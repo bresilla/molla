@@ -15,6 +15,173 @@ use molla_sensors::{BoundingBox2D, CameraChannels, Dataset, TiledCamera, TiledCa
 use molla_sim::{BodyParams, Model, ModelBuilder, State};
 
 static GPU_LOCK: Mutex<()> = Mutex::new(());
+
+#[test]
+#[ignore = "requires GPU"]
+fn device_annotations_from_heterogeneous_cameras_export_selected_channels() {
+    use molla_math::Quat;
+    use molla_sensors::{
+        AnnotationConfig, AnnotationJob, AnnotationProcessor, CameraBatch, CameraBatchLimits,
+        CameraSpec, DeviceBoundingBox, dataset,
+        readback::{ReadbackConfig, ReadbackRing},
+    };
+    use std::time::Duration;
+
+    let _lock = lock_gpu();
+    let mut builder = ModelBuilder::new();
+    let body = builder.add_body(BodyParams::new());
+    let shape = builder
+        .add_shape_sphere(body, 0.5, Transform::IDENTITY)
+        .unwrap();
+    let (engine, model, state) = setup(builder.build().unwrap()).unwrap();
+    let config = TiledCameraConfig {
+        channels: CameraChannels::SHAPE_INDEX,
+        ..small_camera_config()
+    };
+    let specs = [
+        CameraSpec {
+            sensor_id: u64::MAX - 1,
+            config,
+            pose: Transform::new(Vec3::Z * 5., Quat::IDENTITY),
+        },
+        CameraSpec {
+            sensor_id: 77,
+            config: TiledCameraConfig {
+                width: 13,
+                height: 9,
+                ..config
+            },
+            pose: Transform::new(Vec3::new(50., 0., 5.), Quat::IDENTITY),
+        },
+    ];
+    let mut cameras = CameraBatch::new(&engine, &specs, CameraBatchLimits::default()).unwrap();
+    let frame = cameras.dispatch(&engine, &model, &state).unwrap();
+    let images: Vec<_> = specs
+        .iter()
+        .map(|spec| frame.image(spec.sensor_id).unwrap())
+        .collect();
+    let jobs: Vec<_> = images
+        .iter()
+        .map(|image| AnnotationJob::from_camera(image, Some(0.5)).unwrap())
+        .collect();
+    let mut processor = AnnotationProcessor::new(
+        &engine,
+        AnnotationConfig {
+            max_pixels: 2048,
+            max_images: 2,
+            max_labels: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut cpu = Dataset::new();
+    cpu.label_shapes(&[shape.0], 10);
+    processor.set_labels(&cpu.shape_labels()).unwrap();
+    let annotations = processor.process(&jobs).unwrap();
+    let mut ring = ReadbackRing::new(
+        &engine,
+        ReadbackConfig {
+            slots: 1,
+            bytes_per_slot: 16_384,
+            max_total_bytes: 16_384,
+        },
+    )
+    .unwrap();
+    for (i, spec) in specs.iter().enumerate() {
+        let stamp = annotations.layouts()[i].stamp;
+        let ticket = ring
+            .try_enqueue(&[annotations.box_count_source(i).unwrap()], stamp)
+            .unwrap()
+            .unwrap();
+        let count_read = ring.wait(&ticket, Duration::from_secs(10)).unwrap();
+        let count = count_read.channel::<u32>(0).unwrap()[0] as usize;
+        assert_eq!(count, if i == 0 { 1 } else { 0 });
+        assert_eq!(count_read.stamp.sensor_id, spec.sensor_id);
+        let ticket = ring
+            .try_enqueue(&[annotations.boxes_source(i, 0..count).unwrap()], stamp)
+            .unwrap()
+            .unwrap();
+        let selected = ring.wait(&ticket, Duration::from_secs(10)).unwrap();
+        let boxes: Vec<_> = selected
+            .channel::<DeviceBoundingBox>(0)
+            .unwrap()
+            .into_iter()
+            .map(|b| b.to_cpu().unwrap())
+            .collect();
+        assert!(selected.channel::<u32>(1).is_err());
+        let mut json = Vec::new();
+        dataset::write_bbox_json(&boxes, &mut json).unwrap();
+        let n = (spec.config.width * spec.config.height) as usize;
+        let ticket = ring
+            .try_enqueue(
+                &[
+                    annotations.shape_source(i, 0..n).unwrap(),
+                    annotations.class_source(i, 0..n).unwrap(),
+                ],
+                stamp,
+            )
+            .unwrap()
+            .unwrap();
+        let masks = ring.wait(&ticket, Duration::from_secs(10)).unwrap();
+        let shapes = masks.channel::<u32>(0).unwrap();
+        let classes = masks.channel::<u32>(1).unwrap();
+        let reference = cpu
+            .annotate_checked(i as u32, &shapes, spec.config.width, spec.config.height)
+            .unwrap();
+        let mut expected = Vec::new();
+        reference.write_bbox_json(&mut expected).unwrap();
+        assert_eq!(json, expected);
+        assert_eq!(classes, reference.class_image);
+        for (pixels, instances) in [(&classes, false), (&shapes, true)] {
+            let mut pgm = Vec::new();
+            if instances {
+                dataset::write_instance_image_pgm(
+                    pixels,
+                    spec.config.width,
+                    spec.config.height,
+                    &mut pgm,
+                )
+                .unwrap();
+            } else {
+                dataset::write_class_image_pgm(
+                    pixels,
+                    spec.config.width,
+                    spec.config.height,
+                    &mut pgm,
+                )
+                .unwrap();
+            }
+            let text = String::from_utf8(pgm).unwrap();
+            let mut tokens = text.split_whitespace();
+            assert_eq!(tokens.next(), Some("P2"));
+            assert_eq!(
+                tokens.next().unwrap().parse::<u32>().unwrap(),
+                spec.config.width
+            );
+            assert_eq!(
+                tokens.next().unwrap().parse::<u32>().unwrap(),
+                spec.config.height
+            );
+            assert_eq!(tokens.next(), Some("255"));
+            let parsed: Vec<u32> = tokens.map(|v| v.parse().unwrap()).collect();
+            let expected: Vec<_> = pixels
+                .iter()
+                .map(|&p| {
+                    if !instances {
+                        p.min(255)
+                    } else if p == u32::MAX {
+                        0
+                    } else {
+                        (p + 1).min(255)
+                    }
+                })
+                .collect();
+            assert_eq!(parsed, expected);
+        }
+    }
+    assert_eq!(processor.stats().submissions, 1);
+}
+
 fn lock_gpu() -> std::sync::MutexGuard<'static, ()> {
     GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }

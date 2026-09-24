@@ -7,6 +7,11 @@ pub use molla_core as core;
 pub use molla_math as math;
 
 #[cfg(feature = "gpu")]
+mod annotation;
+#[cfg(feature = "gpu")]
+pub use annotation::{AnnotationBindings, AnnotationKernel};
+
+#[cfg(feature = "gpu")]
 mod actuator_delay;
 #[cfg(feature = "gpu")]
 mod actuator_neural_lstm;
@@ -24,6 +29,20 @@ mod actuator_pipeline_pid;
 mod barrier_newton;
 #[cfg(feature = "gpu")]
 mod bsr_solve;
+#[cfg(feature = "gpu")]
+mod camera_accumulate;
+#[cfg(feature = "gpu")]
+mod image_process;
+#[cfg(feature = "gpu")]
+pub use image_process::{ImageProcessBindings, ImageProcessKernel};
+#[cfg(feature = "gpu")]
+mod cloud_process;
+#[cfg(feature = "gpu")]
+pub use cloud_process::{CloudDescriptor, CloudProcessBindings, CloudProcessKernel};
+#[cfg(feature = "gpu")]
+mod cloud_grid;
+#[cfg(feature = "gpu")]
+pub use cloud_grid::{CloudGridBindings, CloudGridKernel, CloudGridParams};
 #[cfg(feature = "gpu")]
 mod clamping_dc_motor;
 #[cfg(feature = "gpu")]
@@ -63,6 +82,8 @@ mod integrate_bodies;
 #[cfg(feature = "gpu")]
 mod jacobian;
 #[cfg(feature = "gpu")]
+mod lidar_scan;
+#[cfg(feature = "gpu")]
 mod muscle;
 #[cfg(feature = "gpu")]
 pub(crate) mod optim_adam;
@@ -71,11 +92,15 @@ mod optim_sgd;
 #[cfg(feature = "gpu")]
 mod raycast;
 #[cfg(feature = "gpu")]
+mod raycast_merge;
+#[cfg(feature = "gpu")]
 mod rnea;
 #[cfg(feature = "gpu")]
 mod robust_loss;
 #[cfg(feature = "gpu")]
 mod scan;
+#[cfg(feature = "gpu")]
+mod sensor_bindings;
 #[cfg(feature = "gpu")]
 mod soft_bvh_gpu;
 #[cfg(feature = "gpu")]
@@ -102,6 +127,8 @@ pub(crate) mod sparse_grid_insert;
 mod splat_raytrace;
 #[cfg(feature = "gpu")]
 mod tiled_camera;
+#[cfg(feature = "gpu")]
+pub use camera_accumulate::{CameraAccumulateBindings, CameraAccumulateKernel};
 #[cfg(feature = "gpu")]
 mod tire_bekker;
 #[cfg(feature = "gpu")]
@@ -161,7 +188,7 @@ pub use contact_reduction::{
     unpack_output_host,
 };
 #[cfg(feature = "gpu")]
-pub use contact_sensor::ContactAggregateKernel;
+pub use contact_sensor::{ContactAggregateBindings, ContactAggregateKernel};
 #[cfg(feature = "gpu")]
 pub use crba::MassMatrixKernel;
 #[cfg(feature = "gpu")]
@@ -183,7 +210,7 @@ pub use featherstone_adjoint_gpu::{
 #[cfg(feature = "gpu")]
 pub use fft::{Complex32, FftKernel};
 #[cfg(feature = "gpu")]
-pub use frame_transform::FrameTransformKernel;
+pub use frame_transform::{FrameTransformBindings, FrameTransformKernel};
 #[cfg(feature = "gpu")]
 pub use hydroelastic::HydroelasticKernel;
 #[cfg(feature = "gpu")]
@@ -200,11 +227,13 @@ pub use implicit_mpm::{
     upload_storage_vec3_f32 as implicit_mpm_upload_storage_vec3_f32,
 };
 #[cfg(feature = "gpu")]
-pub use imu::ImuKernel;
+pub use imu::{ImuBindings, ImuKernel};
 #[cfg(feature = "gpu")]
 pub use integrate_bodies::IntegrateBodiesKernel;
 #[cfg(feature = "gpu")]
 pub use jacobian::{JacobianKernel, JacobianRequest, jacobian_gpu};
+#[cfg(feature = "gpu")]
+pub use lidar_scan::{LidarScanBindings, LidarScanDescriptor, LidarScanKernel};
 #[cfg(feature = "gpu")]
 pub use molla_compute_primitives::{
     RadixSortKernel, RadixSortKernel64, radix_sort_pairs, radix_sort_pairs_u64,
@@ -226,7 +255,9 @@ pub use optim_adam::AdamGpuKernel;
 #[cfg(feature = "gpu")]
 pub use optim_sgd::SgdGpuKernel;
 #[cfg(feature = "gpu")]
-pub use raycast::RaycastKernel;
+pub use raycast::{RaycastBindings, RaycastKernel};
+#[cfg(feature = "gpu")]
+pub use raycast_merge::{RaycastMergeBindings, RaycastMergeKernel};
 #[cfg(feature = "gpu")]
 pub use rnea::{InverseDynamicsKernel, inverse_dynamics_gpu};
 #[cfg(feature = "gpu")]
@@ -253,7 +284,10 @@ pub use splat_raytrace::{
     SplatGradients, SplatRaytraceKernel, SplatShBand3Gradients, SplatShGradients,
 };
 #[cfg(feature = "gpu")]
-pub use tiled_camera::{CameraRaysKernel, CameraTraceKernel};
+pub use tiled_camera::{
+    CameraRaysBindings, CameraRaysKernel, CameraRaysParams, CameraShadeBindings, CameraShadeKernel,
+    CameraTraceBindings, CameraTraceKernel, CameraTraceParams,
+};
 #[cfg(feature = "gpu")]
 pub use tire_bekker::{
     TireBekkerContactCell, TireBekkerFemTerrainOwner, TireBekkerGpuInput, TireBekkerGpuKernel,

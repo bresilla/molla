@@ -42,6 +42,122 @@ fn setup(model: Model) -> Option<(Engine, Model, State)> {
     Some((engine, model, state))
 }
 
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn static_only_scene_and_invalid_ray_inputs() {
+    let _gpu = lock_gpu();
+    let mut builder = ModelBuilder::new();
+    builder
+        .add_shape_sphere(molla_core::BodyId::NONE, 1.0, Transform::IDENTITY)
+        .unwrap();
+    let (engine, model, state) = setup(builder.build().unwrap()).expect("GPU required");
+    assert!(Raycaster::new(&engine, u32::MAX).is_err());
+    let mut sensor = Raycaster::new(&engine, 1).unwrap();
+    for direction in [
+        Vec3::ZERO,
+        Vec3::splat(f64::NAN),
+        Vec3::splat(f64::INFINITY),
+    ] {
+        assert!(
+            sensor
+                .cast(
+                    &engine,
+                    &model,
+                    &state,
+                    &[Vec3::Y * 3.0],
+                    &[direction],
+                    10.0
+                )
+                .is_err()
+        );
+    }
+    for distance in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+        assert!(
+            sensor
+                .cast(
+                    &engine,
+                    &model,
+                    &state,
+                    &[Vec3::Y * 3.0],
+                    &[Vec3::NEG_Y],
+                    distance
+                )
+                .is_err()
+        );
+    }
+    assert!(
+        sensor
+            .cast(
+                &engine,
+                &model,
+                &state,
+                &[Vec3::splat(f64::MAX)],
+                &[Vec3::NEG_Y],
+                10.0
+            )
+            .is_err()
+    );
+    let hits = sensor
+        .cast(
+            &engine,
+            &model,
+            &state,
+            &[Vec3::Y * 3.0],
+            &[Vec3::NEG_Y],
+            10.0,
+        )
+        .unwrap();
+    assert!((hits[0].t - 2.0).abs() < 1.0e-4);
+    assert!((hits[0].point - Vec3::Y).length() < 1.0e-4);
+}
+
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn cone_side_base_inside_and_generator_parallel_rays() {
+    let _gpu = lock_gpu();
+    let mut builder = ModelBuilder::new();
+    builder
+        .add_shape_cone(molla_core::BodyId::NONE, 1.0, 1.0, Transform::IDENTITY)
+        .unwrap();
+    let (engine, model, state) = setup(builder.build().unwrap()).expect("GPU required");
+    let mut sensor = Raycaster::new(&engine, 6).unwrap();
+    let origins = [
+        Vec3::new(2.0, 0.0, 0.0),
+        Vec3::new(0.0, -3.0, 0.0),
+        Vec3::ZERO,
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 3.0, 0.0),
+        Vec3::new(2.0, 3.0, 0.0),
+    ];
+    let directions = [
+        Vec3::NEG_X,
+        Vec3::Y,
+        Vec3::X,
+        Vec3::new(-0.5, -1.0, 0.0),
+        Vec3::NEG_Y,
+        Vec3::X,
+    ];
+    let hits = sensor
+        .cast(&engine, &model, &state, &origins, &directions, 10.0)
+        .unwrap();
+    for (i, distance) in [1.5, 2.0, 0.5, 0.5 * 1.25_f64.sqrt(), 2.0]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(hits[i].shape_id, Some(0), "ray {i}: {:?}", hits[i]);
+        assert!(
+            (hits[i].t - distance).abs() < 1.0e-4,
+            "ray {i}: {:?}",
+            hits[i]
+        );
+        assert!(hits[i].normal.is_finite());
+        assert!((hits[i].normal.length() - 1.0).abs() < 1.0e-4);
+    }
+    assert!((hits[0].normal - Vec3::new(1.0, 0.5, 0.0).normalize()).length() < 1.0e-4);
+    assert!((hits[1].normal - Vec3::NEG_Y).length() < 1.0e-4);
+    assert!(hits[5].shape_id.is_none());
+}
+
 /// Helper: acquire the GPU lock and return a guard that the caller
 /// drops at the end of the test scope. See module docstring.
 fn lock_gpu() -> std::sync::MutexGuard<'static, ()> {

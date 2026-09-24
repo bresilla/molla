@@ -1,7 +1,36 @@
 # FULL_COMPACT implementation checkpoint
 
-The objective is the entire `FULL_COMPACT.md`, including the Gearbox backend
-and its live acceptance scenes. This is a checkpoint, not a completion report.
+The reference objective is `FULL_COMPACT.md`, including the Gearbox backend,
+subject to the user's explicit scope exclusions below. This is a checkpoint,
+not a completion report.
+
+## Current user scope override — 2026-09-20
+
+- The user is implementing soil and visual tyres in the original/mainline Gearbox
+  worktree. **Do not develop soil or tyre rendering here.** Previous checklist
+  entries proposing soil/Bekker/MPM or visual-tyre work are superseded.
+- The user does not care about save/reload. **Drop save/reload implementation and
+  acceptance work from this thread's scope.** Do not pursue it as a completion gate.
+- Keep subsequent implementation scoped to Molla physics/backend integration.
+  Leave existing overlapping work isolated; do not merge or delete it without a
+  user request. Original Gearbox and shared machine assets remain off limits.
+
+### Scope audit / session summary
+- Goal: answer how much overlapping soil/tyre-visual work was already done.
+- Read-only Git audit against isolated/mainline merge base
+  `6f2db09ff1a6c7a672e6cbbd5842fc9e1e018f83` found five new dedicated tyre-rendering
+  files, **1,227 added lines including tests**, plus viewer/controller wiring:
+  `viewer/tyre_mesh.rs` 721, `tyre_gpu.rs` 248, `tyre_gpu.wgsl` 85,
+  `tyre_deform.wgsl` 32, `tyre_gpu_test.rs` 141. This was substantial visual work,
+  not just a physics adapter. Five scoped commits touch these files.
+- No live Bekker/MPM deformable-soil integration was implemented. Adjacent work
+  did add authored field friction and tyre footprint/track plumbing. Main field
+  friction commit **bee6719** changed eight files (+668/-7 including tests/docs).
+- No USD/USDA/USDZ/Blender asset changes appear in the isolated branch diff.
+- No rollback, merge or further soil/rendering/save work performed in this audit.
+- Next: respect the exclusions above; finish bookkeeping for already validated
+  immediate wheel-unregister changes, then only remaining Molla physics scope.
+- Engram APIs are unavailable; this project note preserves the explicit scope.
 
 ## Current implementation
 
@@ -8254,6 +8283,154 @@ gearbox-physics, currently uncommitted. No subagents, Python edits, or GUI launc
   independent-machine lifecycle target; inspected only, not changed this turn.
 - `target/perf/tyre-acceptance-finite-fix.log`: focused reporting-fix results.
 - Engram APIs unavailable; this project checkpoint is the session summary.
+
+### Independent-machine lifecycle checkpoint
+
+#### Goal
+- Continue FULL_COMPACT: preserve an existing machine's tyre readout and pressure
+  transition across another machine's live registration, edits and removal.
+- Previous goal turn was progress: partial coverage and acceptance fixes were
+  committed, validated and measured. No blocking condition this turn.
+
+#### Instructions
+- Original Gearbox and shared assets remain untouched. No GUI was launched or
+  closed. No Rapier development, speculative optimization or subagent delegation.
+
+#### Discoveries
+- Wheel registration/configuration/removal previously invalidated every readout;
+  aggregate witnesses also discarded all machines after an edit to just one.
+- Explicit-state commit's `changed` list previously represented wake requests:
+  `wake=false` passed an empty list even though poses/velocities changed. State
+  invalidation must receive edited bodies independently from the wake flag.
+- Real USD projection reapplied authored material friction to existing Kubota
+  wheels: **1.1 -> 0.8999999761581421**. This was a genuine material edit that
+  correctly invalidated their readouts, independent of the core global-cache bug.
+- The headless importer must restore its manually advanced Time after app.update
+  and register the new MachineAgentKey before preparing the second machine.
+- Cross-layout bitwise equality is not the same gate as same-script determinism:
+  a one-machine/two-machine comparison first differed by ~2e-17 in velocity.
+  Exact snapshots are still required at edits, while cross-layout evolution uses
+  a tight 1e-9 normalized bound and identical two-machine replays require bitwise
+  equality. Observed peak normalized cross-layout error: **1.3844481117075702e-11**.
+- Backend removal previously left dead core wheel registrations until the next
+  step. Paused deletion must unregister immediately, including removal of a
+  wheel's spin joint or parent chassis.
+
+#### Accomplished
+- Core **d2369a9** `fix(tyres): scope readout to machine components`:
+  per-component explicit-state stamps, per-wheel structural/state witnesses,
+  targeted registration invalidation, borrowed filtered WheelSamples view with
+  no filtered-vector allocation and an unchanged-scene fast path. Raw mutable
+  state access still invalidates all; no-wake edits keep their sleep semantics.
+- Two initial lifecycle tests failed as expected (session **95355**). First
+  targeted implementation passed 40 wheel tests (**5097**). Component-state
+  extension initially failed the existing no-wake teleport test (**60020**);
+  separating edits from activation corrected it. Session **38940** passed four
+  runtime readout tests and all **43 wheel tests**.
+- Full core session **83289**, exit 0: **566 passed, 0 failed, 9 ignored across
+  101 binaries**, plus solver GPU-feature all-target check. Log:
+  `target/perf/tyre-independent-lifecycle-full.log`.
+- Isolated **a4d2be3** `fix(tyres): preserve readout during machine spawn`:
+  AppliedPhysicsMaterial tracks collider/binding/effective authored values so
+  unchanged material sync preserves runtime overrides. Authored edits, unbind/
+  rebind and collider replacement remain covered by a dedicated regression.
+- Imported live regression projects a second real Kubota 25 m away during first
+  machine drive/inflation, runs the second at 0.8 bar, despawns it through normal
+  dead-physics cleanup and verifies all remaining bodies/joints/colliders/entity
+  mappings. Exact edit snapshots, close cross-layout evolution and bitwise
+  same-script replay pass; per-machine pressure targets remain independent.
+- Intermediate imported sessions **73183/42615** exposed material reset; **41055**
+  exposed a private system-parameter type (made pub(crate)); **46739** exposed
+  missing fixture key; **38862** exposed the over-strong cross-layout bitwise
+  assertion. Corrected replay **42045** passed. These failures were not hidden.
+- Final integration **33640**, exit 0: **114 ordinary tests**, live machine
+  lifecycle **1**, remote-prop lifecycle **1**, payload **1**, independent/stable
+  Oxbo cases **4** all passed. Native build **52051** also exited 0, 29.94 s.
+- Additional immediate unregister change is pending in isolated molla/mod.rs
+  and tests.rs. Session **94541** runs ordinary + the four imported groups again,
+  then a native build. Log: isolated
+  `target/perf/tyre-independent-machine-prune-final.log`. Poll this live handle;
+  do not restart solely on observation timeout. No preview launch.
+
+#### Next Steps
+- Complete session 94541, commit immediate unregister after validation, and record
+  current performance with no other owned builds/tests running. A median alone
+  does not satisfy the strict under-1-ms gate.
+- Continue remaining pressure UI/CLI hitch/save/reload and pressure-extreme
+  towing/slope/surface/timestep gates. Sleeping fleet wake isolation, calibrated
+  operating ranges, soil coupling and general-joint/GPU requirements remain open.
+- Do not mark FULL_COMPACT complete from this representative lifecycle regression.
+
+#### Relevant Files
+- Core `runtime/readout.rs`, `runtime.rs`: independent state/structure witnesses.
+- Core `wheel_forces.rs`, `wheel_forces/readout.rs`, `tests/wheel_forces/lifecycle.rs`:
+  independent readout view and five lifecycle regressions.
+- Isolated `physics/colliders.rs`, `colliders/material_tests.rs`: authored material
+  application cache and regression; `physics/benchmark.rs`: normal cleanup helper.
+- Isolated `controller/benchmark/machine_lifecycle.rs`: real imported live replay.
+- Isolated `physics/molla/mod.rs`, `tests.rs`: pending immediate unregister fix.
+- `TYRE_CONTACT_VALIDATION.md`: API and numerical acceptance distinctions.
+- Engram APIs remain unavailable; this project checkpoint preserves the session.
+
+### User launch and status checkpoint
+
+#### Goal
+- Continue FULL_COMPACT; user requested an Oxbo launch, then a progress update.
+
+#### Accomplished
+- Session **94541** completed with exit 0: **115 ordinary Gearbox tests**, live
+  lifecycle **1**, prop lifecycle **1**, payload **1**, Oxbo **4** all passed, then
+  native build succeeded in **47.71 s**. Immediate unregister fix is validated but
+  still uncommitted in isolated molla/mod.rs and molla/tests.rs.
+- Launched requested Oxbo through isolated release binary on Wayland, Molla
+  backend, name `molla-oxbo-tyres`, session **28813**. Log:
+  isolated `target/perf/oxbo-user-launch-20260920-1912.log`.
+- The preview rendered/stepped: latest logged physics averages **1.61–1.64 ms**
+  per step; recent rendered reports approximately **35–45 FPS**. This Oxbo run
+  does not meet a strict under-1-ms target and is not the headless Kubota benchmark.
+- User interrupted after launch to ask status. Session 28813 is now terminal,
+  exit **0**, and no preview process was found. No close/kill command was sent;
+  cause of closure is unconfirmed. Do not auto-relaunch without a request.
+
+#### Next Steps
+- Commit validated unregister change and current documentation. Fresh headless
+  timing after the lifecycle changes has not run; do not reuse previous numbers
+  as current proof. Remaining full-plan requirements are unchanged.
+
+#### Relevant Files
+- Isolated `target/perf/tyre-independent-machine-prune-final.log`: final validation.
+- Isolated `target/perf/oxbo-user-launch-20260920-1912.log`: requested live preview.
+- Engram tools unavailable; this checkpoint records the session close summary.
+
+### Concrete unfinished-work clarification
+
+#### Goal / Instructions
+- User requested an explicit unfinished-work list, not another generic statement
+  that FULL_COMPACT is incomplete. Distinguish missing integration from unproven
+  acceptance; do not invent a percentage.
+
+#### Discoveries
+- Current imported_kubota_slope_parking already covers 0.5 and 4.0 bar for 7200
+  ticks (60 s) after settling. Do not list pressure-extreme slope parking itself
+  as wholly missing; the full trailer/towing/pressure combination remains open.
+- Earlier paused Kubota save/reload evidence exists. Mid-transition save/reload
+  and resume is the remaining distinct lifecycle gate.
+- Under-1-ms target in FULL_COMPACT names a 26-body tractor. Live 40-body Oxbo
+  timing is useful but is not that same benchmark; Kubota tail timings themselves
+  still fail to establish a strict sub-millisecond guarantee.
+
+#### Accomplished / Next Steps
+- Clarified remaining live deformable soil/Bekker/MPM integration, calibrated
+  pressure/load/surface braking/cornering/coast-down behavior, pressure-extreme
+  loaded towing/hitch lifecycle, mid-transition save/reload, field visual/track
+  validation, timestep convergence, full GPU transient pressure/history parity,
+  outstanding compliant/angular-joint validation and sleeping fleet isolation.
+- Continue full objective; no implementation or verification completed merely
+  by giving this status clarification. Engram tools remain unavailable.
+
+#### Relevant Files
+- FULL_COMPACT.md sections 6.1, 7 and 9 define these acceptance requirements.
+- Isolated controller/benchmark.rs contains existing slope-pressure coverage.
 
 ## Next implementation steps
 

@@ -121,8 +121,20 @@
 # Sensors
 
 - [Raycaster](./sensors/raycaster.md)
+- [Sensor geometry snapshots](./sensors/scene.md)
+- [Device-resident LiDAR batches](./sensors/lidar_batch.md)
 - [TiledCamera](./sensors/tiled_camera.md)
+- [GPU image processing](./sensors/image_processing.md)
+- [GPU point-cloud processing](./sensors/cloud_processing.md)
+- [Selected point-cloud export](./sensors/cloud_export.md)
+- [GPU spatial bins and reductions](./sensors/cloud_grid.md)
+- [GPU class and instance annotation](./sensors/annotation.md)
 - [IMU](./sensors/imu.md)
+- [Asynchronous sensor readback](./sensors/readback.md)
+- [Sensor device loss and recovery boundaries](./sensors/device_lifecycle.md)
+- [Leased GPU snapshots](./sensors/snapshot.md)
+- [Direct leased sensor outputs](./sensors/device_results.md)
+- [Simulation-time scheduling](./sensors/scheduler.md)
 - [Contact sensor](./sensors/contact_sensor.md)
 - [Frame transform](./sensors/frame_transform.md)
 

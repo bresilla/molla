@@ -1,6 +1,9 @@
 //! `Engine` — owns the wgpu runtime.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use molla_core::{Error, Result};
 
@@ -52,6 +55,52 @@ pub struct Engine {
     adapter_info: Option<AdapterInfo>,
     device: Option<Arc<wgpu::Device>>,
     queue: Option<Arc<wgpu::Queue>>,
+    health: Option<Arc<DeviceHealth>>,
+}
+
+/// Sticky first-loss diagnostic for one logical GPU device.
+#[derive(Debug, Clone)]
+pub struct DeviceLoss {
+    pub reason: wgpu::DeviceLostReason,
+    pub message: String,
+}
+
+/// Shared loss signal without references to GPU resources.
+#[derive(Default)]
+pub struct DeviceHealth {
+    lost: AtomicBool,
+    loss: Mutex<Option<DeviceLoss>>,
+}
+
+impl DeviceHealth {
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire)
+    }
+
+    pub fn loss(&self) -> Option<DeviceLoss> {
+        if !self.is_lost() {
+            return None;
+        }
+        self.loss.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn check(&self) -> Result<()> {
+        if let Some(loss) = self.loss() {
+            return Err(Error::Gpu(format!(
+                "GPU device lost ({:?}): {}",
+                loss.reason, loss.message
+            )));
+        }
+        Ok(())
+    }
+
+    fn record(&self, reason: wgpu::DeviceLostReason, message: String) {
+        let mut loss = self.loss.lock().unwrap_or_else(|e| e.into_inner());
+        if loss.is_none() {
+            *loss = Some(DeviceLoss { reason, message });
+        }
+        self.lost.store(true, Ordering::Release);
+    }
 }
 
 impl Engine {
@@ -71,6 +120,7 @@ impl Engine {
             adapter_info: None,
             device: None,
             queue: None,
+            health: None,
         }
     }
 
@@ -113,6 +163,35 @@ impl Engine {
     pub fn queue(&self) -> Option<&Arc<wgpu::Queue>> {
         self.queue.as_ref()
     }
+
+    /// Observed device loss; raw wgpu loss callbacks may require polling for delivery.
+    pub fn device_health(&self) -> Option<&Arc<DeviceHealth>> {
+        self.health.as_ref()
+    }
+
+    pub fn check_device(&self) -> Result<()> {
+        self.health
+            .as_ref()
+            .ok_or_else(|| Error::Gpu("engine has no GPU device".into()))?
+            .check()
+    }
+
+    /// Marks this engine's logical device lost immediately, then destroys it.
+    pub fn destroy_device(&self) -> Result<()> {
+        let health = self
+            .health
+            .as_ref()
+            .ok_or_else(|| Error::Gpu("engine has no GPU device".into()))?;
+        health.record(
+            wgpu::DeviceLostReason::Destroyed,
+            "logical device explicitly destroyed".into(),
+        );
+        self.device
+            .as_ref()
+            .expect("GPU health has a device")
+            .destroy();
+        Ok(())
+    }
 }
 
 fn init_gpu(backends: wgpu::Backends) -> Result<Engine> {
@@ -145,12 +224,55 @@ fn init_gpu(backends: wgpu::Backends) -> Result<Engine> {
     }))
     .map_err(|e| Error::Gpu(format!("device request failed: {e}")))?;
 
+    let health = Arc::new(DeviceHealth::default());
+    let signal = health.clone();
+    device.set_device_lost_callback(move |reason, message| signal.record(reason, message));
     Ok(Engine {
         backend: Backend::Gpu(backends),
         adapter_info: Some(adapter_info),
         device: Some(Arc::new(device)),
         queue: Some(Arc::new(queue)),
+        health: Some(health),
     })
+}
+
+#[cfg(test)]
+mod loss_tests {
+    use super::*;
+
+    #[test]
+    fn cpu_engine_has_no_device_loss_signal() {
+        let engine = Engine::new_cpu();
+        assert!(engine.device_health().is_none());
+        assert!(engine.check_device().is_err());
+        assert!(engine.destroy_device().is_err());
+    }
+
+    #[test]
+    fn loss_is_sticky_and_keeps_the_first_diagnostic() {
+        let health = Arc::new(DeviceHealth::default());
+        assert!(health.check().is_ok());
+        assert!(health.loss().is_none());
+        let signal = health.clone();
+        std::thread::spawn(move || {
+            signal.record(wgpu::DeviceLostReason::Unknown, "first loss".into())
+        })
+        .join()
+        .unwrap();
+        health.record(
+            wgpu::DeviceLostReason::Destroyed,
+            "later destruction".into(),
+        );
+        assert!(health.is_lost());
+        assert_eq!(health.loss().unwrap().message, "first loss");
+        assert!(
+            health
+                .check()
+                .unwrap_err()
+                .to_string()
+                .contains("first loss")
+        );
+    }
 }
 
 #[cfg(test)]

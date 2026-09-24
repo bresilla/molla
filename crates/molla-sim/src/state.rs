@@ -214,9 +214,9 @@ impl State {
     /// Allocate device buffers for every state array and upload host data.
     /// Idempotent: subsequent calls re-upload from host.
     #[cfg(feature = "gpu")]
-    pub fn upload_to_device(
+    pub fn upload_to_device<D: molla_storage::BufferDevice + ?Sized>(
         &mut self,
-        device: &wgpu::Device,
+        device: &D,
         queue: &wgpu::Queue,
     ) -> molla_core::Result<()> {
         macro_rules! up {

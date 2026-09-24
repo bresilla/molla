@@ -105,9 +105,9 @@ impl Contacts {
     /// Allocate device buffers and upload host data. Re-uploads every
     /// frame (the contact set turns over completely each step).
     #[cfg(feature = "gpu")]
-    pub fn upload_to_device(
+    pub fn upload_to_device<D: molla_storage::BufferDevice + ?Sized>(
         &mut self,
-        device: &wgpu::Device,
+        device: &D,
         queue: &wgpu::Queue,
     ) -> molla_core::Result<()> {
         macro_rules! up {

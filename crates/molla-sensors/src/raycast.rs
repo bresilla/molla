@@ -1,96 +1,125 @@
-//! Public ray-cast sensor — orchestrates a [`RaycastKernel`] dispatch.
+//! GPU closest-hit queries over analytical primitives and rigid mesh instances.
 //!
-//! GPU-first by construction: the heavy lifting (shape iteration,
-//! ray-vs-primitive math, normal computation) all runs in
-//! `shaders/raycast.wgsl`. This module only owns the per-batch
-//! ray/hit buffers and the dispatch wrapper.
-//!
-//! **H1 — TriMesh support.** Triangle / TriMesh shapes still carry the
-//! `0xff` "skip" sentinel in `Model::shape_geom_kind` (the analytical
-//! `raycast.wgsl` kernel skips them), but the [`Raycaster`] now also
-//! runs a second GPU pass per static TriMesh shape against
-//! [`molla_geometry::MeshBvhGpu`] and merges the closest hit into the
-//! analytical result. Static TriMesh shapes (`shape_body == -1`) are
-//! supported; dynamic TriMesh shapes (attached to a moving body) are
-//! still skipped pending a transform-aware mesh-BVH kernel (a later
-//! H1 follow-up). The mesh-BVH is built in **world space** at first
-//! use and cached per-shape, so each `cast()` call only pays the
-//! per-shape dispatch + readback.
-//!
-//! # Example
-//!
-//! ```ignore
-//! use molla::compute::Engine;
-//! use molla::sensors::Raycaster;
-//! use molla::math::Vec3;
-//!
-//! let engine = Engine::new_gpu()?;
-//! let mut sensor = Raycaster::new(&engine, /* max_rays = */ 64);
-//! let origins = vec![Vec3::new(0.0, 5.0, 0.0); 1];
-//! let dirs    = vec![Vec3::new(0.0, -1.0, 0.0); 1];
-//! let hits = sensor.cast(&engine, &model, &state, &origins, &dirs, 100.0)?;
-//! println!("{:?}", hits[0]); // RayHit { t: 4.5, shape_id: ..., ... }
-//! ```
+//! Mesh candidates are merged on device. CPU inputs are normalized and uploaded
+//! once per batch; collection is optional. Local mesh BVHs are reused across poses.
+//! Owned scenes share immutable geometry; legacy model queries compare mesh content.
 
+use crate::device_results::{
+    EncodedSensorFrame, SensorChannelSpec, SensorCommandBatch, SensorFramePool,
+    SensorFramePoolConfig,
+};
+use crate::dispatch::BindingsCache;
+use crate::readback::{DeviceBuffer, ReadbackConfig, ReadbackRing, ReadbackStamp, ReadbackStats};
+use crate::scene::{SceneStamp, SensorScene};
 use molla_compute::Engine;
 use molla_core::{BodyId, Error, Result};
-use molla_geometry::{MeshBvh, MeshBvhGpu, MeshBvhRaycastKernel};
-use molla_kernels::RaycastKernel;
-use molla_math::{Real, Vec3};
+use molla_geometry::{MeshBvhGpu, MeshBvhRaycastBindings, MeshBvhRaycastKernel};
+use molla_kernels::{RaycastBindings, RaycastKernel, RaycastMergeBindings, RaycastMergeKernel};
+use molla_math::{Real, Transform, Vec3};
 use molla_sim::{Model, ShapeGeometry, State};
 use molla_storage::{Buffer, BufferUsage};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 /// Single closest-hit result.
 #[derive(Debug, Clone, Copy)]
 pub struct RayHit {
-    /// Index of the hit shape in `Model::shape_geometry`. `None` if
-    /// the ray missed every shape within `max_distance`.
+    /// Index in `Model::shape_geometry`; `None` for a miss.
     pub shape_id: Option<u32>,
-    /// Body that owns the hit shape, or `BodyId::NONE` for static
-    /// world geometry. Meaningless when `shape_id.is_none()`.
+    /// Owning body, or `BodyId::NONE` for static geometry and misses.
     pub body_id: BodyId,
-    /// Distance along the ray. `f64::INFINITY` if no hit.
+    /// Distance in meters along the normalized ray; infinity for a miss.
     pub t: Real,
-    /// World-space hit point (zero when no hit).
+    /// World-space hit point; zero for a miss.
     pub point: Vec3,
-    /// World-space outward surface normal at the hit (`+Y` when no hit).
+    /// World-space normal; +Y for a miss. Mesh normals oppose the incident ray.
     pub normal: Vec3,
 }
 
-/// GPU ray-cast batched sensor. Owns the analytical kernel, the mesh
-/// BVH kernel, and per-batch ray / hit storage; reuse one instance
-/// across many `cast` calls to avoid reallocating GPU buffers each
-/// frame. The mesh-BVH cache is keyed per shape so two TriMesh shapes
-/// that share a `mesh_id` but live at different poses each get their
-/// own world-space BVH.
+/// Borrowed device channels. Only `0..ray_count` contains this batch's results.
+/// Submit consumers or enqueue readback on the same engine before the next dispatch.
+/// Misses have distance -1, shape -1, point zero, normal +Y.
+pub struct RayDeviceHits<'a> {
+    pub ray_count: usize,
+    pub scene_stamp: Option<SceneStamp>,
+    pub origins: &'a DeviceBuffer<Vec3>,
+    pub directions: &'a DeviceBuffer<Vec3>,
+    pub distance: &'a DeviceBuffer<Real>,
+    pub shape: &'a DeviceBuffer<i32>,
+    pub point: &'a DeviceBuffer<Vec3>,
+    pub normal: &'a DeviceBuffer<Vec3>,
+}
+
+/// Pending query identity; channels become available through the submitted frame receipt.
+pub struct EncodedRayQuery {
+    pub frame: EncodedSensorFrame,
+    pub ray_count: usize,
+    pub scene_stamp: SceneStamp,
+}
+
+/// Query-path preparations and submissions, excluding construction and readback.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RayQueryStats {
+    pub encoded_queries: u64,
+    pub submissions: u64,
+    pub primitive_preparations: u64,
+    pub mesh_preparations: u64,
+    pub merge_preparations: u64,
+}
+
+/// Reusable fixed-capacity ray sensor with device-side closest-hit reduction.
+/// Local TriMesh BVHs are shared across rigid instances, including body-attached meshes.
 pub struct Raycaster {
     kernel: RaycastKernel,
+    merge: RaycastMergeKernel,
     capacity: u32,
-    // Ray inputs (shared by both the analytical and the mesh-BVH passes).
-    ray_origin: Buffer<Vec3>,
-    ray_direction: Buffer<Vec3>,
-    // Analytical-pass outputs.
-    hit_t: Buffer<Real>,
-    hit_shape: Buffer<i32>,
-    hit_point: Buffer<Vec3>,
-    hit_normal: Buffer<Vec3>,
-    // H1 — mesh-BVH pass state.
+    static_body_q: Buffer<Transform>,
+    ray_origin: DeviceBuffer<Vec3>,
+    ray_direction: DeviceBuffer<Vec3>,
+    hit_t: DeviceBuffer<Real>,
+    hit_shape: DeviceBuffer<i32>,
+    hit_point: DeviceBuffer<Vec3>,
+    hit_normal: DeviceBuffer<Vec3>,
     mesh_kernel: MeshBvhRaycastKernel,
-    /// Per-shape cached world-space mesh BVH. Keyed by `shape_id` so
-    /// two shapes that share `mesh_id` but have different poses each
-    /// get their own entry. Built lazily on first cast.
-    mesh_cache: HashMap<u32, MeshBvhGpu>,
-    /// Scratch per-ray mesh-BVH hit buffers, sized to `capacity`.
+    mesh_cache: HashMap<u32, CachedMesh>,
+    primitive_bindings: Vec<RaycastBindings>,
+    direct_primitives: BindingsCache<RaycastBindings>,
+    direct_initial: BindingsCache<RaycastMergeBindings>,
+    direct_meshes: HashMap<u32, BindingsCache<DirectMeshBindings>>,
+    direct_scene: Option<SceneStamp>,
+    upload_origins: Vec<[f32; 4]>,
+    upload_directions: Vec<[f32; 4]>,
+    mesh_bindings: HashMap<u32, CachedQuery>,
+    query_stats: RayQueryStats,
+    mesh_epoch: u64,
+    mesh_builds: u64,
+    active_scene: Option<SceneStamp>,
     mesh_hit_t: Buffer<Real>,
     mesh_hit_tri: Buffer<i32>,
     mesh_hit_normal: Buffer<Vec3>,
+    readback: Option<ReadbackRing>,
+}
+
+struct CachedMesh {
+    gpu: MeshBvhGpu,
+    source: molla_sim::TriMesh,
+    checked_epoch: u64,
+}
+
+struct CachedQuery {
+    bindings: Vec<MeshBvhRaycastBindings>,
+    merge: RaycastMergeBindings,
+    checked_epoch: u64,
+}
+
+struct DirectMeshBindings {
+    query: MeshBvhRaycastBindings,
+    merge: RaycastMergeBindings,
 }
 
 impl Raycaster {
-    /// Build a sensor with capacity for up to `max_rays` rays per
-    /// batch. Cheap to construct; reusable.
+    /// Allocate reusable input, output and scratch storage for up to `max_rays`.
     pub fn new(engine: &Engine, max_rays: u32) -> Result<Self> {
+        engine.check_device()?;
         let device = engine
             .device()
             .ok_or_else(|| Error::Gpu("raycaster: engine has no GPU device".into()))?
@@ -99,82 +128,669 @@ impl Raycaster {
             .queue()
             .ok_or_else(|| Error::Gpu("raycaster: engine has no GPU queue".into()))?
             .clone();
-
         let cap = max_rays.max(1) as usize;
-        let mut ray_origin = Buffer::from_vec(vec![Vec3::ZERO; cap], BufferUsage::Storage);
-        let mut ray_direction = Buffer::from_vec(vec![Vec3::ZERO; cap], BufferUsage::Storage);
-        let mut hit_t = Buffer::from_vec(vec![-1.0_f64; cap], BufferUsage::StorageReadWrite);
-        let mut hit_shape = Buffer::from_vec(vec![-1_i32; cap], BufferUsage::StorageReadWrite);
-        let mut hit_point = Buffer::from_vec(vec![Vec3::ZERO; cap], BufferUsage::StorageReadWrite);
-        let mut hit_normal = Buffer::from_vec(vec![Vec3::Y; cap], BufferUsage::StorageReadWrite);
-
-        // H1 — mesh-pass scratch hit buffers, sized to capacity so the
-        // mesh kernel can be dispatched against the same ray batch.
+        let limits = device.limits();
+        let bytes = cap as u64 * 16;
+        if bytes > limits.max_storage_buffer_binding_size as u64
+            || bytes > limits.max_buffer_size
+            || max_rays.max(1).div_ceil(64) > limits.max_compute_workgroups_per_dimension
+        {
+            return Err(Error::Solver(
+                "raycaster: ray capacity exceeds GPU limits".into(),
+            ));
+        }
+        let mut static_body_q = Buffer::from_vec(vec![Transform::IDENTITY], BufferUsage::Storage);
+        static_body_q.ensure_device(&device)?;
+        static_body_q.upload(&queue)?;
+        let ray_origin =
+            DeviceBuffer::from_host(engine, vec![Vec3::ZERO; cap], BufferUsage::StorageReadWrite)?;
+        let ray_direction =
+            DeviceBuffer::from_host(engine, vec![Vec3::ZERO; cap], BufferUsage::StorageReadWrite)?;
+        let hit_t =
+            DeviceBuffer::from_host(engine, vec![-1.0; cap], BufferUsage::StorageReadWrite)?;
+        let hit_shape =
+            DeviceBuffer::from_host(engine, vec![-1; cap], BufferUsage::StorageReadWrite)?;
+        let hit_point =
+            DeviceBuffer::from_host(engine, vec![Vec3::ZERO; cap], BufferUsage::StorageReadWrite)?;
+        let hit_normal =
+            DeviceBuffer::from_host(engine, vec![Vec3::Y; cap], BufferUsage::StorageReadWrite)?;
         let mut mesh_hit_t =
             Buffer::from_vec(vec![Real::INFINITY; cap], BufferUsage::StorageReadWrite);
         let mut mesh_hit_tri = Buffer::from_vec(vec![-1_i32; cap], BufferUsage::StorageReadWrite);
         let mut mesh_hit_normal =
             Buffer::from_vec(vec![Vec3::ZERO; cap], BufferUsage::StorageReadWrite);
-
-        // Allocate device mirrors up-front so dispatch never has to.
-        ray_origin.ensure_device(&device)?;
-        ray_direction.ensure_device(&device)?;
-        hit_t.ensure_device(&device)?;
-        hit_shape.ensure_device(&device)?;
-        hit_point.ensure_device(&device)?;
-        hit_normal.ensure_device(&device)?;
         mesh_hit_t.ensure_device(&device)?;
         mesh_hit_tri.ensure_device(&device)?;
         mesh_hit_normal.ensure_device(&device)?;
-        ray_origin.upload(&queue)?;
-        ray_direction.upload(&queue)?;
-        hit_t.upload(&queue)?;
-        hit_shape.upload(&queue)?;
-        hit_point.upload(&queue)?;
-        hit_normal.upload(&queue)?;
         mesh_hit_t.upload(&queue)?;
         mesh_hit_tri.upload(&queue)?;
         mesh_hit_normal.upload(&queue)?;
-
+        let merge = RaycastMergeKernel::new(
+            &device,
+            [
+                ray_origin.device_buffer()?,
+                ray_direction.device_buffer()?,
+                mesh_hit_t.device_buffer_current()?,
+                mesh_hit_tri.device_buffer_current()?,
+                mesh_hit_normal.device_buffer_current()?,
+                hit_t.device_buffer()?,
+                hit_shape.device_buffer()?,
+                hit_point.device_buffer()?,
+                hit_normal.device_buffer()?,
+            ],
+        );
         Ok(Self {
             kernel: RaycastKernel::new(&device),
-            mesh_kernel: MeshBvhRaycastKernel::new(&device),
-            mesh_cache: HashMap::new(),
+            merge,
             capacity: max_rays.max(1),
+            static_body_q,
             ray_origin,
             ray_direction,
             hit_t,
             hit_shape,
             hit_point,
             hit_normal,
+            mesh_kernel: MeshBvhRaycastKernel::new(&device),
+            mesh_cache: HashMap::new(),
+            primitive_bindings: Vec::with_capacity(2),
+            direct_primitives: BindingsCache::with_capacity(128),
+            direct_initial: BindingsCache::with_capacity(64),
+            direct_meshes: HashMap::new(),
+            direct_scene: None,
+            upload_origins: vec![[0.0; 4]; cap],
+            upload_directions: vec![[0.0; 4]; cap],
+            mesh_bindings: HashMap::new(),
+            query_stats: RayQueryStats::default(),
+            mesh_epoch: 0,
+            mesh_builds: 0,
+            active_scene: None,
             mesh_hit_t,
             mesh_hit_tri,
             mesh_hit_normal,
+            readback: None,
         })
     }
 
-    /// Drop every cached per-shape mesh BVH. Call this when the
-    /// model's TriMesh shapes change (vertices edited, mesh swapped,
-    /// or a new `Model` reuses old shape indices); a subsequent
-    /// `cast` then rebuilds the world-space BVH lazily. Cheap when
-    /// the cache is empty.
+    /// Release legacy mesh BVHs and mesh query bindings. Owned scene geometry is unaffected.
     pub fn clear_mesh_cache(&mut self) {
         self.mesh_cache.clear();
+        self.mesh_bindings.clear();
+        self.direct_meshes.clear();
     }
 
-    /// Number of cached per-shape mesh BVHs. Useful for tests and
-    /// memory-budget asserts.
+    /// Number of unique local meshes cached by legacy model queries.
     pub fn mesh_cache_len(&self) -> usize {
         self.mesh_cache.len()
     }
 
-    /// Cast `origins.len()` rays against `model` (using the body
-    /// poses in `state`) and return the closest hits within
-    /// `max_distance`. The model + state must already have their
-    /// device mirrors uploaded.
+    /// Counters for the optional synchronous collector. Device-only dispatch leaves these zero.
+    pub fn readback_stats(&self) -> ReadbackStats {
+        self.readback
+            .as_ref()
+            .map(ReadbackRing::stats)
+            .unwrap_or_default()
+    }
+
+    /// Each preparation allocates one uniform and four bind groups; merge uses one group.
+    /// Legacy queries retain two variants; direct queries retain 128 per primitive/mesh
+    /// and 64 miss initializers. Direct submissions are counted on their command batch.
+    pub fn query_stats(&self) -> RayQueryStats {
+        self.query_stats
+    }
+
+    fn output_specs(&self) -> [SensorChannelSpec; 6] {
+        let n = self.capacity as usize;
+        [
+            SensorChannelSpec::of::<Vec3>(n),
+            SensorChannelSpec::of::<Vec3>(n),
+            SensorChannelSpec::of::<Real>(n),
+            SensorChannelSpec::of::<i32>(n),
+            SensorChannelSpec::of::<Vec3>(n),
+            SensorChannelSpec::of::<Vec3>(n),
+        ]
+    }
+
+    /// Channels: origins, unit directions, distance, shape index, point, normal.
+    pub fn output_pool(
+        &self,
+        engine: &Engine,
+        config: SensorFramePoolConfig,
+    ) -> Result<SensorFramePool> {
+        engine.check_device()?;
+        if !Arc::ptr_eq(engine.device().expect("checked engine"), &self.hit_t.device) {
+            return Err(Error::Gpu("raycaster: foreign engine".into()));
+        }
+        SensorFramePool::new(engine, config, &self.output_specs())
+    }
+
+    /// Encode closest hits directly into leased scene-query slots without collection/submission.
+    /// Host rays are checked and normalized before upload; all six channels use `0..ray_count`.
+    /// Scene/producer/state borrows last until submission/drop. Nonempty body states need canonical device ownership.
+    /// `None` means backpressure without input uploads, binding preparation or query commands.
     ///
-    /// Slice lengths must match and not exceed the sensor's
-    /// `max_rays` capacity.
+    /// ```compile_fail
+    /// use molla_sensors::{Raycaster, SensorScene, SensorCommandBatch, SensorFramePool};
+    /// use molla_compute::Engine;
+    /// use molla_sim::{Model, State};
+    /// fn replace_pending(sensor: &mut Raycaster, engine: &Engine, scene: &mut SensorScene, model: &Model, state: &State, pool: &mut SensorFramePool) {
+    ///     let mut batch = SensorCommandBatch::new(engine).unwrap();
+    ///     sensor.encode_scene(&mut batch, engine, scene, state, &[], &[], 10.0, pool, Default::default()).unwrap();
+    ///     scene.replace_model(engine, model).unwrap();
+    ///     batch.submit().unwrap();
+    /// }
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_scene<'a>(
+        &'a mut self,
+        batch: &mut SensorCommandBatch<'a>,
+        engine: &Engine,
+        scene: &'a SensorScene,
+        state: &'a State,
+        origins: &[Vec3],
+        directions: &[Vec3],
+        max_distance: Real,
+        pool: &mut SensorFramePool,
+        stamp: ReadbackStamp,
+    ) -> Result<Option<EncodedRayQuery>> {
+        batch.check_engine(engine)?;
+        scene.check_engine(engine)?;
+        let device = engine.device().expect("checked engine");
+        if !Arc::ptr_eq(device, &self.hit_t.device) {
+            return Err(Error::Gpu("raycaster: foreign engine".into()));
+        }
+        if origins.len() != directions.len() || origins.len() > self.capacity as usize {
+            return Err(Error::Solver(
+                "raycaster: ray lengths differ or exceed capacity".into(),
+            ));
+        }
+        if !(max_distance as f32).is_finite() || max_distance as f32 <= 0.0 {
+            return Err(Error::Solver(
+                "raycaster: max_distance must be positive and finite in f32".into(),
+            ));
+        }
+        for (i, (origin, direction)) in origins.iter().zip(directions).enumerate() {
+            if !origin.as_vec3().is_finite()
+                || !direction.is_finite()
+                || direction.abs().max_element() == 0.0
+            {
+                return Err(Error::Solver(format!(
+                    "raycaster: invalid origin or direction at ray {i}"
+                )));
+            }
+        }
+        let n = origins.len();
+        if n != 0 && scene.model.body_count != 0 {
+            if state.body_q.len() != scene.model.body_count {
+                return Err(Error::Solver(
+                    "raycaster: state/model body counts differ".into(),
+                ));
+            }
+            state.body_q.device_buffer_for(device)?;
+        }
+        let specs = self.output_specs();
+        let ranges = std::array::from_fn::<_, 6, _>(|_| 0..n);
+        let frame = batch.encode_output_initialized(
+            pool,
+            &specs,
+            &ranges,
+            stamp,
+            !3u64,
+            |device, queue, encoder, outputs| {
+                if n == 0 {
+                    return Ok(0);
+                }
+                for (i, (origin, direction)) in origins.iter().zip(directions).enumerate() {
+                    let direction = (*direction / direction.abs().max_element()).normalize();
+                    self.upload_origins[i] =
+                        [origin.x as f32, origin.y as f32, origin.z as f32, 0.0];
+                    self.upload_directions[i] = [
+                        direction.x as f32,
+                        direction.y as f32,
+                        direction.z as f32,
+                        0.0,
+                    ];
+                }
+                queue.write_buffer(
+                    &outputs[0],
+                    0,
+                    bytemuck::cast_slice(&self.upload_origins[..n]),
+                );
+                queue.write_buffer(
+                    &outputs[1],
+                    0,
+                    bytemuck::cast_slice(&self.upload_directions[..n]),
+                );
+                self.encode_owned_scene(
+                    device,
+                    queue,
+                    encoder,
+                    scene,
+                    state,
+                    outputs,
+                    n as u32,
+                    max_distance as f32,
+                )
+            },
+        )?;
+        let Some(frame) = frame else {
+            return Ok(None);
+        };
+        batch.record_input_upload(n as u64 * 32);
+        Ok(Some(EncodedRayQuery {
+            frame,
+            ray_count: n,
+            scene_stamp: scene.stamp(),
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_owned_scene(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        scene: &SensorScene,
+        state: &State,
+        outputs: &[wgpu::Buffer],
+        count: u32,
+        max_distance: f32,
+    ) -> Result<u64> {
+        if self.direct_scene != Some(scene.stamp()) {
+            self.direct_primitives.clear();
+            self.direct_meshes.clear();
+            self.direct_scene = Some(scene.stamp());
+        }
+        let model = &scene.model;
+        let scratch = [
+            self.mesh_hit_t.device_buffer_current()?,
+            self.mesh_hit_tri.device_buffer_current()?,
+            self.mesh_hit_normal.device_buffer_current()?,
+        ];
+        let merge_buffers = [
+            &outputs[0],
+            &outputs[1],
+            scratch[0],
+            scratch[1],
+            scratch[2],
+            &outputs[2],
+            &outputs[3],
+            &outputs[4],
+            &outputs[5],
+        ];
+        let has_primitives = model
+            .shape_geom_kind
+            .host()?
+            .iter()
+            .any(|&kind| kind != 0xff);
+        if has_primitives {
+            let poses = if model.body_count == 0 {
+                self.static_body_q.device_buffer_current()?
+            } else {
+                state.body_q.device_buffer_current()?
+            };
+            let buffers = [
+                model.shape_geom_kind.device_buffer_current()?,
+                model.shape_geom_data.device_buffer_current()?,
+                model.shape_body.device_buffer_current()?,
+                model.shape_transform.device_buffer_current()?,
+                poses,
+                &outputs[0],
+                &outputs[1],
+                &outputs[2],
+                &outputs[3],
+                &outputs[4],
+                &outputs[5],
+            ];
+            let (bindings, prepared) = self.direct_primitives.get_or_prepare(
+                |binding| binding.matches(buffers),
+                || self.kernel.prepare(device, buffers),
+            );
+            self.query_stats.primitive_preparations += u64::from(prepared);
+            self.kernel.encode_prepared(
+                queue,
+                encoder,
+                bindings,
+                count,
+                model.shape_count as u32,
+                max_distance,
+            );
+        } else {
+            let (bindings, prepared) = self.direct_initial.get_or_prepare(
+                |binding| binding.matches(merge_buffers),
+                || self.merge.prepare_with_buffers(device, merge_buffers),
+            );
+            self.query_stats.merge_preparations += u64::from(prepared);
+            self.merge
+                .encode_prepared(queue, encoder, bindings, count, None, max_distance);
+        }
+        let mut dispatches = 1;
+        let bodies = model.shape_body.host()?;
+        for (shape, geometry) in model.shape_geometry.iter().enumerate() {
+            let ShapeGeometry::TriMesh { mesh_id } = *geometry else {
+                continue;
+            };
+            let mesh = scene.mesh(mesh_id)?;
+            if mesh.node_count == 0 {
+                continue;
+            }
+            let body = bodies[shape];
+            let poses = if body < 0 {
+                self.static_body_q.device_buffer_current()?
+            } else {
+                state.body_q.device_buffer_current()?
+            };
+            let buffers = [
+                &mesh.nodes,
+                &mesh.tri_order,
+                &mesh.indices,
+                &mesh.vertices,
+                &outputs[0],
+                &outputs[1],
+                scratch[0],
+                scratch[1],
+                scratch[2],
+                poses,
+                model.shape_transform.device_buffer_current()?,
+            ];
+            let cache = self
+                .direct_meshes
+                .entry(shape as u32)
+                .or_insert_with(|| BindingsCache::with_capacity(128));
+            let (bindings, prepared) = cache.get_or_prepare(
+                |binding| binding.query.matches(buffers) && binding.merge.matches(merge_buffers),
+                || DirectMeshBindings {
+                    query: self.mesh_kernel.prepare(device, buffers),
+                    merge: self.merge.prepare_with_buffers(device, merge_buffers),
+                },
+            );
+            self.query_stats.mesh_preparations += u64::from(prepared);
+            self.query_stats.merge_preparations += u64::from(prepared);
+            self.mesh_kernel.encode_prepared(
+                queue,
+                encoder,
+                &bindings.query,
+                count,
+                mesh.node_count,
+                max_distance,
+                shape as u32,
+                body,
+            );
+            self.merge.encode_prepared(
+                queue,
+                encoder,
+                &bindings.merge,
+                count,
+                Some(shape as u32),
+                max_distance,
+            );
+            dispatches += 2;
+        }
+        self.mesh_hit_t.mark_device_dirty();
+        self.mesh_hit_tri.mark_device_dirty();
+        self.mesh_hit_normal.mark_device_dirty();
+        self.query_stats.encoded_queries += 1;
+        Ok(dispatches)
+    }
+
+    /// Submit a query without host collection or GPU waits.
+    /// Directions must be finite/nonzero; origins and range must remain finite in f32.
+    /// Equal-distance ties retain analytical hits first, then the earliest mesh.
+    /// Inputs must be uploaded on this engine; raw mesh edits invalidate cached geometry.
+    pub fn dispatch(
+        &mut self,
+        engine: &Engine,
+        model: &Model,
+        state: &State,
+        origins: &[Vec3],
+        directions: &[Vec3],
+        max_distance: Real,
+    ) -> Result<RayDeviceHits<'_>> {
+        engine.check_device()?;
+        self.dispatch_for_model(
+            engine,
+            model,
+            state,
+            origins,
+            directions,
+            max_distance,
+            None,
+        )
+    }
+
+    pub fn dispatch_scene(
+        &mut self,
+        engine: &Engine,
+        scene: &SensorScene,
+        state: &State,
+        origins: &[Vec3],
+        directions: &[Vec3],
+        max_distance: Real,
+    ) -> Result<RayDeviceHits<'_>> {
+        scene.check_engine(engine)?;
+        self.dispatch_for_model(
+            engine,
+            &scene.model,
+            state,
+            origins,
+            directions,
+            max_distance,
+            Some(scene),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_for_model(
+        &mut self,
+        engine: &Engine,
+        model: &Model,
+        state: &State,
+        origins: &[Vec3],
+        directions: &[Vec3],
+        max_distance: Real,
+        scene: Option<&SensorScene>,
+    ) -> Result<RayDeviceHits<'_>> {
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("raycaster: engine has no GPU device".into()))?
+            .clone();
+        if !Arc::ptr_eq(&device, &self.hit_t.device) {
+            return Err(Error::Gpu(
+                "raycaster: engine differs from sensor device".into(),
+            ));
+        }
+        if origins.len() != directions.len() || origins.len() > self.capacity as usize {
+            return Err(Error::Solver(
+                "raycaster: ray lengths differ or exceed capacity".into(),
+            ));
+        }
+        if !(max_distance as f32).is_finite() || max_distance as f32 <= 0.0 {
+            return Err(Error::Solver(
+                "raycaster: max_distance must be positive and finite in f32".into(),
+            ));
+        }
+        for (i, (origin, direction)) in origins.iter().zip(directions).enumerate() {
+            if !origin.as_vec3().is_finite()
+                || !direction.is_finite()
+                || direction.abs().max_element() == 0.0
+            {
+                return Err(Error::Solver(format!(
+                    "raycaster: invalid origin or direction at ray {i}"
+                )));
+            }
+        }
+        let n = origins.len();
+        if n != 0 {
+            self.ray_origin.host_mut()?[..n].copy_from_slice(origins);
+            for (out, direction) in self.ray_direction.host_mut()?.iter_mut().zip(directions) {
+                *out = (*direction / direction.abs().max_element()).normalize();
+            }
+            self.ray_origin.upload()?;
+            self.ray_direction.upload()?;
+        }
+        self.query_uploaded(engine, model, state, n, max_distance, scene)
+    }
+
+    pub(crate) fn device_hits(&self, n: usize) -> RayDeviceHits<'_> {
+        RayDeviceHits {
+            ray_count: n,
+            scene_stamp: self.active_scene,
+            origins: &self.ray_origin,
+            directions: &self.ray_direction,
+            distance: &self.hit_t,
+            shape: &self.hit_shape,
+            point: &self.hit_point,
+            normal: &self.hit_normal,
+        }
+    }
+
+    pub fn mesh_build_count(&self) -> u64 {
+        self.mesh_builds
+    }
+
+    pub(crate) fn set_scene_stamp(&mut self, stamp: Option<SceneStamp>) {
+        self.active_scene = stamp;
+    }
+
+    pub(crate) fn encode_generated(
+        &mut self,
+        engine: &Engine,
+        encoder: &mut wgpu::CommandEncoder,
+        model: &Model,
+        state: &State,
+        n: usize,
+        max_distance: Real,
+        scene: Option<&SensorScene>,
+    ) -> Result<u64> {
+        self.ray_origin.mark_device_dirty();
+        self.ray_direction.mark_device_dirty();
+        self.encode_uploaded(engine, encoder, model, state, n, max_distance, scene)
+    }
+
+    fn query_uploaded(
+        &mut self,
+        engine: &Engine,
+        model: &Model,
+        state: &State,
+        n: usize,
+        max_distance: Real,
+        scene: Option<&SensorScene>,
+    ) -> Result<RayDeviceHits<'_>> {
+        if n == 0 {
+            self.active_scene = scene.map(SensorScene::stamp);
+            return Ok(self.device_hits(0));
+        }
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("raycaster requires GPU".into()))?;
+        let queue = engine
+            .queue()
+            .ok_or_else(|| Error::Gpu("raycaster requires queue".into()))?;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::raycaster query"),
+        });
+        self.encode_uploaded(engine, &mut encoder, model, state, n, max_distance, scene)?;
+        queue.submit([encoder.finish()]);
+        self.query_stats.submissions += 1;
+        Ok(self.device_hits(n))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_uploaded(
+        &mut self,
+        engine: &Engine,
+        encoder: &mut wgpu::CommandEncoder,
+        model: &Model,
+        state: &State,
+        n: usize,
+        max_distance: Real,
+        scene: Option<&SensorScene>,
+    ) -> Result<u64> {
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("raycaster requires GPU".into()))?;
+        let queue = engine
+            .queue()
+            .ok_or_else(|| Error::Gpu("raycaster requires queue".into()))?;
+        if !Arc::ptr_eq(device, &self.hit_t.device) || n > self.capacity as usize {
+            return Err(Error::Gpu("raycaster: invalid device or capacity".into()));
+        }
+        self.active_scene = scene.map(SensorScene::stamp);
+        let mut dispatches = 0;
+        if n != 0 {
+            let has_analytical_shape = model.shape_geom_kind.host()?.iter().any(|&k| k != 0xff);
+            if has_analytical_shape {
+                let body_q = if model.body_count == 0 {
+                    self.static_body_q.device_buffer_current()?
+                } else {
+                    if state.body_q.len() != model.body_count {
+                        return Err(Error::Solver(
+                            "raycaster: state/model body counts differ".into(),
+                        ));
+                    }
+                    state.body_q.device_buffer_current()?
+                };
+                let buffers = [
+                    model.shape_geom_kind.device_buffer_current()?,
+                    model.shape_geom_data.device_buffer_current()?,
+                    model.shape_body.device_buffer_current()?,
+                    model.shape_transform.device_buffer_current()?,
+                    body_q,
+                    self.ray_origin.device_buffer()?,
+                    self.ray_direction.device_buffer()?,
+                    self.hit_t.device_buffer()?,
+                    self.hit_shape.device_buffer()?,
+                    self.hit_point.device_buffer()?,
+                    self.hit_normal.device_buffer()?,
+                ];
+                let index = match self
+                    .primitive_bindings
+                    .iter()
+                    .position(|b| b.matches(buffers))
+                {
+                    Some(index) => index,
+                    None => {
+                        if self.primitive_bindings.len() == 2 {
+                            self.primitive_bindings.remove(0);
+                        }
+                        self.primitive_bindings
+                            .push(self.kernel.prepare(device, buffers));
+                        self.query_stats.primitive_preparations += 1;
+                        self.primitive_bindings.len() - 1
+                    }
+                };
+                self.kernel.encode_prepared(
+                    queue,
+                    encoder,
+                    &self.primitive_bindings[index],
+                    n as u32,
+                    model.shape_count as u32,
+                    max_distance as f32,
+                );
+            } else {
+                self.merge
+                    .encode_initial(queue, encoder, n as u32, max_distance as f32);
+            }
+            self.hit_t.mark_device_dirty();
+            self.hit_shape.mark_device_dirty();
+            self.hit_point.mark_device_dirty();
+            self.hit_normal.mark_device_dirty();
+            dispatches = 1 + self.run_trimesh_pass(
+                &device,
+                &queue,
+                encoder,
+                model,
+                state,
+                scene,
+                n as u32,
+                max_distance as f32,
+            )?;
+            self.query_stats.encoded_queries += 1;
+        }
+        Ok(dispatches)
+    }
+
+    /// Cast and collect all four active hit channels in one grouped readback.
+    /// This synchronous convenience call may wait up to 30 seconds for collection.
     pub fn cast(
         &mut self,
         engine: &Engine,
@@ -184,285 +800,229 @@ impl Raycaster {
         directions: &[Vec3],
         max_distance: Real,
     ) -> Result<Vec<RayHit>> {
-        if origins.len() != directions.len() {
-            return Err(Error::Solver(format!(
-                "raycaster::cast: origins.len() {} != directions.len() {}",
-                origins.len(),
-                directions.len()
-            )));
-        }
-        if origins.len() as u32 > self.capacity {
-            return Err(Error::Solver(format!(
-                "raycaster::cast: {} rays exceeds capacity {}",
-                origins.len(),
-                self.capacity
-            )));
-        }
-        if origins.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let device = engine
-            .device()
-            .ok_or_else(|| Error::Gpu("raycaster::cast: engine has no GPU device".into()))?
-            .clone();
-        let queue = engine
-            .queue()
-            .ok_or_else(|| Error::Gpu("raycaster::cast: engine has no GPU queue".into()))?
-            .clone();
-
-        // Fill the front of the input buffers with the caller's rays;
-        // any unused slots stay at the previous frame's values, which
-        // is fine because we only consult the first `n` outputs.
-        {
-            let host = self.ray_origin.host_mut()?;
-            host[..origins.len()].copy_from_slice(origins);
-            self.ray_origin.upload(&queue)?;
-        }
-        {
-            let host = self.ray_direction.host_mut()?;
-            host[..directions.len()].copy_from_slice(directions);
-            self.ray_direction.upload(&queue)?;
-        }
-
-        // ── Pass 1: analytical primitives (sphere / box / capsule /
-        // cylinder / cone / plane / ellipsoid). The kernel skips
-        // TriMesh shapes via the `0xff` sentinel. If the model carries
-        // no analytical shapes at all — e.g. a TriMesh-only ground
-        // scene — skip the analytical dispatch and seed the merge
-        // buffers with miss defaults so pass 2 still runs.
-        let n = origins.len();
-        let has_analytical_shape = {
-            let kinds = model.shape_geom_kind.host()?;
-            kinds.iter().any(|&k| k != 0xff)
-        };
-        let mut best_t: Vec<Real>;
-        let mut best_shape: Vec<i32>;
-        let mut best_point: Vec<Vec3>;
-        let mut best_normal: Vec<Vec3>;
-        if has_analytical_shape {
-            let body_q_buf = state
-                .body_q
-                .device_buffer()
-                .ok_or_else(|| Error::Gpu("raycaster::cast: state.body_q not on device".into()))?;
-            self.kernel.dispatch_with_body_q(
-                &device,
-                &queue,
-                model,
-                body_q_buf,
-                n as u32,
-                &self.ray_origin,
-                &self.ray_direction,
-                &mut self.hit_t,
-                &mut self.hit_shape,
-                &mut self.hit_point,
-                &mut self.hit_normal,
-                max_distance as f32,
-            )?;
-            self.hit_t.download(&device, &queue)?;
-            self.hit_shape.download(&device, &queue)?;
-            self.hit_point.download(&device, &queue)?;
-            self.hit_normal.download(&device, &queue)?;
-            best_t = self.hit_t.host()?[..n].to_vec();
-            best_shape = self.hit_shape.host()?[..n].to_vec();
-            best_point = self.hit_point.host()?[..n].to_vec();
-            best_normal = self.hit_normal.host()?[..n].to_vec();
-        } else {
-            best_t = vec![-1.0; n];
-            best_shape = vec![-1; n];
-            best_point = vec![Vec3::ZERO; n];
-            best_normal = vec![Vec3::Y; n];
-        }
-
-        // ── Pass 2: one mesh-BVH dispatch per static TriMesh shape,
-        // merged into `best_*` host-side. Dynamic TriMesh shapes
-        // (`shape_body != -1`) are skipped — see module docstring.
-        self.run_trimesh_pass(
-            &device,
-            &queue,
-            model,
-            origins,
-            directions,
-            max_distance,
-            &mut best_t,
-            &mut best_shape,
-            &mut best_point,
-            &mut best_normal,
-        )?;
-
-        // ── Assemble the public RayHit vec.
-        let shape_body = model.shape_body.host()?;
-        let mut out = Vec::with_capacity(n);
-        for i in 0..n {
-            let t = best_t[i];
-            let s = best_shape[i];
-            if s < 0 || t <= 0.0 {
-                out.push(RayHit {
-                    shape_id: None,
-                    body_id: BodyId::NONE,
-                    t: Real::INFINITY,
-                    point: Vec3::ZERO,
-                    normal: Vec3::Y,
-                });
-            } else {
-                let body = shape_body.get(s as usize).copied().unwrap_or(-1);
-                out.push(RayHit {
-                    shape_id: Some(s as u32),
-                    body_id: if body >= 0 {
-                        BodyId::from_index(body as usize)
-                    } else {
-                        BodyId::NONE
-                    },
-                    t,
-                    point: best_point[i],
-                    normal: best_normal[i],
-                });
-            }
-        }
-
-        Ok(out)
+        self.dispatch(engine, model, state, origins, directions, max_distance)?;
+        self.collect_hits(engine, model, origins.len())
     }
 
-    /// H1 — second pass over every static TriMesh shape. The pass
-    /// builds the world-space mesh BVH once per shape (cached), then
-    /// merges the closest hit into the per-ray running best.
+    pub fn cast_scene(
+        &mut self,
+        engine: &Engine,
+        scene: &SensorScene,
+        state: &State,
+        origins: &[Vec3],
+        directions: &[Vec3],
+        max_distance: Real,
+    ) -> Result<Vec<RayHit>> {
+        self.dispatch_scene(engine, scene, state, origins, directions, max_distance)?;
+        self.collect_hits(engine, &scene.model, origins.len())
+    }
+
+    fn collect_hits(&mut self, engine: &Engine, model: &Model, n: usize) -> Result<Vec<RayHit>> {
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        if self.readback.is_none() {
+            let bytes = self.capacity as u64 * 40;
+            self.readback = Some(ReadbackRing::new(
+                engine,
+                ReadbackConfig {
+                    slots: 1,
+                    bytes_per_slot: bytes,
+                    max_total_bytes: bytes,
+                },
+            )?);
+        }
+        let ring = self.readback.as_mut().expect("initialized readback");
+        let sources = [
+            self.hit_t.readback_source(0..n)?,
+            self.hit_shape.readback_source(0..n)?,
+            self.hit_point.readback_source(0..n)?,
+            self.hit_normal.readback_source(0..n)?,
+        ];
+        let ticket = ring
+            .try_enqueue(&sources, ReadbackStamp::default())?
+            .ok_or_else(|| Error::Storage("raycaster: synchronous readback slot busy".into()))?;
+        let frame = match ring.wait(&ticket, Duration::from_secs(30)) {
+            Ok(frame) => frame,
+            Err(error) => {
+                ring.reset();
+                return Err(error);
+            }
+        };
+        let shape_body = model.shape_body.host()?;
+        let hits = frame
+            .channel_iter::<Real>(0)?
+            .zip(frame.channel_iter::<i32>(1)?)
+            .zip(frame.channel_iter::<Vec3>(2)?)
+            .zip(frame.channel_iter::<Vec3>(3)?)
+            .map(|(((t, shape), point), normal)| {
+                if shape < 0 || t <= 0.0 {
+                    RayHit {
+                        shape_id: None,
+                        body_id: BodyId::NONE,
+                        t: Real::INFINITY,
+                        point: Vec3::ZERO,
+                        normal: Vec3::Y,
+                    }
+                } else {
+                    let body = shape_body.get(shape as usize).copied().unwrap_or(-1);
+                    RayHit {
+                        shape_id: Some(shape as u32),
+                        body_id: if body >= 0 {
+                            BodyId::from_index(body as usize)
+                        } else {
+                            BodyId::NONE
+                        },
+                        t,
+                        point,
+                        normal,
+                    }
+                }
+            })
+            .collect();
+        Ok(hits)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn run_trimesh_pass(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
         model: &Model,
-        origins: &[Vec3],
-        directions: &[Vec3],
-        max_distance: Real,
-        best_t: &mut [Real],
-        best_shape: &mut [i32],
-        best_point: &mut [Vec3],
-        best_normal: &mut [Vec3],
-    ) -> Result<()> {
-        let n = origins.len();
-        if model.shape_geometry.is_empty() || n == 0 {
-            return Ok(());
-        }
+        state: &State,
+        scene: Option<&SensorScene>,
+        ray_count: u32,
+        max_distance: f32,
+    ) -> Result<u64> {
+        let mut dispatches = 0;
+        self.mesh_epoch = self
+            .mesh_epoch
+            .checked_add(1)
+            .ok_or_else(|| Error::Solver("raycaster mesh epoch exhausted".into()))?;
         let shape_body = model.shape_body.host()?;
-        let shape_transform = model.shape_transform.host()?;
-        // Snapshot once; the inner loop indexes into these.
-        let n_shapes = model.shape_geometry.len();
-
-        for shape_id in 0..n_shapes {
-            let mesh_id = match model.shape_geometry[shape_id] {
-                ShapeGeometry::TriMesh { mesh_id } => mesh_id,
-                _ => continue,
+        for (shape_id, geometry) in model.shape_geometry.iter().enumerate() {
+            let ShapeGeometry::TriMesh { mesh_id } = *geometry else {
+                continue;
             };
-            // v1 scope: static TriMesh only (no moving body).
-            // shape_body[s] == -1 ↔ world-static shape. Dynamic
-            // TriMesh is logged at scene-build time via the existing
-            // `0xff` skip; the mesh kernel here just defers it.
-            if shape_body.get(shape_id).copied().unwrap_or(-1) != -1 {
+            let body_id = *shape_body
+                .get(shape_id)
+                .ok_or_else(|| Error::Solver("raycaster: invalid shape body array".into()))?;
+            if body_id < -1 || body_id >= 0 && body_id as usize >= model.body_count {
+                return Err(Error::Solver("raycaster: invalid mesh body index".into()));
+            }
+            let body_poses = if body_id < 0 {
+                self.static_body_q.device_buffer_current()?
+            } else {
+                if state.body_q.len() != model.body_count {
+                    return Err(Error::Solver(
+                        "raycaster: state/model body counts differ".into(),
+                    ));
+                }
+                state.body_q.device_buffer_current()?
+            };
+            let shape_poses = model.shape_transform.device_buffer_current()?;
+            let mesh = if let Some(scene) = scene {
+                scene.mesh(mesh_id)?
+            } else {
+                let source = model
+                    .meshes
+                    .get(mesh_id as usize)
+                    .ok_or_else(|| Error::Solver("raycaster: invalid mesh id".into()))?;
+                let entry = self.mesh_cache.get(&mesh_id);
+                let rebuild = entry.is_none_or(|entry| {
+                    entry.checked_epoch != self.mesh_epoch
+                        && (entry.source.vertices != source.vertices
+                            || entry.source.indices != source.indices)
+                });
+                if rebuild {
+                    let gpu =
+                        MeshBvhGpu::from_mesh(device, queue, &source.vertices, &source.indices)?;
+                    self.mesh_cache.insert(
+                        mesh_id,
+                        CachedMesh {
+                            gpu,
+                            source: source.clone(),
+                            checked_epoch: self.mesh_epoch,
+                        },
+                    );
+                    self.mesh_builds += 1;
+                }
+                let entry = self.mesh_cache.get_mut(&mesh_id).expect("initialized mesh");
+                entry.checked_epoch = self.mesh_epoch;
+                &entry.gpu
+            };
+            if mesh.node_count == 0 {
                 continue;
             }
-            let world_xf = shape_transform
-                .get(shape_id)
-                .copied()
-                .ok_or_else(|| Error::Gpu("raycaster: shape_transform out of range".into()))?;
-
-            // Build & upload the world-space BVH the first time this
-            // shape is queried. Vertices are pre-transformed so the
-            // mesh kernel can be used as-is (it operates in
-            // "mesh-local" = world-space here). `Entry::or_insert_with`
-            // avoids the contains_key/insert two-lookup pattern, but
-            // we want the build to be fallible — match-and-fill is
-            // the readable form.
-            let key = shape_id as u32;
-            if let std::collections::hash_map::Entry::Vacant(slot) = self.mesh_cache.entry(key) {
-                let mesh = model.meshes.get(mesh_id as usize).ok_or_else(|| {
-                    Error::Gpu(format!(
-                        "raycaster: shape {shape_id} has invalid mesh_id {mesh_id}"
-                    ))
-                })?;
-                if mesh.vertices.is_empty() || mesh.indices.is_empty() {
-                    continue;
+            let key = u32::try_from(shape_id)
+                .ok()
+                .filter(|&id| id <= i32::MAX as u32)
+                .ok_or_else(|| Error::Solver("raycaster: shape index exceeds i32".into()))?;
+            let buffers = [
+                &mesh.nodes,
+                &mesh.tri_order,
+                &mesh.indices,
+                &mesh.vertices,
+                self.ray_origin.device_buffer()?,
+                self.ray_direction.device_buffer()?,
+                self.mesh_hit_t.device_buffer_current()?,
+                self.mesh_hit_tri.device_buffer_current()?,
+                self.mesh_hit_normal.device_buffer_current()?,
+                body_poses,
+                shape_poses,
+            ];
+            let entry = self.mesh_bindings.entry(key).or_insert_with(|| {
+                self.query_stats.merge_preparations += 1;
+                CachedQuery {
+                    bindings: Vec::with_capacity(2),
+                    merge: self.merge.prepare(device),
+                    checked_epoch: 0,
                 }
-                let world_vertices: Vec<Vec3> = mesh
-                    .vertices
-                    .iter()
-                    .map(|v| world_xf.transform_point(*v))
-                    .collect();
-                let bvh = MeshBvh::build(&world_vertices, &mesh.indices, 8);
-                let gpu = MeshBvhGpu::upload(device, queue, &bvh, &world_vertices, &mesh.indices)?;
-                slot.insert(gpu);
-            }
-            let mesh_gpu = self
-                .mesh_cache
-                .get(&key)
-                .expect("just inserted or already cached");
-
-            // Dispatch the mesh-BVH raycast against the same ray batch.
-            self.mesh_kernel.dispatch(
-                device,
+            });
+            entry.checked_epoch = self.mesh_epoch;
+            let index = match entry.bindings.iter().position(|b| b.matches(buffers)) {
+                Some(index) => index,
+                None => {
+                    if entry.bindings.len() == 2 {
+                        entry.bindings.remove(0);
+                    }
+                    entry
+                        .bindings
+                        .push(self.mesh_kernel.prepare(device, buffers));
+                    self.query_stats.mesh_preparations += 1;
+                    entry.bindings.len() - 1
+                }
+            };
+            self.mesh_kernel.encode_prepared(
                 queue,
-                mesh_gpu,
-                &self.ray_origin,
-                &self.ray_direction,
-                &mut self.mesh_hit_t,
-                &mut self.mesh_hit_tri,
-                &mut self.mesh_hit_normal,
-                max_distance as f32,
-                n as u32,
-            )?;
-            self.mesh_hit_t.download(device, queue)?;
-            self.mesh_hit_tri.download(device, queue)?;
-            self.mesh_hit_normal.download(device, queue)?;
-
-            let mht = self.mesh_hit_t.host()?;
-            let mtri = self.mesh_hit_tri.host()?;
-            let mnrm = self.mesh_hit_normal.host()?;
-
-            for i in 0..n {
-                if mtri[i] < 0 {
-                    continue; // miss
-                }
-                let mt = mht[i];
-                // The mesh kernel writes `max_distance` as the miss
-                // sentinel for `hit_t` (it's also the initial value),
-                // so guard both: only count it as a real hit when the
-                // triangle index is non-negative AND `t < max_distance`.
-                if !mt.is_finite() || mt >= max_distance || mt <= 0.0 {
-                    continue;
-                }
-                let prev_has_hit = best_shape[i] >= 0 && best_t[i] > 0.0;
-                if !prev_has_hit || mt < best_t[i] {
-                    let n_geom = mnrm[i];
-                    let n_len2 = n_geom.x * n_geom.x + n_geom.y * n_geom.y + n_geom.z * n_geom.z;
-                    let outward = if n_len2 > 1.0e-24 {
-                        let inv = 1.0 / n_len2.sqrt();
-                        let n_unit = Vec3::new(n_geom.x * inv, n_geom.y * inv, n_geom.z * inv);
-                        // Flip to outward (against the ray direction).
-                        let dir = directions[i];
-                        if n_unit.x * dir.x + n_unit.y * dir.y + n_unit.z * dir.z > 0.0 {
-                            Vec3::new(-n_unit.x, -n_unit.y, -n_unit.z)
-                        } else {
-                            n_unit
-                        }
-                    } else {
-                        Vec3::Y
-                    };
-                    best_t[i] = mt;
-                    best_shape[i] = shape_id as i32;
-                    // The ray `direction` is the raw vector (not
-                    // necessarily unit); both kernels return `t` in
-                    // direction-vector units, so the hit point is
-                    // `origin + t * direction` regardless.
-                    let dir = directions[i];
-                    best_point[i] = Vec3::new(
-                        origins[i].x + dir.x * mt,
-                        origins[i].y + dir.y * mt,
-                        origins[i].z + dir.z * mt,
-                    );
-                    best_normal[i] = outward;
-                }
-            }
+                encoder,
+                &entry.bindings[index],
+                ray_count,
+                mesh.node_count,
+                max_distance,
+                key,
+                body_id,
+            );
+            self.mesh_hit_t.mark_device_dirty();
+            self.mesh_hit_tri.mark_device_dirty();
+            self.mesh_hit_normal.mark_device_dirty();
+            self.merge.encode_prepared(
+                queue,
+                encoder,
+                &entry.merge,
+                ray_count,
+                Some(key),
+                max_distance,
+            );
+            dispatches += 2;
         }
-        Ok(())
+        self.mesh_bindings
+            .retain(|_, entry| entry.checked_epoch == self.mesh_epoch);
+        if scene.is_none() {
+            self.mesh_cache
+                .retain(|_, entry| entry.checked_epoch == self.mesh_epoch);
+        }
+        Ok(dispatches)
     }
 }

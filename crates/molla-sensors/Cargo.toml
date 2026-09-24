@@ -13,6 +13,8 @@ workspace = true
 [features]
 default = []
 gpu = [
+    "dep:arrayvec",
+    "dep:bytemuck",
     "dep:wgpu",
     "dep:molla-geometry",
     "molla-compute/gpu",
@@ -24,8 +26,10 @@ gpu = [
 ]
 
 [dependencies]
+arrayvec = { version = "0.7.6", optional = true }
+bytemuck = { version = "1.18", features = ["derive"], optional = true }
 molla-compute = { path = "../molla-compute", default-features = false, optional = true }
-molla-core = { path = "../molla-core", default-features = false, optional = true }
+molla-core = { path = "../molla-core", default-features = false }
 # H1 — TriMesh raycasts use molla-geometry's mesh BVH on the GPU.
 molla-geometry = { path = "../molla-geometry", default-features = false, optional = true }
 molla-kernels = { path = "../molla-kernels", default-features = false, optional = true }
@@ -51,5 +55,35 @@ required-features = ["gpu"]
 
 [[bench]]
 name = "bench_sensor_raycast"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_sensor_lidar"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_sensor_images"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_sensor_cloud"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_sensor_grid"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_sensor_annotations"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_sensor_cloud_export"
 harness = false
 required-features = ["gpu"]

@@ -1,7 +1,12 @@
 SHELL := /bin/bash
 
+ifneq ($(wildcard PROJECT),)
 PROJECT_NAME := $(shell sed -n '/^[[:space:]]*[^#\[[:space:]]/p' PROJECT | head -1 | tr -d '[:space:]')
 PROJECT_VERSION := $(shell sed -n '/^[[:space:]]*[^#\[[:space:]]/p' PROJECT | sed -n '2p' | tr -d '[:space:]')
+else
+PROJECT_NAME := molla
+PROJECT_VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' crates/molla/Cargo.toml | head -1)
+endif
 ifeq ($(PROJECT_NAME),)
     $(error Error: PROJECT file not found or invalid)
 endif
@@ -13,6 +18,8 @@ DISPLAY ?= :1
 APP_PKG ?= molla_viewer
 APP_TARGET := -p $(APP_PKG)
 RUN_WITH ?= nixVulkan
+BENCH_ARGS ?=
+FMT_ARGS ?=
 TYPE ?= patch
 HAS_REL := $(shell command -v git-rel 2>/dev/null)
 
@@ -26,7 +33,7 @@ $(info Project: $(PROJECT_NAME) v$(PROJECT_VERSION))
 $(info Display: $(BACKEND) backend)
 $(info ------------------------------------------)
 
-.PHONY: build b compile c run r test t test-gpu test-all check check-all harden bench clean docs release help h
+.PHONY: build b compile c run r test t test-gpu test-sensors test-all check check-all fmt-files harden bench clean docs release help h
 
 build:
 	@$(CARGO) build $(APP_TARGET)
@@ -58,6 +65,15 @@ t: test
 test-gpu:
 	@$(RUN_WITH) $(CARGO) test $(REL) -p $(P) --features gpu --test $(T) -- --ignored $(A)
 
+test-sensors:
+	@$(MAKE) test APP_TARGET='-p molla-compute --features gpu --lib'
+	@$(MAKE) test APP_TARGET='-p molla-sensors --no-default-features'
+	@$(MAKE) test APP_TARGET='-p molla-sensors --features gpu --lib'
+	@$(MAKE) test APP_TARGET='-p molla-sensors --features gpu --test sensor_allocation_gpu'
+	@$(MAKE) test APP_TARGET='-p molla --no-default-features --test sensor_api'
+	@$(MAKE) test APP_TARGET='-p molla --features gpu --test sensor_api'
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-sensors --features gpu --tests -- --ignored --test-threads=1
+
 test-all:
 	@$(CARGO) test --workspace --all-targets
 
@@ -66,6 +82,10 @@ check:
 
 check-all:
 	@$(CARGO) check --workspace --all-targets
+
+fmt-files:
+	@test -n "$(FILES)" || { echo 'Set FILES to the Rust files to format'; exit 1; }
+	@rustfmt --edition 2024 $(FMT_ARGS) $(FILES)
 
 harden:
 	@git diff --check
@@ -76,7 +96,7 @@ harden:
 	@$(RUN_WITH) $(CARGO) test --workspace --all-targets --all-features
 
 bench:
-	@$(RUN_WITH) $(CARGO) bench
+	@$(RUN_WITH) $(CARGO) bench $(BENCH_ARGS)
 
 docs:
 	@command -v mdbook >/dev/null 2>&1 || { echo "mdbook is not installed. Please install it first."; exit 1; }
@@ -106,11 +126,13 @@ help:
 	@echo "  run          Run $(APP_PKG) ($(BACKEND) backend, $(RUN_WITH) wrapper)"
 	@echo "  test         Test $(APP_PKG)"
 	@echo "  test-gpu     Run a GPU test lane via $(RUN_WITH) (P= T= A= RELEASE=)"
+	@echo "  test-sensors Run sensor host, feature and explicit GPU regression lanes"
 	@echo "  test-all     Run the full workspace all-target test suite"
 	@echo "  check        Check $(APP_PKG)"
 	@echo "  check-all    Check the full workspace all-target suite"
+	@echo "  fmt-files    Format explicit Rust paths (FILES= FMT_ARGS=--check)"
 	@echo "  harden       Run diff whitespace check + fmt/check + strict clippy + all-feature tests"
-	@echo "  bench        Run benchmarks"
+	@echo "  bench        Run benchmarks (BENCH_ARGS=)"
 	@echo "  docs         Build documentation with mdbook"
 	@echo "  release      Create a new release (TYPE=patch|minor|major|m.m.p)"
 	@echo "  clean        Remove Cargo build artifacts"

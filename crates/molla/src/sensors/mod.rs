@@ -1,28 +1,10 @@
-//! Sensors — primitives for closing the perception loop in RL /
-//! teleop scenes.
+//! Public sensor APIs from `molla-sensors`.
 //!
-//! **GPU-first** by construction: each sensor's heavy compute lives
-//! in WGSL (`crates/molla/shaders/<sensor>.wgsl`) with a Rust
-//! dispatch wrapper and a thin orchestrator. CPU fallback paths
-//! exist only as test oracles, not as the primary execution path.
-//!
-//! Modules:
-//! - [`raycast`] — closest-hit ray vs collision shapes. Lives in
-//!   `shaders/raycast.wgsl` with the [`Raycaster`] orchestrator on
-//!   top. Sphere / Plane / Box / Capsule / Cylinder / Cone /
-//!   Ellipsoid supported analytically; static TriMesh shapes are
-//!   handled via a second GPU pass over the mesh BVH (H1).
-//! - [`lidar`] — terrestrial-LiDAR scan model: a (θ, φ) angular grid
-//!   on top of `Raycaster`, with metadata-aware [`Scan`] output (H4).
-//! - [`imu`] — body-frame linear acceleration + angular velocity.
-//! - [`contact`] — per-body contact summary.
-//! - [`frame_transform`] — pose tracking with optional smoothing.
-//! - [`tiled_camera`] — tiled depth/colour/normal/albedo camera for
-//!   RL pixel observations (Stage 14).
-//! - [`raycast_adjoint`] — CPU finite-difference adjoint for the
-//!   raycast pipeline (Stage 37.7). Differentiable raycasting for
-//!   inverse-rendering optimisations; CPU-only by design (FD probes
-//!   the forward pass `O(P · N_rays)` times, no GPU buffers needed).
+//! GPU-gated sensors include scene queries, LiDAR, cameras, IMU, contacts and
+//! frame transforms, with optional readback and copied device snapshots.
+//! Simulation-time scheduling and finite-difference ray adjoints also compile
+//! without GPU support. Images and point-cloud transforms/filters have GPU paths;
+//! CPU convenience processing and filesystem serialization remain available.
 
 #[cfg(feature = "gpu")]
 pub mod contact;
@@ -55,11 +37,60 @@ pub mod raycast_adjoint {
 pub mod tiled_camera;
 
 #[cfg(feature = "gpu")]
+pub use molla_sensors::{CloudReadLimits, cloud_export};
+
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{
+    AnnotationConfig, AnnotationCounts, AnnotationDeviceFrame, AnnotationJob, AnnotationLayout,
+    AnnotationProcessor, AnnotationStats, DeviceBoundingBox, EncodedAnnotations,
+    PendingAnnotationJob, ShapeLabel, annotation,
+};
+
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{
+    CloudGrid, CloudGridCell, CloudGridConfig, CloudGridDiagnostics, CloudGridFrame, CloudGridSpec,
+    CloudGridStats, EncodedCloudGrid, PendingCloudGridInput, cloud_grid,
+};
+
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{
+    CloudFilter, CloudFrame, CloudInput, CloudJob, CloudLayout, CloudPoint, CloudProcessingStats,
+    CloudProcessor, CloudProcessorConfig, CloudRaster, CloudSummary, EncodedCloud,
+    PendingCloudInput, PendingCloudJob, PendingCloudSource, cloud_processing,
+};
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{
+    EncodedProcessedImages, ImageJob, ImageOp, ImageProcessingStats, ImageProcessor,
+    ImageProcessorConfig, PendingImageJob, ProcessedImage, ProcessedImageLayout, ProcessedImages,
+};
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{
+    EncodedSensorFrame, PendingSensorChannel, PendingSensorInputs, SensorChannelSpec,
+    SensorCommandBatch, SensorCommandStats, SensorFrame, SensorFrameChannel, SensorFramePool,
+    SensorFramePoolConfig, SensorFramePoolStats, SensorSubmission, device_results,
+};
+pub use molla_sensors::{ScheduledSample, SensorSchedule, SensorScheduler, scheduler};
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{camera_batch, image_processing, lidar_batch, readback, scene, snapshot};
+
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{
+    CameraBatch, CameraBatchFrame, CameraBatchLimits, CameraBatchOutputPool, CameraBatchStamp,
+    CameraBatchStats, CameraDispatchStats, CameraImage, CameraImageLayout, CameraSpec,
+    ContactDeviceReadings, DeviceCommandBatch, DeviceSnapshot, DeviceSnapshotConfig,
+    DeviceSnapshotPool, DeviceSnapshotStats, EncodedCameraBatch, EncodedLidarBatch,
+    FrameDeviceReadings, ImuDeviceReadings, LidarBatch, LidarBatchStats, LidarDeviceBatch,
+    LidarPattern, LidarScan, LidarScanRange, RayDeviceHits, RayQueryStats, SceneStamp,
+    SensorDispatchStats, SensorScene, SensorSceneOptions, SnapshotChannel,
+    UnsupportedGeometryPolicy, UnsupportedShape,
+};
+
+#[cfg(feature = "gpu")]
 pub use contact::{BodyContactReading, ContactSensor};
 #[cfg(feature = "gpu")]
 pub use frame_transform::{FrameReading, FrameTarget, FrameTransformSensor};
 #[cfg(feature = "gpu")]
-pub use imu::{ImuMount, ImuReading, ImuSensor};
+pub use imu::{EncodedImuSample, ImuMount, ImuReading, ImuSensor};
 #[cfg(feature = "gpu")]
 pub use molla_sensors::{
     AerialLidar, AerialScan, AerialScanMetadata, AnnotationFrame, BoundingBox2D, Compare, Dataset,
@@ -71,6 +102,8 @@ pub use molla_sensors::{
     DiffRay, DiffSdfShape, RayScene, compute_grad_raycast, compute_loss_l2, forward_with_loss,
 };
 #[cfg(feature = "gpu")]
-pub use raycast::{RayHit, Raycaster};
+pub use raycast::{EncodedRayQuery, RayHit, Raycaster};
 #[cfg(feature = "gpu")]
-pub use tiled_camera::{CameraChannels, PhysicalOptics, TiledCamera, TiledCameraConfig};
+pub use tiled_camera::{
+    CameraChannels, EncodedCamera, PhysicalOptics, TiledCamera, TiledCameraConfig,
+};

@@ -63,6 +63,9 @@ use molla::solvers::{
     box_tank_walls,
 };
 
+#[cfg(test)]
+mod viewer_readback_tests;
+
 #[cfg(not(target_arch = "wasm32"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -4491,6 +4494,17 @@ fn apply_scene_switch(
     info!("scene switched → {}", scene.label());
 }
 
+fn readback_buffer<T: molla::storage::BufferElement>(
+    buffer: &mut mp::Buffer<T>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> molla::core::Result<()> {
+    if buffer.host().is_err() {
+        buffer.download(device, queue)?;
+    }
+    Ok(())
+}
+
 fn step_simulation(
     mut sim: ResMut<Sim>,
     mut run: ResMut<SimRunState>,
@@ -4712,19 +4726,16 @@ fn step_simulation(
         std::mem::swap(state_a, state_b);
 
         let d0 = std::time::Instant::now();
-        let _ = state_a.body_q.download(&device, &queue);
-        let _ = state_a.body_qd.download(&device, &queue);
+        readback_buffer(&mut state_a.body_q, &device, &queue).expect("body pose readback");
+        readback_buffer(&mut state_a.body_qd, &device, &queue).expect("body velocity readback");
         if model.joint_dof_total > 0 {
-            let _ = state_a.joint_q.download(&device, &queue);
-            let _ = state_a.joint_qd.download(&device, &queue);
+            readback_buffer(&mut state_a.joint_q, &device, &queue).expect("joint position readback");
+            readback_buffer(&mut state_a.joint_qd, &device, &queue).expect("joint velocity readback");
         }
-        // Cloth scenes (XPBD or VBD) write `particle_q` on the device
-        // and the renderer reads `particle_q.host()` in
-        // `sync_cloth_mesh`. Download per-substep so the visualisation
-        // tracks every solver iteration.
+        // Synchronize device-owned particle results for the renderer.
         if model.particle_count > 0 {
-            let _ = state_a.particle_q.download(&device, &queue);
-            let _ = state_a.particle_qd.download(&device, &queue);
+            readback_buffer(&mut state_a.particle_q, &device, &queue).expect("particle position readback");
+            readback_buffer(&mut state_a.particle_qd, &device, &queue).expect("particle velocity readback");
         }
         total_download_us += d0.elapsed().as_secs_f64() * 1_000_000.0;
     }

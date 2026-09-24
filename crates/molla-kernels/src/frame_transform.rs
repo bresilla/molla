@@ -1,8 +1,18 @@
 //! Rust dispatch wrapper for `shaders/frame_transform.wgsl`.
 
-use molla_core::{Error, Result};
+use crate::sensor_bindings::{SensorBindings, required_buffers};
+use molla_core::Result;
 use molla_sim::State;
 use molla_storage::Buffer;
+
+/// Retained input/output bindings and one parameter buffer for a frame query.
+pub struct FrameTransformBindings(SensorBindings<8, 2>);
+
+impl FrameTransformBindings {
+    pub fn matches(&self, buffers: [&wgpu::Buffer; 8]) -> bool {
+        self.0.matches(buffers)
+    }
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -78,6 +88,51 @@ impl FrameTransformKernel {
         }
     }
 
+    /// Buffer order: body poses, target bodies/positions/rotations, world
+    /// positions/rotations, relative positions/rotations. All belong to `device`.
+    pub fn prepare(
+        &self,
+        device: &wgpu::Device,
+        buffers: [&wgpu::Buffer; 8],
+    ) -> FrameTransformBindings {
+        FrameTransformBindings(SensorBindings::new(
+            device,
+            buffers,
+            [(&self.layout_in, 0..4), (&self.layout_out, 4..8)],
+            &self.layout_uniforms,
+            "molla::frame_transform prepared",
+        ))
+    }
+
+    /// Encode without submitting. Submit before rewriting these bindings' parameters;
+    /// use separate bindings for differing parameters in the same pending batch.
+    /// The caller validates active lengths/indices and marks outputs device-authoritative.
+    pub fn encode_prepared(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: &FrameTransformBindings,
+        target_count: u32,
+        has_reference: bool,
+    ) {
+        if target_count == 0 {
+            return;
+        }
+        let uniforms = Uniforms {
+            target_count,
+            has_reference: u32::from(has_reference),
+            _pad0: 0,
+            _pad1: 0,
+        };
+        bindings.0.encode(
+            queue,
+            encoder,
+            &self.pipeline,
+            bytemuck::cast_ref(&uniforms),
+            target_count.div_ceil(WORKGROUP_SIZE),
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &self,
@@ -98,64 +153,21 @@ impl FrameTransformKernel {
             return Ok(());
         }
 
-        let bg_in = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::frame_transform in bg"),
-            layout: &self.layout_in,
-            entries: &[
-                buffer_entry(0, state.body_q.device_buffer())?,
-                buffer_entry(1, target_body.device_buffer())?,
-                buffer_entry(2, target_local_pos.device_buffer())?,
-                buffer_entry(3, target_local_rot.device_buffer())?,
-            ],
-        });
-        let bg_out = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::frame_transform out bg"),
-            layout: &self.layout_out,
-            entries: &[
-                buffer_entry(0, world_pos.device_buffer())?,
-                buffer_entry(1, world_rot.device_buffer())?,
-                buffer_entry(2, relative_pos.device_buffer())?,
-                buffer_entry(3, relative_rot.device_buffer())?,
-            ],
-        });
-
-        let uniforms = Uniforms {
-            target_count,
-            has_reference: u32::from(has_reference),
-            _pad0: 0,
-            _pad1: 0,
-        };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::frame_transform uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
-        let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::frame_transform uniforms bg"),
-            layout: &self.layout_uniforms,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buf.as_entire_binding(),
-            }],
-        });
-
-        let groups = target_count.div_ceil(WORKGROUP_SIZE);
+        let buffers = [
+            state.body_q.device_buffer(),
+            target_body.device_buffer(),
+            target_local_pos.device_buffer(),
+            target_local_rot.device_buffer(),
+            world_pos.device_buffer(),
+            world_rot.device_buffer(),
+            relative_pos.device_buffer(),
+            relative_rot.device_buffer(),
+        ];
+        let bindings = self.prepare(device, required_buffers(buffers, "frame_transform")?);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::frame_transform encoder"),
         });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("molla::frame_transform::compute_frame_transforms"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bg_in, &[]);
-            pass.set_bind_group(1, &bg_out, &[]);
-            pass.set_bind_group(2, &bg_uniforms, &[]);
-            pass.dispatch_workgroups(groups, 1, 1);
-        }
+        self.encode_prepared(queue, &mut encoder, &bindings, target_count, has_reference);
         queue.submit(std::iter::once(encoder.finish()));
 
         world_pos.mark_device_dirty();
@@ -164,21 +176,6 @@ impl FrameTransformKernel {
         relative_rot.mark_device_dirty();
         Ok(())
     }
-}
-
-fn buffer_entry<'a>(
-    binding: u32,
-    buf: Option<&'a wgpu::Buffer>,
-) -> Result<wgpu::BindGroupEntry<'a>> {
-    let buf = buf.ok_or_else(|| {
-        Error::Gpu(format!(
-            "frame_transform binding {binding}: no device mirror"
-        ))
-    })?;
-    Ok(wgpu::BindGroupEntry {
-        binding,
-        resource: buf.as_entire_binding(),
-    })
 }
 
 fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntry> {

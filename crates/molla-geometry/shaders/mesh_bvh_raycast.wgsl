@@ -1,14 +1,5 @@
-// Per-mesh BVH ray-cast on the GPU. Mirrors `MeshBvh::ray_cast` from
-// `crates/molla/src/geometry/mesh_bvh.rs`: iterative stack-based
-// traversal of a flat `BvhNode` array, Möller–Trumbore for each
-// triangle in a leaf.
-//
-// One thread per ray. Per-thread stack capped at MAX_STACK; deeper
-// trees fall back to "no hit" (a future TODO; current trees stay
-// well under 64 deep for ~1k-tri meshes).
-//
-// Outputs (per ray): `hit_t`, `hit_tri`, `hit_normal`. `hit_tri == -1`
-// means no hit within `max_distance`.
+// Local-space BVH traversal with rigid instance poses and world-space normals.
+// Mesh upload validates tree depth against the per-ray stack capacity.
 
 struct BvhNode {
     aabb_min: vec4<f32>,   // .xyz = min; .w = is_leaf (as f32 0 or 1)
@@ -20,8 +11,14 @@ struct Uniforms {
     ray_count:    u32,
     node_count:   u32,
     max_distance: f32,
-    _pad:         f32,
+    shape_id:     u32,
+    body_id:      i32,
+    _pad0:        u32,
+    _pad1:        u32,
+    _pad2:        u32,
 };
+
+struct Transform { position: vec4<f32>, rotation: vec4<f32> }
 
 @group(0) @binding(0) var<storage, read> bvh_nodes:    array<BvhNode>;
 @group(0) @binding(1) var<storage, read> tri_order:    array<u32>;
@@ -36,6 +33,17 @@ struct Uniforms {
 @group(2) @binding(2) var<storage, read_write> hit_normal: array<vec4<f32>>;
 
 @group(3) @binding(0) var<uniform> u: Uniforms;
+@group(3) @binding(1) var<storage, read> body_poses: array<Transform>;
+@group(3) @binding(2) var<storage, read> shape_poses: array<Transform>;
+
+fn rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+    let t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+
+fn multiply(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
+}
 
 const MAX_STACK: u32 = 64u;
 
@@ -76,8 +84,15 @@ fn raycast_mesh(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if (u.node_count == 0u) { return; }
 
-    let origin = ray_origin[i].xyz;
-    let dir = ray_direction[i].xyz;
+    var pose = shape_poses[u.shape_id];
+    if (u.body_id >= 0) {
+        let body = body_poses[u32(u.body_id)];
+        pose.position = vec4<f32>(body.position.xyz + rotate(body.rotation, pose.position.xyz), 0.0);
+        pose.rotation = multiply(body.rotation, pose.rotation);
+    }
+    let inverse_rotation = vec4<f32>(-pose.rotation.xyz, pose.rotation.w);
+    let origin = rotate(inverse_rotation, ray_origin[i].xyz - pose.position.xyz);
+    let dir = rotate(inverse_rotation, ray_direction[i].xyz);
     let inv_dir = vec3<f32>(
         select(1e30, 1.0 / dir.x, abs(dir.x) > 1e-30),
         select(1e30, 1.0 / dir.y, abs(dir.y) > 1e-30),
@@ -130,6 +145,6 @@ fn raycast_mesh(@builtin(global_invocation_id) gid: vec3<u32>) {
     hit_t[i] = best_t;
     hit_tri[i] = best_tri;
     if (best_tri >= 0) {
-        hit_normal[i] = vec4<f32>(normalize(best_n), 0.0);
+        hit_normal[i] = vec4<f32>(rotate(pose.rotation, normalize(best_n)), 0.0);
     }
 }

@@ -8,9 +8,19 @@
 //!
 //! Reference: Newton's `compute_sensor_imu_kernel`.
 
+use crate::sensor_bindings::{SensorBindings, required_buffers};
 use molla_core::{Error, Result};
 use molla_sim::{Model, State};
 use molla_storage::Buffer;
+
+/// Retained state/history/mount/output bindings and one parameter buffer.
+pub struct ImuBindings(SensorBindings<11, 3>);
+
+impl ImuBindings {
+    pub fn matches(&self, buffers: [&wgpu::Buffer; 11]) -> bool {
+        self.0.matches(buffers)
+    }
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -96,12 +106,63 @@ impl ImuKernel {
         }
     }
 
+    /// Buffer order: body poses/velocities/history/COM/world/gravity, mount
+    /// bodies/positions/rotations, accelerometer/gyro. All belong to `device`.
+    pub fn prepare(&self, device: &wgpu::Device, buffers: [&wgpu::Buffer; 11]) -> ImuBindings {
+        ImuBindings(SensorBindings::new(
+            device,
+            buffers,
+            [
+                (&self.layout_body, 0..6),
+                (&self.layout_sensor, 6..9),
+                (&self.layout_out, 9..11),
+            ],
+            &self.layout_uniforms,
+            "molla::imu prepared",
+        ))
+    }
+
+    /// Encode without submitting. Submit before rewriting these bindings' parameters;
+    /// use separate bindings for differing parameters in the same pending batch.
+    /// The caller validates active lengths/indices and marks outputs device-authoritative.
+    pub fn encode_prepared(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: &ImuBindings,
+        sensor_count: u32,
+        dt: f32,
+    ) -> Result<()> {
+        if !dt.is_normal() || dt <= 0.0 {
+            return Err(Error::Solver(
+                "imu: dt must be positive and normal in f32".into(),
+            ));
+        }
+        if sensor_count == 0 {
+            return Ok(());
+        }
+        let uniforms = Uniforms {
+            sensor_count,
+            dt,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+        bindings.0.encode(
+            queue,
+            encoder,
+            &self.pipeline,
+            bytemuck::cast_ref(&uniforms),
+            sensor_count.div_ceil(WORKGROUP_SIZE),
+        );
+        Ok(())
+    }
+
     /// Run the IMU kernel for `sensor_count` sensors.
     ///
     /// `body_qd_prev` must be uploaded to the device before calling
     /// (sensor owner's responsibility) — it carries the previous
     /// step's `state.body_qd` so the kernel can finite-difference.
-    /// After the dispatch, the sensor swaps the roles for next frame.
+    /// The caller advances history after evaluation.
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &self,
@@ -118,95 +179,80 @@ impl ImuKernel {
         sensor_count: u32,
         dt: f32,
     ) -> Result<()> {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::imu encoder"),
+        });
+        self.encode(
+            device,
+            queue,
+            &mut encoder,
+            model,
+            state,
+            body_qd_prev,
+            sensor_body,
+            sensor_local_pos,
+            sensor_local_rot,
+            accel,
+            gyro,
+            sensor_count,
+            dt,
+        )?;
+        queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
+    }
+
+    /// Encode IMU evaluation into the caller's command stream.
+    /// Submit the encoder before consuming its device-authoritative outputs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        model: &Model,
+        state: &State,
+        body_qd_prev: &Buffer<molla_math::SpatialVector>,
+        sensor_body: &Buffer<u32>,
+        sensor_local_pos: &Buffer<molla_math::Vec3>,
+        sensor_local_rot: &Buffer<molla_math::Quat>,
+        accel: &mut Buffer<molla_math::Vec3>,
+        gyro: &mut Buffer<molla_math::Vec3>,
+        sensor_count: u32,
+        dt: f32,
+    ) -> Result<()> {
+        if !dt.is_normal() || dt <= 0.0 {
+            return Err(Error::Solver(
+                "imu: dt must be positive and normal in f32".into(),
+            ));
+        }
         if sensor_count == 0 {
             return Ok(());
         }
 
-        let bg_body = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::imu body bg"),
-            layout: &self.layout_body,
-            entries: &[
-                buffer_entry(0, state.body_q.device_buffer())?,
-                buffer_entry(1, state.body_qd.device_buffer())?,
-                buffer_entry(2, body_qd_prev.device_buffer())?,
-                buffer_entry(3, model.body_com.device_buffer())?,
-                buffer_entry(4, model.body_world.device_buffer())?,
-                buffer_entry(5, model.gravity.device_buffer())?,
-            ],
-        });
-        let bg_sensor = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::imu sensor bg"),
-            layout: &self.layout_sensor,
-            entries: &[
-                buffer_entry(0, sensor_body.device_buffer())?,
-                buffer_entry(1, sensor_local_pos.device_buffer())?,
-                buffer_entry(2, sensor_local_rot.device_buffer())?,
-            ],
-        });
-        let bg_out = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::imu out bg"),
-            layout: &self.layout_out,
-            entries: &[
-                buffer_entry(0, accel.device_buffer())?,
-                buffer_entry(1, gyro.device_buffer())?,
-            ],
-        });
-
-        let uniforms = Uniforms {
-            sensor_count,
-            dt,
-            _pad0: 0.0,
-            _pad1: 0.0,
-        };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::imu uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
-        let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("molla::imu uniforms bg"),
-            layout: &self.layout_uniforms,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buf.as_entire_binding(),
-            }],
-        });
-
-        let groups = sensor_count.div_ceil(WORKGROUP_SIZE);
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("molla::imu encoder"),
-        });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("molla::imu::compute_imu"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bg_body, &[]);
-            pass.set_bind_group(1, &bg_sensor, &[]);
-            pass.set_bind_group(2, &bg_out, &[]);
-            pass.set_bind_group(3, &bg_uniforms, &[]);
-            pass.dispatch_workgroups(groups, 1, 1);
-        }
-        queue.submit(std::iter::once(encoder.finish()));
-
+        let bindings = self.prepare(
+            device,
+            required_buffers(
+                [
+                    state.body_q.device_buffer(),
+                    state.body_qd.device_buffer(),
+                    body_qd_prev.device_buffer(),
+                    model.body_com.device_buffer(),
+                    model.body_world.device_buffer(),
+                    model.gravity.device_buffer(),
+                    sensor_body.device_buffer(),
+                    sensor_local_pos.device_buffer(),
+                    sensor_local_rot.device_buffer(),
+                    accel.device_buffer(),
+                    gyro.device_buffer(),
+                ],
+                "imu",
+            )?,
+        );
+        self.encode_prepared(queue, encoder, &bindings, sensor_count, dt)?;
         accel.mark_device_dirty();
         gyro.mark_device_dirty();
         Ok(())
     }
-}
-
-fn buffer_entry<'a>(
-    binding: u32,
-    buf: Option<&'a wgpu::Buffer>,
-) -> Result<wgpu::BindGroupEntry<'a>> {
-    let buf = buf.ok_or_else(|| Error::Gpu(format!("imu binding {binding}: no device mirror")))?;
-    Ok(wgpu::BindGroupEntry {
-        binding,
-        resource: buf.as_entire_binding(),
-    })
 }
 
 fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntry> {

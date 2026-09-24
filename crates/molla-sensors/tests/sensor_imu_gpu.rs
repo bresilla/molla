@@ -202,3 +202,178 @@ fn imu_gyro_reads_body_angular_velocity() {
     );
     assert!(g.x.abs() < 1.0e-3 && g.z.abs() < 1.0e-3);
 }
+
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn imu_reads_gpu_integrated_velocity_without_host_readback() {
+    use molla_kernels::IntegrateBodiesKernel;
+    use molla_sim::Control;
+
+    let mut builder = ModelBuilder::new();
+    let body = builder.add_body(BodyParams::new().with_position(Vec3::Y * 5.0));
+    builder
+        .add_shape_sphere(body, 0.1, Transform::IDENTITY)
+        .unwrap();
+    let (engine, model, mut current) = setup(builder.build().unwrap()).expect("GPU required");
+    eprintln!("IMU integration adapter: {:?}", engine.adapter_info());
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let mut next = model.state().unwrap();
+    next.upload_to_device(device, queue).unwrap();
+    let mut control = Control::for_model(&model);
+    control.upload_to_device(device, queue).unwrap();
+    let dummy = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("imu integration dummy force"),
+        size: 32,
+        usage: wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    });
+    let integrator = IntegrateBodiesKernel::new(device);
+    let mut imu = ImuSensor::new(
+        &engine,
+        &model,
+        &[ImuMount {
+            body,
+            local_pose: Transform::IDENTITY,
+        }],
+    )
+    .unwrap();
+    let dt = 0.005;
+
+    for step in 0..6 {
+        integrator
+            .dispatch(
+                device, queue, &model, &current, &control, &dummy, &mut next, dt,
+            )
+            .unwrap();
+        assert!(next.body_qd.host().is_err());
+        if step == 3 {
+            imu.reset();
+        }
+        let readings = imu.update(&engine, &model, &next, dt).unwrap();
+        if step == 0 || step == 3 {
+            assert!(readings.is_empty());
+        } else {
+            assert_eq!(readings.len(), 1);
+            assert!(readings[0].accelerometer.length() < 1.0e-3, "{readings:?}");
+            assert!(readings[0].gyroscope.length() < 1.0e-6);
+        }
+        assert!(next.body_qd.host().is_err());
+        std::mem::swap(&mut current, &mut next);
+    }
+}
+
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn imu_rejects_invalid_time_and_unuploaded_velocity_without_advancing_history() {
+    let mut builder = ModelBuilder::new();
+    let body = builder.add_body(BodyParams::new());
+    builder
+        .add_shape_sphere(body, 0.1, Transform::IDENTITY)
+        .unwrap();
+    let (engine, model, mut state) = setup(builder.build().unwrap()).expect("GPU required");
+    let mut imu = ImuSensor::new(
+        &engine,
+        &model,
+        &[ImuMount {
+            body,
+            local_pose: Transform::IDENTITY,
+        }],
+    )
+    .unwrap();
+    for dt in [
+        0.0,
+        -0.1,
+        f64::NAN,
+        f64::INFINITY,
+        f64::MAX,
+        f64::MIN_POSITIVE,
+    ] {
+        assert!(
+            imu.update(&engine, &model, &state, dt).is_err(),
+            "accepted dt={dt}"
+        );
+    }
+    state.body_qd.host_mut().unwrap()[0].linear = Vec3::Y;
+    assert!(imu.update(&engine, &model, &state, 0.01).is_err());
+    state.body_qd.upload(engine.queue().unwrap()).unwrap();
+    assert!(
+        imu.update(&engine, &model, &state, 0.01)
+            .unwrap()
+            .is_empty()
+    );
+    let readings = imu.update(&engine, &model, &state, 0.01).unwrap();
+    assert!((readings[0].accelerometer.y - 9.806649).abs() < 1.0e-3);
+}
+
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn imu_batches_mount_lever_arms_and_rejects_scene_changes_until_reset() {
+    let build = || {
+        let mut builder = ModelBuilder::new();
+        let body = builder.add_body(BodyParams::new());
+        builder
+            .add_shape_sphere(body, 0.1, Transform::IDENTITY)
+            .unwrap();
+        (builder.build().unwrap(), body)
+    };
+    let (model, body) = build();
+    let (engine, model, mut state) = setup(model).expect("GPU required");
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let mounts: Vec<_> = (0..65)
+        .map(|i| ImuMount {
+            body,
+            local_pose: Transform::new(Vec3::X * (i as f64 / 64.0), Quat::IDENTITY),
+        })
+        .collect();
+    let mut imu = ImuSensor::new(&engine, &model, &mounts).unwrap();
+    state.body_qd.host_mut().unwrap()[0].angular = Vec3::Y;
+    state.body_qd.upload(queue).unwrap();
+    assert!(imu.update(&engine, &model, &state, 0.5).unwrap().is_empty());
+    state.body_qd.host_mut().unwrap()[0].angular = Vec3::Y * 2.0;
+    state.body_qd.upload(queue).unwrap();
+    let readings = imu.update(&engine, &model, &state, 0.5).unwrap();
+    assert_eq!(readings.len(), 65);
+    for (i, reading) in readings.iter().enumerate() {
+        let offset = i as f64 / 64.0;
+        let expected = Vec3::new(-4.0 * offset, 9.806649, -2.0 * offset);
+        assert!(
+            (reading.accelerometer - expected).length() < 1.0e-3,
+            "mount {i}: {reading:?}"
+        );
+        assert!((reading.gyroscope - Vec3::Y * 2.0).length() < 1.0e-4);
+    }
+
+    let (mut replacement, _) = build();
+    replacement.upload_to_device(device, queue).unwrap();
+    let mut replacement_state = replacement.state().unwrap();
+    replacement_state.upload_to_device(device, queue).unwrap();
+    assert!(
+        imu.update(&engine, &replacement, &replacement_state, 0.5)
+            .is_err()
+    );
+    imu.reset();
+    assert!(
+        imu.update(&engine, &replacement, &replacement_state, 0.5)
+            .unwrap()
+            .is_empty()
+    );
+    let readings = imu
+        .update(&engine, &replacement, &replacement_state, 0.5)
+        .unwrap();
+    for reading in readings {
+        assert!((reading.accelerometer - Vec3::Y * 9.806649).length() < 1.0e-3);
+        assert!(reading.gyroscope.length() < 1.0e-6);
+    }
+
+    let mut builder = ModelBuilder::new();
+    builder.add_body(BodyParams::new());
+    builder.add_body(BodyParams::new());
+    let different_size = builder.build().unwrap();
+    let different_state = different_size.state().unwrap();
+    assert!(
+        imu.update(&engine, &different_size, &different_state, 0.5)
+            .is_err()
+    );
+}

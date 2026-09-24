@@ -24,9 +24,9 @@ pub mod marching_cubes;
 mod marching_cubes_gpu;
 pub mod mass_properties;
 pub mod mesh_bvh;
-mod mesh_cache;
 #[cfg(feature = "gpu")]
 mod mesh_bvh_raycast_gpu;
+mod mesh_cache;
 pub mod mpr;
 #[cfg(feature = "gpu")]
 mod mpr_gpu;
@@ -98,7 +98,7 @@ pub use marching_cubes::marching_cubes;
 pub use marching_cubes_gpu::marching_cubes_gpu;
 pub use mesh_bvh::{BvhNode as MeshBvhNode, MeshBvh};
 #[cfg(feature = "gpu")]
-pub use mesh_bvh_raycast_gpu::{MeshBvhGpu, MeshBvhRaycastKernel};
+pub use mesh_bvh_raycast_gpu::{MeshBvhGpu, MeshBvhRaycastBindings, MeshBvhRaycastKernel};
 pub use mpr::{Manifold as MprManifold, ShapeSupport, SupportFn, mpr_collide};
 #[cfg(feature = "gpu")]
 pub use mpr_gpu::{

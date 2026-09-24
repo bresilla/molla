@@ -1,24 +1,14 @@
-//! H11 — Photographic post-process for the
-//! [`TiledCamera`](crate::TiledCamera) color output. A small CPU
-//! pipeline that turns the raw linear-radiance `u32`-packed RGBA
-//! buffer into something that looks like a photograph: exposure,
-//! gray-world / white-patch white balance, Reinhard tone mapping,
-//! and gamma (sRGB) compression, plus brightness / contrast /
-//! saturation tweakers.
+//! CPU reference and convenience operations on packed RGBA8 images.
 //!
-//! All passes operate on RGB **f32 in `[0, 1]`** in linear space; the
-//! conversion helpers ([`unpack_rgba8`], [`pack_rgba8`]) move to/from
-//! the `u32`-packed RGBA8 buffer `TiledCamera` writes. The pipeline
-//! is host-side by design — single-pixel arithmetic that's not the
-//! bottleneck of any real perception pipeline, and it lets the test
-//! suite verify per-pixel formulas without a GPU.
+//! Each operation unpacks normalized RGB, adjusts it and quantizes back to RGBA8.
+//! Alpha is preserved. Color-space conversion is explicit; camera color starts
+//! in linear space. [`crate::ImageProcessor`] executes corresponding device-only
+//! pipelines with per-image white-balance reductions.
 
 #![cfg(feature = "gpu")]
 
 /// Unpack `0xAABBGGRR` (the `u32` layout `TiledCamera::download_color`
-/// returns) into linear-space RGBA in `[0, 1]`. The source buffer is
-/// nominally sRGB-encoded; this helper does **not** undo the sRGB
-/// curve — callers that want linear can call [`srgb_to_linear`].
+/// returns) into normalized RGBA in `[0, 1]`, without color-space conversion.
 pub fn unpack_rgba8(p: u32) -> [f32; 4] {
     let r = ((p & 0xFF) as f32) / 255.0;
     let g = (((p >> 8) & 0xFF) as f32) / 255.0;
@@ -82,6 +72,19 @@ pub fn apply_gamma_srgb(buf: &mut [u32]) {
             linear_to_srgb(c[0]),
             linear_to_srgb(c[1]),
             linear_to_srgb(c[2]),
+            c[3],
+        ]);
+    }
+}
+
+/// Decode sRGB-encoded RGB into linear RGB, preserving alpha.
+pub fn apply_srgb_to_linear(buf: &mut [u32]) {
+    for p in buf.iter_mut() {
+        let c = unpack_rgba8(*p);
+        *p = pack_rgba8([
+            srgb_to_linear(c[0]),
+            srgb_to_linear(c[1]),
+            srgb_to_linear(c[2]),
             c[3],
         ]);
     }

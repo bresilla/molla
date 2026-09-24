@@ -1,12 +1,9 @@
 //! Rust dispatch wrapper around `shaders/raycast.wgsl` — closest-hit
 //! ray-cast against every collision shape in a [`Model`].
 //!
-//! Pattern mirrors [`super::XpbdKernel`]: one pipeline, four bind
-//! groups (`model`, `rays`, `hits`, `uniforms`). Caller supplies the
-//! ray-origin + ray-direction buffers and pre-allocated hit buffers;
-//! we own only the kernel pipelines and a uniform buffer.
-//!
-//! Reference: Newton's `_src/geometry/raycast.py` `sensor_raycast_kernel`.
+//! Four bind groups contain model, rays, hits and uniform parameters.
+//! Prepared bindings retain resources for encoding into a shared command buffer;
+//! convenience dispatch methods allocate temporary bindings and submit immediately.
 
 use molla_core::{Error, Result};
 use molla_sim::Model;
@@ -24,8 +21,7 @@ struct Uniforms {
 const WORKGROUP_SIZE: u32 = 64;
 
 /// Compute pipeline + bind-group layouts for the GPU ray-cast kernel.
-/// One instance is reusable across many `dispatch` calls; the only
-/// per-dispatch state is the uniform buffer.
+/// Prepared resources are owned separately by [`RaycastBindings`].
 pub struct RaycastKernel {
     pipeline: wgpu::ComputePipeline,
     layout_model: wgpu::BindGroupLayout,
@@ -34,7 +30,89 @@ pub struct RaycastKernel {
     layout_uniforms: wgpu::BindGroupLayout,
 }
 
+/// Retained bindings for one primitive query input/output buffer set.
+pub struct RaycastBindings {
+    buffers: [wgpu::Buffer; 11],
+    groups: [wgpu::BindGroup; 4],
+    uniform: wgpu::Buffer,
+}
+
+impl RaycastBindings {
+    pub fn matches(&self, buffers: [&wgpu::Buffer; 11]) -> bool {
+        self.buffers.iter().zip(buffers).all(|(a, b)| a == b)
+    }
+}
+
 impl RaycastKernel {
+    /// Bind shape kind/data/body/pose, body poses, rays, then t/shape/point/normal.
+    pub fn prepare(&self, device: &wgpu::Device, buffers: [&wgpu::Buffer; 11]) -> RaycastBindings {
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("molla::raycast retained uniform"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let make_group = |layout, buffers: &[&wgpu::Buffer]| {
+            let entries: Vec<_> = buffers
+                .iter()
+                .enumerate()
+                .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                    binding: binding as u32,
+                    resource: buffer.as_entire_binding(),
+                })
+                .collect();
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("molla::raycast retained bindings"),
+                layout,
+                entries: &entries,
+            })
+        };
+        RaycastBindings {
+            groups: [
+                make_group(&self.layout_model, &buffers[..5]),
+                make_group(&self.layout_rays, &buffers[5..7]),
+                make_group(&self.layout_hits, &buffers[7..]),
+                make_group(&self.layout_uniforms, &[&uniform]),
+            ],
+            buffers: std::array::from_fn(|i| buffers[i].clone()),
+            uniform,
+        }
+    }
+
+    /// Encode without submission. Submit before changing this binding set's uniform.
+    pub fn encode_prepared(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        bindings: &RaycastBindings,
+        ray_count: u32,
+        shape_count: u32,
+        max_distance: f32,
+    ) {
+        if ray_count == 0 {
+            return;
+        }
+        queue.write_buffer(
+            &bindings.uniform,
+            0,
+            bytemuck::bytes_of(&Uniforms {
+                ray_count,
+                shape_count,
+                max_distance,
+                _pad: 0.0,
+            }),
+        );
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("molla::raycast prepared"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        for (i, group) in bindings.groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, group, &[]);
+        }
+        pass.dispatch_workgroups(ray_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+    }
+
     pub fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::raycast"),

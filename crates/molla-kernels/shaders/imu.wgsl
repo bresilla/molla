@@ -90,11 +90,7 @@ fn compute_imu(@builtin(global_invocation_id) gid: vec3<u32>) {
     let world = max(body_world[body], 0);
     let g_world = gravity[u32(world)].xyz;
 
-    // Finite-difference linear + angular accelerations of the body's
-    // COM. dt comes from the caller; on the very first frame
-    // body_qd_prev == body_qd, so accelerations read zero (the
-    // sensor's first reading is a sentinel — let it stabilise).
-    let inv_dt = select(0.0, 1.0 / uniforms.dt, uniforms.dt > 1e-9);
+    let inv_dt = 1.0 / uniforms.dt;
     let a_lin_com = (bqd.linear.xyz  - bqd0.linear.xyz)  * inv_dt;
     let a_ang     = (bqd.angular.xyz - bqd0.angular.xyz) * inv_dt;
 

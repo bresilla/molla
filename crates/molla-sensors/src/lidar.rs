@@ -106,15 +106,24 @@ impl ScanMetadata {
         self.subray_count.max(1)
     }
 
-    /// Total ray budget for this scan: `cell_count() * subray_count`.
+    /// Total ray budget, saturating for invalid metadata; use `validate` before allocation.
     pub fn ray_count(&self) -> u32 {
-        self.cell_count() * self.effective_subray_count()
+        self.cell_count()
+            .saturating_mul(self.effective_subray_count())
+    }
+
+    /// Checked total ray budget for allocation and dispatch.
+    pub fn checked_ray_count(&self) -> Result<u32> {
+        self.n_theta
+            .checked_mul(self.n_phi)
+            .and_then(|cells| cells.checked_mul(self.effective_subray_count()))
+            .ok_or_else(|| Error::Solver("ScanMetadata: ray count exceeds u32".into()))
     }
 
     /// Total cell count (`n_theta * n_phi`). The cell index `k` for
-    /// `(row, col)` is `row * n_phi + col`.
+    /// `(row, col)` is `row * n_phi + col`. Saturates for invalid metadata.
     pub fn cell_count(&self) -> u32 {
-        self.n_theta * self.n_phi
+        self.n_theta.saturating_mul(self.n_phi)
     }
 
     /// Validate the metadata against the invariants the scan layout
@@ -123,6 +132,7 @@ impl ScanMetadata {
     /// beam-divergence in `[0, π/2)`. Returns an `Error::Solver` with
     /// a precise message on the first violated invariant.
     pub fn validate(&self) -> Result<()> {
+        self.checked_ray_count()?;
         if self.n_theta == 0 || self.n_phi == 0 {
             return Err(Error::Solver(format!(
                 "ScanMetadata: n_theta and n_phi must be non-zero (got {}, {})",
@@ -184,6 +194,15 @@ impl ScanMetadata {
                 self.up
             )));
         }
+        if (self.forward / fmag.sqrt())
+            .cross(self.up / umag.sqrt())
+            .length_squared()
+            <= 1.0e-24
+        {
+            return Err(Error::Solver(
+                "ScanMetadata: forward and up must not be parallel".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -207,7 +226,7 @@ impl ScanMetadata {
 
     /// Build an orthonormal `(forward, up, right)` frame from
     /// `self.forward` and `self.up`, with `right = up × forward`.
-    fn local_frame(&self) -> (Vec3, Vec3, Vec3) {
+    pub(crate) fn local_frame(&self) -> (Vec3, Vec3, Vec3) {
         let f = normalise(self.forward, Vec3::new(0.0, 0.0, 1.0));
         let u_in = normalise(self.up, Vec3::new(0.0, 1.0, 0.0));
         // Project `up` perpendicular to `forward` so the frame is
@@ -393,7 +412,7 @@ impl Lidar {
         scan: &ScanMetadata,
     ) -> Result<Scan> {
         scan.validate()?;
-        let n_rays = scan.ray_count();
+        let n_rays = scan.checked_ray_count()?;
         if n_rays > self.max_rays {
             return Err(Error::Solver(format!(
                 "lidar::cast: {n_rays} rays exceeds max_rays {} ({} cells × {} sub-rays)",
@@ -526,6 +545,15 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_overflowed_grid_or_subray_count() {
+        let grid = ScanMetadata::new(Vec3::ZERO, u32::MAX, 2);
+        assert!(grid.validate().is_err());
+        let mut subrays = ScanMetadata::new(Vec3::ZERO, 65_536, 1);
+        subrays.subray_count = 65_536;
+        assert!(subrays.validate().is_err());
+    }
+
+    #[test]
     fn validate_rejects_zero_axes() {
         let mut s = ScanMetadata::new(Vec3::ZERO, 0, 8);
         assert!(s.validate().is_err());
@@ -573,6 +601,18 @@ mod tests {
     fn validate_accepts_default_metadata() {
         let s = ScanMetadata::new(Vec3::ZERO, 32, 64);
         assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_parallel_frame_axes() {
+        for direction in [Vec3::X, Vec3::Y, Vec3::new(1.0, 2.0, 3.0)] {
+            let mut s = ScanMetadata::new(Vec3::ZERO, 1, 1);
+            s.forward = direction;
+            s.up = direction * 2.0;
+            assert!(s.validate().is_err());
+            s.up = -direction;
+            assert!(s.validate().is_err());
+        }
     }
 
     #[test]
@@ -715,9 +755,28 @@ impl AerialScanMetadata {
         self.subray_count.max(1)
     }
 
-    /// Total ray budget: `pulse_count * subray_count`.
+    /// Total ray budget, saturating for invalid metadata; use `validate` before allocation.
     pub fn ray_count(&self) -> u32 {
-        self.pulse_count() * self.effective_subray_count()
+        self.pulse_count()
+            .saturating_mul(self.effective_subray_count())
+    }
+
+    /// Checked pulse count before conversion to the GPU index type.
+    pub fn checked_pulse_count(&self) -> Result<u32> {
+        let pulses = self.footprint_area() * self.scan_density;
+        if !pulses.is_finite() || pulses <= 0.0 || pulses.round() > u32::MAX as Real {
+            return Err(Error::Solver(
+                "AerialScanMetadata: pulse count outside u32 budget".into(),
+            ));
+        }
+        Ok(pulses.round().max(1.0) as u32)
+    }
+
+    /// Checked total ray budget for allocation and dispatch.
+    pub fn checked_ray_count(&self) -> Result<u32> {
+        self.checked_pulse_count()?
+            .checked_mul(self.effective_subray_count())
+            .ok_or_else(|| Error::Solver("AerialScanMetadata: ray count exceeds u32".into()))
     }
 
     /// Validate the metadata before any GPU work. Returns an
@@ -726,6 +785,7 @@ impl AerialScanMetadata {
     /// scan-density and max-distance, cone-angle and beam-divergence
     /// in `[0, π/2)`.
     pub fn validate(&self) -> Result<()> {
+        self.checked_ray_count()?;
         for (name, v) in [
             ("footprint_min", self.footprint_min),
             ("footprint_max", self.footprint_max),
@@ -869,7 +929,7 @@ impl AerialLidar {
         scan: &AerialScanMetadata,
     ) -> Result<AerialScan> {
         scan.validate()?;
-        let n_rays = scan.ray_count();
+        let n_rays = scan.checked_ray_count()?;
         if n_rays > self.max_rays {
             return Err(Error::Solver(format!(
                 "aerial_lidar::cast: {n_rays} rays exceeds max_rays {} ({} pulses × {} sub-rays)",
@@ -974,6 +1034,18 @@ mod aerial_tests {
         assert_eq!(s.pulse_count(), 100);
         s.scan_density = 4.0;
         assert_eq!(s.pulse_count(), 400);
+    }
+
+    #[test]
+    fn aerial_validate_rejects_overflowed_pulse_and_ray_counts() {
+        let mut scan = AerialScanMetadata::new(Vec3::ZERO, Vec3::ONE, f64::MAX);
+        assert!(scan.validate().is_err());
+        scan.scan_density = u32::MAX as f64;
+        scan.subray_count = 2;
+        assert!(scan.validate().is_err());
+        scan.footprint_max = Vec3::new(f64::MAX, 1.0, f64::MAX);
+        scan.scan_density = 1.0;
+        assert!(scan.validate().is_err());
     }
 
     #[test]

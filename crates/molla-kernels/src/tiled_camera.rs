@@ -8,7 +8,7 @@
 //!   normal / albedo / shape index, gated by a bitmask uniform).
 //!
 //! Pattern mirrors [`super::RaycastKernel`]: dedicated bind-group
-//! layouts per kernel, host-allocated uniform buffer per dispatch.
+//! layouts per kernel, with retained prepared bindings or convenience dispatch.
 //!
 //! Reference: Newton's `SensorTiledCamera` (Warp/CUDA); molla
 //! re-implements the primitive kernels in WGSL and runs Lambertian
@@ -62,7 +62,7 @@ impl CameraRaysKernel {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
+                        has_dynamic_offset: true,
                         min_binding_size: None,
                     },
                     count: None,
@@ -162,7 +162,7 @@ impl CameraRaysKernel {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bg, &[]);
+            pass.set_bind_group(0, &bg, &[0]);
             pass.dispatch_workgroups(groups_x, groups_y, camera_count);
         }
         queue.submit(std::iter::once(encoder.finish()));
@@ -230,7 +230,7 @@ impl CameraTraceKernel {
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: None,
                 },
                 count: None,
@@ -382,7 +382,7 @@ impl CameraTraceKernel {
             pass.set_bind_group(0, &bg_model, &[]);
             pass.set_bind_group(1, &bg_rays, &[]);
             pass.set_bind_group(2, &bg_out, &[]);
-            pass.set_bind_group(3, &bg_uniforms, &[]);
+            pass.set_bind_group(3, &bg_uniforms, &[0]);
             pass.dispatch_workgroups(groups_x, groups_y, camera_count);
         }
         queue.submit(std::iter::once(encoder.finish()));
@@ -429,3 +429,10 @@ fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
 fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
     (0..count).map(|i| storage_entry(i, read_only)).collect()
 }
+
+#[path = "camera_prepared.rs"]
+mod prepared;
+pub use prepared::{
+    CameraRaysBindings, CameraRaysParams, CameraShadeBindings, CameraShadeKernel,
+    CameraTraceBindings, CameraTraceParams,
+};

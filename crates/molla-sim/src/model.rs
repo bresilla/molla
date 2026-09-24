@@ -1160,7 +1160,11 @@ impl Model {
     /// run once before the first GPU step. Re-running is harmless but
     /// re-uploads the same data.
     #[cfg(feature = "gpu")]
-    pub fn upload_to_device(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<()> {
+    pub fn upload_to_device<D: molla_storage::BufferDevice + ?Sized>(
+        &mut self,
+        device: &D,
+        queue: &wgpu::Queue,
+    ) -> Result<()> {
         self.validate_tet_viscosity()?;
         macro_rules! up {
             ($field:ident) => {{
@@ -1318,7 +1322,7 @@ impl Model {
             for (i, t) in self.soft_surface_tris.iter().enumerate() {
                 tri_data.push([t[0], t[1], t[2], tri_owner[i]]);
             }
-            let tris_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            let tris_buf = device.device().create_buffer(&wgpu::BufferDescriptor {
                 label: Some("molla::soft_surface_tris"),
                 size: (tri_data.len() * core::mem::size_of::<[u32; 4]>()) as u64,
                 usage: wgpu::BufferUsages::STORAGE
@@ -1347,7 +1351,7 @@ impl Model {
                     _pad: 0u32,
                 });
             }
-            let surf_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            let surf_buf = device.device().create_buffer(&wgpu::BufferDescriptor {
                 label: Some("molla::soft_surfaces"),
                 size: (surf_data.len() * core::mem::size_of::<SoftSurfaceGpu>()) as u64,
                 usage: wgpu::BufferUsages::STORAGE

@@ -11,6 +11,40 @@ use molla_math::{
     GpuMat3, GpuSpatialVector, GpuTransform, Mat3, Real, SpatialVector, Transform, Vec3,
 };
 
+#[cfg(feature = "gpu")]
+mod device_sealed {
+    pub trait Sealed {}
+    impl Sealed for wgpu::Device {}
+    impl Sealed for std::sync::Arc<wgpu::Device> {}
+}
+
+/// Device reference with optional canonical ownership identity.
+#[cfg(feature = "gpu")]
+pub trait BufferDevice: device_sealed::Sealed {
+    fn device(&self) -> &wgpu::Device;
+    fn owner(&self) -> Option<std::sync::Arc<wgpu::Device>>;
+}
+
+#[cfg(feature = "gpu")]
+impl BufferDevice for wgpu::Device {
+    fn device(&self) -> &wgpu::Device {
+        self
+    }
+    fn owner(&self) -> Option<std::sync::Arc<wgpu::Device>> {
+        None
+    }
+}
+
+#[cfg(feature = "gpu")]
+impl BufferDevice for std::sync::Arc<wgpu::Device> {
+    fn device(&self) -> &wgpu::Device {
+        self
+    }
+    fn owner(&self) -> Option<std::sync::Arc<wgpu::Device>> {
+        Some(self.clone())
+    }
+}
+
 /// What the buffer will be used for. Used at GPU allocation time to set the
 /// right `wgpu::BufferUsages`.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -148,6 +182,8 @@ pub struct Buffer<T: BufferElement> {
     state: SyncState,
     #[cfg(feature = "gpu")]
     device: Option<wgpu::Buffer>,
+    #[cfg(feature = "gpu")]
+    device_owner: Option<std::sync::Arc<wgpu::Device>>,
 }
 
 impl<T: BufferElement> Buffer<T> {
@@ -161,6 +197,8 @@ impl<T: BufferElement> Buffer<T> {
             state: SyncState::HostOnly,
             #[cfg(feature = "gpu")]
             device: None,
+            #[cfg(feature = "gpu")]
+            device_owner: None,
         }
     }
 
@@ -226,9 +264,23 @@ impl<T: BufferElement> Buffer<T> {
 
     /// Allocate the GPU mirror if not already present, sized for `host.len()`
     /// elements of `T::Gpu`. Does not upload — call [`Self::upload`] after.
+    /// An `Arc<Device>` records canonical ownership at allocation; a raw device
+    /// leaves ownership unverified. Existing mirrors never acquire a new owner.
     #[cfg(feature = "gpu")]
-    pub fn ensure_device(&mut self, device: &wgpu::Device) -> Result<()> {
+    pub fn ensure_device<D: BufferDevice + ?Sized>(&mut self, device: &D) -> Result<()> {
+        let owner = device.owner();
         if self.device.is_some() {
+            if let Some(requested) = &owner {
+                if self
+                    .device_owner
+                    .as_ref()
+                    .is_some_and(|existing| !std::sync::Arc::ptr_eq(existing, requested))
+                {
+                    return Err(Error::Storage(
+                        "buffer belongs to a different owned device".into(),
+                    ));
+                }
+            }
             return Ok(());
         }
         if self.host.is_empty() {
@@ -255,13 +307,14 @@ impl<T: BufferElement> Buffer<T> {
         };
 
         let size = (self.host.len() * core::mem::size_of::<T::Gpu>()) as u64;
-        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        let buf = device.device().create_buffer(&wgpu::BufferDescriptor {
             label: Some("molla::Buffer"),
             size,
             usage,
             mapped_at_creation: false,
         });
         self.device = Some(buf);
+        self.device_owner = owner;
         // Host is the authoritative copy until we upload.
         self.state = SyncState::HostDirty;
         Ok(())
@@ -271,21 +324,31 @@ impl<T: BufferElement> Buffer<T> {
     /// is allocated.
     #[cfg(feature = "gpu")]
     pub fn upload(&mut self, queue: &wgpu::Queue) -> Result<()> {
+        self.upload_with_scratch(queue, &mut Vec::new())
+    }
+
+    /// Upload host values through caller-retained packed storage; capacity grows only when needed.
+    /// Missing/empty device mirrors leave scratch unchanged. Queue staging is separate.
+    #[cfg(feature = "gpu")]
+    pub fn upload_with_scratch(
+        &mut self,
+        queue: &wgpu::Queue,
+        scratch: &mut Vec<T::Gpu>,
+    ) -> Result<()> {
         let Some(buf) = self.device.as_ref() else {
             return Ok(());
         };
         if self.host.is_empty() {
             return Ok(());
         }
-        // Uploading while the device copy is dirty would silently
-        // clobber fresh kernel output the host has not read back.
         debug_assert!(
             !matches!(self.state, SyncState::DeviceDirty),
             "Buffer::upload would overwrite device-dirty data with stale \
              host data — call download() before re-uploading"
         );
-        let gpu_data: Vec<T::Gpu> = self.host.iter().map(BufferElement::to_gpu).collect();
-        queue.write_buffer(buf, 0, bytemuck::cast_slice(&gpu_data));
+        scratch.clear();
+        scratch.extend(self.host.iter().map(BufferElement::to_gpu));
+        queue.write_buffer(buf, 0, bytemuck::cast_slice(scratch));
         self.state = SyncState::InSync;
         Ok(())
     }
@@ -354,6 +417,38 @@ impl<T: BufferElement> Buffer<T> {
     #[must_use]
     pub fn device_buffer(&self) -> Option<&wgpu::Buffer> {
         self.device.as_ref()
+    }
+
+    /// Borrow an uploaded device mirror without accepting stale host edits.
+    #[cfg(feature = "gpu")]
+    pub fn device_buffer_current(&self) -> Result<&wgpu::Buffer> {
+        if matches!(self.state, SyncState::HostOnly | SyncState::HostDirty) {
+            return Err(Error::Storage(
+                "device copy is stale; allocate and upload before GPU consumption".into(),
+            ));
+        }
+        self.device
+            .as_ref()
+            .ok_or_else(|| Error::Storage("buffer has no device mirror".into()))
+    }
+
+    /// Borrow a current mirror allocated on the specified logical device.
+    /// Requires the same canonical `Arc<Device>` used at allocation.
+    #[cfg(feature = "gpu")]
+    pub fn device_buffer_for(
+        &self,
+        device: &std::sync::Arc<wgpu::Device>,
+    ) -> Result<&wgpu::Buffer> {
+        if self
+            .device_owner
+            .as_ref()
+            .is_none_or(|owner| !std::sync::Arc::ptr_eq(owner, device))
+        {
+            return Err(Error::Storage(
+                "buffer device ownership is foreign or unverified".into(),
+            ));
+        }
+        self.device_buffer_current()
     }
 
     /// Mark the device copy as authoritative (used after a kernel writes

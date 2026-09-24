@@ -244,6 +244,45 @@ fn ray_cylinder_local(o: vec3<f32>, d: vec3<f32>, half_h: f32, r: f32) -> f32 {
 // ── Ellipsoid (per-axis semi-axes `data.xyz`). Scale space by
 // 1/half_axes so the surface becomes a unit sphere; intersect; the
 // ray-parameter t is preserved by the diagonal scale.
+fn ray_cone_local(o: vec3<f32>, d: vec3<f32>, half_h: f32, radius: f32) -> f32 {
+    let k = radius / (2.0 * half_h);
+    let k2 = k * k;
+    let shifted_y = o.y - half_h;
+    let a = dot(d.xz, d.xz) - k2 * d.y * d.y;
+    let b = dot(o.xz, d.xz) - k2 * shifted_y * d.y;
+    let c = dot(o.xz, o.xz) - k2 * shifted_y * shifted_y;
+    var roots = vec2<f32>(NO_HIT_T);
+    if (abs(a) <= 1e-7 * max(1.0, k2)) {
+        if (abs(b) > EPS) { roots.x = -c / (2.0 * b); }
+    } else {
+        let discriminant = b * b - a * c;
+        if (discriminant >= 0.0) {
+            let q = -b - select(-sqrt(discriminant), sqrt(discriminant), b >= 0.0);
+            if (abs(q) > EPS) {
+                roots = vec2<f32>(q / a, c / q);
+            } else {
+                roots = vec2<f32>(-b / a);
+            }
+        }
+    }
+    var best = NO_HIT_T;
+    for (var i = 0u; i < 2u; i += 1u) {
+        let t = roots[i];
+        let y = o.y + t * d.y;
+        if (t > 0.0 && y >= -half_h && y <= half_h && (best < 0.0 || t < best)) {
+            best = t;
+        }
+    }
+    if (abs(d.y) > EPS) {
+        let t = (-half_h - o.y) / d.y;
+        let p = o.xz + t * d.xz;
+        if (t > 0.0 && dot(p, p) <= radius * radius && (best < 0.0 || t < best)) {
+            best = t;
+        }
+    }
+    return best;
+}
+
 fn ray_ellipsoid_local(o: vec3<f32>, d: vec3<f32>, half: vec3<f32>) -> f32 {
     let inv = vec3<f32>(1.0 / half.x, 1.0 / half.y, 1.0 / half.z);
     let o_s = o * inv;
@@ -293,6 +332,12 @@ fn shape_normal(kind: u32, data: vec3<f32>, p_local: vec3<f32>) -> vec3<f32> {
         if (abs(p_local.y - half_h) < 1e-5) { return vec3<f32>(0.0, 1.0, 0.0); }
         if (abs(p_local.y + half_h) < 1e-5) { return vec3<f32>(0.0, -1.0, 0.0); }
         return normalize(vec3<f32>(p_local.x, 0.0, p_local.z));
+    } else if (kind == KIND_CONE) {
+        if (abs(p_local.y + data.x) < 1e-5) { return vec3<f32>(0.0, -1.0, 0.0); }
+        let k = data.y / (2.0 * data.x);
+        let n = vec3<f32>(p_local.x, k * k * (data.x - p_local.y), p_local.z);
+        if (dot(n, n) < 1e-20) { return vec3<f32>(0.0, 1.0, 0.0); }
+        return normalize(n);
     } else if (kind == KIND_ELLIPSOID) {
         // Normal at a surface point on an axis-aligned ellipsoid is
         // gradient(p²/a²) = (px/a², py/b², pz/c²), normalised.
@@ -317,6 +362,8 @@ fn cast_rays(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (rd_len < 1e-12) {
         hit_t[tid] = NO_HIT_T;
         hit_shape[tid] = -1;
+        hit_point[tid] = vec4<f32>(0.0);
+        hit_normal[tid] = vec4<f32>(0.0, 1.0, 0.0, 0.0);
         return;
     }
     let rd = rd_raw / rd_len;
@@ -351,6 +398,7 @@ fn cast_rays(@builtin(global_invocation_id) gid: vec3<u32>) {
         else if (kind == KIND_BOX)       { t = ray_box_local(lo, ld, data); }
         else if (kind == KIND_CAPSULE)   { t = ray_capsule_local(lo, ld, data.x, data.y); }
         else if (kind == KIND_CYLINDER)  { t = ray_cylinder_local(lo, ld, data.x, data.y); }
+        else if (kind == KIND_CONE)      { t = ray_cone_local(lo, ld, data.x, data.y); }
         else if (kind == KIND_ELLIPSOID) { t = ray_ellipsoid_local(lo, ld, data); }
 
         if (t > 0.0 && t < best_t) {

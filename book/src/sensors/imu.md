@@ -1,5 +1,11 @@
 # IMU
 
+`encode` supports [direct leased outputs](device_results.md) and mixed sensor
+command batches. Priming is explicit, and history advances only after submission;
+discarded/poisoned batches leave the previous sample unchanged. Model/state
+inputs require canonical device ownership. Existing `dispatch`/`update` remain
+available and share the same history with the direct path.
+
 `ImuSensor` produces six-DoF inertial readings for a batch of
 sensor mounts: linear acceleration (specific force) plus angular
 velocity, both expressed in the sensor's local frame. It mirrors
@@ -7,7 +13,7 @@ Newton's `SensorImu` accelerometer + gyroscope combo and is the
 primitive that locomotion / balance policies build their
 proprioceptive observation vector on.
 
-Source: `crates/molla/src/sensors/imu.rs`. Shader:
+Source: `crates/molla-sensors/src/imu.rs`. Shader:
 `crates/molla-kernels/shaders/imu.wgsl`.
 
 ## Reading + mount types
@@ -62,6 +68,17 @@ current `body_qd` into `prev_body_qd` and returns an empty `Vec`
 zeros). Discard the first frame's reading on real captures, or call
 `reset()` after a teleport / scene reset to force re-priming on the
 next step.
+
+History is copied device-to-device after evaluation in the same command
+stream. A GPU solver's velocity buffer does not need to be downloaded first.
+CPU edits must be uploaded before sampling; stale device input is rejected.
+The public `update` call collects its two output channels together through one
+reusable staging slot. It remains synchronous, with an explicit 30-second wait
+limit. `dispatch` instead returns borrowed device readings without a host copy
+or wait; the first priming call returns `None`.
+`dt` is elapsed simulation time between samples, in seconds, and must convert
+to a positive normal f32; zero, negative, non-finite and underflowing values
+are rejected without advancing history.
 
 The kernel then transforms the linear acceleration into the sensor
 frame, **adds the centripetal + tangential terms** that come from
@@ -118,6 +135,40 @@ empty vec, identical to the very first call. Use this after:
 - Any operation that breaks the finite-difference assumption that
   the velocity changed smoothly between the previous and current
   step.
+
+Replacing a model's GPU storage requires a reset even when body counts match.
+A changed body count requires recreating the sensor and validating its mounts.
+In-place topology/index changes also require explicit reset or recreation;
+the sensor does not infer application-level scene revisions from buffer contents.
+
+## Device-only and asynchronous use
+
+Use `dispatch` for GPU consumers or externally scheduled collection. A returned
+`ImuDeviceReadings` exposes typed accelerometer/gyroscope `DeviceBuffer`s.
+Submit consumers on the same engine queue before dispatching the next sample;
+the borrowed view prevents concurrent mutable access to the sensor in Rust.
+`readback_source(range)` selects active elements for a [readback ring](./readback.md).
+
+`readback_stats()` measures only the sensor's internal synchronous collector.
+Pure `dispatch` does not allocate staging or submit readback; an external ring
+tracks its own collection statistics. Reset external rings separately when
+invalidating queued scene results, and attach scene/sample identity to requests.
+
+`dispatch_stats()` counts submissions, evaluations, history copies and binding
+preparations. Priming submits a history copy without evaluation. Subsequent
+samples encode evaluation and the following history copy into one submission.
+Two least-recently-used bound-buffer variants are retained, supporting physics
+ping-pong without new bindings after warm-up. In-place state or `dt` changes
+reuse resources; replacing a bound buffer prepares a new set. Reset invalidates
+history, not reusable bindings or lifetime counters. Each preparation creates
+one uniform buffer and four bind groups; construction, command encoders, driver
+staging and readback allocations are outside this counter.
+
+`ImuKernel::prepare` / `encode_prepared` support lower-level command composition.
+The caller owns history sequencing, range/index validity and output authority.
+Submit before updating a reused parameter buffer; different `dt` values in one
+pending batch need separate prepared bindings. Public sensor-level producer
+batching and direct dispatch into leased output slots remain pending.
 
 ## Cross-references
 

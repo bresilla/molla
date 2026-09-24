@@ -71,3 +71,33 @@ That paper does not validate this implementation or its hand-tuned parameters.
 Real tyre calibration, broad terrain/soil validation, transient and integrated
 GPU pressure/history parity, and all remaining `FULL_COMPACT.md` acceptance gates
 remain separate requirements. A passing brush parity test does not satisfy them.
+
+## Independent-machine lifecycle
+
+Wheel readouts retain per-machine structural and explicit-state witnesses.
+Registering, configuring or removing one wheel invalidates only that wheel's
+samples. A changed articulation invalidates its own samples, while ground edits
+still invalidate samples depending on the registered terrain. Raw mutable state
+access invalidates all body witnesses. No-wake pose and velocity edits update
+witnesses without changing their requested wake behavior.
+
+`WheelForces::samples` returns a borrowed `WheelSamples` view rather than a slice.
+It supports forward/reverse iteration, indexing, length and endpoint access without
+allocating a filtered copy. Unchanged scene/state stamps retain the direct path;
+component checks occur when the scene or explicit state has changed.
+
+The isolated Gearbox material importer records the last applied authored material
+and collider identity. Unchanged USD material values no longer overwrite live
+controller friction/restitution. Authored edits, rebinding and collider replacement
+still apply the current authored values. This is necessary because live machine
+projection previously reset existing Kubota wheel friction from 1.1 to 0.9.
+
+The live imported regression spawns another real Kubota 25 m away while the first
+drives and inflates, sets the second machine to 0.8 bar independently, then despawns
+it through the normal dead-physics cleanup. Projection, alignment and despawn must
+preserve the first machine's complete pose/velocity/tyre snapshot exactly. Two
+identical scripted runs must match bitwise across every simulated step. Comparing
+the different one-machine and two-machine layouts uses `1e-9 * max(1, abs(value))`
+per numeric field: the initial bitwise cross-layout trial differed by approximately
+`2e-17` in velocity, while the full corrected trial's peak normalized difference
+was `1.39e-11`. These are numerical lifecycle checks, not tyre calibration bounds.

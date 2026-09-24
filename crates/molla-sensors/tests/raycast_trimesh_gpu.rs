@@ -62,6 +62,114 @@ fn ground_quad(r: f32, y0: f32) -> TriMesh {
     }
 }
 
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn scaled_rays_preserve_metric_distances_and_mixed_geometry_occlusion() {
+    let _gpu = lock_gpu();
+    let mut builder = ModelBuilder::new();
+    let mesh = builder.add_mesh(ground_quad(4.0, 0.0));
+    let ground = builder
+        .add_shape_trimesh(BodyId::NONE, mesh, Transform::IDENTITY)
+        .unwrap();
+    let body = builder.add_body(molla_sim::BodyParams::new().with_position(Vec3::Y * 2.0));
+    let sphere = builder
+        .add_shape_sphere(body, 0.5, Transform::IDENTITY)
+        .unwrap();
+    let (engine, model, state) = setup(builder.build().unwrap()).expect("GPU required");
+    let mut sensor = Raycaster::new(&engine, 2).unwrap();
+    for scale in [0.25, 1.0, 4.0, 1.0e-30, 1.0e30] {
+        let rays = [Vec3::NEG_Y * scale; 2];
+        let origins = [Vec3::Y * 5.0, Vec3::new(2.0, 5.0, 0.0)];
+        let hits = sensor
+            .cast(&engine, &model, &state, &origins, &rays, 10.0)
+            .unwrap();
+        assert_eq!(
+            hits[0].shape_id,
+            Some(sphere.index() as u32),
+            "scale={scale}"
+        );
+        assert_eq!(hits[1].shape_id, Some(ground.index() as u32));
+        assert!((hits[0].t - 2.5).abs() < 1.0e-4);
+        assert!((hits[1].t - 5.0).abs() < 1.0e-4);
+        assert!((hits[1].point - Vec3::new(2.0, 0.0, 0.0)).length() < 1.0e-4);
+        let clipped = sensor
+            .cast(&engine, &model, &state, &origins, &rays, 3.0)
+            .unwrap();
+        assert_eq!(clipped[0].shape_id, Some(sphere.index() as u32));
+        assert!(clipped[1].shape_id.is_none());
+    }
+}
+
+fn triangle_oracle(origin: Vec3, direction: Vec3, vertices: [Vec3; 3]) -> Option<f64> {
+    let edge1 = vertices[1] - vertices[0];
+    let edge2 = vertices[2] - vertices[0];
+    let p = direction.cross(edge2);
+    let determinant = edge1.dot(p);
+    if determinant.abs() < 1.0e-12 {
+        return None;
+    }
+    let offset = origin - vertices[0];
+    let u = offset.dot(p) / determinant;
+    let q = offset.cross(edge1);
+    let v = direction.dot(q) / determinant;
+    let distance = edge2.dot(q) / determinant;
+    (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && distance > 0.0).then_some(distance)
+}
+
+#[test]
+#[ignore = "needs a real wgpu adapter"]
+fn transformed_mesh_matches_independent_double_precision_triangle_oracle() {
+    let _gpu = lock_gpu();
+    let mesh = ground_quad(2.0, 0.0);
+    let transform = Transform::new(
+        Vec3::new(0.5, 1.25, -0.3),
+        molla_math::Quat::from_rotation_z(0.31),
+    );
+    let triangles: Vec<_> = mesh
+        .indices
+        .iter()
+        .map(|triangle| triangle.map(|i| transform.transform_point(mesh.vertices[i as usize])))
+        .collect();
+    let mut builder = ModelBuilder::new();
+    let mesh_id = builder.add_mesh(mesh);
+    builder
+        .add_shape_trimesh(BodyId::NONE, mesh_id, transform)
+        .unwrap();
+    let (engine, model, state) = setup(builder.build().unwrap()).expect("GPU required");
+    let origins: Vec<_> = (0..100)
+        .map(|i| {
+            Vec3::new(
+                (i % 10) as f64 * 0.51 - 2.1,
+                7.0,
+                (i / 10) as f64 * 0.47 - 2.6,
+            )
+        })
+        .collect();
+    let direction = Vec3::new(0.03, -1.0, 0.05).normalize();
+    let directions = vec![direction * 3.0; origins.len()];
+    let mut sensor = Raycaster::new(&engine, origins.len() as u32).unwrap();
+    let hits = sensor
+        .cast(&engine, &model, &state, &origins, &directions, 20.0)
+        .unwrap();
+    let mut hit_count = 0;
+    for (origin, hit) in origins.iter().zip(hits) {
+        let expected = triangles
+            .iter()
+            .filter_map(|triangle| triangle_oracle(*origin, direction, *triangle))
+            .filter(|t| *t < 20.0)
+            .min_by(f64::total_cmp);
+        assert_eq!(hit.shape_id.is_some(), expected.is_some());
+        if let Some(distance) = expected {
+            hit_count += 1;
+            assert!((hit.t - distance).abs() < 1.0e-4);
+            assert!((hit.point - (*origin + direction * distance)).length() < 1.0e-4);
+            let normal = transform.rotation * Vec3::Y;
+            assert!((hit.normal - normal).length() < 1.0e-4);
+        }
+    }
+    assert!(hit_count > 20 && hit_count < origins.len());
+}
+
 /// A ray straight down onto a static TriMesh ground quad hits at the
 /// expected distance, with the expected world-space hit point and
 /// outward normal.

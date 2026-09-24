@@ -86,67 +86,92 @@ impl AnnotationFrame {
     /// `{shape_id, class_id, bbox: [x, y, w, h], pixel_count}` —
     /// matching the COCO detection convention `(x, y, w, h)`.
     pub fn write_bbox_json<W: Write>(&self, out: &mut W) -> Result<()> {
-        let map_err = |e: std::io::Error| Error::Storage(format!("write_bbox_json: {e}"));
-        writeln!(out, "[").map_err(map_err)?;
-        for (i, b) in self.bboxes.iter().enumerate() {
-            let comma = if i + 1 < self.bboxes.len() { "," } else { "" };
-            writeln!(
-                out,
-                "  {{\"shape_id\": {}, \"class_id\": {}, \"bbox\": [{}, {}, {}, {}], \"pixel_count\": {}}}{comma}",
-                b.shape_id,
-                b.class_id,
-                b.x_min,
-                b.y_min,
-                b.width(),
-                b.height(),
-                b.pixel_count
-            )
-            .map_err(map_err)?;
-        }
-        writeln!(out, "]").map_err(map_err)?;
-        Ok(())
+        write_bbox_json(&self.bboxes, out)
     }
 
     /// Write the class image as 8-bit ASCII PGM (P2). Class IDs > 255
     /// are clamped — class IDs are intended to be small enumerated
     /// values for the segmentation-mask use case.
     pub fn write_class_image_pgm<W: Write>(&self, out: &mut W) -> Result<()> {
-        let map_err = |e: std::io::Error| Error::Storage(format!("write_class_image_pgm: {e}"));
-        writeln!(out, "P2").map_err(map_err)?;
-        writeln!(out, "{} {}", self.width, self.height).map_err(map_err)?;
-        writeln!(out, "255").map_err(map_err)?;
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let v = self.class_image[(y * self.width + x) as usize].min(255);
-                write!(out, "{v} ").map_err(map_err)?;
-            }
-            writeln!(out).map_err(map_err)?;
-        }
-        Ok(())
+        write_class_image_pgm(&self.class_image, self.width, self.height, out)
     }
 
     /// Write the per-instance mask image as PGM, using `shape_id`
     /// directly as the pixel value (clamped to 255). Useful for
     /// instance segmentation when there are ≤ 255 instances.
     pub fn write_instance_image_pgm<W: Write>(&self, out: &mut W) -> Result<()> {
-        let map_err = |e: std::io::Error| Error::Storage(format!("write_instance_image_pgm: {e}"));
-        writeln!(out, "P2").map_err(map_err)?;
-        writeln!(out, "{} {}", self.width, self.height).map_err(map_err)?;
-        writeln!(out, "255").map_err(map_err)?;
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let s = self.shape_image[(y * self.width + x) as usize];
-                let v = if s == MISS_SHAPE_ID {
-                    0
-                } else {
-                    (s + 1).min(255)
-                };
-                write!(out, "{v} ").map_err(map_err)?;
-            }
-            writeln!(out).map_err(map_err)?;
-        }
-        Ok(())
+        write_instance_image_pgm(&self.shape_image, self.width, self.height, out)
     }
+}
+
+/// Writes selected CPU boxes as JSON with inclusive bounds converted to `(x, y, width, height)`.
+pub fn write_bbox_json<W: Write>(boxes: &[BoundingBox2D], out: &mut W) -> Result<()> {
+    if boxes.iter().any(|b| {
+        b.x_min > b.x_max
+            || b.y_min > b.y_max
+            || b.x_max - b.x_min == u32::MAX
+            || b.y_max - b.y_min == u32::MAX
+    }) {
+        return Err(Error::Storage("write_bbox_json: invalid bounds".into()));
+    }
+    let map_err = |e: std::io::Error| Error::Storage(format!("write_bbox_json: {e}"));
+    writeln!(out, "[").map_err(map_err)?;
+    for (i, b) in boxes.iter().enumerate() {
+        let comma = if i + 1 < boxes.len() { "," } else { "" };
+        writeln!(out, "  {{\"shape_id\": {}, \"class_id\": {}, \"bbox\": [{}, {}, {}, {}], \"pixel_count\": {}}}{comma}",
+            b.shape_id, b.class_id, b.x_min, b.y_min, b.width(), b.height(), b.pixel_count).map_err(map_err)?;
+    }
+    writeln!(out, "]").map_err(map_err)?;
+    Ok(())
+}
+
+/// Writes selected CPU class pixels as P2 PGM, clamping IDs above 255.
+pub fn write_class_image_pgm<W: Write>(
+    pixels: &[u32],
+    width: u32,
+    height: u32,
+    out: &mut W,
+) -> Result<()> {
+    write_mask(pixels, width, height, out, |class| class.min(255))
+}
+
+/// Writes selected CPU shape pixels as P2 PGM: misses are 0, other IDs are `min(shape + 1, 255)`.
+pub fn write_instance_image_pgm<W: Write>(
+    pixels: &[u32],
+    width: u32,
+    height: u32,
+    out: &mut W,
+) -> Result<()> {
+    write_mask(pixels, width, height, out, |shape| {
+        if shape == MISS_SHAPE_ID {
+            0
+        } else {
+            (shape + 1).min(255)
+        }
+    })
+}
+
+fn write_mask<W: Write>(
+    pixels: &[u32],
+    width: u32,
+    height: u32,
+    out: &mut W,
+    value: impl Fn(u32) -> u32,
+) -> Result<()> {
+    if width == 0 || height == 0 || width as u64 * height as u64 != pixels.len() as u64 {
+        return Err(Error::Storage(
+            "write_mask: malformed image dimensions".into(),
+        ));
+    }
+    let map_err = |e: std::io::Error| Error::Storage(format!("write_mask: {e}"));
+    writeln!(out, "P2\n{width} {height}\n255").map_err(map_err)?;
+    for row in pixels.chunks_exact(width as usize) {
+        for &pixel in row {
+            write!(out, "{} ", value(pixel)).map_err(map_err)?;
+        }
+        writeln!(out).map_err(map_err)?;
+    }
+    Ok(())
 }
 
 /// Dataset builder — collects shape→class labels, then produces
@@ -178,6 +203,17 @@ impl Dataset {
     /// Look up the class for a shape (or `0` when unlabelled).
     pub fn class_for(&self, shape_id: u32) -> u32 {
         self.shape_to_class.get(&shape_id).copied().unwrap_or(0)
+    }
+
+    /// Returns labels sorted by shape ID, including any reserved IDs supplied by the caller.
+    pub fn shape_labels(&self) -> Vec<crate::ShapeLabel> {
+        let mut labels: Vec<_> = self
+            .shape_to_class
+            .iter()
+            .map(|(&shape_id, &class_id)| crate::ShapeLabel { shape_id, class_id })
+            .collect();
+        labels.sort_unstable_by_key(|label| label.shape_id);
+        labels
     }
 
     /// Build an [`AnnotationFrame`] from a rendered shape-id image.
@@ -292,6 +328,46 @@ pub fn bounding_boxes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_writers_validate_before_output_and_propagate_io_errors() {
+        let mut output = Vec::new();
+        for (width, height) in [(0, 1), (1, 0), (2, 2), (u32::MAX, u32::MAX)] {
+            assert!(write_class_image_pgm(&[1], width, height, &mut output).is_err());
+            assert!(write_instance_image_pgm(&[1], width, height, &mut output).is_err());
+        }
+        let mut bbox = BoundingBox2D {
+            x_min: 2,
+            x_max: 1,
+            y_min: 0,
+            y_max: 0,
+            shape_id: 7,
+            class_id: 9,
+            pixel_count: 1,
+        };
+        assert!(write_bbox_json(&[bbox], &mut output).is_err());
+        bbox.x_min = 0;
+        bbox.x_max = u32::MAX;
+        assert!(write_bbox_json(&[bbox], &mut output).is_err());
+        assert!(output.is_empty());
+        struct Broken;
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("fixture failure"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        assert!(write_bbox_json(&[], &mut Broken).is_err());
+        assert!(write_class_image_pgm(&[1], 1, 1, &mut Broken).is_err());
+        assert!(write_instance_image_pgm(&[1], 1, 1, &mut Broken).is_err());
+        write_instance_image_pgm(&[u32::MAX, u32::MAX - 1, 0], 3, 1, &mut output).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "P2\n3 1\n255\n0 255 1 \n"
+        );
+    }
 
     #[test]
     fn class_image_maps_known_shapes_skipping_misses() {
