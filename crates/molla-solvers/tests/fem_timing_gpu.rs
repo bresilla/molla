@@ -83,11 +83,12 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
             system.configure_gpu_timing(false).unwrap();
             continue;
         }
-        for (outer, diagnostics) in [
-            (None, false),
-            (Some(2), false),
-            (Some(130), false),
-            (Some(2), true),
+        for (outer, diagnostics, polish) in [
+            (None, false, false),
+            (Some(2), false, false),
+            (Some(130), false, false),
+            (Some(2), true, false),
+            (Some(2), true, true),
         ] {
             let mut plain = make();
             let mut timed = make();
@@ -101,6 +102,9 @@ fn timing_pages_preserve_state_and_enforce_idle_configuration() {
                         }))
                         .unwrap();
                     system.configure_material_contact_reuse(Some(1)).unwrap();
+                    if polish {
+                        system.configure_material_contact_polish(Some(8)).unwrap();
+                    }
                 }
                 system.set_drive_effort(0, 0.25).unwrap();
                 if diagnostics {
