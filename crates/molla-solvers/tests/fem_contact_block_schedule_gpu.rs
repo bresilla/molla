@@ -91,6 +91,8 @@ fn gpu_contact_blocks_cover_grouping_fallbacks_and_invalid_inputs() {
         "dynamic",
         "static",
         "static_reordered",
+        "static_mirrored",
+        "static_edge_only",
         "reordered",
         "unequal",
         "collision",
@@ -124,6 +126,10 @@ fn gpu_contact_blocks_cover_grouping_fallbacks_and_invalid_inputs() {
             },
         );
         match mode {
+            "static_mirrored" | "static_edge_only" => cs.iter_mut().for_each(|c| {
+                c.normal_gap[3] = -c.normal_gap[3];
+                c.material[0] = 0.0;
+            }),
             "reordered" | "static_reordered" => cs.rotate_right(1),
             "collision" => {
                 cs.extend(contacts(0, 16, 0.5));
@@ -151,10 +157,18 @@ fn gpu_contact_blocks_cover_grouping_fallbacks_and_invalid_inputs() {
             cs.clone()
         };
         let positions = buffer(device, &[[0.0_f32, 0.0, 0.0, 0.0], [0.01, 0.02, 0.0, 0.0]]);
-        let initial = [[0.3_f32, -1.0, 0.2, 0.0]; 2];
+        let mut initial = [[0.3_f32, -1.0, 0.2, 0.0]; 2];
+        if mode == "static_edge_only" {
+            for (node, sign) in [-1.0_f32, 1.0].iter().enumerate() {
+                initial[node][0] += sign * 0.04 * 0.6;
+                initial[node][1] += sign * 0.04 * 0.8;
+            }
+        }
         let velocities = buffer(device, &initial);
         let inv = if mode == "zero_mass" {
             [0.0_f32; 2]
+        } else if mode == "static_mirrored" || mode == "static_edge_only" {
+            [10.0; 2]
         } else {
             [10.0, 20.0]
         };
@@ -187,7 +201,11 @@ fn gpu_contact_blocks_cover_grouping_fallbacks_and_invalid_inputs() {
             body_count: 2,
         };
         let settings = SoftRigidSolveSettings {
-            iterations: 64,
+            iterations: if mode == "static_mirrored" || mode == "static_edge_only" {
+                1
+            } else {
+                64
+            },
             dt: 1e-4,
             penetration_recovery: 0.2,
             max_recovery_speed: 0.5,
@@ -206,7 +224,9 @@ fn gpu_contact_blocks_cover_grouping_fallbacks_and_invalid_inputs() {
             kernel
                 .encode(device, &mut encoder, bindings(), settings)
                 .unwrap();
-            if mode == "zero_mass" {
+            if mode == "zero_mass"
+                || (blocked && (mode == "static_mirrored" || mode == "static_edge_only"))
+            {
                 kernel
                     .encode_residual_check(device, &mut encoder, bindings(), settings, 1e-4)
                     .unwrap();
@@ -241,6 +261,11 @@ fn gpu_contact_blocks_cover_grouping_fallbacks_and_invalid_inputs() {
                     .all(|v| v.is_finite())
             );
             if blocked {
+                if mode == "static_mirrored" || mode == "static_edge_only" {
+                    assert_eq!(rows[0][4], 0.0, "first point was not released: {mode}");
+                    assert!(rows[2][4] > 0.0, "edge was not active: {mode}");
+                    assert_eq!(rows[1][4] > 0.0, mode == "static_mirrored");
+                }
                 let words = gpu_readback::read::<u32>(
                     &engine,
                     kernel.active_rows(),

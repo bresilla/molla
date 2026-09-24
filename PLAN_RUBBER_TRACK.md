@@ -35,6 +35,20 @@ not accepted states or a rollback guarantee.
 The implementation remains opt-in. Native independent trajectories, performance
 and sustained driving remain required before default integration.
 
+Fresh native block integration passes one independently checked step but rejects
+step17 after16 GPU-accepted steps. The step17 capture exposed missing active-set
+cases: dynamic vec2 subset construction emitted incorrect mask4/mask6 candidates
+on the tested GPU path. Scalar bit-selected indices fix the captured full solve;
+mirrored and edge-only one-sweep RED/GREEN tests now cover these cases. All21
+grouping cases, two coupled runtime tests and six ordered replay regressions pass.
+No contact tolerance was changed and no row-specific diagnostics are retained.
+
+Accepted-state contact capture additionally exposes a loop-closure discrepancy at
+step9 between GPU row diagnostics and independently reconstructed final velocities.
+Anchor arithmetic and post-contact rigid drift must be separated before attributing
+the discrepancy. The prefix is not fully independently accepted, and a fresh
+native trajectory with the subset fix remains required.
+
 ### Current contact throughput and convergence (2026-09-24)
 
 Cooperative contact updates skip exactly zero impulses. Ordered row processing,

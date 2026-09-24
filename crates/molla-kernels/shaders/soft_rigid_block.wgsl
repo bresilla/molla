@@ -128,15 +128,11 @@ fn solve_contact_block(r: u32) -> bool {
     var found = false;
     for (var mask = 0u; mask < 7u; mask += 1u) {
         var candidate = vec3<f32>(0.0);
-        var indices = vec2<u32>(0u);
-        var count = 0u;
-        for (var i = 0u; i < 3u; i += 1u) {
-            if (mask & (1u<<i)) != 0u { indices[count] = i; count += 1u; }
-        }
-        if count == 1u { candidate[indices.x] = rhs[indices.x]/matrix[indices.x][indices.x]; }
+        let count = countOneBits(mask);
+        let x = select(select(2u, 1u, (mask & 2u) != 0u), 0u, (mask & 1u) != 0u);
+        let y = select(1u, 2u, (mask & 4u) != 0u);
+        if count == 1u { candidate[x] = rhs[x]/matrix[x][x]; }
         if count == 2u {
-            let x = indices.x;
-            let y = indices.y;
             let determinant = matrix[x][x]*matrix[y][y]-matrix[x][y]*matrix[y][x];
             if determinant <= 1e-6*matrix[x][x]*matrix[y][y] { continue; }
             candidate[x] = (matrix[y][y]*rhs[x]-matrix[x][y]*rhs[y])/determinant;
