@@ -19,6 +19,16 @@ fn bytes(engine: &Engine, buffer: &wgpu::Buffer) -> Vec<u8> {
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn contact_snapshot_preserves_state_replaces_inputs_and_replays_first_solve() {
+    check_snapshot(false);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn contact_snapshot_separates_solved_velocities_from_stop_drift() {
+    check_snapshot(true);
+}
+
+fn check_snapshot(stopped: bool) {
     let engine = Arc::new(Engine::new_gpu().unwrap());
     let device = engine.device().unwrap();
     let queue = engine.queue().unwrap();
@@ -34,11 +44,14 @@ fn contact_snapshot_preserves_state_replaces_inputs_and_replays_first_solve() {
             position: [0.0, -0.1, 0.0, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
             data: [10.0, 0.1, 10.0, 0.85],
-            ids: [1, u32::MAX, 0, 0],
+            ids: [1, if stopped { 0 } else { u32::MAX }, 0, 0],
         });
+        if stopped {
+            scene.rigid_model.joint_limit_upper.host_mut().unwrap()[0] = 0.0;
+        }
         let mut system =
             FemRigidGpuSystem::new(engine.clone(), scene, fem_rotor::config()).unwrap();
-        system.set_drive_effort(0, 0.25).unwrap();
+        system.set_drive_effort(0, if stopped { 0.0 } else { 0.25 }).unwrap();
         system
     };
     let mut plain = make();
@@ -95,6 +108,18 @@ fn contact_snapshot_preserves_state_replaces_inputs_and_replays_first_solve() {
         }
         assert_eq!(bytes(&engine, captured.status_buffer()), 0u32.to_le_bytes());
         let snapshot = captured.contact_snapshot().unwrap();
+        let solved = snapshot.solved_buffers().collect::<Vec<_>>();
+        assert_eq!(solved.iter().map(|v| v.0).collect::<Vec<_>>(),
+            ["solved_velocities", "solved_rigid_velocities"]);
+        assert_eq!(bytes(&engine, solved[0].1),
+            bytes(&engine, captured.soft_state().particle_qd.device_buffer().unwrap()));
+        if stopped {
+            let before = readback::read::<f32>(&engine, solved[1].1, 1)[0];
+            let after = readback::read::<f32>(&engine,
+                captured.rigid_state().joint_qd.device_buffer().unwrap(), 1)[0];
+            assert!(before > 1e-6, "stop fixture did not receive contact torque: {before}");
+            assert_eq!(after, 0.0);
+        }
         let named = snapshot.buffers().collect::<Vec<_>>();
         assert_eq!(
             named.iter().map(|v| v.0).collect::<Vec<_>>(),
@@ -161,18 +186,18 @@ fn contact_snapshot_preserves_state_replaces_inputs_and_replays_first_solve() {
         for (actual, expected) in [
             (
                 named[1].1,
-                captured.soft_state().particle_qd.device_buffer().unwrap(),
+                solved[0].1,
             ),
             (
                 named[8].1,
-                captured.rigid_state().joint_qd.device_buffer().unwrap(),
-            ),
-            (
-                named[9].1,
-                captured.rigid_state().body_qd.device_buffer().unwrap(),
+                solved[1].1,
             ),
         ] {
             assert_eq!(bytes(&engine, actual), bytes(&engine, expected));
+        }
+        if !stopped {
+            assert_eq!(bytes(&engine, named[9].1),
+                bytes(&engine, captured.rigid_state().body_qd.device_buffer().unwrap()));
         }
     }
     captured.configure_contact_snapshot(true).unwrap();
