@@ -467,6 +467,137 @@ fn coupled_polish_cycles_preserve_friction_energy_and_lifecycle() {
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
+fn configured_polish_corrections_finish_before_convergence_is_latched() {
+    use molla_solvers::fem_rigid_gpu::{
+        FemRigidGpuSystem, MaterialContactConfig, SoftRigidShapeGpu,
+    };
+    let engine = std::sync::Arc::new(Engine::new_gpu().unwrap());
+    let h = 1.0 / 19200.0;
+    let oracle = model(false, true);
+    for (cycles, inverted) in [(1, false), (2, false), (257, false), (257, true)] {
+        let mut scene = fem_rotor::scene();
+        scene.soft_model = model(false, true);
+        scene.soft_state = scene.soft_model.state().unwrap();
+        scene
+            .soft_state
+            .particle_qd
+            .host_mut()
+            .unwrap()
+            .fill(Vec3::NEG_Y);
+        if inverted {
+            scene.soft_state.particle_q.host_mut().unwrap().swap(1, 2);
+        }
+        scene.shapes.clear();
+        scene.shapes.push(SoftRigidShapeGpu {
+            position: [0.0, -0.1, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            data: [10.0, 0.1, 10.0, 0.85],
+            ids: [1, u32::MAX, 0, 0],
+        });
+        let mut system = FemRigidGpuSystem::new(
+            engine.clone(),
+            scene,
+            molla_solvers::fem_rigid::FemRigidConfig {
+                max_substep: h,
+                elastic_iterations: 128,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        system
+            .configure_material_contact(Some(MaterialContactConfig {
+                iterations: 2,
+                linear_tolerance: 1e-4,
+                angular_tolerance: 1e-4,
+            }))
+            .unwrap();
+        system.configure_material_contact_reuse(Some(8)).unwrap();
+        system.configure_material_contact_sweeps(Some(1)).unwrap();
+        system.configure_material_contact_polish(Some(8)).unwrap();
+        system
+            .configure_material_contact_polish_cycles(cycles)
+            .unwrap();
+        let previous = readback::read::<[f32; 4]>(
+            &engine,
+            system.soft_state().particle_q.device_buffer().unwrap(),
+            4,
+        );
+        assert!(system.try_step_substep(h).unwrap());
+        let status = readback::read::<u32>(&engine, system.status_buffer(), 1)[0];
+        let checkpoint = readback::read::<u32>(
+            &engine,
+            system.material_pre_polish_diagnostics().unwrap(),
+            4,
+        );
+        let force =
+            readback::read::<f32>(&engine, system.material_force_diagnostics().unwrap(), 1)[0];
+        let rows = readback::read::<[f32; 8]>(
+            &engine,
+            system.contact_row_diagnostics(),
+            system.contact_row_count() as usize,
+        );
+        let residual = rows.iter().map(|r| r[3]).fold(0.0_f32, f32::max);
+        eprintln!(
+            "cycles={cycles} inverted={inverted} status={status} pre={checkpoint:?} material={force} contact={residual}"
+        );
+        if inverted {
+            assert_ne!(status & 8, 0);
+            while !system.poll_completion().unwrap() {
+                std::thread::yield_now();
+            }
+            system.step(h).unwrap();
+            assert_ne!(
+                readback::read::<u32>(&engine, system.status_buffer(), 1)[0] & 8,
+                0
+            );
+            continue;
+        }
+        if cycles <= 2 {
+            assert_eq!(status, 64);
+            while !system.poll_completion().unwrap() {
+                std::thread::yield_now();
+            }
+            system.step(h).unwrap();
+            assert_eq!(
+                readback::read::<u32>(&engine, system.status_buffer(), 1),
+                [64]
+            );
+            continue;
+        }
+        assert_eq!(
+            status, 0,
+            "configured correction passes were not allowed to converge"
+        );
+        assert_eq!(checkpoint[0], 0);
+        assert!(checkpoint[1..].iter().all(|&v| f32::from_bits(v) <= 1e-4));
+        assert!(force <= 1e-4 && residual <= 1e-4);
+        while !system.poll_completion().unwrap() {
+            std::thread::yield_now();
+        }
+        let velocity = readback::read::<[f32; 4]>(
+            &engine,
+            system.soft_state().particle_qd.device_buffer().unwrap(),
+            4,
+        );
+        let samples =
+            readback::read::<[f32; 4]>(&engine, system.material_force_samples().unwrap(), 4);
+        assert!(
+            trajectory_force_oracle(&oracle, &previous, &velocity, &samples, h)
+                .iter()
+                .all(|&value| value <= 1e-4)
+        );
+        for (i, row) in rows.iter().enumerate() {
+            assert!(row[4] >= 0.0);
+            assert!(row[5].hypot(row[6]) <= 0.85 * row[4] + 1e-8);
+            if i < 4 && previous[i][1] == 0.0 {
+                assert!(velocity[i][1] >= -1e-4);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
 fn blocked_runtime_preserves_friction_energy_and_lifecycle() {
     material_reuse_trajectory_configured(0.85, None, Some(1), true, 17, 256, true);
 }

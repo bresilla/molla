@@ -1275,7 +1275,9 @@ impl FemRigidGpuSystem {
                     if let Some(timing) = &self.timing {
                         timing.mark_contact(&mut pass, 2 * iteration + 1);
                     }
-                    if iteration + 1 == coupling.config.iterations {
+                    let final_correction = iteration + 1 == coupling.config.iterations
+                        && !(coupling.polish_iterations.is_some() && coupling.polish_cycles > 1);
+                    if final_correction {
                         self.solve.encode_residual_check(
                             device,
                             &mut pass,
@@ -1290,7 +1292,7 @@ impl FemRigidGpuSystem {
                         &self.soft_next,
                         &self.rigid_next,
                         self.solve.status(),
-                        iteration + 1 == coupling.config.iterations,
+                        final_correction,
                     )?;
                     if let Some(timing) = &self.timing {
                         timing.mark(&mut pass, 2 * iteration + 3);
