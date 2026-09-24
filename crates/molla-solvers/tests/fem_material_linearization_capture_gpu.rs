@@ -160,7 +160,25 @@ fn captured_ceol_material_operator_preserves_state() {
             pass.set_pipeline(&pipelines[0]);
             pass.dispatch_workgroups((tets as u32).div_ceil(64), 1, 1);
             pass.set_pipeline(&pipelines[1]);
-            pass.dispatch_workgroups((particles as u32).div_ceil(64), 1, 1);
+            for start in (0..particles as u32).step_by(512) {
+                let mut params = bytes[3][0].clone();
+                params[12..16].copy_from_slice(&start.to_le_bytes());
+                let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("captured material batch"),
+                    contents: &params,
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                let batch = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &layouts[3],
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform.as_entire_binding(),
+                    }],
+                });
+                pass.set_bind_group(3, &batch, &[]);
+                pass.dispatch_workgroups((particles as u32 - start).min(512).div_ceil(64), 1, 1);
+            }
         }
         queue.submit([encoder.finish()]);
         for (name, binding) in [("residual", 1), ("action", 2)] {

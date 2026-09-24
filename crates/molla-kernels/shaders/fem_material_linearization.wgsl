@@ -88,7 +88,7 @@ fn material_spring_action(node: u32, spring: u32) -> vec3<f32> {
 
 @compute @workgroup_size(64)
 fn material_linearization(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let node = gid.x;
+    let node = u.color_index + gid.x;
     if node >= u.particle_count { return; }
     let inverse_mass = particle_inv_mass[node];
     let direction = material_direction[node].xyz;

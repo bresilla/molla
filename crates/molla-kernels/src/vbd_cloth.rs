@@ -690,7 +690,10 @@ impl VbdClothKernel {
         pass.set_pipeline(&self.pipe_residual_seed);
         pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
         pass.set_pipeline(&linearization.pipeline);
-        pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        for (uniform, blocks) in &linearization.batches {
+            pass.set_bind_group(3, uniform, &[]);
+            pass.dispatch_workgroups(*blocks, 1, 1);
+        }
         Ok(())
     }
 
@@ -1193,6 +1196,19 @@ impl VbdClothKernel {
             push_uniforms(&base(tet_count_u, 0, 0.0));
         }
 
+        let mut linearization_batches = Vec::new();
+        if mode == DispatchMode::Linearization {
+            for start in (0..particle_count_u).step_by(512) {
+                let count = (particle_count_u - start).min(512);
+                let uniform = self.bindings.uniform_group(
+                    device,
+                    &self.layout_uniforms,
+                    bytemuck::bytes_of(&base(count, start, 0.0)),
+                );
+                linearization_batches.push((uniform, count.div_ceil(WORKGROUP_SIZE)));
+            }
+        }
+
         // ── Encode + dispatch ─────────────────────────────────────
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::vbd_cloth encoder"),
@@ -1284,7 +1300,11 @@ impl VbdClothKernel {
                 if mode == DispatchMode::Linearization {
                     let linearization = self.linearization.as_ref().unwrap();
                     pass.set_bind_group(6, linearization.group.as_ref().unwrap(), &[]);
-                    dispatch(&mut pass, &linearization.pipeline, 0, particle_count_u);
+                    pass.set_pipeline(&linearization.pipeline);
+                    for (uniform, blocks) in &linearization_batches {
+                        pass.set_bind_group(3, uniform, &[]);
+                        pass.dispatch_workgroups(*blocks, 1, 1);
+                    }
                 } else {
                     dispatch(&mut pass, &self.pipe_force_residual, 0, particle_count_u);
                 }
@@ -1364,6 +1384,7 @@ impl VbdClothKernel {
         self.continuation = continuation;
 
         if mode == DispatchMode::Linearization {
+            self.linearization.as_mut().unwrap().batches = linearization_batches;
             self.linearization.as_mut().unwrap().material_groups = Some([
                 bg_state,
                 bg_topo,
