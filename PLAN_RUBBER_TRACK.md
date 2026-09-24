@@ -78,6 +78,27 @@ Full mesh/timestep convergence, hysteresis and a physical tensioner remain
 
 ## Model limits and evidence
 
+### Geometry-edge subtraction precision (2026-09-24)
+
+The h1/9600 CEOL screen exposed false GPU convergence: GPU maximum9.6353e-5
+versus independently reconstructed1.25747e-4, with four nodes over the unchanged
+1e-4 limit. The h1/4800 screen correctly rejected at2.55584e-4 GPU force residual.
+Neither larger timestep is validated for sustained operation.
+
+At two captured nodes, rounded(q_i-q_0)-rounded(rest_i-rest_0) lost remainders
+before compensated gradient multiplication. An independent component calculation
+accounts for4.48e-5 and6.86e-5 speed-equivalent error, leaving less than8.6e-7
+unexplained. Viscosity was not the dominant source. GPU preparation now retains
+all three subtraction remainders in the cached previous-gradient low parts;
+the uncached reference uses the same correction. Newton and residual geometry
+change together; trajectories need new validation, not bitwise old-state matching.
+
+Two captured regression fixtures reproduce the false acceptance before the fix.
+Afterward both reject correctly, with GPU/f64 scalar gaps1.88e-7 and1.64e-6;
+the four earlier fixtures and67206 rounding-correction lanes still pass. The
+fixture error bound is tightened to3e-6, with physical/contact limits unchanged.
+Full-mesh/native larger-timestep revalidation remains pending.
+
 ### GPU previous-gradient cache (2026-09-24)
 
 VBD computes the previous-position deformation-gradient high/low parts once per

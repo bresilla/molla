@@ -572,12 +572,28 @@ fn cache_previous_tets(@builtin(global_invocation_id) gid: vec3<u32>) {
         tet_displacement_edge(i0, tet_indices[tet * 4u + 3u]),
     );
     let raw = tet_dm_inv[tet];
-    let parts = tet_gradient_parts(edges, mat3x3<f32>(raw.col0.xyz, raw.col1.xyz, raw.col2.xyz), IDENTITY3);
+    let parts = tet_previous_gradient_parts(tet, edges, mat3x3<f32>(raw.col0.xyz, raw.col1.xyz, raw.col2.xyz));
     let base = u.particle_count + 6u * tet;
     for (var column = 0u; column < 3u; column++) {
         particle_delta[base + column] = vec4<f32>(parts.value[column], 0.0);
         particle_delta[base + 3u + column] = vec4<f32>(parts.correction[column], 0.0);
     }
+}
+
+fn tet_previous_gradient_parts(tet: u32, edges: mat3x3<f32>, dm_inv: mat3x3<f32>) -> TetGradient {
+    let origin = tet_indices[tet * 4u];
+    var low: mat3x3<f32>;
+    for (var column = 0u; column < 3u; column++) {
+        let node = tet_indices[tet * 4u + column + 1u];
+        let current = particle_q_in[node].xyz - particle_q_in[origin].xyz;
+        let rest = particle_rest[node].xyz - particle_rest[origin].xyz;
+        low[column] = tet_sum_error(particle_q_in[node].xyz, -particle_q_in[origin].xyz, current)
+            - tet_sum_error(particle_rest[node].xyz, -particle_rest[origin].xyz, rest)
+            + tet_sum_error(current, -rest, edges[column]);
+    }
+    var parts = tet_gradient_parts(edges, dm_inv, IDENTITY3);
+    parts.correction += low * dm_inv;
+    return parts;
 }
 
 fn tet_previous_parts(tet: u32, edges: mat3x3<f32>, dm_inv: mat3x3<f32>) -> TetGradient {
@@ -590,7 +606,7 @@ fn tet_previous_parts(tet: u32, edges: mat3x3<f32>, dm_inv: mat3x3<f32>) -> TetG
         }
         return parts;
     }
-    return tet_gradient_parts(edges, dm_inv, IDENTITY3);
+    return tet_previous_gradient_parts(tet, edges, dm_inv);
 }
 
 fn tet_dot_minus_one(a: vec3<f32>, b: vec3<f32>) -> f32 {

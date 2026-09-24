@@ -143,7 +143,11 @@ fn cancelling_tet_gradients_match_f64_force() {
     let engine = Engine::new_gpu().unwrap();
     let device = engine.device().unwrap();
     let queue = engine.queue().unwrap();
-    for (case, fixture) in fixtures::CASES.iter().enumerate() {
+    for (case, fixture) in fixtures::CASES
+        .iter()
+        .chain(fixtures::EDGE_CASES)
+        .enumerate()
+    {
         let rest = vectors(fixture.rest);
         let q = vectors(fixture.positions);
         let velocity = vectors(fixture.velocities);
@@ -260,7 +264,7 @@ fn cancelling_tet_gradients_match_f64_force() {
             samples[node][3]
         );
         assert!(
-            error < 3e-5,
+            error < 3e-6,
             "case={case}: GPU/oracle force mismatch {error}"
         );
         assert_eq!(
