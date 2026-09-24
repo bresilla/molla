@@ -279,8 +279,7 @@ impl GpuGmres {
             layout: &self.layout,
             entries: &entries,
         });
-        let dispatch = |encoder: &mut wgpu::CommandEncoder, pipeline: usize, slot: u32, x, y| {
-            let mut pass = encoder.begin_compute_pass(&Default::default());
+        let dispatch = |pass: &mut wgpu::ComputePass<'_>, pipeline: usize, slot: u32, x, y| {
             pass.set_pipeline(&self.pipelines[pipeline]);
             pass.set_bind_group(0, &group, &[slot * stride]);
             pass.dispatch_workgroups(x, y, 1);
@@ -290,31 +289,43 @@ impl GpuGmres {
             encoder.clear_buffer(&self.solution, 0, None);
         }
         let blocks = self.n.div_ceil(64);
-        dispatch(encoder, 0, 0, blocks, 1);
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            dispatch(&mut pass, 0, 0, blocks, 1);
+        }
         operator(encoder, &self.direction, &self.work)?;
         for cycle in 0..=settings.cycles {
-            dispatch(encoder, 1, 0, blocks, 1);
-            dispatch(encoder, 2, u32::from(cycle != 0), 1, 1);
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                dispatch(&mut pass, 1, 0, blocks, 1);
+                dispatch(&mut pass, 2, u32::from(cycle != 0), 1, 1);
+                if cycle < settings.cycles {
+                    dispatch(&mut pass, 3, 0, blocks, 1);
+                }
+            }
             if cycle == settings.cycles {
                 break;
             }
-            dispatch(encoder, 3, 0, blocks, 1);
             for k in 0..self.restart {
                 operator(encoder, &self.direction, &self.work)?;
                 let slot = 2 + 2 * k;
-                dispatch(encoder, 4, slot, blocks, 1);
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                dispatch(&mut pass, 4, slot, blocks, 1);
                 for reorthogonalization in 0..2 {
-                    dispatch(encoder, 5, slot + reorthogonalization, blocks, k + 1);
-                    dispatch(encoder, 6, slot + reorthogonalization, k + 1, 1);
-                    dispatch(encoder, 7, slot + reorthogonalization, blocks, 1);
+                    dispatch(&mut pass, 5, slot + reorthogonalization, blocks, k + 1);
+                    dispatch(&mut pass, 6, slot + reorthogonalization, k + 1, 1);
+                    dispatch(&mut pass, 7, slot + reorthogonalization, blocks, 1);
                 }
-                dispatch(encoder, 8, slot, blocks, 1);
-                dispatch(encoder, 9, slot, 1, 1);
-                dispatch(encoder, 10, slot, blocks, 1);
+                dispatch(&mut pass, 8, slot, blocks, 1);
+                dispatch(&mut pass, 9, slot, 1, 1);
+                dispatch(&mut pass, 10, slot, blocks, 1);
             }
-            dispatch(encoder, 11, 0, 1, 1);
-            dispatch(encoder, 12, 0, blocks, 1);
-            dispatch(encoder, 0, 0, blocks, 1);
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                dispatch(&mut pass, 11, 0, 1, 1);
+                dispatch(&mut pass, 12, 0, blocks, 1);
+                dispatch(&mut pass, 0, 0, blocks, 1);
+            }
             operator(encoder, &self.direction, &self.work)?;
         }
         Ok(())
