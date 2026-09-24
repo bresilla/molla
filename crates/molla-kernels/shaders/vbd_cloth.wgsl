@@ -57,6 +57,18 @@ struct Uniforms {
 
 const MAX_STRETCH_DISABLED: f32 = 1.0;
 const CACHE_PREVIOUS_TETS: bool = false;
+const LOCAL_MATERIAL_TRIAL: bool = false;
+var<private> material_trial_enabled: bool;
+var<private> material_trial_nodes: vec2<u32>;
+var<private> material_trial_delta: array<vec3<f32>, 2>;
+
+fn material_displacement(node: u32) -> vec3<f32> {
+    if LOCAL_MATERIAL_TRIAL && material_trial_enabled {
+        if node == material_trial_nodes.x { return material_trial_delta[0]; }
+        if node == material_trial_nodes.y { return material_trial_delta[1]; }
+    }
+    return particle_delta[node].xyz;
+}
 const IDENTITY3 = mat3x3<f32>(
     vec3<f32>(1.0, 0.0, 0.0),
     vec3<f32>(0.0, 1.0, 0.0),
@@ -615,8 +627,8 @@ fn tet_increment_parts(tet: u32, dm_inv: mat3x3<f32>) -> TetGradient {
     var low: mat3x3<f32>;
     for (var column = 0u; column < 3u; column++) {
         let node = tet_indices[tet * 4u + column + 1u];
-        edges[column] = particle_delta[node].xyz - particle_delta[origin].xyz;
-        low[column] = tet_sum_error(particle_delta[node].xyz, -particle_delta[origin].xyz, edges[column]);
+        edges[column] = material_displacement(node) - material_displacement(origin);
+        low[column] = tet_sum_error(material_displacement(node), -material_displacement(origin), edges[column]);
     }
     var parts = tet_gradient_parts(edges, dm_inv, mat3x3<f32>());
     parts.correction += low * dm_inv;
@@ -892,7 +904,7 @@ fn spring_force_hessian(
     let b = spring_b[spring_idx];
     let other = select(a, b, self_idx == a);
     let previous = particle_q_in[self_idx].xyz - particle_q_in[other].xyz;
-    let increment = particle_delta[self_idx].xyz - particle_delta[other].xyz;
+    let increment = material_displacement(self_idx) - material_displacement(other);
     let diff = previous + increment;
     let len = max(length(diff), 1e-8);
     let rest = spring_rest_length[spring_idx];
@@ -903,7 +915,7 @@ fn spring_force_hessian(
         extension = (previous_len - rest) + extension_increment;
         if strict {
             let low = tet_sum_error(particle_q_in[self_idx].xyz, -particle_q_in[other].xyz, previous)
-                + tet_sum_error(particle_delta[self_idx].xyz, -particle_delta[other].xyz, increment)
+                + tet_sum_error(material_displacement(self_idx), -material_displacement(other), increment)
                 + tet_sum_error(previous, increment, diff);
             extension = spring_length_extension(diff, low, rest, len);
         }

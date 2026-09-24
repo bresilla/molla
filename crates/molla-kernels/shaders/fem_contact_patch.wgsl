@@ -32,8 +32,10 @@ fn patch_evaluate(x: array<f32,15>, mask: i32) -> array<f32,15> {
             for (var k = 0u; k < 3u; k += 1u) {
                 delta[k] = patch_input[10u+3u*i+k] + u.dt*x[3u*i+k];
             }
-            particle_delta[node] = vec4<f32>(delta,0.0);
+            material_trial_nodes[i] = node;
+            material_trial_delta[i] = delta;
         }
+        material_trial_enabled = true;
         for (var i = 0u; i < 2u; i += 1u) {
             let node = u32(patch_input[i]);
             let force = patch_force(node);
@@ -45,7 +47,7 @@ fn patch_evaluate(x: array<f32,15>, mask: i32) -> array<f32,15> {
                 }
                 let inertia_target = patch_input[16u+coordinate] + u.dt*particle_inv_mass[node]*impulse;
                 result[coordinate] = u.dt*particle_inv_mass[node]*force[k]
-                    + (inertia_target-particle_delta[node][k])/u.dt;
+                    + (inertia_target-material_trial_delta[i][k])/u.dt;
             }
         }
         var relative: array<f32,9>;
@@ -78,6 +80,7 @@ fn patch_evaluate(x: array<f32,15>, mask: i32) -> array<f32,15> {
                     patch_input[181u+row]-relative[row*3u], (u32(mask) & (1u<<row)) != 0u);
             }
         }
+        material_trial_enabled = false;
         return result;
 }
 
@@ -246,10 +249,98 @@ fn patch_select() {
     }
 }
 
-@compute @workgroup_size(1)
-fn patch_live_solve() {
-    if patch_input[191] == 0.0 { return; }
-    patch_solve_impl();
+var<workgroup> patch_iterate: array<f32,15>;
+var<workgroup> patch_jacobian: array<f32,225>;
+var<workgroup> patch_running: u32;
+var<workgroup> patch_converged: u32;
+var<workgroup> patch_present: u32;
+
+@compute @workgroup_size(32)
+fn patch_live_solve(@builtin(local_invocation_index) lane: u32) {
+    if lane == 0u {
+        patch_present = u32(patch_input[191] != 0.0);
+        patch_converged = 0u;
+    }
+    if workgroupUniformLoad(&patch_present) == 0u { return; }
+    var best: array<f32,15>;
+    var best_merit = 1e30;
+    var best_mask = -1.0;
+    var best_iteration = 0.0;
+    for (var mask = 0; mask < 7; mask += 1) {
+        if lane == 0u {
+            for (var i = 0u; i < 15u; i += 1u) {
+                patch_iterate[i] = patch_input[192u+i];
+                if mask == 0 { best[i] = patch_iterate[i]; }
+            }
+        }
+        workgroupBarrier();
+        for (var iteration = 0u; iteration < 48u; iteration += 1u) {
+            var value: array<f32,15>;
+            var merit = 0.0;
+            if lane == 0u {
+                let full = patch_evaluate(patch_iterate,-1);
+                let full_merit = patch_merit(full);
+                if full_merit < best_merit {
+                    best = patch_iterate;
+                    best_merit = full_merit;
+                    best_mask = f32(mask);
+                    best_iteration = f32(iteration);
+                }
+                patch_converged = u32(patch_maximum(full) < 1e-5);
+                patch_running = 1u-patch_converged;
+                if patch_running != 0u {
+                    value = patch_evaluate(patch_iterate,mask);
+                    merit = patch_merit(value);
+                    if merit < 1e-10 { patch_running = 0u; }
+                }
+            }
+            if workgroupUniformLoad(&patch_running) == 0u { break; }
+            if lane < 15u {
+                let epsilon = 1e-3*max(1.0,abs(patch_iterate[lane]));
+                var plus = patch_iterate;
+                var minus = patch_iterate;
+                plus[lane] += epsilon;
+                minus[lane] -= epsilon;
+                let a = patch_evaluate(plus,mask);
+                let b = patch_evaluate(minus,mask);
+                for (var row = 0u; row < 15u; row += 1u) {
+                    patch_jacobian[row*15u+lane] = (a[row]-b[row])/(2.0*epsilon);
+                }
+            }
+            workgroupBarrier();
+            if lane == 0u {
+                let delta = patch_newton_delta(patch_jacobian,value);
+                patch_running = 0u;
+                if delta[15] != 0.0 {
+                    var scale = 1.0;
+                    for (var i = 0u; i < 6u; i += 1u) { scale = min(scale,1.0/max(1.0,abs(delta[i]))); }
+                    for (var trial = 0u; trial < 12u; trial += 1u) {
+                        var candidate = patch_iterate;
+                        for (var i = 0u; i < 15u; i += 1u) { candidate[i] += scale*delta[i]; }
+                        if patch_merit(patch_evaluate(candidate,mask)) < merit {
+                            patch_iterate = candidate;
+                            patch_running = 1u;
+                            break;
+                        }
+                        scale *= 0.5;
+                    }
+                }
+            }
+            if workgroupUniformLoad(&patch_running) == 0u { break; }
+        }
+        if workgroupUniformLoad(&patch_converged) != 0u { break; }
+    }
+    if lane == 0u {
+        let residual = patch_evaluate(best,-1);
+        for (var i = 0u; i < 15u; i += 1u) {
+            patch_output[i] = best[i];
+            patch_output[15u+i] = residual[i];
+        }
+        patch_output[30] = best_mask;
+        patch_output[31] = best_iteration;
+        patch_output[32] = f32(patch_converged);
+        patch_output[33] = patch_maximum(residual);
+    }
 }
 
 @compute @workgroup_size(64)
