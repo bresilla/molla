@@ -5,6 +5,8 @@ use wgpu::util::DeviceExt;
 
 mod material_iteration;
 pub use material_iteration::{SoftMaterialIterationBindings, SoftMaterialIterationKernel};
+mod linearization;
+pub use linearization::{ContactLinearizationBindings, ContactLinearizationKernel};
 
 const PREPARE_BATCH_GROUPS: u32 = 8;
 
