@@ -10,7 +10,7 @@ const PREPARE_BATCH_GROUPS: u32 = 8;
 
 fn cooperative_delta_shader(dofs: u32) -> String {
     let delta: String = (0..dofs)
-        .map(|d| format!("sweep_velocity[{d}] -= sweep_response[k][{d}] * impulse;\n"))
+        .map(|d| format!("accumulate_rigid_delta({d}u, -sweep_response[k][{d}] * impulse);\n"))
         .collect();
     format!("fn cooperative_rigid_delta(k: u32, impulse: f32) {{\n{delta}}}\n")
 }
@@ -112,7 +112,7 @@ impl SoftRigidSolveKernel {
         Self::new_cooperative(device, dofs, row_count)
     }
 
-    /// Single-invocation reference sweep with storage-resident rigid velocities.
+    /// Single-invocation reference sweep with storage velocities and per-sweep increments.
     pub fn new_serial(device: &wgpu::Device, dofs: u32, row_count: u32) -> Result<Self> {
         Self::build(device, dofs, row_count, false, None, false)
     }
@@ -121,7 +121,7 @@ impl SoftRigidSolveKernel {
     pub fn new_cooperative(device: &wgpu::Device, dofs: u32, row_count: u32) -> Result<Self> {
         if device.limits().max_compute_invocations_per_workgroup < 64
             || device.limits().max_compute_workgroup_size_x < 64
-            || device.limits().max_compute_workgroup_storage_size < 2048
+            || device.limits().max_compute_workgroup_storage_size < 2060
         {
             return Err(Error::Build(
                 "unsupported cooperative contact workgroup".into(),
@@ -140,7 +140,7 @@ impl SoftRigidSolveKernel {
     ) -> Result<Self> {
         if device.limits().max_compute_invocations_per_workgroup < 64
             || device.limits().max_compute_workgroup_size_x < 64
-            || device.limits().max_compute_workgroup_storage_size < 2048
+            || device.limits().max_compute_workgroup_storage_size < 2060
         {
             return Err(Error::Build(
                 "unsupported separated contact workgroup".into(),
@@ -158,7 +158,7 @@ impl SoftRigidSolveKernel {
     ) -> Result<Self> {
         if device.limits().max_compute_invocations_per_workgroup < 64
             || device.limits().max_compute_workgroup_size_x < 64
-            || device.limits().max_compute_workgroup_storage_size < 2048
+            || device.limits().max_compute_workgroup_storage_size < 2060
         {
             return Err(Error::Build("unsupported blocked contact workgroup".into()));
         }

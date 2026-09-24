@@ -70,11 +70,11 @@ fn validate_device_limits(limits: &wgpu::Limits) -> Result<()> {
         || limits.max_uniform_buffers_per_shader_stage < 1
         || limits.max_compute_invocations_per_workgroup < 64
         || limits.max_compute_workgroup_size_x < 64
-        || limits.max_compute_workgroup_storage_size < 2048
+        || limits.max_compute_workgroup_storage_size < 2060
     {
         return Err(Error::Gpu(
             "FEM device requires 6 bind groups, 17 bindings per group, 43 storage buffers, \
-             1 uniform buffer, 64 compute invocations in X, and 2048 workgroup bytes"
+             1 uniform buffer, 64 compute invocations in X, and 2060 workgroup bytes"
                 .into(),
         ));
     }
@@ -133,7 +133,7 @@ pub fn request_fem_device_limits(
         requested.max_compute_invocations_per_workgroup.max(64);
     requested.max_compute_workgroup_size_x = requested.max_compute_workgroup_size_x.max(64);
     requested.max_compute_workgroup_storage_size =
-        requested.max_compute_workgroup_storage_size.max(2048);
+        requested.max_compute_workgroup_storage_size.max(2060);
     Ok(())
 }
 
@@ -160,7 +160,7 @@ mod device_limits_tests {
             max_uniform_buffers_per_shader_stage: 1,
             max_compute_invocations_per_workgroup: 64,
             max_compute_workgroup_size_x: 64,
-            max_compute_workgroup_storage_size: 2048,
+            max_compute_workgroup_storage_size: 2060,
             ..Default::default()
         };
         assert!(validate_device_limits(&limits).is_ok());
@@ -174,6 +174,10 @@ mod device_limits_tests {
         expected.max_bind_groups = 6;
         expected.max_storage_buffers_per_shader_stage = 43;
         assert_eq!(requested, expected);
+        let mut small = original.clone();
+        small.max_compute_workgroup_storage_size = 1024;
+        request_fem_device_limits(&mut small, &limits).unwrap();
+        assert_eq!(small.max_compute_workgroup_storage_size, 2060);
         let mut larger = requested.clone();
         larger.max_bind_groups = 8;
         larger.max_storage_buffers_per_shader_stage = 64;
