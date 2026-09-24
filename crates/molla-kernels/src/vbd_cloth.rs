@@ -671,6 +671,22 @@ impl VbdClothKernel {
     /// Candidate velocities and directions may change; reference positions, topology,
     /// material parameters and timestep must stay fixed until preparation is repeated.
     pub fn encode_material_linearization(&self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
+        self.encode_material_operator(encoder, false)
+    }
+
+    /// Overwrites the retained action buffer with positive material inverse diagonal entries.
+    pub fn encode_material_inverse_diagonal(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        self.encode_material_operator(encoder, true)
+    }
+
+    fn encode_material_operator(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        diagonal: bool,
+    ) -> Result<()> {
         let linearization = self
             .linearization
             .as_ref()
@@ -689,7 +705,11 @@ impl VbdClothKernel {
         pass.set_bind_group(6, direction, &[]);
         pass.set_pipeline(&self.pipe_residual_seed);
         pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
-        pass.set_pipeline(&linearization.pipeline);
+        pass.set_pipeline(if diagonal {
+            &linearization.diagonal_pipeline
+        } else {
+            &linearization.pipeline
+        });
         for (uniform, blocks) in &linearization.batches {
             pass.set_bind_group(3, uniform, &[]);
             pass.dispatch_workgroups(*blocks, 1, 1);

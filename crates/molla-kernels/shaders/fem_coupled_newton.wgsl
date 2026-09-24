@@ -6,7 +6,7 @@ struct Diagnostics {
     faults: u32, running: u32, accepted: u32, iterations: u32,
     initial_norm: f32, residual_norm: f32, base_norm: f32, threshold: f32,
     accepted_alpha: f32, trial_norm: f32, converged: u32, line_evaluations: u32,
-    linear_iterations: u32, pad0: u32, pad1: u32, pad2: u32,
+    linear_iterations: u32, linear_residual_norm: f32, linear_converged: u32, linear_faults: u32,
 }
 @group(0) @binding(0) var<storage, read_write> soft_velocity: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read_write> rigid_velocity: array<f32>;
@@ -28,15 +28,17 @@ struct Diagnostics {
 @group(0) @binding(17) var<storage, read_write> partials: array<vec2<f32>>;
 @group(0) @binding(18) var<storage, read_write> state: Diagnostics;
 @group(0) @binding(19) var<uniform> u: Params;
+@group(0) @binding(20) var<storage, read> inverse_diagonal: array<f32>;
 var<workgroup> sums: array<vec2<f32>,64>;
 
 fn finite(value: f32) -> bool { return abs(value) <= 3.402823e38; }
 fn soft_end() -> u32 { return 3u*u.particles; }
 fn rigid_end() -> u32 { return soft_end()+u.dofs; }
-fn packed3(start: u32) -> vec3<f32> { return vec3<f32>(packed_vector[start],packed_vector[start+1u],packed_vector[start+2u]); }
+fn scale3(start: u32) -> vec3<f32> { return vec3<f32>(inverse_diagonal[start],inverse_diagonal[start+1u],inverse_diagonal[start+2u]); }
+fn packed3(start: u32) -> vec3<f32> { return vec3<f32>(packed_vector[start],packed_vector[start+1u],packed_vector[start+2u])*scale3(start); }
 fn trial3(start: u32) -> vec3<f32> {
     return vec3<f32>(base[start],base[start+1u],base[start+2u])
-        + u.alpha*vec3<f32>(step[start],step[start+1u],step[start+2u]);
+        + u.alpha*vec3<f32>(step[start],step[start+1u],step[start+2u])*scale3(start);
 }
 fn base3(start: u32) -> vec3<f32> { return vec3<f32>(base[start],base[start+1u],base[start+2u]); }
 
@@ -50,11 +52,12 @@ fn zero_directions(@builtin(global_invocation_id) id: vec3<u32>) {
 @compute @workgroup_size(64)
 fn unpack_direction(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x < u.particles { soft_direction[id.x] = vec4<f32>(packed3(3u*id.x),0.0); }
-    if id.x < u.dofs { rigid_direction[id.x] = packed_vector[soft_end()+id.x]; }
+    if id.x < u.dofs { rigid_direction[id.x] = packed_vector[soft_end()+id.x]*inverse_diagonal[soft_end()+id.x]; }
     if id.x < u.rows { impulse_direction[id.x] = vec4<f32>(packed3(rigid_end()+3u*id.x),0.0); }
 }
 
 fn component(i: u32, action: bool) -> f32 {
+    if !finite(inverse_diagonal[i]) || inverse_diagonal[i] == 0.0 { return bitcast<f32>(0x7fc00000u); }
     if contact_status[0] != 0u || contact_status[1] != 0u { return bitcast<f32>(0x7fc00000u); }
     if i < soft_end() {
         let node = i/3u;
@@ -160,6 +163,9 @@ fn capture_base(@builtin(global_invocation_id) id: vec3<u32>) {
 fn check_linear() {
     if state.running == 0u { return; }
     state.linear_iterations += linear_status[3];
+    state.linear_residual_norm = bitcast<f32>(linear_status[5]);
+    state.linear_converged = linear_status[10];
+    state.linear_faults = linear_status[0];
     if linear_status[0] != 0u { state.faults |= 2u; state.running = 0u; }
 }
 
@@ -170,7 +176,7 @@ fn apply_trial(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x < u.rows { impulse_direction[id.x] = vec4<f32>(0.0); }
     if state.running == 0u || state.accepted != 0u { return; }
     if id.x < u.particles { soft_velocity[id.x] = vec4<f32>(trial3(3u*id.x),soft_velocity[id.x].w); }
-    if id.x < u.dofs { rigid_velocity[id.x] = base[soft_end()+id.x]+u.alpha*step[soft_end()+id.x]; }
+    if id.x < u.dofs { rigid_velocity[id.x] = base[soft_end()+id.x]+u.alpha*step[soft_end()+id.x]*inverse_diagonal[soft_end()+id.x]; }
     if id.x < u.rows { impulses[id.x] = vec4<f32>(trial3(rigid_end()+3u*id.x),impulses[id.x].w); }
 }
 

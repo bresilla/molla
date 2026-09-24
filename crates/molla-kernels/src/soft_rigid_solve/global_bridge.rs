@@ -24,6 +24,8 @@ pub struct GlobalContactBridge {
     uniform: wgpu::Buffer,
     layouts: [wgpu::BindGroupLayout; 2],
     pipelines: [[wgpu::ComputePipeline; 3]; 2],
+    material_layout: wgpu::BindGroupLayout,
+    material_pipeline: wgpu::ComputePipeline,
 }
 impl GlobalContactBridge {
     pub fn new(
@@ -119,6 +121,47 @@ impl GlobalContactBridge {
                     | wgpu::BufferUsages::COPY_DST,
             })
         };
+        let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("global material scale"),
+            entries: &(0..3)
+                .map(|binding| wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    count: None,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: if binding == 2 {
+                            wgpu::BufferBindingType::Uniform
+                        } else {
+                            wgpu::BufferBindingType::Storage {
+                                read_only: binding == 0,
+                            }
+                        },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                })
+                .collect::<Vec<_>>(),
+        });
+        let material_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("global material scale"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/fem_global_material_scale.wgsl").into(),
+            ),
+        });
+        let material_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("global material scale"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[Some(&material_layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            module: &material_shader,
+            entry_point: Some("pack"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
         Ok(Self {
             source_rows,
             capacity,
@@ -136,6 +179,8 @@ impl GlobalContactBridge {
             }),
             layouts,
             pipelines,
+            material_layout,
+            material_pipeline,
         })
     }
     fn source_matches(&self, source: &SoftRigidSolveKernel) -> Result<()> {
@@ -285,6 +330,36 @@ impl GlobalContactBridge {
     }
     pub fn contacts(&self) -> &wgpu::Buffer {
         &self.contacts
+    }
+    pub fn encode_material_scale(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        diagonal: &wgpu::Buffer,
+    ) -> Result<()> {
+        if diagonal.size() < u64::from(self.particles) * 16
+            || !diagonal.usage().contains(wgpu::BufferUsages::STORAGE)
+            || diagonal == &self.inverse_diagonal
+        {
+            return Err(Error::Build("invalid material scaling buffer".into()));
+        }
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.material_layout,
+            entries: &[diagonal, &self.inverse_diagonal, &self.uniform]
+                .into_iter()
+                .enumerate()
+                .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                    binding: binding as u32,
+                    resource: buffer.as_entire_binding(),
+                })
+                .collect::<Vec<_>>(),
+        });
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&self.material_pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.dispatch_workgroups((3 * self.particles).div_ceil(64), 1, 1);
+        Ok(())
     }
     pub fn impulses(&self) -> &wgpu::Buffer {
         &self.impulses

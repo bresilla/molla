@@ -248,7 +248,8 @@ fn coupled_fem_contact_newton_preserves_momentum_and_transfers_torque() {
             .iter()
             .map(|b| readback::read::<u8>(&engine, b, b.size() as usize))
             .collect();
-        let preconditioner = buffer(device, &[1.0_f32; 22]);
+        let scaling: [f32; 22] = std::array::from_fn(|i| 0.25 * (1 + (i % 7)) as f32);
+        let preconditioner = buffer(device, &scaling);
         let mut encoder = device.create_command_encoder(&Default::default());
         newton
             .encode(
@@ -576,16 +577,19 @@ fn newton_backtracking_rejects_nonfinite_trials_and_restores_failed_updates() {
         }
         println!("synthetic backtracking control backtracks={backtracks}: {report:?}");
     }
-    queue.write_buffer(&b[1], 0, bytemuck::bytes_of(&initial));
-    queue.write_buffer(&inverse, 0, bytemuck::bytes_of(&0.0_f32));
-    let mut encoder = device.create_command_encoder(&Default::default());
-    newton
-        .encode(device, &mut encoder, &inverse, settings(), evaluate)
-        .unwrap();
-    queue.submit([encoder.finish()]);
-    let report = readback::read::<CoupledNewtonDiagnostics>(&engine, newton.diagnostics(), 1)[0];
-    assert_eq!((report.faults, report.converged), (2, 0), "{report:?}");
-    assert_eq!(readback::read::<[f32; 4]>(&engine, &b[1], 1)[0], initial);
+    for invalid in [0.0_f32, f32::NAN, f32::INFINITY] {
+        queue.write_buffer(&b[1], 0, bytemuck::bytes_of(&initial));
+        queue.write_buffer(&inverse, 0, bytemuck::bytes_of(&invalid));
+        let mut encoder = device.create_command_encoder(&Default::default());
+        newton
+            .encode(device, &mut encoder, &inverse, settings(), evaluate)
+            .unwrap();
+        queue.submit([encoder.finish()]);
+        let report =
+            readback::read::<CoupledNewtonDiagnostics>(&engine, newton.diagnostics(), 1)[0];
+        assert_eq!((report.faults, report.converged), (1, 0), "{report:?}");
+        assert_eq!(readback::read::<[f32; 4]>(&engine, &b[1], 1)[0], initial);
+    }
     queue.write_buffer(&inverse, 0, bytemuck::bytes_of(&1.0_f32));
     queue.write_buffer(
         contact_operator.status(),

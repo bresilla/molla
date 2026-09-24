@@ -880,6 +880,20 @@ impl VbdSolver {
         gpu.kernel.encode_material_linearization(encoder)
     }
 
+    /// Encodes the retained material inverse diagonal into the material action buffer.
+    #[cfg(feature = "gpu")]
+    pub fn encode_material_inverse_diagonal_gpu(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        let VbdBackend::Gpu(gpu) = &self.backend else {
+            return Err(Error::Build(
+                "material preconditioning requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel.encode_material_inverse_diagonal(encoder)
+    }
+
     /// One GPU VBD substep advancing `dt`: main kernel dispatch, the
     /// soft-VT contact pipeline, and the host-side tet-tet / SDF
     /// fallbacks. Extracted from `step` so the multi-substep driver

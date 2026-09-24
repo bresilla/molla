@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct MaterialLinearization {
     layout: wgpu::BindGroupLayout,
     pub(super) pipeline: wgpu::ComputePipeline,
+    pub(super) diagonal_pipeline: wgpu::ComputePipeline,
     pub(super) group: Option<wgpu::BindGroup>,
     pub(super) material_groups: Option<[wgpu::BindGroup; 6]>,
     pub(super) batches: Vec<(wgpu::BindGroup, u32)>,
@@ -70,6 +71,14 @@ impl MaterialLinearization {
             compilation_options: Default::default(),
             cache: None,
         });
+        let diagonal_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("material inverse diagonal"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("material_inverse_diagonal"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
         let allocate = |label| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -81,6 +90,7 @@ impl MaterialLinearization {
         Ok(Self {
             layout,
             pipeline,
+            diagonal_pipeline,
             group: None,
             material_groups: None,
             batches: Vec::new(),

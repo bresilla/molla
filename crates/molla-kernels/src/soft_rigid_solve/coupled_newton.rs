@@ -61,7 +61,9 @@ pub struct CoupledNewtonDiagnostics {
     pub converged: u32,
     pub line_evaluations: u32,
     pub linear_iterations: u32,
-    pub pad: [u32; 3],
+    pub linear_residual_norm: f32,
+    pub linear_converged: u32,
+    pub linear_faults: u32,
 }
 
 #[repr(C)]
@@ -88,12 +90,14 @@ pub struct CoupledNewtonKernel {
     layout: wgpu::BindGroupLayout,
     pipelines: [wgpu::ComputePipeline; 14],
     gmres: GpuGmres,
+    unity: wgpu::Buffer,
     inputs: [wgpu::Buffer; 12],
     packed: wgpu::Buffer,
     rhs: wgpu::Buffer,
     base: wgpu::Buffer,
     partials: wgpu::Buffer,
     diagnostics: wgpu::Buffer,
+    history: wgpu::Buffer,
 }
 
 impl CoupledNewtonKernel {
@@ -114,8 +118,8 @@ impl CoupledNewtonKernel {
             || dimension * 4 > limits.max_buffer_size
             || dimension * 4 > u64::from(limits.max_storage_buffer_binding_size)
             || dimension.div_ceil(64) > u64::from(limits.max_compute_workgroups_per_dimension)
-            || limits.max_storage_buffers_per_shader_stage < 19
-            || limits.max_bindings_per_bind_group < 20
+            || limits.max_storage_buffers_per_shader_stage < 20
+            || limits.max_bindings_per_bind_group < 21
             || bindings.contact.particles != particles
             || bindings.contact.rows != rows
             || bindings.contact.dofs != dofs
@@ -169,7 +173,7 @@ impl CoupledNewtonKernel {
         let gmres = GpuGmres::new(device, dimension as u32, restart)?;
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("coupled FEM Newton"),
-            entries: &(0..20)
+            entries: &(0..21)
                 .map(|binding| wgpu::BindGroupLayoutEntry {
                     binding,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -178,7 +182,7 @@ impl CoupledNewtonKernel {
                             wgpu::BufferBindingType::Uniform
                         } else {
                             wgpu::BufferBindingType::Storage {
-                                read_only: (6..14).contains(&binding),
+                                read_only: (6..14).contains(&binding) || binding == 20,
                             }
                         },
                         has_dynamic_offset: binding == 19,
@@ -247,16 +251,22 @@ impl CoupledNewtonKernel {
             layout,
             pipelines,
             gmres,
+            unity: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Newton unscaled residual weights"),
+                contents: bytemuck::cast_slice(&vec![1.0_f32; dimension as usize]),
+                usage: wgpu::BufferUsages::STORAGE,
+            }),
             inputs: inputs.map(Clone::clone),
             packed: allocate("Newton packed vector", dimension * 4),
             rhs: allocate("Newton right hand side", dimension * 4),
             base: allocate("Newton accepted base", dimension * 4),
             partials: allocate("Newton residual norm partials", dimension.div_ceil(64) * 8),
             diagnostics: allocate("Newton diagnostics", 64),
+            history: allocate("Newton iteration history", 64 * 64),
         })
     }
 
-    /// Encodes bounded Newton/Krylov/backtracking iterations. `evaluate` must refresh
+    /// Encodes right-preconditioned Newton/Krylov/backtracking iterations. `evaluate` must refresh
     /// both material and contact residual/actions at the bound candidates/directions.
     /// Candidate buffers contain the last accepted state on return, not an unaccepted trial.
     /// Every linear correction starts from zero, regardless of the linear initial-guess setting.
@@ -282,6 +292,8 @@ impl CoupledNewtonKernel {
                     &self.base,
                     &self.partials,
                     &self.diagnostics,
+                    &self.history,
+                    &self.unity,
                     self.gmres.solution(),
                     self.gmres.diagnostics(),
                 ])
@@ -340,6 +352,10 @@ impl CoupledNewtonKernel {
                 size: NonZeroU64::new(32),
             }),
         });
+        entries.push(wgpu::BindGroupEntry {
+            binding: 20,
+            resource: inverse_diagonal.as_entire_binding(),
+        });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.layout,
@@ -355,19 +371,20 @@ impl CoupledNewtonKernel {
         let vectors = self.particles.max(self.rows).max(self.dofs).div_ceil(64);
         let blocks = self.dimension.div_ceil(64);
         encoder.clear_buffer(&self.diagnostics, 0, None);
+        encoder.clear_buffer(&self.history, 0, None);
         dispatch(encoder, 0, 0, vectors);
         evaluate(encoder)?;
         dispatch(encoder, 2, 0, blocks);
         dispatch(encoder, 4, 0, blocks);
         dispatch(encoder, 5, 0, 1);
-        for _ in 0..settings.iterations {
+        for iteration in 0..settings.iterations {
             dispatch(encoder, 6, 0, 1);
             dispatch(encoder, 7, 0, blocks);
             self.gmres.encode(
                 device,
                 encoder,
                 &self.rhs,
-                inverse_diagonal,
+                &self.unity,
                 GpuGmresSettings {
                     zero_initial_guess: true,
                     ..settings.linear
@@ -403,6 +420,13 @@ impl CoupledNewtonKernel {
             }
             dispatch(encoder, 11, 0, 1);
             dispatch(encoder, 12, 0, vectors);
+            encoder.copy_buffer_to_buffer(
+                &self.diagnostics,
+                0,
+                &self.history,
+                u64::from(iteration) * 64,
+                64,
+            );
         }
         dispatch(encoder, 0, 0, vectors);
         evaluate(encoder)?;
@@ -414,6 +438,10 @@ impl CoupledNewtonKernel {
 
     pub fn diagnostics(&self) -> &wgpu::Buffer {
         &self.diagnostics
+    }
+    /// Up to 64 iteration diagnostics, cleared at solve start and recorded before final evaluation.
+    pub fn iteration_history(&self) -> &wgpu::Buffer {
+        &self.history
     }
     /// Negative physical residual at the final accepted candidates, in mixed scalar order.
     pub fn residual_rhs(&self) -> &wgpu::Buffer {

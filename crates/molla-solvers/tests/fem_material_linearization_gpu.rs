@@ -14,6 +14,60 @@ mod readback;
 fn scalar(x: f64) -> f64 {
     x as f32 as f64
 }
+
+#[test]
+#[ignore = "requires GPU through make test-gpu"]
+fn material_inverse_diagonal_matches_rest_state_derivatives() {
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    for viscous in [false, true] {
+        let mut model = model(viscous, true);
+        let positions: [Vec3; 4] =
+            std::array::from_fn(|i| projected(model.initial_particle_q.host().unwrap()[i]));
+        let mut input = model.state().unwrap();
+        let mut output = model.state().unwrap();
+        model.upload_to_device(device, queue).unwrap();
+        input.upload_to_device(device, queue).unwrap();
+        output.upload_to_device(device, queue).unwrap();
+        let direction = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[[0.0_f32; 4]; 4]),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let mut solver = VbdSolver::new_gpu(&engine, &model).unwrap();
+        let h = scalar(1.0 / 9600.0);
+        let (_, action) = solver
+            .material_linearization_gpu(&model, &input, &mut output, h, &direction)
+            .unwrap();
+        let action = action.clone();
+        let before = snapshot(&engine, &[&input, &output]);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        solver
+            .encode_material_inverse_diagonal_gpu(&mut encoder)
+            .unwrap();
+        queue.submit([encoder.finish()]);
+        let inverse = readback::read::<[f32; 4]>(&engine, &action, 4);
+        for node in 0..4 {
+            for axis in 0..3 {
+                let mut plus = [Vec3::ZERO; 4];
+                let mut minus = plus;
+                let epsilon = 1e-5;
+                plus[node][axis] = epsilon;
+                minus[node][axis] = -epsilon;
+                let a = residual(&model, positions, [Vec3::ZERO; 4], plus, h)[node][axis];
+                let b = residual(&model, positions, [Vec3::ZERO; 4], minus, h)[node][axis];
+                let expected = 1.0 / ((a - b) / (2.0 * epsilon)).max(1.0);
+                let actual = inverse[node][axis] as f64;
+                assert!(
+                    (actual - expected).abs() <= 2e-5 * expected,
+                    "viscous={viscous} node={node} axis={axis} actual={actual} expected={expected}"
+                );
+            }
+        }
+        assert_eq!(snapshot(&engine, &[&input, &output]), before);
+    }
+}
 fn projected(x: Vec3) -> Vec3 {
     Vec3::from_array(x.to_array().map(scalar))
 }

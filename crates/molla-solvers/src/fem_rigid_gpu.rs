@@ -813,6 +813,13 @@ impl FemRigidGpuSystem {
             .and_then(GlobalNewtonState::diagnostics)
     }
 
+    /// Up to 64 global Newton iteration records; consume after device completion.
+    pub fn global_newton_iteration_history(&self) -> Option<&wgpu::Buffer> {
+        self.global_newton
+            .as_ref()
+            .and_then(GlobalNewtonState::iteration_history)
+    }
+
     /// Sticky status used by the last global candidate/impulse commit.
     pub fn global_newton_commit_status(&self) -> Option<&wgpu::Buffer> {
         self.global_newton

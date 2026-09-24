@@ -123,6 +123,14 @@ fn native_global_newton_preserves_material_and_contact_gates() {
         assert_eq!(commit, 0);
         assert_eq!(diagnostics.faults, 0);
         assert_eq!(diagnostics.converged, 1);
+        let history = readback::read::<molla_kernels::soft_rigid_solve::CoupledNewtonDiagnostics>(
+            &engine,
+            system.global_newton_iteration_history().unwrap(),
+            64,
+        );
+        assert_eq!(history[11].iterations, diagnostics.iterations);
+        assert_eq!(history[11].residual_norm, diagnostics.residual_norm);
+        assert!(history[12..].iter().all(|row| row.initial_norm == 0.0));
         assert!(material <= 1e-4 && max_contact <= 1e-4);
         reference.check(&engine, &system, &prior_velocity);
         assert!(system.poll_completion().unwrap());

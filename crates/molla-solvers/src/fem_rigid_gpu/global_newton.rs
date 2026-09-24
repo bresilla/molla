@@ -108,6 +108,11 @@ impl GlobalNewtonState {
     pub(super) fn diagnostics(&self) -> Option<&wgpu::Buffer> {
         self.newton.as_ref().map(CoupledNewtonKernel::diagnostics)
     }
+    pub(super) fn iteration_history(&self) -> Option<&wgpu::Buffer> {
+        self.newton
+            .as_ref()
+            .map(CoupledNewtonKernel::iteration_history)
+    }
     pub(super) fn commit_status(&self) -> &wgpu::Buffer {
         self.bridge.commit_status()
     }
@@ -186,6 +191,9 @@ impl GlobalNewtonState {
             &self.soft_direction,
         )?;
         let outputs = [residual.clone(), action.clone()];
+        fem.encode_material_inverse_diagonal_gpu(encoder)?;
+        self.bridge
+            .encode_material_scale(device, encoder, &outputs[1])?;
         if self.material_outputs.as_ref() != Some(&outputs) {
             self.newton = Some(CoupledNewtonKernel::new(
                 device,
@@ -200,8 +208,8 @@ impl GlobalNewtonState {
                     soft_direction: &self.soft_direction,
                     rigid_direction: &self.rigid_direction,
                     impulse_direction: &self.impulse_direction,
-                    material_residual: residual,
-                    material_action: action,
+                    material_residual: &outputs[0],
+                    material_action: &outputs[1],
                     contact: &self.contact,
                 },
             )?);

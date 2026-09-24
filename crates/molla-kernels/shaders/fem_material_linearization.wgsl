@@ -120,3 +120,31 @@ fn material_linearization(@builtin(global_invocation_id) gid: vec3<u32>) {
         - (u.dt*inverse_mass)*force,0.0);
     material_action[node] = vec4<f32>(direction-(u.dt*u.dt*inverse_mass)*derivative,0.0);
 }
+
+@compute @workgroup_size(64)
+fn material_inverse_diagonal(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let node = u.color_index + gid.x;
+    if node >= u.particle_count { return; }
+    let inverse_mass = particle_inv_mass[node];
+    var diagonal = vec3<f32>(0.0);
+    if inverse_mass > 0.0 {
+        for (var s = vertex_adj_offsets[node]; s < vertex_adj_offsets[node+1u]; s++) {
+            var force: vec3<f32>;
+            var hessian: mat3x3<f32>;
+            spring_force_hessian(node,vertex_adj_springs[s],true,&force,&hessian);
+            diagonal += vec3<f32>(hessian[0].x,hessian[1].y,hessian[2].z);
+        }
+        for (var t = vertex_adj_tets_offsets[node]; t < vertex_adj_tets_offsets[node+1u]; t += 2u) {
+            var force: vec3<f32>;
+            var hessian: mat3x3<f32>;
+            tet_neo_hookean_block(vertex_adj_tets[t],vertex_adj_tets[t+1u],true,&force,&hessian);
+            diagonal += vec3<f32>(hessian[0].x,hessian[1].y,hessian[2].z);
+        }
+    }
+    let scaled = vec3<f32>(1.0)+(u.dt*u.dt*inverse_mass)*diagonal;
+    if !all(abs(scaled) <= vec3<f32>(3.402823e38)) {
+        material_action[node] = vec4<f32>(bitcast<f32>(0x7fc00000u));
+        return;
+    }
+    material_action[node] = vec4<f32>(vec3<f32>(1.0)/max(vec3<f32>(1.0),scaled),0.0);
+}
