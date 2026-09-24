@@ -221,7 +221,7 @@ impl GlobalNewtonState {
         }
         let newton = self.newton.as_ref().unwrap();
         let mut evaluations = 0_u32;
-        newton.encode_split_with_finalize(
+        newton.encode_scheduled(
             device,
             encoder,
             self.bridge.inverse_diagonal(),
@@ -231,7 +231,6 @@ impl GlobalNewtonState {
                     fem.encode_cached_material_action_gpu(encoder)?;
                 } else {
                     fem.encode_material_linearization_gpu(encoder)?;
-                    fem.encode_material_tangent_cache_gpu(encoder)?;
                 }
                 self.contact.encode(encoder)?;
                 evaluations += 1;
@@ -244,6 +243,7 @@ impl GlobalNewtonState {
                 }
                 Ok(())
             },
+            |encoder| fem.encode_material_tangent_cache_gpu(encoder),
             |encoder| {
                 self.bridge.encode_project(encoder);
                 Ok(())

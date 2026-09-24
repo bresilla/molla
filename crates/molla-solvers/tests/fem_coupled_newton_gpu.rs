@@ -96,7 +96,14 @@ fn coupled_fem_contact_newton_preserves_momentum_and_transfers_torque() {
     let engine = Engine::new_gpu().unwrap();
     let device = engine.device().unwrap();
     let queue = engine.queue().unwrap();
-    for friction in [0.0_f32, 0.25, 10.0] {
+    for (friction, cached) in [
+        (0.0_f32, false),
+        (0.25, false),
+        (10.0, false),
+        (0.0, true),
+        (0.25, true),
+        (10.0, true),
+    ] {
         let mut builder = ModelBuilder::new();
         builder.set_world_gravity(WorldId(0), Vec3::ZERO);
         builder.set_linear_damping(0.0);
@@ -253,15 +260,26 @@ fn coupled_fem_contact_newton_preserves_momentum_and_transfers_torque() {
         let preconditioner = buffer(device, &scaling);
         let mut encoder = device.create_command_encoder(&Default::default());
         newton
-            .encode(
+            .encode_scheduled(
                 device,
                 &mut encoder,
                 &preconditioner,
                 settings(),
-                |encoder| {
-                    material_operator.encode_material_linearization_gpu(encoder)?;
+                |encoder, action_only| {
+                    if cached && action_only {
+                        material_operator.encode_cached_material_action_gpu(encoder)?;
+                    } else {
+                        material_operator.encode_material_linearization_gpu(encoder)?;
+                    }
                     contact_operator.encode(encoder)
                 },
+                |encoder| {
+                    if cached {
+                        material_operator.encode_material_tangent_cache_gpu(encoder)?;
+                    }
+                    Ok(())
+                },
+                |_| Ok(()),
             )
             .unwrap();
         queue.submit([encoder.finish()]);
@@ -349,7 +367,7 @@ fn coupled_fem_contact_newton_preserves_momentum_and_transfers_torque() {
             );
         }
         println!(
-            "actual coupled FEM/contact mu={friction}: {report:?}, impulse={lambda:?}, angular speed={} -> {}",
+            "actual coupled FEM/contact mu={friction} cached={cached}: {report:?}, impulse={lambda:?}, angular speed={} -> {}",
             rigid_reference[3], rigid[3]
         );
     }

@@ -316,7 +316,29 @@ impl CoupledNewtonKernel {
         encoder: &mut wgpu::CommandEncoder,
         inverse_diagonal: &wgpu::Buffer,
         settings: CoupledNewtonSettings,
+        evaluate: impl FnMut(&mut wgpu::CommandEncoder, bool) -> Result<()>,
+        finalize: impl FnOnce(&mut wgpu::CommandEncoder) -> Result<()>,
+    ) -> Result<()> {
+        self.encode_scheduled(
+            device,
+            encoder,
+            inverse_diagonal,
+            settings,
+            evaluate,
+            |_| Ok(()),
+            finalize,
+        )
+    }
+
+    /// Freezes the tangent once before each linear solve, separately from trial residuals.
+    pub fn encode_scheduled(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        inverse_diagonal: &wgpu::Buffer,
+        settings: CoupledNewtonSettings,
         mut evaluate: impl FnMut(&mut wgpu::CommandEncoder, bool) -> Result<()>,
+        mut linearize: impl FnMut(&mut wgpu::CommandEncoder) -> Result<()>,
         finalize: impl FnOnce(&mut wgpu::CommandEncoder) -> Result<()>,
     ) -> Result<()> {
         settings.validate()?;
@@ -423,6 +445,7 @@ impl CoupledNewtonKernel {
         for iteration in 0..settings.iterations {
             dispatch(encoder, 6, 0, 1);
             dispatch(encoder, 7, 0, blocks);
+            linearize(encoder)?;
             self.gmres.encode(
                 device,
                 encoder,
