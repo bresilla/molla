@@ -617,6 +617,9 @@ impl VbdClothKernel {
     ) -> Result<(&wgpu::Buffer, &wgpu::Buffer)> {
         self.continuation = None;
         self.force_samples_ready = false;
+        if let Some(linearization) = &mut self.linearization {
+            linearization.material_groups = None;
+        }
         if model.particle_count == 0
             || model.particle_count as u32 != self.particle_count
             || model.spring_count as u32 != self.spring_count
@@ -664,6 +667,33 @@ impl VbdClothKernel {
         Ok((&linearization.residual, &linearization.action))
     }
 
+    /// Reuses the last material linearization's bindings and cached reference gradients.
+    /// Candidate velocities and directions may change; reference positions, topology,
+    /// material parameters and timestep must stay fixed until preparation is repeated.
+    pub fn encode_material_linearization(&self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
+        let linearization = self
+            .linearization
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization is not prepared".into()))?;
+        let groups = linearization.material_groups.as_ref().ok_or_else(|| {
+            Error::Build("material linearization bindings were invalidated".into())
+        })?;
+        let direction = linearization
+            .group
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization direction is not bound".into()))?;
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        for (i, group) in groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, group, &[]);
+        }
+        pass.set_bind_group(6, direction, &[]);
+        pass.set_pipeline(&self.pipe_residual_seed);
+        pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        pass.set_pipeline(&linearization.pipeline);
+        pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn dispatch_inner(
         &mut self,
@@ -679,6 +709,9 @@ impl VbdClothKernel {
         mode: DispatchMode,
     ) -> Result<()> {
         let previous = self.continuation.take();
+        if let Some(linearization) = &mut self.linearization {
+            linearization.material_groups = None;
+        }
         self.force_samples_ready = false;
         let residual_only = matches!(
             mode,
@@ -1329,6 +1362,17 @@ impl VbdClothKernel {
         }
         queue.submit(std::iter::once(encoder.finish()));
         self.continuation = continuation;
+
+        if mode == DispatchMode::Linearization {
+            self.linearization.as_mut().unwrap().material_groups = Some([
+                bg_state,
+                bg_topo,
+                bg_out,
+                bg_uniforms[0].clone(),
+                bg_shapes,
+                bg_tets,
+            ]);
+        }
 
         if residual_only {
             self.force_samples_ready = mode == DispatchMode::ForceResidual;

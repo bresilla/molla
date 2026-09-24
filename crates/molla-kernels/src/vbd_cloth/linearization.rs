@@ -4,6 +4,7 @@ pub(super) struct MaterialLinearization {
     layout: wgpu::BindGroupLayout,
     pub(super) pipeline: wgpu::ComputePipeline,
     pub(super) group: Option<wgpu::BindGroup>,
+    pub(super) material_groups: Option<[wgpu::BindGroup; 6]>,
     pub(super) residual: wgpu::Buffer,
     pub(super) action: wgpu::Buffer,
 }
@@ -80,6 +81,7 @@ impl MaterialLinearization {
             layout,
             pipeline,
             group: None,
+            material_groups: None,
             residual: allocate("material signed residual"),
             action: allocate("material tangent action"),
         })

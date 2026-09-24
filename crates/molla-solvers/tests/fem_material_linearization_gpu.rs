@@ -297,7 +297,7 @@ fn analytic_material_action_matches_independent_finite_differences() {
                 let vector = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: None,
                     contents: bytemuck::cast_slice(&data),
-                    usage: wgpu::BufferUsages::STORAGE,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 });
                 let before = snapshot(&engine, &[&input, &output]);
                 let (r, a) = solver
@@ -305,6 +305,24 @@ fn analytic_material_action_matches_independent_finite_differences() {
                     .unwrap();
                 let actual_r = readback::read::<[f32; 4]>(&engine, r, 4);
                 let actual_a = readback::read::<[f32; 4]>(&engine, a, 4);
+                let (r, a) = (r.clone(), a.clone());
+                let doubled: Vec<[f32; 4]> = data.iter().map(|v| v.map(|x| 2.0 * x)).collect();
+                queue.write_buffer(&vector, 0, bytemuck::cast_slice(&doubled));
+                let mut encoder = device.create_command_encoder(&Default::default());
+                solver
+                    .encode_material_linearization_gpu(&mut encoder)
+                    .unwrap();
+                queue.submit([encoder.finish()]);
+                assert_eq!(readback::read::<[f32; 4]>(&engine, &r, 4), actual_r);
+                let doubled_action = readback::read::<[f32; 4]>(&engine, &a, 4);
+                for (actual, original) in doubled_action
+                    .iter()
+                    .flatten()
+                    .zip(actual_a.iter().flatten())
+                {
+                    assert!((*actual - 2.0 * original).abs() < 2e-6 * (1.0 + original.abs()));
+                }
+                queue.write_buffer(&vector, 0, bytemuck::cast_slice(&data));
                 assert_eq!(before, snapshot(&engine, &[&input, &output]));
                 let expected_r = residual(&model, positions, target, velocity, h);
                 let epsilon = 1e-4;
@@ -380,6 +398,13 @@ fn material_linearization_rejects_invalid_buffers_and_exposes_nonfinite_state() 
                 .material_linearization_gpu(&model, &input, &mut output, dt, &direction)
                 .is_err()
         );
+        assert!(
+            solver
+                .encode_material_linearization_gpu(
+                    &mut device.create_command_encoder(&Default::default())
+                )
+                .is_err()
+        );
     }
     let h = 1.0 / 9600.0;
     for invalid in [
@@ -400,6 +425,13 @@ fn material_linearization_rejects_invalid_buffers_and_exposes_nonfinite_state() 
         assert!(
             solver
                 .material_linearization_gpu(&model, &input, &mut output, h, &invalid)
+                .is_err()
+        );
+        assert!(
+            solver
+                .encode_material_linearization_gpu(
+                    &mut device.create_command_encoder(&Default::default())
+                )
                 .is_err()
         );
     }
@@ -430,4 +462,186 @@ fn material_linearization_rejects_invalid_buffers_and_exposes_nonfinite_state() 
             .all(|v| !v[0].is_finite())
     );
     assert!(solver.material_force_samples_gpu().is_none());
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn retained_material_operator_drives_device_resident_gmres() {
+    use molla_kernels::{GpuGmres, GpuGmresDiagnostics, GpuGmresSettings};
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let mut model = model(true, true);
+    let mut input = model.state().unwrap();
+    let mut output = model.state().unwrap();
+    model.upload_to_device(device, queue).unwrap();
+    input.upload_to_device(device, queue).unwrap();
+    output.upload_to_device(device, queue).unwrap();
+    let known = [
+        [0.0_f32; 4],
+        [0.1, -0.2, 0.3, 0.0],
+        [-0.4, 0.05, 0.2, 0.0],
+        [0.07, -0.3, 0.15, 0.0],
+    ];
+    let vector = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&known),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+    let mut solver = VbdSolver::new_gpu(&engine, &model).unwrap();
+    let h = scalar(1.0 / 9600.0);
+    let (_, action) = solver
+        .material_linearization_gpu(&model, &input, &mut output, h, &vector)
+        .unwrap();
+    let action = action.clone();
+    let before = snapshot(&engine, &[&input, &output]);
+    let rhs = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 48,
+        mapped_at_creation: false,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+    });
+    let inverse = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&[1.0_f32; 12]),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &(0..4)
+            .map(|binding| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage {
+                        read_only: binding % 2 == 0,
+                    },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            })
+            .collect::<Vec<_>>(),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("test material Krylov packing"), source: wgpu::ShaderSource::Wgsl(
+            "@group(0) @binding(0) var<storage, read> packed_input: array<f32>;
+             @group(0) @binding(1) var<storage, read_write> direction: array<vec4<f32>>;
+             @group(0) @binding(2) var<storage, read> action: array<vec4<f32>>;
+             @group(0) @binding(3) var<storage, read_write> packed_output: array<f32>;
+             @compute @workgroup_size(64)
+             fn unpack(@builtin(global_invocation_id) id: vec3<u32>) {
+                 if id.x < 4u { direction[id.x] = vec4<f32>(packed_input[3u*id.x],packed_input[3u*id.x+1u],packed_input[3u*id.x+2u],0.0); }
+             }
+             @compute @workgroup_size(64)
+             fn flatten(@builtin(global_invocation_id) id: vec3<u32>) {
+                 if id.x < 12u { packed_output[id.x] = action[id.x/3u][id.x%3u]; }
+             }".into()),
+    });
+    let pipelines = ["unpack", "flatten"].map(|entry| {
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some(entry),
+            compilation_options: Default::default(),
+            cache: None,
+        })
+    });
+    let group = |source: &wgpu::Buffer, destination: &wgpu::Buffer| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &layout,
+            entries: &[source, &vector, &action, destination]
+                .into_iter()
+                .enumerate()
+                .map(|(binding, b)| wgpu::BindGroupEntry {
+                    binding: binding as u32,
+                    resource: b.as_entire_binding(),
+                })
+                .collect::<Vec<_>>(),
+        })
+    };
+    let dispatch =
+        |encoder: &mut wgpu::CommandEncoder, pipeline: usize, group: &wgpu::BindGroup| {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipelines[pipeline]);
+            pass.set_bind_group(0, group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        };
+    let mut encoder = device.create_command_encoder(&Default::default());
+    dispatch(&mut encoder, 1, &group(&inverse, &rhs));
+    let kernel = GpuGmres::new(device, 12, 12).unwrap();
+    let mut cached = None;
+    kernel
+        .encode(
+            device,
+            &mut encoder,
+            &rhs,
+            &inverse,
+            GpuGmresSettings {
+                cycles: 2,
+                absolute_tolerance: 1e-7,
+                relative_tolerance: 2e-6,
+                zero_initial_guess: true,
+            },
+            |encoder, source, destination| {
+                let bindings = cached.get_or_insert_with(|| group(source, destination));
+                dispatch(encoder, 0, bindings);
+                solver.encode_material_linearization_gpu(encoder)?;
+                dispatch(encoder, 1, bindings);
+                Ok(())
+            },
+        )
+        .unwrap();
+    queue.submit([encoder.finish()]);
+    let report = readback::read::<GpuGmresDiagnostics>(&engine, kernel.diagnostics(), 1)[0];
+    assert_eq!((report.faults, report.converged), (0, 1), "{report:?}");
+    let solution = readback::read::<f32>(&engine, kernel.solution(), 12);
+    for i in 0..12 {
+        assert!(
+            (solution[i] - known[i / 3][i % 3]).abs() < 1e-5,
+            "{i} {} {report:?}",
+            solution[i]
+        );
+    }
+    let positions = std::array::from_fn(|i| projected(model.initial_particle_q.host().unwrap()[i]));
+    let direction = known.map(|v| Vec3::new(v[0] as f64, v[1] as f64, v[2] as f64));
+    let epsilon = 1e-4;
+    let plus = residual(
+        &model,
+        positions,
+        [Vec3::ZERO; 4],
+        direction.map(|v| epsilon * v),
+        h,
+    );
+    let minus = residual(
+        &model,
+        positions,
+        [Vec3::ZERO; 4],
+        direction.map(|v| -epsilon * v),
+        h,
+    );
+    let rhs_values = readback::read::<f32>(&engine, &rhs, 12);
+    for i in 0..12 {
+        let expected = (plus[i / 3][i % 3] - minus[i / 3][i % 3]) / (2.0 * epsilon);
+        assert!((rhs_values[i] as f64 - expected).abs() < 3e-5 * (1.0 + expected.abs()));
+    }
+    assert_eq!(before, snapshot(&engine, &[&input, &output]));
+    solver
+        .material_force_residual_gpu(&model, &input, &mut output, h)
+        .unwrap();
+    assert!(
+        solver
+            .encode_material_linearization_gpu(
+                &mut device.create_command_encoder(&Default::default())
+            )
+            .is_err()
+    );
+    println!("actual pinned viscous FEM material GMRES: {report:?}; physical state preserved");
 }

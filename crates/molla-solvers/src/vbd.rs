@@ -866,6 +866,20 @@ impl VbdSolver {
         )
     }
 
+    /// Encodes another residual/action using retained fixed-reference linearization bindings.
+    #[cfg(feature = "gpu")]
+    pub fn encode_material_linearization_gpu(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        let VbdBackend::Gpu(gpu) = &self.backend else {
+            return Err(Error::Build(
+                "material linearization requires GPU backend".into(),
+            ));
+        };
+        gpu.kernel.encode_material_linearization(encoder)
+    }
+
     /// One GPU VBD substep advancing `dt`: main kernel dispatch, the
     /// soft-VT contact pipeline, and the host-side tet-tet / SDF
     /// fallbacks. Extracted from `step` so the multi-substep driver
