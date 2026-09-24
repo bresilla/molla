@@ -428,7 +428,7 @@ fn short_contact_sweeps_preserve_real_friction_trajectory() {
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn material_reuse_rejects_unconverged_high_friction_trajectory() {
-    material_reuse_trajectory_configured(1000.0, Some(0), None, false, 1, 2);
+    material_reuse_trajectory_configured(1000.0, Some(0), None, false, 1, 2, false);
 }
 
 #[test]
@@ -442,19 +442,39 @@ fn material_reuse_trajectory(
     rejection_deadline: Option<usize>,
     sweeps: Option<u32>,
 ) {
-    material_reuse_trajectory_configured(friction, rejection_deadline, sweeps, false, 1, 256);
+    material_reuse_trajectory_configured(
+        friction,
+        rejection_deadline,
+        sweeps,
+        false,
+        1,
+        256,
+        false,
+    );
 }
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn final_material_polish_preserves_friction_energy_and_lifecycle() {
-    material_reuse_trajectory_configured(0.85, None, Some(1), true, 1, 256);
+    material_reuse_trajectory_configured(0.85, None, Some(1), true, 1, 256, false);
 }
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]
 fn coupled_polish_cycles_preserve_friction_energy_and_lifecycle() {
-    material_reuse_trajectory_configured(0.85, None, Some(1), true, 17, 256);
+    material_reuse_trajectory_configured(0.85, None, Some(1), true, 17, 256, false);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn blocked_runtime_preserves_friction_energy_and_lifecycle() {
+    material_reuse_trajectory_configured(0.85, None, Some(1), true, 17, 256, true);
+}
+
+#[test]
+#[ignore = "requires a real GPU through make test-gpu"]
+fn blocked_runtime_rejects_unconverged_material() {
+    material_reuse_trajectory_configured(1000.0, Some(0), None, false, 1, 2, true);
 }
 
 fn material_reuse_trajectory_configured(
@@ -464,6 +484,7 @@ fn material_reuse_trajectory_configured(
     polish: bool,
     cycles: u32,
     outer: u32,
+    blocked: bool,
 ) {
     use molla_solvers::fem_rigid_gpu::{
         FemRigidGpuSystem, MaterialContactConfig, SoftRigidShapeGpu,
@@ -487,15 +508,23 @@ fn material_reuse_trajectory_configured(
             data: [10.0, 0.1, 10.0, friction],
             ids: [1, u32::MAX, 0, 0],
         });
-        let mut system = FemRigidGpuSystem::new(
-            engine.clone(),
-            scene,
-            molla_solvers::fem_rigid::FemRigidConfig {
-                max_substep: h,
-                elastic_iterations: 128,
-                ..Default::default()
-            },
-        )
+        let config = molla_solvers::fem_rigid::FemRigidConfig {
+            max_substep: h,
+            elastic_iterations: 128,
+            ..Default::default()
+        };
+        let mut system = if blocked {
+            FemRigidGpuSystem::new_surface_sampled_with_contact_blocks_on_device(
+                engine.device().unwrap().clone(),
+                engine.queue().unwrap().clone(),
+                scene,
+                config,
+                &[],
+                None,
+            )
+        } else {
+            FemRigidGpuSystem::new(engine.clone(), scene, config)
+        }
         .unwrap();
         system
             .configure_material_contact(Some(MaterialContactConfig {
