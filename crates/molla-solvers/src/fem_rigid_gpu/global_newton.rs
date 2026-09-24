@@ -19,9 +19,10 @@ impl Default for GlobalNewtonConfig {
             solve: CoupledNewtonSettings {
                 iterations: 12,
                 backtracks: 8,
-                absolute_tolerance: 1e-5,
+                absolute_tolerance: 1e-4,
                 relative_tolerance: 0.0,
                 armijo: 1e-4,
+                block_maximum: true,
                 linear: molla_kernels::GpuGmresSettings {
                     cycles: 4,
                     absolute_tolerance: 1e-7,
@@ -220,7 +221,7 @@ impl GlobalNewtonState {
         }
         let newton = self.newton.as_ref().unwrap();
         let mut evaluations = 0_u32;
-        newton.encode_split(
+        newton.encode_split_with_finalize(
             device,
             encoder,
             self.bridge.inverse_diagonal(),
@@ -241,6 +242,10 @@ impl GlobalNewtonState {
                     );
                     queue.submit([pending.finish()]);
                 }
+                Ok(())
+            },
+            |encoder| {
+                self.bridge.encode_project(encoder);
                 Ok(())
             },
         )?;

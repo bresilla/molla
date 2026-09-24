@@ -22,6 +22,8 @@ pub struct CoupledNewtonSettings {
     pub absolute_tolerance: f32,
     pub relative_tolerance: f32,
     pub armijo: f32,
+    /// Uses the maximum soft/contact vector norm or rigid scalar norm for convergence; Armijo stays L2.
+    pub block_maximum: bool,
     pub linear: GpuGmresSettings,
 }
 impl CoupledNewtonSettings {
@@ -64,6 +66,9 @@ pub struct CoupledNewtonDiagnostics {
     pub linear_residual_norm: f32,
     pub linear_converged: u32,
     pub linear_faults: u32,
+    pub maximum_norm: f32,
+    pub initial_maximum_norm: f32,
+    pub pad: [u32; 2],
 }
 
 #[repr(C)]
@@ -77,6 +82,8 @@ struct Params {
     absolute_tolerance: f32,
     relative_tolerance: f32,
     armijo: f32,
+    norm_kind: u32,
+    pad: [u32; 3],
 }
 
 /// Fixed-geometry simultaneous material/contact Newton solve on scratch candidate buffers.
@@ -187,7 +194,7 @@ impl CoupledNewtonKernel {
                         },
                         has_dynamic_offset: binding == 19,
                         min_binding_size: if binding == 19 {
-                            NonZeroU64::new(32)
+                            NonZeroU64::new(48)
                         } else {
                             None
                         },
@@ -260,9 +267,9 @@ impl CoupledNewtonKernel {
             packed: allocate("Newton packed vector", dimension * 4),
             rhs: allocate("Newton right hand side", dimension * 4),
             base: allocate("Newton accepted base", dimension * 4),
-            partials: allocate("Newton residual norm partials", dimension.div_ceil(64) * 8),
-            diagnostics: allocate("Newton diagnostics", 64),
-            history: allocate("Newton iteration history", 64 * 64),
+            partials: allocate("Newton residual norm partials", dimension.div_ceil(64) * 16),
+            diagnostics: allocate("Newton diagnostics", 80),
+            history: allocate("Newton iteration history", 64 * 80),
         })
     }
 
@@ -290,7 +297,27 @@ impl CoupledNewtonKernel {
         encoder: &mut wgpu::CommandEncoder,
         inverse_diagonal: &wgpu::Buffer,
         settings: CoupledNewtonSettings,
+        evaluate: impl FnMut(&mut wgpu::CommandEncoder, bool) -> Result<()>,
+    ) -> Result<()> {
+        self.encode_split_with_finalize(
+            device,
+            encoder,
+            inverse_diagonal,
+            settings,
+            evaluate,
+            |_| Ok(()),
+        )
+    }
+
+    /// Re-evaluates all physical residuals after `finalize` changes the final candidate.
+    pub fn encode_split_with_finalize(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        inverse_diagonal: &wgpu::Buffer,
+        settings: CoupledNewtonSettings,
         mut evaluate: impl FnMut(&mut wgpu::CommandEncoder, bool) -> Result<()>,
+        finalize: impl FnOnce(&mut wgpu::CommandEncoder) -> Result<()>,
     ) -> Result<()> {
         settings.validate()?;
         if inverse_diagonal.size() != u64::from(self.dimension) * 4
@@ -319,7 +346,7 @@ impl CoupledNewtonKernel {
         }
         self.gmres
             .validate_inputs(&self.rhs, inverse_diagonal, settings.linear)?;
-        let stride = device.limits().min_uniform_buffer_offset_alignment.max(32);
+        let stride = device.limits().min_uniform_buffer_offset_alignment.max(48);
         let mut bytes = vec![0; (stride * settings.backtracks) as usize];
         for slot in 0..settings.backtracks {
             let params = Params {
@@ -331,8 +358,10 @@ impl CoupledNewtonKernel {
                 absolute_tolerance: settings.absolute_tolerance,
                 relative_tolerance: settings.relative_tolerance,
                 armijo: settings.armijo,
+                norm_kind: settings.block_maximum as u32,
+                pad: [0; 3],
             };
-            bytes[(slot * stride) as usize..(slot * stride + 32) as usize]
+            bytes[(slot * stride) as usize..(slot * stride + 48) as usize]
                 .copy_from_slice(bytemuck::bytes_of(&params));
         }
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -363,7 +392,7 @@ impl CoupledNewtonKernel {
             resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                 buffer: &uniform,
                 offset: 0,
-                size: NonZeroU64::new(32),
+                size: NonZeroU64::new(48),
             }),
         });
         entries.push(wgpu::BindGroupEntry {
@@ -438,11 +467,12 @@ impl CoupledNewtonKernel {
                 &self.diagnostics,
                 0,
                 &self.history,
-                u64::from(iteration) * 64,
-                64,
+                u64::from(iteration) * 80,
+                80,
             );
         }
         dispatch(encoder, 0, 0, vectors);
+        finalize(encoder)?;
         evaluate(encoder, false)?;
         dispatch(encoder, 2, 0, blocks);
         dispatch(encoder, 4, 0, blocks);

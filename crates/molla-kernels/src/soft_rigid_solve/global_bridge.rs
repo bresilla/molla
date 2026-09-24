@@ -26,6 +26,8 @@ pub struct GlobalContactBridge {
     pipelines: [[wgpu::ComputePipeline; 3]; 2],
     material_layout: wgpu::BindGroupLayout,
     material_pipeline: wgpu::ComputePipeline,
+    projection_pipeline: wgpu::ComputePipeline,
+    projection_group: wgpu::BindGroup,
 }
 impl GlobalContactBridge {
     pub fn new(
@@ -162,25 +164,63 @@ impl GlobalContactBridge {
             compilation_options: Default::default(),
             cache: None,
         });
+        let contacts = allocate("compact Newton contacts", u64::from(capacity) * 80);
+        let impulses = allocate("Newton contact multipliers", u64::from(capacity) * 16);
+        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[source_rows, capacity, particles, dofs]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let projection_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("feasible Newton impulses"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/fem_global_contact_project.wgsl").into(),
+            ),
+        });
+        let projection_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("feasible Newton impulses"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: None,
+                        bind_group_layouts: &[Some(&material_layout)],
+                        immediate_size: 0,
+                    }),
+                ),
+                module: &projection_shader,
+                entry_point: Some("project"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        let projection_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("feasible Newton impulses"),
+            layout: &material_layout,
+            entries: &[&contacts, &impulses, &uniform]
+                .into_iter()
+                .enumerate()
+                .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                    binding: binding as u32,
+                    resource: buffer.as_entire_binding(),
+                })
+                .collect::<Vec<_>>(),
+        });
         Ok(Self {
             source_rows,
             capacity,
             particles,
             dofs,
             compact,
-            contacts: allocate("compact Newton contacts", u64::from(capacity) * 80),
-            impulses: allocate("Newton contact multipliers", u64::from(capacity) * 16),
+            contacts,
+            impulses,
             inverse_diagonal: allocate("mixed Newton preconditioner", dimension * 4),
             gate: allocate("global contact commit gate", 4),
-            uniform: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(&[source_rows, capacity, particles, dofs]),
-                usage: wgpu::BufferUsages::UNIFORM,
-            }),
+            uniform,
             layouts,
             pipelines,
             material_layout,
             material_pipeline,
+            projection_pipeline,
+            projection_group,
         })
     }
     fn source_matches(&self, source: &SoftRigidSolveKernel) -> Result<()> {
@@ -363,6 +403,13 @@ impl GlobalContactBridge {
     }
     pub fn impulses(&self) -> &wgpu::Buffer {
         &self.impulses
+    }
+    /// Projects trial impulses before residual evaluation; bilateral rows are unchanged.
+    pub fn encode_project(&self, encoder: &mut wgpu::CommandEncoder) {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&self.projection_pipeline);
+        pass.set_bind_group(0, &self.projection_group, &[]);
+        pass.dispatch_workgroups(self.capacity.div_ceil(64), 1, 1);
     }
     pub fn compact_solve(&self) -> &SoftRigidSolveKernel {
         &self.compact

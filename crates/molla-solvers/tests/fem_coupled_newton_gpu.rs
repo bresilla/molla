@@ -75,6 +75,7 @@ fn material_residual(model: &Model, velocity: [Vec3; 4], target: Vec3, h: f64) -
 }
 fn settings() -> CoupledNewtonSettings {
     CoupledNewtonSettings {
+        block_maximum: false,
         iterations: 8,
         backtracks: 8,
         absolute_tolerance: 2e-5,
@@ -546,6 +547,40 @@ fn newton_backtracking_rejects_nonfinite_trials_and_restores_failed_updates() {
         }
         contact_operator.encode(encoder)
     };
+    for block_maximum in [true, false] {
+        queue.write_buffer(&b[1], 0, bytemuck::bytes_of(&initial));
+        queue.write_buffer(&b[8], 0, bytemuck::bytes_of(&0.8_f32));
+        let mut encoder = device.create_command_encoder(&Default::default());
+        newton
+            .encode(
+                device,
+                &mut encoder,
+                &inverse,
+                CoupledNewtonSettings {
+                    absolute_tolerance: 1.05,
+                    relative_tolerance: 0.0,
+                    block_maximum,
+                    ..settings()
+                },
+                evaluate,
+            )
+            .unwrap();
+        queue.submit([encoder.finish()]);
+        let report =
+            readback::read::<CoupledNewtonDiagnostics>(&engine, newton.diagnostics(), 1)[0];
+        assert_eq!((report.faults, report.converged), (0, 1));
+        assert!((report.initial_maximum_norm - 0.999).abs() < 1e-6);
+        assert!(report.initial_norm > 1.05);
+        if block_maximum {
+            assert_eq!(report.iterations, 0);
+            assert!(
+                report.residual_norm > report.threshold && report.maximum_norm < report.threshold
+            );
+        } else {
+            assert!(report.iterations > 0 && report.residual_norm <= report.threshold);
+        }
+    }
+    queue.write_buffer(&b[8], 0, bytemuck::bytes_of(&0.0_f32));
     for backtracks in [1, 12] {
         queue.write_buffer(&b[1], 0, bytemuck::bytes_of(&initial));
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -577,6 +612,27 @@ fn newton_backtracking_rejects_nonfinite_trials_and_restores_failed_updates() {
         }
         println!("synthetic backtracking control backtracks={backtracks}: {report:?}");
     }
+    queue.write_buffer(&b[1], 0, bytemuck::bytes_of(&initial));
+    let invalid_final = buffer(device, &[initial]);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    newton
+        .encode_split_with_finalize(
+            device,
+            &mut encoder,
+            &inverse,
+            settings(),
+            |encoder, _| evaluate(encoder),
+            |encoder| {
+                encoder.copy_buffer_to_buffer(&invalid_final, 0, &b[1], 0, 16);
+                Ok(())
+            },
+        )
+        .unwrap();
+    queue.submit([encoder.finish()]);
+    let report = readback::read::<CoupledNewtonDiagnostics>(&engine, newton.diagnostics(), 1)[0];
+    assert_eq!((report.faults, report.converged), (0, 0));
+    assert!(report.iterations > 0 && (report.residual_norm - 0.999).abs() < 1e-6);
+    assert_eq!(readback::read::<[f32; 4]>(&engine, &b[1], 1)[0], initial);
     for invalid in [0.0_f32, f32::NAN, f32::INFINITY] {
         queue.write_buffer(&b[1], 0, bytemuck::bytes_of(&initial));
         queue.write_buffer(&inverse, 0, bytemuck::bytes_of(&invalid));

@@ -19,6 +19,52 @@ mod oracle;
 #[allow(dead_code)]
 mod readback;
 
+#[test]
+#[ignore = "requires GPU through make test-gpu"]
+fn global_trial_impulses_preserve_unilateral_feasibility() {
+    use molla_kernels::soft_rigid_solve::GlobalContactBridge;
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let bridge = GlobalContactBridge::new(device, 8, 8, 1, 1).unwrap();
+    let mut contacts = [[0_u32; 20]; 8];
+    for (c, kind) in contacts.iter_mut().zip([1, 1, 1, 5, 5, 3, 0, 1]) {
+        c[11] = kind;
+        c[4] = 0.5_f32.to_bits();
+    }
+    let values = [
+        [-4e-10, 3e-10, -2e-10, 0.0],
+        [2.0, 3.0, -4.0, 0.0],
+        [2.0, 0.3, 0.4, 0.0],
+        [-0.2, 0.3, -0.4, 0.0],
+        [2.0, 0.3, -0.4, 0.0],
+        [-2.0, 0.3, -0.4, 0.0],
+        [2.0, 0.3, -0.4, 0.0],
+        [f32::NAN, 0.3, -0.4, 0.0],
+    ];
+    queue.write_buffer(bridge.contacts(), 0, bytemuck::cast_slice(&contacts));
+    queue.write_buffer(bridge.impulses(), 0, bytemuck::cast_slice(&values));
+    let mut encoder = device.create_command_encoder(&Default::default());
+    bridge.encode_project(&mut encoder);
+    queue.submit([encoder.finish()]);
+    let result = readback::read::<[f32; 4]>(&engine, bridge.impulses(), 8);
+    assert_eq!(result[0], [0.0; 4]);
+    assert_eq!(result[1][0], 2.0);
+    assert!((result[1][1] - 0.6).abs() < 1e-7);
+    assert!((result[1][2] + 0.8).abs() < 1e-7);
+    assert_eq!(result[2], values[2]);
+    assert_eq!(result[3], [0.0; 4]);
+    assert_eq!(result[4], [2.0, 0.0, 0.0, 0.0]);
+    assert_eq!(result[5], values[5]);
+    assert_eq!(result[6], [0.0; 4]);
+    assert!(result[7][0].is_nan());
+    for row in &result[..3] {
+        let normal = f64::from(row[0]);
+        let tangent = f64::from(row[1]).hypot(f64::from(row[2]));
+        assert!(normal >= 0.0 && tangent <= 0.5 * normal + 1e-7);
+    }
+}
+
 fn scene() -> FemRigidGpuScene {
     let mut builder = ModelBuilder::new();
     builder.set_world_gravity(WorldId(0), Vec3::ZERO);
@@ -129,7 +175,15 @@ fn native_global_newton_preserves_material_and_contact_gates() {
             64,
         );
         assert_eq!(history[11].iterations, diagnostics.iterations);
-        assert_eq!(history[11].residual_norm, diagnostics.residual_norm);
+        assert!(history[11].maximum_norm <= history[11].threshold);
+        assert!(diagnostics.maximum_norm <= diagnostics.threshold);
+        let rhs = system.global_newton_residual_rhs().unwrap();
+        let norm = readback::read::<f32>(&engine, rhs, rhs.size() as usize / 4)
+            .iter()
+            .map(|value| f64::from(*value).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        assert!((norm - f64::from(diagnostics.residual_norm)).abs() < 1e-10 + 1e-5 * norm);
         assert!(history[12..].iter().all(|row| row.initial_norm == 0.0));
         assert!(material <= 1e-4 && max_contact <= 1e-4);
         reference.check(&engine, &system, &prior_velocity);

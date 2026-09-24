@@ -1,12 +1,14 @@
 struct Params {
     particles: u32, rows: u32, dofs: u32, dimension: u32,
     alpha: f32, absolute_tolerance: f32, relative_tolerance: f32, armijo: f32,
+    norm_kind: u32, pad0: u32, pad1: u32, pad2: u32,
 }
 struct Diagnostics {
     faults: u32, running: u32, accepted: u32, iterations: u32,
     initial_norm: f32, residual_norm: f32, base_norm: f32, threshold: f32,
     accepted_alpha: f32, trial_norm: f32, converged: u32, line_evaluations: u32,
     linear_iterations: u32, linear_residual_norm: f32, linear_converged: u32, linear_faults: u32,
+    maximum_norm: f32, initial_maximum_norm: f32, pad0: u32, pad1: u32,
 }
 @group(0) @binding(0) var<storage, read_write> soft_velocity: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read_write> rigid_velocity: array<f32>;
@@ -25,11 +27,11 @@ struct Diagnostics {
 @group(0) @binding(14) var<storage, read_write> packed_vector: array<f32>;
 @group(0) @binding(15) var<storage, read_write> rhs: array<f32>;
 @group(0) @binding(16) var<storage, read_write> base: array<f32>;
-@group(0) @binding(17) var<storage, read_write> partials: array<vec2<f32>>;
+@group(0) @binding(17) var<storage, read_write> partials: array<vec4<f32>>;
 @group(0) @binding(18) var<storage, read_write> state: Diagnostics;
 @group(0) @binding(19) var<uniform> u: Params;
 @group(0) @binding(20) var<storage, read> inverse_diagonal: array<f32>;
-var<workgroup> sums: array<vec2<f32>,64>;
+var<workgroup> sums: array<vec4<f32>,64>;
 
 fn finite(value: f32) -> bool { return abs(value) <= 3.402823e38; }
 fn soft_end() -> u32 { return 3u*u.particles; }
@@ -83,8 +85,8 @@ fn pack_action(@builtin(global_invocation_id) id: vec3<u32>) {
     packed_vector[id.x] = value;
 }
 
-fn norm_reduce(lane: u32, value: f32, bad: f32) -> vec2<f32> {
-    sums[lane] = vec2<f32>(abs(value),bad);
+fn norm_reduce(lane: u32, value: f32, bad: f32, maximum: f32) -> vec4<f32> {
+    sums[lane] = vec4<f32>(abs(value),bad,maximum,0.0);
     workgroupBarrier();
     for (var stride = 32u; stride > 0u; stride /= 2u) {
         if lane < stride { sums[lane] = max(sums[lane],sums[lane+stride]); }
@@ -92,34 +94,49 @@ fn norm_reduce(lane: u32, value: f32, bad: f32) -> vec2<f32> {
     }
     let scale = sums[0].x;
     let invalid = sums[0].y;
+    let block_maximum = sums[0].z;
     let normalized = value/select(1.0,scale,scale>0.0);
     workgroupBarrier();
-    sums[lane] = vec2<f32>(normalized*normalized,0.0);
+    sums[lane] = vec4<f32>(normalized*normalized,0.0,0.0,0.0);
     workgroupBarrier();
     for (var stride = 32u; stride > 0u; stride /= 2u) {
         if lane < stride { sums[lane].x += sums[lane+stride].x; }
         workgroupBarrier();
     }
-    return vec2<f32>(scale*sqrt(max(0.0,sums[0].x)),invalid);
+    return vec4<f32>(scale*sqrt(max(0.0,sums[0].x)),invalid,block_maximum,0.0);
 }
+
+fn block_norm(i: u32) -> f32 {
+    if i >= soft_end() && i < rigid_end() { return abs(rhs[i]); }
+    let local = select(i,i-rigid_end(),i>=rigid_end());
+    if local%3u != 0u { return 0.0; }
+    let value = vec3<f32>(rhs[i],rhs[i+1u],rhs[i+2u]);
+    let scale = max(abs(value.x),max(abs(value.y),abs(value.z)));
+    return scale*length(value/select(1.0,scale,scale>0.0));
+}
+fn convergence_norm(result: vec4<f32>) -> f32 { return select(result.x,result.z,u.norm_kind==1u); }
 
 @compute @workgroup_size(64)
 fn norm_partials(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_index) lane: u32,
     @builtin(workgroup_id) group: vec3<u32>) {
     var value = 0.0;
     var bad = 0.0;
+    var maximum = 0.0;
     if id.x < u.dimension {
         value = rhs[id.x];
+        maximum = block_norm(id.x);
         if !finite(value) { value = 0.0; bad = 1.0; }
+        if !finite(maximum) { maximum = 0.0; bad = 1.0; }
     }
-    let result = norm_reduce(lane,value,bad);
+    let result = norm_reduce(lane,value,bad,maximum);
     if lane == 0u { partials[group.x] = result; }
 }
 
-fn total_norm(lane: u32) -> vec2<f32> {
+fn total_norm(lane: u32) -> vec4<f32> {
     var scale = 0.0;
     var squares = 0.0;
     var bad = 0.0;
+    var maximum = 0.0;
     for (var block = lane; block < (u.dimension+63u)/64u; block += 64u) {
         let value = partials[block];
         let next = max(scale,value.x);
@@ -127,8 +144,9 @@ fn total_norm(lane: u32) -> vec2<f32> {
         squares = squares*(scale/denominator)*(scale/denominator)+(value.x/denominator)*(value.x/denominator);
         scale = next;
         bad = max(bad,value.y);
+        maximum = max(maximum,value.z);
     }
-    return norm_reduce(lane,scale*sqrt(squares),bad);
+    return norm_reduce(lane,scale*sqrt(squares),bad,maximum);
 }
 
 @compute @workgroup_size(64)
@@ -137,9 +155,11 @@ fn initial_norm(@builtin(local_invocation_index) lane: u32) {
     if lane != 0u { return; }
     state.initial_norm = result.x;
     state.residual_norm = result.x;
-    state.threshold = u.absolute_tolerance+u.relative_tolerance*result.x;
+    state.maximum_norm = result.z;
+    state.initial_maximum_norm = result.z;
+    state.threshold = u.absolute_tolerance+u.relative_tolerance*convergence_norm(result);
     if result.y != 0.0 || !finite(result.x) { state.faults = 1u; return; }
-    state.converged = select(0u,1u,result.x<=state.threshold);
+    state.converged = select(0u,1u,convergence_norm(result)<=state.threshold);
     state.running = 1u-state.converged;
 }
 
@@ -191,7 +211,8 @@ fn accept_trial(@builtin(local_invocation_index) lane: u32) {
         state.iterations++;
         state.accepted_alpha = u.alpha;
         state.residual_norm = result.x;
-        state.converged = select(0u,1u,result.x<=state.threshold);
+        state.maximum_norm = result.z;
+        state.converged = select(0u,1u,convergence_norm(result)<=state.threshold);
         if state.converged != 0u { state.running = 0u; }
     }
 }
@@ -215,6 +236,7 @@ fn finish_solve(@builtin(local_invocation_index) lane: u32) {
     if lane != 0u { return; }
     state.running = 0u;
     state.residual_norm = result.x;
+    state.maximum_norm = result.z;
     if result.y != 0.0 || !finite(result.x) { state.faults |= 1u; }
-    state.converged = select(0u,1u,state.faults == 0u && result.x<=state.threshold);
+    state.converged = select(0u,1u,state.faults == 0u && convergence_norm(result)<=state.threshold);
 }
