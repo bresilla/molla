@@ -357,6 +357,11 @@ impl SoftRigidSolveKernel {
         &self.response
     }
 
+    /// Whether the prepared schedule contains coplanar point/edge blocks.
+    pub fn has_contact_blocks(&self) -> bool {
+        self.block_schedule.is_some()
+    }
+
     /// Active count followed by contact indices in ascending candidate order; scratch offsets follow.
     pub fn active_rows(&self) -> &wgpu::Buffer {
         &self.active_rows

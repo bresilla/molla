@@ -360,7 +360,7 @@ pub use tire_vehicle::{
     tire_vehicle_yaw_reference,
 };
 #[cfg(feature = "gpu")]
-pub use vbd_cloth::VbdClothKernel;
+pub use vbd_cloth::{MaterialContactPatchBindings, VbdClothKernel};
 #[cfg(feature = "gpu")]
 pub use xpbd::XpbdKernel;
 #[cfg(feature = "gpu")]

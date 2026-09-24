@@ -146,9 +146,55 @@ pub struct FemRigidGpuScene {
     pub shapes: Vec<SoftRigidShapeGpu>,
 }
 
+/// Raises a device request to the coupled material patch limits without lowering other limits.
+pub fn request_material_contact_patch_device_limits(
+    requested: &mut wgpu::Limits,
+    supported: &wgpu::Limits,
+) -> Result<()> {
+    if supported.max_bind_groups < 7 || supported.max_storage_buffers_per_shader_stage < 51 {
+        return Err(Error::Gpu(
+            "material contact patch requires 7 groups and 51 storage buffers".into(),
+        ));
+    }
+    request_fem_device_limits(requested, supported)?;
+    requested.max_bind_groups = requested.max_bind_groups.max(7);
+    requested.max_storage_buffers_per_shader_stage =
+        requested.max_storage_buffers_per_shader_stage.max(51);
+    Ok(())
+}
+
 #[cfg(test)]
 mod device_limits_tests {
-    use super::{request_fem_device_limits, validate_device_limits};
+    use super::{
+        request_fem_device_limits, request_material_contact_patch_device_limits,
+        validate_device_limits,
+    };
+
+    #[test]
+    fn patch_limits_preserve_requests_and_reject_unsupported_devices() {
+        let mut supported = wgpu::Limits::default();
+        supported.max_bind_groups = 7;
+        supported.max_storage_buffers_per_shader_stage = 51;
+        let original = wgpu::Limits::default();
+        let mut request = original.clone();
+        request_material_contact_patch_device_limits(&mut request, &supported).unwrap();
+        assert_eq!(request.max_bind_groups, 7);
+        assert_eq!(request.max_storage_buffers_per_shader_stage, 51);
+        for (groups, buffers) in [(6, 51), (7, 50)] {
+            let mut small = supported.clone();
+            small.max_bind_groups = groups;
+            small.max_storage_buffers_per_shader_stage = buffers;
+            let mut unchanged = original.clone();
+            assert!(request_material_contact_patch_device_limits(&mut unchanged, &small).is_err());
+            assert_eq!(unchanged, original);
+        }
+        let mut large = supported.clone();
+        large.max_bind_groups = 8;
+        large.max_storage_buffers_per_shader_stage = 64;
+        let unchanged = large.clone();
+        request_material_contact_patch_device_limits(&mut large, &supported).unwrap();
+        assert_eq!(large, unchanged);
+    }
 
     #[test]
     fn external_device_requires_all_kernel_limits() {
@@ -704,6 +750,7 @@ impl FemRigidGpuSystem {
             })
             .transpose()?;
         self.material_contact = state;
+        self.fem.clear_material_contact_patch_gpu();
         self.timing = None;
         Ok(())
     }
@@ -804,7 +851,44 @@ impl FemRigidGpuSystem {
         coupling.polish_iterations = iterations;
         coupling.polish_cycles = 1;
         coupling.polish_contact_sweeps = None;
+        coupling.coupled_patch = false;
+        self.fem.clear_material_contact_patch_gpu();
         Ok(())
+    }
+
+    /// Enables one GPU-selected coupled point/edge patch during final material polish.
+    pub fn configure_material_contact_patch(&mut self, enabled: bool) -> Result<()> {
+        if self.queued_substeps != 0 || self.completion.is_some() {
+            return Err(Error::Build(
+                "material contact patch configuration requires an idle island".into(),
+            ));
+        }
+        let coupling = self.material_contact.as_mut().ok_or_else(|| {
+            Error::Build("material contact patch requires material coupling".into())
+        })?;
+        if enabled
+            && (coupling.polish_iterations.is_none()
+                || coupling.polish_cycles < 2
+                || coupling.reuse_iterations.is_none()
+                || !self.solve.has_contact_blocks()
+                || self.soft_model.shape_count != 0
+                || !self.soft_model.vertex_cable_bending_entries.is_empty()
+                || self.device.limits().max_bind_groups < 7
+                || self.device.limits().max_storage_buffers_per_shader_stage < 51)
+        {
+            return Err(Error::Build("material contact patch requires retained elastic polish, blocked contacts and 7 groups/51 buffers".into()));
+        }
+        coupling.coupled_patch = enabled;
+        self.fem.clear_material_contact_patch_gpu();
+        Ok(())
+    }
+
+    /// Last selected local patch's solution, residual, counters and application flag.
+    pub fn material_contact_patch_diagnostics(&self) -> Option<&wgpu::Buffer> {
+        if !self.material_contact.as_ref()?.coupled_patch {
+            return None;
+        }
+        self.fem.material_patch_diagnostics_gpu()
     }
 
     /// Select contact sweeps between final material passes; None inherits the continuation count.
@@ -845,6 +929,11 @@ impl FemRigidGpuSystem {
         if coupling.polish_iterations.is_none() {
             return Err(Error::Build(
                 "enable material polish before its cycles".into(),
+            ));
+        }
+        if coupling.coupled_patch && cycles < 2 {
+            return Err(Error::Build(
+                "coupled material patch requires at least two polish cycles".into(),
             ));
         }
         coupling.polish_cycles = cycles;
@@ -1173,17 +1262,20 @@ impl FemRigidGpuSystem {
                     h as f32,
                 )?;
             }
+            let soft_velocity_buffer = self.soft_next.particle_qd.device_buffer().unwrap().clone();
+            let rigid_velocity_buffer = self.rigid_next.joint_qd.device_buffer().unwrap().clone();
+            let body_velocity_buffer = self.rigid_next.body_qd.device_buffer().unwrap().clone();
             let solve_bindings = SoftRigidSolveBindings {
                 positions: self.soft_state.particle_q.device_buffer().unwrap(),
-                velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
+                velocities: &soft_velocity_buffer,
                 inverse_mass: self.soft_model.particle_inv_mass.device_buffer().unwrap(),
                 contacts: self.gather.rows(),
                 body_poses: self.rigid_state.body_q.device_buffer().unwrap(),
                 body_com: self.rigid_model.body_com.device_buffer().unwrap(),
                 jacobians: &self.jacobian_buffer,
                 mass_matrix: &self.mass_buffer,
-                rigid_velocities: self.rigid_next.joint_qd.device_buffer().unwrap(),
-                body_velocities: self.rigid_next.body_qd.device_buffer().unwrap(),
+                rigid_velocities: &rigid_velocity_buffer,
+                body_velocities: &body_velocity_buffer,
                 particle_count: self.soft_model.particle_count as u32,
                 body_count: self.rigid_model.body_count as u32,
             };
@@ -1327,6 +1419,31 @@ impl FemRigidGpuSystem {
                 }
                 encoder = device.create_command_encoder(&Default::default());
                 if let Some(iterations) = coupling.polish_iterations {
+                    if coupling.coupled_patch {
+                        self.solve.encode_residual_check(
+                            device,
+                            &mut encoder,
+                            solve_bindings,
+                            solve_settings,
+                            f32::MAX,
+                        )?;
+                        self.fem.prepare_material_contact_patch_gpu(
+                            molla_kernels::MaterialContactPatchBindings {
+                                rows: self.solve.row_state(),
+                                projected: self.solve.projected_rows(),
+                                response: self.solve.row_responses(),
+                                rigid_velocity: self.rigid_next.joint_qd.device_buffer().unwrap(),
+                                contacts: self.gather.rows(),
+                                schedule: self.solve.active_rows(),
+                                input_velocity: coupling.input.particle_qd.device_buffer().unwrap(),
+                                inverse_mass: self
+                                    .soft_model
+                                    .particle_inv_mass
+                                    .device_buffer()
+                                    .unwrap(),
+                            },
+                        )?;
+                    }
                     for cycle in 0..coupling.polish_cycles {
                         let last_cycle = cycle + 1 == coupling.polish_cycles;
                         if cycle > 0 {
@@ -1356,12 +1473,20 @@ impl FemRigidGpuSystem {
                                     .unwrap_or(solve_settings.iterations),
                                 ..solve_settings
                             };
+                            if coupling.coupled_patch {
+                                self.fem
+                                    .encode_material_patch_contacts_gpu(&mut encoder, false);
+                            }
                             self.solve.encode_continuation(
                                 device,
                                 &mut encoder,
                                 bindings,
                                 settings,
                             )?;
+                            if coupling.coupled_patch {
+                                self.fem
+                                    .encode_material_patch_contacts_gpu(&mut encoder, true);
+                            }
                             if last_cycle {
                                 self.solve.encode_residual_check(
                                     device,
@@ -1404,6 +1529,16 @@ impl FemRigidGpuSystem {
                             iterations,
                         )?;
                         encoder = device.create_command_encoder(&Default::default());
+                        if coupling.coupled_patch {
+                            coupling.input.particle_qd.mark_device_dirty();
+                            self.rigid_next.joint_qd.mark_device_dirty();
+                            self.solve.encode_velocity_recovery(
+                                device,
+                                &mut encoder,
+                                solve_bindings,
+                                solve_settings,
+                            )?;
+                        }
                         if last_cycle {
                             coupling.check_polish(
                                 device,
