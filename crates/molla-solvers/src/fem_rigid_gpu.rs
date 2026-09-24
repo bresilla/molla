@@ -21,6 +21,7 @@ use std::sync::{
 };
 use wgpu::util::DeviceExt;
 
+mod bounds;
 mod contact_snapshot;
 mod coupling;
 mod timing;
@@ -220,6 +221,7 @@ pub struct FemRigidGpuSystem {
     surface: wgpu::Buffer,
     shapes: wgpu::Buffer,
     gather: SoftRigidContactKernel,
+    bounds: Option<molla_kernels::soft_rigid_bounds::SoftRigidBoundsKernel>,
     solve: SoftRigidSolveKernel,
     drift: SoftParticleDriftKernel,
     volume: TetVolumeMonitor,
@@ -509,6 +511,12 @@ impl FemRigidGpuSystem {
                 point_local: [p.x as f32, p.y as f32, p.z as f32, 0.0],
             })
             .collect();
+        let (bounds, bound_rows) = bounds::build(device, &scene.rigid_model)?;
+        let mut constraint_rows = joints
+            .iter()
+            .map(|j| j.row(scene.rigid_model.body_count as u32))
+            .collect::<Result<Vec<_>>>()?;
+        constraint_rows.extend(bound_rows);
         let gather = if sample_surface {
             let sample_count = u32::try_from(samples.len())
                 .map_err(|_| Error::Build("too many FEM surface features".into()))?;
@@ -521,20 +529,28 @@ impl FemRigidGpuSystem {
                     sample_count,
                     shape_count,
                     n,
-                    joints.len(),
+                    constraint_rows.len(),
                 )?,
             };
-            SoftRigidContactKernel::new_compact_sampled_with_ball_joints(
+            SoftRigidContactKernel::new_with_constraint_rows(
                 device,
                 queue,
                 sample_count,
                 shape_count,
-                scene.rigid_model.body_count as u32,
-                capacity,
-                joints,
+                true,
+                Some(capacity),
+                &constraint_rows,
             )?
         } else {
-            SoftRigidContactKernel::new(device, nodes.len() as u32, shape_count as u32)?
+            SoftRigidContactKernel::new_with_constraint_rows(
+                device,
+                queue,
+                nodes.len() as u32,
+                shape_count as u32,
+                false,
+                None,
+                &constraint_rows,
+            )?
         };
         let solve = if contact_blocks {
             SoftRigidSolveKernel::new_blocked_contacts(
@@ -579,6 +595,7 @@ impl FemRigidGpuSystem {
         .with_substeps(1)
         .with_rigorous_d_solve(true);
         rigid.set_gpu_status_buffer(solve.status())?;
+        rigid.set_external_scalar_bounds(true)?;
         Ok(Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -599,6 +616,7 @@ impl FemRigidGpuSystem {
             surface,
             shapes,
             gather,
+            bounds,
             solve,
             drift,
             volume,
@@ -1114,6 +1132,17 @@ impl FemRigidGpuSystem {
                 },
                 self.config.contact_margin as f32,
             )?;
+            if let Some(bounds) = &self.bounds {
+                bounds.encode(
+                    device,
+                    &mut encoder,
+                    self.rigid_state.joint_q.device_buffer().unwrap(),
+                    self.gather.rows(),
+                    self.solve.status(),
+                    self.gather.row_count() - bounds.row_count(),
+                    h as f32,
+                )?;
+            }
             let solve_bindings = SoftRigidSolveBindings {
                 positions: self.soft_state.particle_q.device_buffer().unwrap(),
                 velocities: self.soft_next.particle_qd.device_buffer().unwrap(),
@@ -1164,6 +1193,15 @@ impl FemRigidGpuSystem {
             }
             if let Some(timing) = &self.timing {
                 timing.mark_contact(&mut encoder, 1);
+            }
+            if self.bounds.is_some() && self.material_contact.is_none() {
+                self.solve.encode_residual_check(
+                    device,
+                    &mut encoder,
+                    solve_bindings,
+                    solve_settings,
+                    1e-5,
+                )?;
             }
             if let Some(coupling) = &mut self.material_contact {
                 coupling.accumulate(

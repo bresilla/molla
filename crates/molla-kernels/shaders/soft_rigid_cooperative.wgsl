@@ -54,8 +54,8 @@ fn cooperative_row(r: u32) -> u32 {
         rows[r].lambda = vec4<f32>(lambda,0.0);
         return 0u;
     }
-    if contact.ids.w != 1u { return 0u; }
-    if BLOCK_CONTACTS && solve_contact_block(r) { return 0u; }
+    if contact.ids.w != 1u && contact.ids.w != 5u { return 0u; }
+    if contact.ids.w == 1u && BLOCK_CONTACTS && solve_contact_block(r) { return 0u; }
     let directions = basis(contact.normal_gap.xyz);
     let row = rows[r];
     var lambda = row.lambda.xyz;

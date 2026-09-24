@@ -32,7 +32,7 @@ var<workgroup> active_prefix: array<u32, 64>;
 fn scan_contacts(row: u32, lane: u32) -> u32 {
     var enabled = 0u;
     if row < params.rows {
-        enabled = select(0u, 1u, contacts[row].ids.w == 1u || contacts[row].ids.w == 3u);
+        enabled = select(0u, 1u, contacts[row].ids.w == 1u || contacts[row].ids.w == 3u || contacts[row].ids.w == 5u);
     }
     active_prefix[lane] = enabled;
     workgroupBarrier();
@@ -150,7 +150,14 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
     if contact.ids.w == 4u {atomicOr(&status,16u); return;}
     let body = contact.ids.y;
     let ball = contact.ids.w == 3u;
-    if ball {
+    let bound = contact.ids.w == 5u;
+    if bound {
+        if contact.ids.x >= params.dofs || body != 0u || contact.support.z != 0u
+            || contact.material.x != 0.0 || !finite(contact.material.y) || abs(contact.material.z) != 1.0
+            || any(contact.normal_gap.xyz != vec3<f32>(1.0, 0.0, 0.0)) {
+            atomicOr(&status, 2u); return;
+        }
+    } else if ball {
         if contact.ids.x >= params.bodies || body >= params.bodies || contact.ids.x == body
             || contact.support.z != 0u || !finite(dot(contact.material.xyz, contact.material.xyz))
             || !finite(dot(contact.weights.xyz, contact.weights.xyz)) {
@@ -184,7 +191,7 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
         point += weight * positions[particle].xyz;
         weight_sum += weight;
     }
-    if (!ball && abs(weight_sum-1.0) > 1e-5) || !finite(dot(point, point)) {
+    if (!ball && !bound && abs(weight_sum-1.0) > 1e-5) || !finite(dot(point, point)) {
         atomicOr(&status, 2u); return;
     }
     let n = params.dofs;
@@ -207,7 +214,7 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
         offset_a = rotate(poses[contact.ids.x].rotation, contact.material.xyz - body_com[contact.ids.x].xyz);
     }
     var offset = vec3<f32>(0.0);
-    if body != 0xffffffffu {
+    if body != 0xffffffffu && !bound {
         offset = point - poses[body].position.xyz - rotate(poses[body].rotation, body_com[body].xyz);
     }
     var diagonal = vec3<f32>(w);
@@ -216,7 +223,9 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
         var solution: array<f32, 64>;
         for (var d = 0u; d < n; d += 1u) {
             var value = 0.0;
-            if body != 0xffffffffu {
+            if bound {
+                value = select(0.0, -contact.material.z, k == 0u && d == contact.ids.x);
+            } else if body != 0xffffffffu {
                 value = dot(directions[k], point_jacobian(body, offset, d));
             }
             if ball { value -= dot(directions[k], point_jacobian(contact.ids.x, offset_a, d)); }
@@ -244,6 +253,11 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
             atomicOr(&status, 2u); return;
         }
         rows[r] = Row(diagonal.x, diagonal.y, diagonal.z, 0.0, vec4<f32>(0.0));
+        return;
+    }
+    if bound {
+        if !finite(diagonal.x) || diagonal.x <= 0.0 { atomicOr(&status, 2u); return; }
+        rows[r] = Row(diagonal.x, 0.0, contact.material.y, 0.0, vec4<f32>(0.0));
         return;
     }
     var off_diagonal = 0.0;
@@ -313,7 +327,7 @@ fn solve() {
                 rows[r].lambda = vec4<f32>(lambda,0.0);
                 continue;
             }
-            if contact.ids.w != 1u { continue; }
+            if contact.ids.w != 1u && contact.ids.w != 5u { continue; }
             let directions = basis(contact.normal_gap.xyz);
             let row = rows[r];
             var lambda = row.lambda.xyz;
@@ -341,7 +355,7 @@ fn check_residuals(@builtin(global_invocation_id) gid: vec3<u32>) {
     let r = gid.x;
     if r >= params.rows { return; }
     let contact = contacts[r];
-    if contact.ids.w != 1u && contact.ids.w != 3u { return; }
+    if contact.ids.w != 1u && contact.ids.w != 3u && contact.ids.w != 5u { return; }
     let row = rows[r];
     var error = 0.0;
     if contact.ids.w == 3u {

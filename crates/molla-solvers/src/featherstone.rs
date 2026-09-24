@@ -218,6 +218,17 @@ impl FeatherstoneSolver {
         eval_body_velocities(model, state_out)
     }
 
+    #[cfg(feature = "gpu")]
+    pub(crate) fn set_external_scalar_bounds(&mut self, enabled: bool) -> Result<()> {
+        match &mut self.backend {
+            FeatherstoneBackend::Gpu(gpu) => {
+                gpu.kernel.set_external_scalar_bounds(enabled);
+                Ok(())
+            }
+            _ => Err(Error::Gpu("external scalar bounds require a GPU backend".into())),
+        }
+    }
+
     /// Integrate input coordinates using contact-corrected output velocities on the GPU.
     #[cfg(feature = "gpu")]
     pub fn drift_gpu(

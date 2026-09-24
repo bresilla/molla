@@ -75,12 +75,37 @@ mod shape_tests {
 pub struct SoftRigidContactGpu {
     pub normal_gap: [f32; 4],
     pub material: [f32; 4],
-    /// Particle/body A, body B, shape, status (0 inactive, 1 contact, 2 invalid, 3 ball, 4 overflow).
+    /// Particle/body/DOF A, body B, shape, status (0 inactive, 1 contact, 2 invalid, 3 ball, 4 overflow, 5 DOF bound).
     pub ids: [u32; 4],
     /// Additional particles, support count (1..=3, or zero for ball rows), reserved.
     pub support: [u32; 4],
     /// Barycentric weights; ball rows instead store body B's local anchor in xyz.
     pub weights: [f32; 4],
+}
+
+/// Unilateral generalized velocity constraint: sign * velocity[dof] >= speed.
+#[derive(Clone, Copy, Debug)]
+pub struct SoftRigidDofBound {
+    pub dof: u32,
+    pub sign: f32,
+    pub speed: f32,
+}
+
+impl SoftRigidDofBound {
+    pub fn row(&self, dofs: u32) -> Result<SoftRigidContactGpu> {
+        if self.dof >= dofs || self.sign.abs() != 1.0 || !self.speed.is_finite() {
+            return Err(Error::Build(
+                "invalid FEM generalized velocity bound".into(),
+            ));
+        }
+        Ok(SoftRigidContactGpu {
+            normal_gap: [1.0, 0.0, 0.0, 0.0],
+            material: [0.0, self.speed, self.sign, 0.0],
+            ids: [self.dof, 0, 0, 5],
+            support: [0; 4],
+            weights: [0.0; 4],
+        })
+    }
 }
 
 /// Body-local spherical loop anchors in one articulation.
@@ -167,6 +192,29 @@ struct CompactGather {
 }
 
 impl SoftRigidContactKernel {
+    /// Gather node or sampled contacts before persistent constraint rows.
+    pub fn new_with_constraint_rows(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        nodes: u32,
+        shapes: u32,
+        sampled: bool,
+        capacity: Option<u32>,
+        rows: &[SoftRigidContactGpu],
+    ) -> Result<Self> {
+        let extra = u32::try_from(rows.len())
+            .map_err(|_| Error::Build("too many FEM constraint rows".into()))?;
+        let kernel = Self::build(device, nodes, shapes, sampled, extra, capacity)?;
+        if !rows.is_empty() {
+            queue.write_buffer(
+                &kernel.output,
+                u64::from(kernel.capacity) * std::mem::size_of::<SoftRigidContactGpu>() as u64,
+                bytemuck::cast_slice(rows),
+            );
+        }
+        Ok(kernel)
+    }
+
     pub fn new(device: &wgpu::Device, node_count: u32, shape_count: u32) -> Result<Self> {
         Self::build(device, node_count, shape_count, false, 0, None)
     }

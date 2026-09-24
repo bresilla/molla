@@ -29,6 +29,8 @@ struct Uniforms {
     rigorous_distance:  u32,
     drift_only:         u32,
     stable_motor_feedback: u32,
+    external_scalar_bounds: u32,
+    pad0: u32, pad1: u32, pad2: u32,
 };
 
 const JOINT_PRISMATIC: u32 = 0u;
@@ -330,6 +332,7 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             has_stops = has_stops || abs(joint_limit_lower[dof]) < 1e30 || abs(joint_limit_upper[dof]) < 1e30;
         }
     }
+    has_stops = has_stops && uniforms.external_scalar_bounds == 0u;
     let rigorous = uniforms.rigorous_d_solve == 1u || has_stops;
 
     // Per-joint scratch.
@@ -797,8 +800,13 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             let q_pred = joint_q[coord] + qd_capped * uniforms.dt;
             let lo = joint_limit_lower[dof];
             let hi = joint_limit_upper[dof];
-            joint_qd[dof] = qd_capped;
-            joint_q[coord] = clamp(q_pred, lo, hi);
+            if uniforms.external_scalar_bounds != 0u && abs(hi-lo) >= 1e-12 {
+                joint_qd[dof] = qd_damped;
+                joint_q[coord] = joint_q[coord] + qd_damped * uniforms.dt;
+            } else {
+                joint_qd[dof] = qd_capped;
+                joint_q[coord] = clamp(q_pred, lo, hi);
+            }
         } else if (jt == JOINT_CABLE) {
             // Stage 39E — 2 scalar coords (q_l, q_b), 2 dofs. Symplectic
             // Euler per DoF, identical to two stacked 1-DoF integrators.
