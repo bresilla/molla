@@ -803,6 +803,32 @@ impl FemRigidGpuSystem {
         }
         coupling.polish_iterations = iterations;
         coupling.polish_cycles = 1;
+        coupling.polish_contact_sweeps = None;
+        Ok(())
+    }
+
+    /// Select contact sweeps between final material passes; None inherits the continuation count.
+    pub fn configure_material_contact_polish_contact_sweeps(
+        &mut self,
+        sweeps: Option<u32>,
+    ) -> Result<()> {
+        if self.queued_substeps != 0
+            || self.completion.is_some()
+            || sweeps.is_some_and(|count| !(1..=4096).contains(&count))
+        {
+            return Err(Error::Build(
+                "invalid or pending polish contact sweep configuration".into(),
+            ));
+        }
+        let coupling = self.material_contact.as_mut().ok_or_else(|| {
+            Error::Build("polish contact sweeps require configured material contact".into())
+        })?;
+        if coupling.polish_iterations.is_none() {
+            return Err(Error::Build(
+                "enable material polish before its contact sweeps".into(),
+            ));
+        }
+        coupling.polish_contact_sweeps = sweeps;
         Ok(())
     }
 
@@ -1325,7 +1351,8 @@ impl FemRigidGpuSystem {
                             };
                             let settings = SoftRigidSolveSettings {
                                 iterations: coupling
-                                    .contact_sweeps
+                                    .polish_contact_sweeps
+                                    .or(coupling.contact_sweeps)
                                     .unwrap_or(solve_settings.iterations),
                                 ..solve_settings
                             };

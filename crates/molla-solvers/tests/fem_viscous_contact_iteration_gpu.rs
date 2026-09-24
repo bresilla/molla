@@ -474,7 +474,14 @@ fn configured_polish_corrections_finish_before_convergence_is_latched() {
     let engine = std::sync::Arc::new(Engine::new_gpu().unwrap());
     let h = 1.0 / 19200.0;
     let oracle = model(false, true);
-    for (cycles, inverted) in [(1, false), (2, false), (257, false), (257, true)] {
+    for (cycles, inverted, polish_contact) in [
+        (1, false, None),
+        (2, false, None),
+        (257, false, None),
+        (257, false, Some(1)),
+        (257, false, Some(16)),
+        (257, true, Some(16)),
+    ] {
         let mut scene = fem_rotor::scene();
         scene.soft_model = model(false, true);
         scene.soft_state = scene.soft_model.state().unwrap();
@@ -517,12 +524,20 @@ fn configured_polish_corrections_finish_before_convergence_is_latched() {
         system
             .configure_material_contact_polish_cycles(cycles)
             .unwrap();
+        system
+            .configure_material_contact_polish_contact_sweeps(polish_contact)
+            .unwrap();
         let previous = readback::read::<[f32; 4]>(
             &engine,
             system.soft_state().particle_q.device_buffer().unwrap(),
             4,
         );
         assert!(system.try_step_substep(h).unwrap());
+        assert!(
+            system
+                .configure_material_contact_polish_contact_sweeps(None)
+                .is_err()
+        );
         let status = readback::read::<u32>(&engine, system.status_buffer(), 1)[0];
         let checkpoint = readback::read::<u32>(
             &engine,
@@ -538,7 +553,7 @@ fn configured_polish_corrections_finish_before_convergence_is_latched() {
         );
         let residual = rows.iter().map(|r| r[3]).fold(0.0_f32, f32::max);
         eprintln!(
-            "cycles={cycles} inverted={inverted} status={status} pre={checkpoint:?} material={force} contact={residual}"
+            "cycles={cycles} inverted={inverted} polish_contact={polish_contact:?} status={status} pre={checkpoint:?} material={force} contact={residual}"
         );
         if inverted {
             assert_ne!(status & 8, 0);
@@ -673,6 +688,11 @@ fn material_reuse_trajectory_configured(
     assert!(retained.configure_material_contact_polish(Some(8)).is_err());
     assert!(
         retained
+            .configure_material_contact_polish_contact_sweeps(Some(16))
+            .is_err()
+    );
+    assert!(
+        retained
             .configure_material_contact_polish_cycles(1)
             .is_err()
     );
@@ -690,6 +710,19 @@ fn material_reuse_trajectory_configured(
         retained.configure_material_contact_reuse(reuse).unwrap();
         if polish && reuse.is_some() {
             retained.configure_material_contact_polish(Some(8)).unwrap();
+            for invalid in [0, 4097, u32::MAX] {
+                assert!(
+                    retained
+                        .configure_material_contact_polish_contact_sweeps(Some(invalid))
+                        .is_err()
+                );
+            }
+            retained
+                .configure_material_contact_polish_contact_sweeps(Some(1))
+                .unwrap();
+            retained
+                .configure_material_contact_polish_contact_sweeps(None)
+                .unwrap();
             for invalid in [0, 4097, u32::MAX] {
                 assert!(
                     retained
@@ -850,6 +883,11 @@ fn material_reuse_trajectory_configured(
         "expected force guard did not reject"
     );
     retained.configure_material_contact(None).unwrap();
+    assert!(
+        retained
+            .configure_material_contact_polish_contact_sweeps(Some(16))
+            .is_err()
+    );
     assert!(retained.configure_material_contact_polish(Some(8)).is_err());
     assert!(
         retained
