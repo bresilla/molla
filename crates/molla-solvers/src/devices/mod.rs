@@ -4,19 +4,21 @@
 //! Each device is part of the physics step. Motors turn a position,
 //! velocity or force command into the joint drive; brakes damp a joint
 //! axis; propellers push their body; belts move their colliders' surfaces;
-//! connectors dock bodies with a breakable joint; flight controllers fly a
-//! multirotor on its propellers. Every device reports what it did in the
-//! last step.
+//! connectors dock bodies with a breakable joint; copter controllers fly a
+//! multirotor on its propellers; the air drags bodies and blows with the
+//! wind. Every device reports what it did in the last step.
 
+mod aero;
 mod belts;
 mod connectors;
-mod flight;
+mod copter;
 mod motors;
 mod propellers;
 
+pub use aero::{AIR_DENSITY, Aero, DragId, DragReading, DragSpec};
 pub use belts::{BeltId, BeltReading, BeltSpec, Belts};
 pub use connectors::{ConnectorId, ConnectorKind, ConnectorReading, ConnectorSpec, Connectors};
-pub use flight::{FlightCommand, FlightId, FlightLimits, FlightReading, FlightSpec, Flights};
+pub use copter::{CopterCommand, CopterId, CopterLimits, CopterReading, CopterSpec, Copters};
 pub use motors::{MotorKey, MotorReading, MotorSpec, Motors};
 pub use propellers::{PropellerId, PropellerReading, PropellerSpec, Propellers};
 
@@ -150,7 +152,8 @@ pub struct Devices {
     pub propellers: Propellers,
     pub belts: Belts,
     pub connectors: Connectors,
-    pub flights: Flights,
+    pub copters: Copters,
+    pub aero: Aero,
     /// Loop-joint reactions of the last step, averaged over its substeps.
     reactions: BTreeMap<JointHandle, LoopReaction>,
 }
@@ -158,23 +161,27 @@ pub struct Devices {
 impl Devices {
     /// Whether a device needs the per-substep force path this step.
     pub fn needs_forces(&self) -> bool {
-        self.propellers.active()
+        self.propellers.active() || self.aero.active()
     }
 
     /// Commands the scene for the coming step of `dt`: connectors dock,
-    /// undock or break, motors and belts set their drives.
+    /// undock or break, motors and belts set their drives, copters their
+    /// rotors.
     pub fn before_step(&mut self, scene: &mut RigidScene, dt: Real) -> Result<()> {
         self.connectors.update(scene, &self.reactions)?;
         self.motors.before_step(scene, dt)?;
         self.belts.before_step(scene, dt)?;
-        self.flights.before_step(scene, &mut self.propellers)?;
+        self.copters.before_step(scene, &mut self.propellers, dt)?;
         self.propellers.before_step(dt);
+        self.aero.before_step();
         Ok(())
     }
 
-    /// Adds the propellers' wrenches for one substep.
+    /// Adds the propellers' and the air's wrenches for one substep.
     pub fn apply(&mut self, scene: &RigidScene, state: &State, wrenches: &mut [SpatialVector], weight: Real) -> Result<()> {
-        self.propellers.apply(scene, state, wrenches, weight)
+        let aero = &self.aero;
+        self.propellers.apply(scene, state, wrenches, weight, &|body| aero.wind_at(body))?;
+        self.aero.apply(scene, state, wrenches, weight)
     }
 
     /// Records one substep's loop-joint reactions with `weight`.

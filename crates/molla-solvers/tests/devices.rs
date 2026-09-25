@@ -1,11 +1,12 @@
-//! Motors, brakes, propellers, belts and connectors in the rigid world,
-//! against analytic answers.
+//! Motors, brakes, propellers, belts, connectors, copters and the air in
+//! the rigid world, against analytic answers.
 
 use molla_math::{Mat3, Quat, SpatialVector, Transform, Vec3};
 use molla_sim::runtime::{BodyDesc, BodyHandle, BodyKind, ColliderDesc, ColliderGeometry, JointDesc};
 use molla_sim::{BodyParams, JointType, MassProperties};
 use molla_solvers::devices::{
-    BeltSpec, ConnectorSpec, MotorCommand, MotorLimits, MotorSpec, PropellerSpec,
+    AIR_DENSITY, BeltSpec, ConnectorSpec, CopterCommand, CopterId, CopterLimits, CopterSpec, DragSpec,
+    MotorCommand, MotorLimits, MotorSpec, PropellerSpec,
 };
 use molla_solvers::rigid_world::RigidWorld;
 
@@ -272,8 +273,7 @@ fn unlocking_releases_an_auto_locked_link() {
 
 /// A 25 kg quadcopter in X layout 10 m up (Z up): diagonal rotor pairs spin
 /// opposite ways, hovering near 151 rad/s.
-fn quad() -> (RigidWorld, BodyHandle, molla_solvers::devices::FlightId, Vec<molla_solvers::devices::PropellerId>) {
-    use molla_solvers::devices::{FlightLimits, FlightSpec};
+fn quad() -> (RigidWorld, BodyHandle, CopterId, Vec<molla_solvers::devices::PropellerId>) {
     let mut w = RigidWorld::new().unwrap();
     w.scene.set_gravity(Vec3::new(0.0, 0.0, -9.81)).unwrap();
     let hull = w
@@ -307,24 +307,26 @@ fn quad() -> (RigidWorld, BodyHandle, molla_solvers::devices::FlightId, Vec<moll
                 .unwrap()
         })
         .to_vec();
-    let spec = FlightSpec {
+    let spec = CopterSpec {
         body: hull,
         frame: Transform::IDENTITY,
         propellers: rotors.clone(),
-        limits: FlightLimits::default(),
+        limits: CopterLimits::default(),
     };
-    let flight = w.devices.flights.insert(&w.scene, &w.devices.propellers, spec).unwrap();
-    (w, hull, flight, rotors)
+    let copter = w.devices.copters.insert(&w.scene, &w.devices.propellers, spec).unwrap();
+    (w, hull, copter, rotors)
+}
+
+fn velocity(forward: f64, left: f64, up: f64, yaw_rate: f64) -> CopterCommand {
+    CopterCommand::Velocity { forward, left, up, yaw_rate }
 }
 
 #[test]
 fn a_quad_hovers_climbs_flies_and_yaws() {
-    use molla_solvers::devices::FlightCommand;
     let (mut w, hull, flight, rotors) = quad();
-    let velocity = |forward, left, up, yaw_rate| FlightCommand::Velocity { forward, left, up, yaw_rate };
-    w.devices.flights.command(flight, velocity(0.0, 0.0, 0.0, 0.0)).unwrap();
+    w.devices.copters.command(flight, velocity(0.0, 0.0, 0.0, 0.0)).unwrap();
     run(&mut w, 5.0);
-    let hover = w.devices.flights.reading(flight).unwrap();
+    let hover = w.devices.copters.reading(flight).unwrap();
     let z = w.scene.body_pose(hull).unwrap().position.z;
     assert!((z - 10.0).abs() < 0.05 && hover.roll.abs() < 1e-3 && hover.pitch.abs() < 1e-3, "{z} {hover:?}");
     assert!((hover.thrust - 25.0 * 9.81).abs() < 0.5 && !hover.saturated, "{hover:?}");
@@ -332,38 +334,96 @@ fn a_quad_hovers_climbs_flies_and_yaws() {
     assert!((omega - (25.0 * 9.81 / 4.0 / 2.7e-3f64).sqrt()).abs() < 1.0, "hover rotor speed {omega}");
     assert!((w.devices.propellers.reading(rotors[1]).unwrap().omega + omega).abs() < 1.0, "counter-rotating");
 
-    w.devices.flights.command(flight, velocity(0.0, 0.0, 1.0, 0.0)).unwrap();
+    w.devices.copters.command(flight, velocity(0.0, 0.0, 1.0, 0.0)).unwrap();
     run(&mut w, 4.0);
-    let climb = w.devices.flights.reading(flight).unwrap();
+    let climb = w.devices.copters.reading(flight).unwrap();
     assert!((climb.velocity[2] - 1.0).abs() < 0.02, "{climb:?}");
 
-    w.devices.flights.command(flight, velocity(3.0, 0.0, 0.0, 0.0)).unwrap();
+    w.devices.copters.command(flight, velocity(3.0, 0.0, 0.0, 0.0)).unwrap();
     run(&mut w, 1.0);
-    assert!(w.devices.flights.reading(flight).unwrap().pitch > 0.05, "noses down to speed up");
+    assert!(w.devices.copters.reading(flight).unwrap().pitch > 0.05, "noses down to speed up");
     run(&mut w, 5.0);
-    let cruise = w.devices.flights.reading(flight).unwrap();
+    let cruise = w.devices.copters.reading(flight).unwrap();
     assert!((cruise.velocity[0] - 3.0).abs() < 0.05 && cruise.velocity[1].abs() < 0.05, "{cruise:?}");
     assert!(cruise.velocity[2].abs() < 0.05, "{cruise:?}");
 
-    w.devices.flights.command(flight, velocity(0.0, 0.0, 0.0, 0.5)).unwrap();
+    w.devices.copters.command(flight, velocity(0.0, 0.0, 0.0, 0.5)).unwrap();
     run(&mut w, 3.0);
-    let turn = w.devices.flights.reading(flight).unwrap();
+    let turn = w.devices.copters.reading(flight).unwrap();
     assert!((turn.yaw_rate - 0.5).abs() < 0.02 && turn.velocity[2].abs() < 0.05, "{turn:?}");
 }
 
 #[test]
 fn attitude_mode_tilts_and_off_drops() {
-    use molla_solvers::devices::FlightCommand;
     let (mut w, hull, flight, _) = quad();
-    let command = FlightCommand::Attitude { roll: 0.2, pitch: 0.0, yaw_rate: 0.0, climb: 0.0 };
-    w.devices.flights.command(flight, command).unwrap();
+    let command = CopterCommand::Attitude { roll: 0.2, pitch: 0.0, yaw_rate: 0.0, climb: 0.0 };
+    w.devices.copters.command(flight, command).unwrap();
     run(&mut w, 2.0);
-    let banked = w.devices.flights.reading(flight).unwrap();
+    let banked = w.devices.copters.reading(flight).unwrap();
     assert!((banked.roll - 0.2).abs() < 0.01 && banked.pitch.abs() < 0.01, "{banked:?}");
     assert!(banked.velocity[1] < -1.0 && banked.velocity[2].abs() < 0.1, "slides right, holds height: {banked:?}");
-    w.devices.flights.command(flight, FlightCommand::Off).unwrap();
+    w.devices.copters.command(flight, CopterCommand::Off).unwrap();
     let before = w.scene.body_pose(hull).unwrap().position.z;
     run(&mut w, 1.0);
     let after = w.scene.body_pose(hull).unwrap().position.z;
     assert!((before - after - 0.5 * 9.81).abs() < 0.3, "free fall: {before} -> {after}");
+}
+
+/// A 5 m/s wind along +X on a quad with 0.4 m² of side drag: it holds its
+/// place by leaning its thrust against the drag, nose up by
+/// `atan(½·ρ·CdA·w² / (m·g))`.
+#[test]
+fn a_quad_holds_station_in_a_steady_wind() {
+    let (mut w, hull, flight, _) = quad();
+    let drag = w
+        .devices
+        .aero
+        .insert(&w.scene, DragSpec {
+            body: hull,
+            frame: Transform::IDENTITY,
+            area: Vec3::new(0.4, 0.4, 0.8),
+            density: AIR_DENSITY,
+        })
+        .unwrap();
+    w.devices.aero.set_wind(Vec3::X * 5.0).unwrap();
+    w.devices.copters.command(flight, velocity(0.0, 0.0, 0.0, 0.0)).unwrap();
+    let start = w.scene.body_pose(hull).unwrap().position;
+    run(&mut w, 20.0);
+    let held = w.devices.copters.reading(flight).unwrap();
+    let load = 0.5 * AIR_DENSITY * 0.4 * 25.0;
+    assert!(held.velocity.iter().all(|v| v.abs() < 0.01), "{held:?}");
+    assert!((held.pitch + (load / (25.0 * 9.81)).atan()).abs() < 2e-3, "leans into the wind: {held:?}");
+    let pushed = w.devices.aero.reading(drag).unwrap();
+    assert!((pushed.force.x - load).abs() < 0.05 && (pushed.airspeed.x + 5.0).abs() < 0.01, "{pushed:?}");
+    let drift = (w.scene.body_pose(hull).unwrap().position - start).length();
+    assert!(drift < 1.0, "the integral brings it back: drifted {drift} m");
+}
+
+/// A 1 kg body with 1 m² of drag, released at rest in a 3 m/s wind without
+/// gravity, follows `v(t) = w − 1/(1/w + k·t)` with `k = ½·ρ·CdA/m`.
+#[test]
+fn a_free_body_is_blown_along_by_quadratic_drag() {
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::ZERO).unwrap();
+    let puff = body(&mut w, Vec3::ZERO, 1.0);
+    w.devices
+        .aero
+        .insert(&w.scene, DragSpec {
+            body: puff,
+            frame: Transform::IDENTITY,
+            area: Vec3::ONE,
+            density: AIR_DENSITY,
+        })
+        .unwrap();
+    w.devices.aero.set_wind(Vec3::X * 3.0).unwrap();
+    run(&mut w, 4.0);
+    let k = 0.5 * AIR_DENSITY;
+    let expected = 3.0 - 1.0 / (1.0 / 3.0 + k * 4.0);
+    let v = w.scene.body_velocity(puff).unwrap().linear;
+    assert!((v.x - expected).abs() < 5e-3 && v.y.abs() < 1e-12, "{v:?} vs {expected}");
+    w.devices.aero.set_body_wind(puff, Some(Vec3::ZERO)).unwrap();
+    let before = w.scene.body_velocity(puff).unwrap().linear.x;
+    run(&mut w, 1.0);
+    let after = w.scene.body_velocity(puff).unwrap().linear.x;
+    assert!(after < before, "its own still air slows it: {before} -> {after}");
 }

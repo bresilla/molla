@@ -114,12 +114,15 @@ impl Propellers {
         }
     }
 
+    /// Adds the thrust and reaction torque of every turning rotor; `wind`
+    /// gives the air each body moves through.
     pub(crate) fn apply(
         &mut self,
         scene: &RigidScene,
         state: &State,
         wrenches: &mut [SpatialVector],
         weight: Real,
+        wind: &dyn Fn(BodyHandle) -> Vec3,
     ) -> Result<()> {
         if self.propellers.is_empty() {
             return Ok(());
@@ -141,7 +144,8 @@ impl Propellers {
             let axis = shaft.rotation * Vec3::X;
             let com = poses[i].transform_point(centers[i]);
             let arm = shaft.position - com;
-            let advance = (velocities[i].linear + velocities[i].angular.cross(arm)).dot(axis);
+            let air = velocities[i].linear + velocities[i].angular.cross(arm) - wind(spec.body);
+            let advance = air.dot(axis);
             let spin = omega.abs();
             let thrust = spec.thrust[0] * spin * omega - spec.thrust[1] * spin * advance;
             let torque = (spec.torque[0] * spin * omega - spec.torque[1] * spin * advance)

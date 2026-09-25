@@ -96,17 +96,25 @@ changes the speed without a rebuild.
   Unlocking breaks it as the unilateral-unlock rules allow. A broken pair does
   not relink until the peer has left.
 
-## Flight controllers
+## Copters
 
-`devices.flights` flies a multirotor on its propellers. Each step, before the
+`devices.copters` flies a multirotor on its propellers. Each step, before the
 propellers update, it reads its body's pose, velocity, mass and inertia and
 sets every rotor's speed:
 
 - **Velocity mode** (forward, left, up, yaw rate in the heading frame):
-  - The velocity error times `velocity_gain`, plus gravity, is the specific
-    force wanted.
+  - The velocity error times `velocity_gain`, plus gravity, minus the
+    observed disturbance, is the specific force wanted.
   - Its horizontal part is capped by `max_tilt`.
   - Its direction is the desired body up. The heading keeps the current one.
+- **Disturbance observer:**
+  - Each step compares the acceleration the body had with the thrust the
+    rotors delivered plus gravity.
+  - It low-passes the difference over `disturbance_time`: wind, drag, payload
+    or a rotor's lost thrust.
+  - The velocity loop cancels the estimate, capped at 0.3 g along up and the
+    tilt limit across. Setpoint changes never pass through it, so there is no
+    overshoot.
 - **Attitude mode:** roll (right side down), pitch (nose down), yaw rate and
   climb rate.
 - **Attitude loop:** the geometric error `½·vee(R_dᵀR − RᵀR_d)` sets body
@@ -125,6 +133,24 @@ Rotors spin opposite ways by the sign of their thrust constant. A rotor with
 a negative `t1` runs at negative `ω` for positive thrust, and its reaction
 torque reverses.
 
+## Air
+
+`devices.aero` holds the wind and the drag elements:
+
+- **Wind:**
+  - `set_wind` sets the wind everywhere.
+  - `set_body_wind` gives one body its own, for example a gust the host
+    sampled where the body is.
+- **Drag:**
+  - Each element is a frame on a body with `CdA` along its axes and an air
+    density.
+  - Its origin is the centre of pressure.
+  - Every substep it adds `−½·ρ·CdA·|a|·a` per axis, where `a` is the
+    airspeed of that point in the frame: body velocity minus wind.
+  - Readings: airspeed, the step's mean force, and the wind.
+- **Propellers:** they take their speed of advance from the airspeed. A
+  headwind loads them as flying forward does.
+
 ## Tests
 
 ```sh
@@ -136,6 +162,10 @@ make test APP_TARGET='-p molla-solvers --test devices'
   3 m/s nose down, and yaws at 0.5 rad/s.
 - **Attitude mode:** it banks to 0.2 rad and slides right holding height.
   Switched off, it free-falls.
+- **Wind:** in a steady 5 m/s wind the quad holds station within 1 m. It
+  leans nose-up by `atan(½·ρ·CdA·w² / (m·g))`, and its drag reads that load.
+- **Drag:** a free 1 kg body in a 3 m/s wind follows `v(t) = w − 1/(1/w + k·t)`,
+  with `k = ½·ρ·CdA/m`.
 
 Each test checks a device against an analytic answer:
 - **Motors:**
