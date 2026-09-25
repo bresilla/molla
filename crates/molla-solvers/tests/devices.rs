@@ -269,3 +269,101 @@ fn unlocking_releases_an_auto_locked_link() {
     assert_eq!(w.devices.connectors.reading(dock).unwrap().linked, None);
     assert!(w.scene.body_velocity(pod).unwrap().linear.x > 0.4);
 }
+
+/// A 25 kg quadcopter in X layout 10 m up (Z up): diagonal rotor pairs spin
+/// opposite ways, hovering near 151 rad/s.
+fn quad() -> (RigidWorld, BodyHandle, molla_solvers::devices::FlightId, Vec<molla_solvers::devices::PropellerId>) {
+    use molla_solvers::devices::{FlightLimits, FlightSpec};
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::new(0.0, 0.0, -9.81)).unwrap();
+    let hull = w
+        .scene
+        .insert_body(BodyDesc {
+            params: BodyParams::new().with_pose(Transform::from_translation(Vec3::Z * 10.0)),
+            additional_mass: Some(MassProperties {
+                mass: 25.0,
+                local_com: Vec3::ZERO,
+                inertia: Mat3::from_diagonal(Vec3::new(2.0, 2.0, 3.5)),
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    let shaft_up = Quat::from_rotation_y(-std::f64::consts::FRAC_PI_2);
+    let rotors = [(1.0, 1.0, 1.0), (1.0, -1.0, -1.0), (-1.0, -1.0, 1.0), (-1.0, 1.0, -1.0)]
+        .map(|(x, y, spin): (f64, f64, f64)| {
+            w.devices
+                .propellers
+                .insert(&w.scene, PropellerSpec {
+                    body: hull,
+                    frame: Transform::new(Vec3::new(0.64 * x, 0.64 * y, 0.2), shaft_up),
+                    thrust: [2.7e-3 * spin, 0.0],
+                    torque: [8e-5, 0.0],
+                    limits: MotorLimits {
+                        max_velocity: 300.0,
+                        ..Default::default()
+                    },
+                    max_torque: f64::INFINITY,
+                })
+                .unwrap()
+        })
+        .to_vec();
+    let spec = FlightSpec {
+        body: hull,
+        frame: Transform::IDENTITY,
+        propellers: rotors.clone(),
+        limits: FlightLimits::default(),
+    };
+    let flight = w.devices.flights.insert(&w.scene, &w.devices.propellers, spec).unwrap();
+    (w, hull, flight, rotors)
+}
+
+#[test]
+fn a_quad_hovers_climbs_flies_and_yaws() {
+    use molla_solvers::devices::FlightCommand;
+    let (mut w, hull, flight, rotors) = quad();
+    let velocity = |forward, left, up, yaw_rate| FlightCommand::Velocity { forward, left, up, yaw_rate };
+    w.devices.flights.command(flight, velocity(0.0, 0.0, 0.0, 0.0)).unwrap();
+    run(&mut w, 5.0);
+    let hover = w.devices.flights.reading(flight).unwrap();
+    let z = w.scene.body_pose(hull).unwrap().position.z;
+    assert!((z - 10.0).abs() < 0.05 && hover.roll.abs() < 1e-3 && hover.pitch.abs() < 1e-3, "{z} {hover:?}");
+    assert!((hover.thrust - 25.0 * 9.81).abs() < 0.5 && !hover.saturated, "{hover:?}");
+    let omega = w.devices.propellers.reading(rotors[0]).unwrap().omega;
+    assert!((omega - (25.0 * 9.81 / 4.0 / 2.7e-3f64).sqrt()).abs() < 1.0, "hover rotor speed {omega}");
+    assert!((w.devices.propellers.reading(rotors[1]).unwrap().omega + omega).abs() < 1.0, "counter-rotating");
+
+    w.devices.flights.command(flight, velocity(0.0, 0.0, 1.0, 0.0)).unwrap();
+    run(&mut w, 4.0);
+    let climb = w.devices.flights.reading(flight).unwrap();
+    assert!((climb.velocity[2] - 1.0).abs() < 0.02, "{climb:?}");
+
+    w.devices.flights.command(flight, velocity(3.0, 0.0, 0.0, 0.0)).unwrap();
+    run(&mut w, 1.0);
+    assert!(w.devices.flights.reading(flight).unwrap().pitch > 0.05, "noses down to speed up");
+    run(&mut w, 5.0);
+    let cruise = w.devices.flights.reading(flight).unwrap();
+    assert!((cruise.velocity[0] - 3.0).abs() < 0.05 && cruise.velocity[1].abs() < 0.05, "{cruise:?}");
+    assert!(cruise.velocity[2].abs() < 0.05, "{cruise:?}");
+
+    w.devices.flights.command(flight, velocity(0.0, 0.0, 0.0, 0.5)).unwrap();
+    run(&mut w, 3.0);
+    let turn = w.devices.flights.reading(flight).unwrap();
+    assert!((turn.yaw_rate - 0.5).abs() < 0.02 && turn.velocity[2].abs() < 0.05, "{turn:?}");
+}
+
+#[test]
+fn attitude_mode_tilts_and_off_drops() {
+    use molla_solvers::devices::FlightCommand;
+    let (mut w, hull, flight, _) = quad();
+    let command = FlightCommand::Attitude { roll: 0.2, pitch: 0.0, yaw_rate: 0.0, climb: 0.0 };
+    w.devices.flights.command(flight, command).unwrap();
+    run(&mut w, 2.0);
+    let banked = w.devices.flights.reading(flight).unwrap();
+    assert!((banked.roll - 0.2).abs() < 0.01 && banked.pitch.abs() < 0.01, "{banked:?}");
+    assert!(banked.velocity[1] < -1.0 && banked.velocity[2].abs() < 0.1, "slides right, holds height: {banked:?}");
+    w.devices.flights.command(flight, FlightCommand::Off).unwrap();
+    let before = w.scene.body_pose(hull).unwrap().position.z;
+    run(&mut w, 1.0);
+    let after = w.scene.body_pose(hull).unwrap().position.z;
+    assert!((before - after - 0.5 * 9.81).abs() < 0.3, "free fall: {before} -> {after}");
+}

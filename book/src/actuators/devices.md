@@ -96,11 +96,46 @@ changes the speed without a rebuild.
   Unlocking breaks it as the unilateral-unlock rules allow. A broken pair does
   not relink until the peer has left.
 
+## Flight controllers
+
+`devices.flights` flies a multirotor on its propellers. Each step, before the
+propellers update, it reads its body's pose, velocity, mass and inertia and
+sets every rotor's speed:
+
+- **Velocity mode** (forward, left, up, yaw rate in the heading frame):
+  - The velocity error times `velocity_gain`, plus gravity, is the specific
+    force wanted.
+  - Its horizontal part is capped by `max_tilt`.
+  - Its direction is the desired body up. The heading keeps the current one.
+- **Attitude mode:** roll (right side down), pitch (nose down), yaw rate and
+  climb rate.
+- **Attitude loop:** the geometric error `½·vee(R_dᵀR − RᵀR_d)` sets body
+  rates, with a critically damped cascade at `attitude_frequency`. The yaw
+  rate is fed straight in.
+- **Rates to torque:** the rate error, through the body inertia plus the
+  gyroscopic term.
+- **Mixer:**
+  - Each rotor's column is its thrust along up, and `t1·(r × a) − q1·a` torque,
+    per unit `|ω|·ω`.
+  - The least-norm solution `Mᵀ(MMᵀ)⁻¹·[T, τ]` gives every rotor's `|ω|·ω`.
+  - It is clamped to non-reversing speeds within each rotor's limit; the
+    reading flags the saturation.
+
+Rotors spin opposite ways by the sign of their thrust constant. A rotor with
+a negative `t1` runs at negative `ω` for positive thrust, and its reaction
+torque reverses.
+
 ## Tests
 
 ```sh
 make test APP_TARGET='-p molla-solvers --test devices'
 ```
+
+- **Quad:** a 25 kg X-layout quad hovers within 5 cm at the analytic rotor
+  speed, with the diagonals counter-rotating. It climbs at 1 m/s, cruises at
+  3 m/s nose down, and yaws at 0.5 rad/s.
+- **Attitude mode:** it banks to 0.2 rad and slides right holding height.
+  Switched off, it free-falls.
 
 Each test checks a device against an analytic answer:
 - **Motors:**

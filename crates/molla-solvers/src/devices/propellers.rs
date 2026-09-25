@@ -93,6 +93,10 @@ impl Propellers {
         self.propellers.get(&id).map(|p| p.reading)
     }
 
+    pub fn spec(&self, id: PropellerId) -> Option<&PropellerSpec> {
+        self.propellers.get(&id).map(|p| &p.spec)
+    }
+
     /// Whether any rotor turns or is told to.
     pub fn active(&self) -> bool {
         self.propellers.values().any(|p| {

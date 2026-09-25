@@ -4,16 +4,19 @@
 //! Each device is part of the physics step. Motors turn a position,
 //! velocity or force command into the joint drive; brakes damp a joint
 //! axis; propellers push their body; belts move their colliders' surfaces;
-//! connectors dock bodies with a breakable joint. Every device reports what
-//! it did in the last step.
+//! connectors dock bodies with a breakable joint; flight controllers fly a
+//! multirotor on its propellers. Every device reports what it did in the
+//! last step.
 
 mod belts;
 mod connectors;
+mod flight;
 mod motors;
 mod propellers;
 
 pub use belts::{BeltId, BeltReading, BeltSpec, Belts};
 pub use connectors::{ConnectorId, ConnectorKind, ConnectorReading, ConnectorSpec, Connectors};
+pub use flight::{FlightCommand, FlightId, FlightLimits, FlightReading, FlightSpec, Flights};
 pub use motors::{MotorKey, MotorReading, MotorSpec, Motors};
 pub use propellers::{PropellerId, PropellerReading, PropellerSpec, Propellers};
 
@@ -147,6 +150,7 @@ pub struct Devices {
     pub propellers: Propellers,
     pub belts: Belts,
     pub connectors: Connectors,
+    pub flights: Flights,
     /// Loop-joint reactions of the last step, averaged over its substeps.
     reactions: BTreeMap<JointHandle, LoopReaction>,
 }
@@ -163,6 +167,7 @@ impl Devices {
         self.connectors.update(scene, &self.reactions)?;
         self.motors.before_step(scene, dt)?;
         self.belts.before_step(scene, dt)?;
+        self.flights.before_step(scene, &mut self.propellers)?;
         self.propellers.before_step(dt);
         Ok(())
     }
