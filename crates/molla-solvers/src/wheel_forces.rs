@@ -537,17 +537,20 @@ impl WheelForces {
             };
             let center = pose.transform_point(model.body_com.host()?[body]);
             let velocity = velocities[body].linear + velocities[body].angular.cross(hub - center);
-            let offset = model.joint_dof_offset.host()?[joint] as usize;
-            let axis = if model.joint_type.host()?[joint] == JointType::D6 as u32 {
-                3
+            // The wheel's own rotation about its axle, in world axes: a
+            // parent turning about the same axis (an axle pitching on a
+            // bogie) turns the wheel too, which the joint rate alone misses.
+            let local_axle = if model.joint_type.host()?[joint] == JointType::D6 as u32 {
+                Vec3::X
             } else {
-                0
+                model.joint_axis.host()?[joint]
             };
+            let axle = (pose.rotation * (model.joint_x_c.host()?[joint].rotation * local_axle)).normalize_or_zero();
             let contact = WheelContact {
                 hub_pos: hub.to_array(),
                 hub_vel: velocity.to_array(),
                 heading: (poses[heading].rotation * w.local_heading.normalize()).to_array(),
-                spin: state.joint_qd.host()?[offset + axis] * w.spin_sign,
+                spin: velocities[body].angular.dot(axle) * w.spin_sign,
                 radius: w.radius,
                 normal_stiffness: w.normal_stiffness,
                 normal_damping: w.normal_damping,

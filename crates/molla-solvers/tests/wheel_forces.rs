@@ -791,3 +791,145 @@ fn pressure_shear_clears_on_teleport_and_ground_loss() {
         assert!(force.abs() < 1e-10, "teleport={teleport} residual force={force}");
     }
 }
+
+/// A free 6.7 t trailer on four pressure tyres with every wheel held by a
+/// joint-damping brake stays parked.
+#[test]
+fn a_trailer_braked_by_joint_damping_stays_parked() {
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::new(0.0, -9.81, 0.0)).unwrap();
+    let chassis = body(&mut w, 6100.0);
+    w.scene
+        .set_body_mass_properties(
+            chassis,
+            MassProperties { mass: 6100.0, local_com: Vec3::ZERO, inertia: Mat3::from_diagonal(Vec3::new(15000.0, 20000.0, 15000.0)) },
+        )
+        .unwrap();
+    let mut ground_desc = ColliderDesc::new(ColliderGeometry::Cuboid { half_extents: Vec3::new(100.0, 0.01, 100.0) });
+    ground_desc.friction = 1.0;
+    let ground = w.scene.insert_collider(ground_desc).unwrap();
+    w.wheels.register_ground(&w.scene, ground, None).unwrap();
+    let radius = 0.7;
+    let mut spins = Vec::new();
+    for (x, z) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+        let wheel = body(&mut w, 140.0);
+        w.scene
+            .set_body_mass_properties(wheel, MassProperties { mass: 140.0, local_com: Vec3::ZERO, inertia: Mat3::IDENTITY * 34.0 })
+            .unwrap();
+        let spin = w
+            .scene
+            .insert_joint(JointDesc {
+                parent: Some(chassis),
+                child: wheel,
+                kind: JointType::Revolute,
+                axis: -Vec3::Z,
+                frame_parent: Transform::from_translation(Vec3::new(x, radius - 0.49, z)),
+                frame_child: Transform::IDENTITY,
+            })
+            .unwrap();
+        let mut desc = descriptor(chassis, wheel, spin);
+        desc.radius = radius;
+        w.wheels.insert(&w.scene, desc).unwrap();
+        let mut config = pressure_config();
+        config.tire.radius = radius;
+        config.supported_mass = 6700.0 / 4.0;
+        w.wheels.configure_pressure_tire(wheel, config).unwrap();
+        w.scene.set_joint_brake(spin, JointAxis::AngX, 5.0e5).unwrap();
+        spins.push(spin);
+    }
+    let start = w.scene.body_pose(chassis).unwrap().position;
+    for second in 1..=30 {
+        for _ in 0..120 {
+            w.step(1.0 / 120.0).unwrap();
+        }
+        let v = w.scene.body_velocity(chassis).unwrap().linear;
+        let at = w.scene.body_pose(chassis).unwrap().position;
+        assert!(v.length() < 0.05, "t={second}s braked trailer moving at {v:?}, drift {:?}", at - start);
+    }
+}
+
+/// A tandem trailer: each side's two braked wheels hang off a bogie beam
+/// that pivots freely about the same lateral axis the wheels spin about.
+/// The tyres must see the wheels' own rotation, bogie rocking included,
+/// or the locked wheels push the trailer along.
+#[test]
+fn a_braked_tandem_on_rocking_bogies_stays_parked() {
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::new(0.0, -9.81, 0.0)).unwrap();
+    let chassis = body(&mut w, 5500.0);
+    w.scene
+        .set_body_mass_properties(
+            chassis,
+            MassProperties { mass: 5500.0, local_com: Vec3::ZERO, inertia: Mat3::from_diagonal(Vec3::new(12000.0, 16000.0, 12000.0)) },
+        )
+        .unwrap();
+    let mut ground_desc = ColliderDesc::new(ColliderGeometry::Cuboid { half_extents: Vec3::new(100.0, 0.01, 100.0) });
+    ground_desc.friction = 1.0;
+    let ground = w.scene.insert_collider(ground_desc).unwrap();
+    w.wheels.register_ground(&w.scene, ground, None).unwrap();
+    let radius = 0.7;
+    let lateral = -Vec3::Z;
+    for z in [1.0, -1.0] {
+        let bogie = body(&mut w, 300.0);
+        w.scene
+            .set_body_mass_properties(bogie, MassProperties { mass: 300.0, local_com: Vec3::ZERO, inertia: Mat3::IDENTITY * 60.0 })
+            .unwrap();
+        let pivot = w
+            .scene
+            .insert_joint(JointDesc {
+                parent: Some(chassis),
+                child: bogie,
+                kind: JointType::Revolute,
+                axis: lateral,
+                frame_parent: Transform::from_translation(Vec3::new(-1.0, radius - 0.49, z)),
+                frame_child: Transform::IDENTITY,
+            })
+            .unwrap();
+        w.scene.set_joint_limits(pivot, JointAxis::AngX, Some([-0.1, 0.1])).unwrap();
+        for x in [0.7, -0.7] {
+            let wheel = body(&mut w, 140.0);
+            w.scene
+                .set_body_mass_properties(wheel, MassProperties { mass: 140.0, local_com: Vec3::ZERO, inertia: Mat3::IDENTITY * 34.0 })
+                .unwrap();
+            let spin = w
+                .scene
+                .insert_joint(JointDesc {
+                    parent: Some(bogie),
+                    child: wheel,
+                    kind: JointType::Revolute,
+                    axis: lateral,
+                    frame_parent: Transform::from_translation(Vec3::new(x, 0.0, 0.0)),
+                    frame_child: Transform::IDENTITY,
+                })
+                .unwrap();
+            let mut desc = descriptor(chassis, wheel, spin);
+            desc.radius = radius;
+            w.wheels.insert(&w.scene, desc).unwrap();
+            let mut config = pressure_config();
+            config.tire.radius = radius;
+            config.supported_mass = 6700.0 / 4.0;
+            w.wheels.configure_pressure_tire(wheel, config).unwrap();
+            w.scene.set_joint_brake(spin, JointAxis::AngX, 5.0e5).unwrap();
+        }
+    }
+    // A front support leg on the ground.
+    let mut leg = ColliderDesc::new(ColliderGeometry::Ball { radius: 0.1 });
+    leg.parent = Some(chassis);
+    leg.pose = Transform::from_translation(Vec3::new(2.5, -0.39, 0.0));
+    w.scene.insert_collider(leg).unwrap();
+    // Settle onto the tyres, then hold still.
+    for _ in 0..360 {
+        w.step(1.0 / 120.0).unwrap();
+    }
+    let start = w.scene.body_pose(chassis).unwrap().position;
+    for second in 1..=30 {
+        for _ in 0..120 {
+            w.step(1.0 / 120.0).unwrap();
+        }
+        let at = w.scene.body_pose(chassis).unwrap().position;
+        let along = Vec3::new(at.x - start.x, 0.0, at.z - start.z);
+        assert!(along.length() < 0.15, "t={second}s braked tandem rolled {along:?}");
+    }
+    let v = w.scene.body_velocity(chassis).unwrap().linear;
+    assert!(v.length() < 0.02, "braked tandem still moving at {v:?}");
+}
