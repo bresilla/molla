@@ -231,6 +231,7 @@ impl FeatherstoneSolver {
         let persistent = input.body_f.host()?.to_vec();
         let mut applied = persistent.clone();
         let mut samples = Vec::new();
+        let mut efforts = Vec::new();
         let owned_bounds;
         let bounds = match bounds {
             Some(bounds) if std::ptr::eq(bounds.model(), model) => bounds,
@@ -265,6 +266,7 @@ impl FeatherstoneSolver {
                 self.rigorous_d_solve,
                 self.rigorous_distance,
                 &mut self.contact_forces,
+                &mut self.substep_efforts,
                 Some(&active),
                 None,
             )?;
@@ -274,11 +276,13 @@ impl FeatherstoneSolver {
             }
             output.body_f.host_mut()?.copy_from_slice(&persistent);
             samples.append(&mut self.contact_forces);
+            self.accumulate_efforts(&mut efforts, 1.0 / count as Real);
             if substep + 1 < count {
                 std::mem::swap(&mut scratch, output);
             }
         }
         self.contact_forces = samples;
+        self.joint_efforts = efforts;
         Ok(())
     }
 
@@ -311,6 +315,7 @@ impl FeatherstoneSolver {
         }
         let mut scratch = input.clone_host()?;
         let mut samples = Vec::new();
+        let mut efforts = Vec::new();
         for step in 0..count {
             self.contact_forces.clear();
             cpu_step(
@@ -325,6 +330,7 @@ impl FeatherstoneSolver {
                 self.rigorous_d_solve,
                 self.rigorous_distance,
                 &mut self.contact_forces,
+                &mut self.substep_efforts,
                 Some(&active),
                 None,
             )?;
@@ -333,11 +339,13 @@ impl FeatherstoneSolver {
                 reading.normal_impulse = reading.normal_force * sub_dt;
             }
             samples.append(&mut self.contact_forces);
+            self.accumulate_efforts(&mut efforts, 1.0 / count as Real);
             if step + 1 < count {
                 std::mem::swap(&mut scratch, output);
             }
         }
         self.contact_forces = samples;
+        self.joint_efforts = efforts;
         Ok(())
     }
 }

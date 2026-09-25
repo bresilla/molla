@@ -154,6 +154,7 @@
 - [Neural controllers](./actuators/neural.md)
 - [DC motor clamping](./actuators/dc_motor.md)
 - [Muscle (Hill-type + SEE)](./actuators/muscle.md)
+- [Rigid-world devices (Webots set)](./actuators/devices.md)
 
 ---
 

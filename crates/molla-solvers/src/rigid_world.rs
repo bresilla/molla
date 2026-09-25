@@ -41,6 +41,8 @@ pub struct RigidWorld {
     pub solver: FeatherstoneSolver,
     pub wheels: crate::wheel_forces::WheelForces,
     pub tracks: crate::track_forces::TrackForces,
+    /// Motors, brakes, propellers, belts and connectors.
+    pub devices: crate::devices::Devices,
     pipeline: CollisionPipeline,
     bounds: molla_geometry::shape_world::SceneShapeBounds,
     contacts: Contacts,
@@ -65,6 +67,7 @@ impl RigidWorld {
                 .with_substeps(8),
             wheels: crate::wheel_forces::WheelForces::default(),
             tracks: crate::track_forces::TrackForces::default(),
+            devices: crate::devices::Devices::default(),
             pipeline: CollisionPipeline::new().with_sensor_overlaps(true),
             bounds: molla_geometry::shape_world::SceneShapeBounds::default(),
             contacts: Contacts::with_capacity(64),
@@ -227,13 +230,17 @@ impl RigidWorld {
         dt: Real,
         excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
     ) -> Result<()> {
+        if dt.is_finite() && dt > 0.0 {
+            self.devices.before_step(&mut self.scene, dt)?;
+        }
         let changed = self.settling.changed_inputs(&self.scene, &self.wheels);
         self.tracks.prepare(&self.scene);
-        if !self.tracks.is_empty() {
+        if !self.tracks.is_empty() || self.devices.needs_forces() {
             return self.step_with_forces_inner(dt, excluded, |_, _, _, _| Ok(()), true);
         }
         if self.sleeping.any_valid(&self.scene, &self.wheels) {
             self.step_sleeping(dt, excluded)?;
+            self.devices.after_step(&self.scene, self.solver.joint_efforts())?;
         } else {
             self.step_with_forces_inner(dt, excluded, |_, _, _, _| Ok(()), false)?;
         }
@@ -249,6 +256,9 @@ impl RigidWorld {
         excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
         forces: impl FnMut(&RigidScene, &molla_sim::State, Real, &mut [SpatialVector]) -> Result<()>,
     ) -> Result<()> {
+        if dt.is_finite() && dt > 0.0 {
+            self.devices.before_step(&mut self.scene, dt)?;
+        }
         self.step_with_forces_inner(dt, excluded, forces, true)
     }
 
@@ -274,6 +284,9 @@ impl RigidWorld {
         let mut track_step = self.tracks.clone();
         let excluded = std::cell::RefCell::new(&mut excluded);
         let wheels = &mut self.wheels;
+        let devices = &mut self.devices;
+        let weight = 1.0 / self.solver.substeps.max(1) as Real;
+        let mut substep = 0usize;
         let mut next = scene.model().state()?;
         let bounds = self.bounds.prepare(scene);
         self.solver.step_with_collision_response(
@@ -323,7 +336,10 @@ impl RigidWorld {
                 wheels.apply(scene, &mut response, sub_dt, wrenches, &mut wheel_step, |a, b| {
                     excluded.borrow_mut()(a, b)
                 })?;
-                crate::loop_forces::apply(scene, &mut response, sub_dt, wrenches)?;
+                let reactions = crate::loop_forces::apply(scene, &mut response, sub_dt, wrenches)?;
+                devices.record_reactions(&reactions, weight, substep == 0);
+                devices.apply(scene, state, wrenches, weight)?;
+                substep += 1;
                 track_step.apply(scene, &mut response, contacts, sub_dt, wrenches)?;
                 forces(scene, state, sub_dt, wrenches)?;
                 response.export_mass(mass_seed)
@@ -331,6 +347,7 @@ impl RigidWorld {
             Some(&bounds),
         )?;
         self.scene.commit_step(next)?;
+        self.devices.after_step(&self.scene, self.solver.joint_efforts())?;
         self.tracks = track_step;
         self.sleeping.clear();
         if custom_forces {

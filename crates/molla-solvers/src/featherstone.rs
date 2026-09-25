@@ -81,9 +81,21 @@ pub struct GpuBackend {
     pub(crate) muscle_kernel: Option<crate::kernels::MuscleKernel>,
 }
 
+/// Actuation of one joint degree of freedom (N·m or N): the drive after its
+/// cap and the brake, time-averaged over the last step's substeps.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct JointEffort {
+    pub drive: Real,
+    pub brake: Real,
+}
+
 /// Forward-dynamics solver for articulated rigid bodies.
 pub struct FeatherstoneSolver {
     contact_forces: Vec<crate::penalty_contact::ContactForce>,
+    /// Per-DOF efforts of the last step, averaged over its substeps.
+    joint_efforts: Vec<JointEffort>,
+    /// Per-DOF efforts of the latest substep.
+    substep_efforts: Vec<JointEffort>,
     /// Joint-space damping coefficient (1/s) applied to `joint_qd`
     /// each step. Helps keep long-running pendulums numerically calm.
     pub joint_damping: Real,
@@ -128,6 +140,8 @@ impl FeatherstoneSolver {
             rigorous_distance: true,
             backend: FeatherstoneBackend::Cpu,
             contact_forces: Vec::new(),
+            joint_efforts: Vec::new(),
+            substep_efforts: Vec::new(),
         }
     }
 
@@ -178,6 +192,8 @@ impl FeatherstoneSolver {
                 muscle_kernel,
             }),
             contact_forces: Vec::new(),
+            joint_efforts: Vec::new(),
+            substep_efforts: Vec::new(),
         })
     }
 
@@ -488,6 +504,21 @@ impl FeatherstoneSolver {
         &self.contact_forces
     }
 
+    /// Per-DOF drive and brake efforts of the last CPU step, averaged over
+    /// its substeps (indexed like `Control`'s per-DOF buffers).
+    pub fn joint_efforts(&self) -> &[JointEffort] {
+        &self.joint_efforts
+    }
+
+    /// Adds the latest substep's efforts, weighted by `weight`, into `sum`.
+    pub(crate) fn accumulate_efforts(&self, sum: &mut Vec<JointEffort>, weight: Real) {
+        sum.resize(self.substep_efforts.len(), JointEffort::default());
+        for (total, effort) in sum.iter_mut().zip(&self.substep_efforts) {
+            total.drive += effort.drive * weight;
+            total.brake += effort.brake * weight;
+        }
+    }
+
     /// CPU stepping with fresh collision detection and pair filtering on every substep.
     pub fn step_with_collision(
         &mut self,
@@ -580,6 +611,7 @@ impl FeatherstoneSolver {
         eval_fk(model, &mut scratch)?;
         eval_body_velocities(model, &mut scratch)?;
         let mut samples = Vec::new();
+        let mut efforts = Vec::new();
         let persistent = state_in.body_f.host()?.to_vec();
         let mut applied = persistent.clone();
         let owned_bounds;
@@ -613,11 +645,13 @@ impl FeatherstoneSolver {
             })?;
             state_out.body_f.host_mut()?.copy_from_slice(&persistent);
             samples.append(&mut self.contact_forces);
+            self.accumulate_efforts(&mut efforts, 1.0 / n as Real);
             if substep + 1 < n {
                 std::mem::swap(&mut scratch, state_out);
             }
         }
         self.contact_forces = samples;
+        self.joint_efforts = efforts;
         Ok(())
     }
 
@@ -679,6 +713,7 @@ impl FeatherstoneSolver {
                     self.rigorous_d_solve,
                     self.rigorous_distance,
                     &mut self.contact_forces,
+                    &mut self.substep_efforts,
                     None,
                     mass_seed,
                 )?;
@@ -686,6 +721,7 @@ impl FeatherstoneSolver {
                     reading.sample_dt = dt;
                     reading.normal_impulse = reading.normal_force * dt;
                 }
+                self.joint_efforts.clone_from(&self.substep_efforts);
                 Ok(())
             }
             #[cfg(feature = "gpu")]
@@ -883,17 +919,20 @@ fn cpu_step(
     rigorous_d_solve: bool,
     rigorous_distance: bool,
     contact_forces: &mut Vec<crate::penalty_contact::ContactForce>,
+    efforts: &mut Vec<JointEffort>,
     activation: Option<&activation::ActiveSet>,
     mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
 ) -> Result<()> {
+    efforts.clear();
+    efforts.resize(model.joint_dof_total, JointEffort::default());
     if model.articulation_count <= 1 {
         cpu_step_inner::<false>(model, state_in, control, contacts, dt, state_out,
             joint_damping, stable_motor_feedback, rigorous_d_solve, rigorous_distance,
-            contact_forces, activation, mass_seed)
+            contact_forces, efforts, activation, mass_seed)
     } else {
         cpu_step_inner::<true>(model, state_in, control, contacts, dt, state_out,
             joint_damping, stable_motor_feedback, rigorous_d_solve, rigorous_distance,
-            contact_forces, activation, mass_seed)
+            contact_forces, efforts, activation, mass_seed)
     }
 }
 
@@ -909,6 +948,7 @@ fn cpu_step_inner<const LOCAL: bool>(
     rigorous_d_solve: bool,
     rigorous_distance: bool,
     contact_forces: &mut Vec<crate::penalty_contact::ContactForce>,
+    efforts: &mut [JointEffort],
     activation: Option<&activation::ActiveSet>,
     mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
 ) -> Result<()> {
@@ -1035,6 +1075,7 @@ fn cpu_step_inner<const LOCAL: bool>(
     let target_kd = control.joint_target_kd.host()?;
     let motor_max_force = control.joint_motor_max_force.host()?;
     let motor_models = control.joint_motor_model.host()?;
+    let brake_damping = control.joint_damping.host()?;
 
     let scratch_len = if LOCAL {
         (0..art_count)
@@ -1237,17 +1278,28 @@ fn cpu_step_inner<const LOCAL: bool>(
                         } else {
                             1.0
                         };
+                    let inertia = motor_inertias[dof_g];
+                    let damping = brake_damping.get(dof_g).copied().unwrap_or(0.0);
+                    let brake_load = if damping > 0.0 && inertia > 0.0 {
+                        damping * dt / inertia
+                    } else {
+                        0.0
+                    };
+                    // Backward Euler over drive and brake together; the brake
+                    // takes −c·q̇⁺ of the predicted rate, the drive the rest.
                     let implicit_drive = if stable_motor_feedback
                         && (1..=3).contains(&(mode as u32))
-                        && motor_inertias[dof_g] > 0.0
+                        && inertia > 0.0
                     {
                         let stiffness = if mode == JointTargetMode::Velocity {
                             0.0
                         } else {
                             kp
                         };
-                        (drive - stiffness * dt * qd_now) * scale
-                            / (1.0 + (kd + stiffness * dt) * scale * dt / motor_inertias[dof_g])
+                        let drive_load = (kd + stiffness * dt) * scale * dt / inertia;
+                        let total = ((drive - stiffness * dt * qd_now) * scale - damping * qd_now)
+                            / (1.0 + drive_load + brake_load);
+                        total + damping * (qd_now + dt / inertia * total)
                     } else {
                         drive * scale
                     };
@@ -1258,6 +1310,15 @@ fn cpu_step_inner<const LOCAL: bool>(
                             .copied()
                             .unwrap_or(Real::INFINITY),
                     );
+                    let brake_torque = if brake_load > 0.0 {
+                        -damping * (qd_now + dt / inertia * drive_torque) / (1.0 + brake_load)
+                    } else {
+                        0.0
+                    };
+                    efforts[dof_g] = JointEffort {
+                        drive: drive_torque,
+                        brake: brake_torque,
+                    };
                     let mu = joint_friction.get(dof_g).copied().unwrap_or(0.0);
                     let friction_torque = -mu * qd_now;
                     // Stage 39E — CABLE per-DoF spring + damper. Only applied
@@ -1336,6 +1397,7 @@ fn cpu_step_inner<const LOCAL: bool>(
                     };
                     let tau_raw = control_force.get(dof_g).copied().unwrap_or(0.0)
                         + drive_torque
+                        + brake_torque
                         + friction_torque
                         + cable_torque
                         + muscle_torque;
@@ -1724,12 +1786,14 @@ fn effective_drive_inertias(
     let models = control.joint_motor_model.host()?;
     let modes = control.joint_target_mode.host()?;
     let compliance = model.joint_compliance.host()?;
+    let brakes = control.joint_damping.host()?;
     let requested = |dof: usize| {
         ((stable_feedback || models.get(dof) == Some(&1))
             && modes.get(dof).is_some_and(|m| (1..=3).contains(m)))
             || compliance
                 .get(dof)
                 .is_some_and(|c| c.enabled != 0 && c.natural_frequency > 0.0)
+            || brakes.get(dof).is_some_and(|&c| c > 0.0)
     };
     if !(0..model.joint_dof_total).any(requested) {
         return Ok(result);

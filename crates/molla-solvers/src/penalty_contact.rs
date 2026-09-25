@@ -117,14 +117,20 @@ pub fn eval_penalty_contacts(
             .ok_or_else(|| Error::Solver("invalid contact normal magnitude".into()))?;
         let mut arms = [Vec3::ZERO; 2];
         let mut speeds = [Vec3::ZERO; 2];
+        let mut belts = [Vec3::ZERO; 2];
         let mut dynamic = [false; 2];
         for side in 0..2 {
+            let belt = shapes[side]
+                .and_then(|s| model.shape_surface_velocity.get(s).copied())
+                .unwrap_or(Vec3::ZERO);
+            belts[side] = belt;
             if let Some(i) = bodies[side] {
                 arms[side] = point[c] - (poses[i].position + poses[i].rotation * com[i]);
                 if flags[i] & BodyFlags::FIXED == 0 {
                     speeds[side] = velocities[i].linear + velocities[i].angular.cross(arms[side]);
                 }
                 dynamic[side] = flags[i] & BodyFlags::IMMOVABLE == 0;
+                belts[side] = poses[i].rotation * belt;
             }
         }
         let inactive = shapes.iter().flatten().any(|&s| {
@@ -137,7 +143,8 @@ pub fn eval_penalty_contacts(
         if active {
             let relative = speeds[1] - speeds[0];
             let vn = relative.dot(normal);
-            let tangent = relative - normal * vn;
+            let belt = belts[1] - belts[0];
+            let tangent = relative - normal * vn + (belt - normal * belt.dot(normal));
             normal_force = material.stiffness * depth[c] + material.damping * (-vn).max(0.0);
             let speed = tangent.length();
             let eps = material.friction_smoothing;

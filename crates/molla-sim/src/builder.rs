@@ -434,6 +434,7 @@ pub struct ModelBuilder {
     shape_flags: Vec<u32>,
     shape_friction: Vec<Real>,
     shape_contact_material: Vec<super::ContactMaterial>,
+    shape_surface_velocity: Vec<Vec3>,
     shape_rolling_friction: Vec<Real>,
     shape_torsional_friction: Vec<Real>,
     shape_restitution: Vec<Real>,
@@ -1715,6 +1716,7 @@ impl ModelBuilder {
         self.shape_friction.push(Real::NAN);
         self.shape_contact_material
             .push(super::ContactMaterial::default());
+        self.shape_surface_velocity.push(Vec3::ZERO);
         self.shape_rolling_friction.push(Real::NAN);
         self.shape_torsional_friction.push(Real::NAN);
         self.shape_restitution.push(Real::NAN);
@@ -1785,6 +1787,17 @@ impl ModelBuilder {
         self.validate_shape_id(shape)?;
         material.validate()?;
         self.shape_contact_material[shape.index()] = material;
+        Ok(())
+    }
+
+    /// Belt surface velocity of `shape`, in its body's frame (world for a
+    /// static shape).
+    pub fn set_shape_surface_velocity(&mut self, shape: ShapeId, velocity: Vec3) -> Result<()> {
+        self.validate_shape_id(shape)?;
+        if !velocity.is_finite() {
+            return Err(Error::Build("shape surface velocity must be finite".into()));
+        }
+        self.shape_surface_velocity[shape.index()] = velocity;
         Ok(())
     }
 
@@ -3151,6 +3164,7 @@ impl ModelBuilder {
             shape_flags: Buffer::from_vec(self.shape_flags, s),
             shape_friction: Buffer::from_vec(self.shape_friction, s),
             shape_contact_material: self.shape_contact_material,
+            shape_surface_velocity: self.shape_surface_velocity,
             shape_rolling_friction: Buffer::from_vec(self.shape_rolling_friction, s),
             shape_torsional_friction: Buffer::from_vec(self.shape_torsional_friction, s),
             shape_restitution: Buffer::from_vec(self.shape_restitution, s),

@@ -320,6 +320,9 @@ impl RigidWorld {
         let excluded = std::cell::RefCell::new(&mut excluded);
         let mut graph_cache: Option<(Vec<[Option<BodyHandle>; 2]>, RigidIslands)> = None;
         let wheels = &mut self.wheels;
+        let devices = &mut self.devices;
+        let weight = 1.0 / self.solver.substeps.max(1) as Real;
+        let mut substep = 0usize;
         let mut next = scene.model().state()?;
         let bounds = self.bounds.prepare(scene);
         self.solver.step_with_active_bounds(
@@ -412,15 +415,19 @@ impl RigidWorld {
                     |a, b| excluded.borrow_mut()(a, b),
                     Some(&selected),
                 )?;
-                if any_awake {
+                let reactions = if any_awake {
                     crate::loop_forces::apply_selected(
                         scene,
                         &mut response,
                         sub_dt,
                         wrenches,
                         Some(&selected),
-                    )?;
-                }
+                    )?
+                } else {
+                    Vec::new()
+                };
+                devices.record_reactions(&reactions, weight, substep == 0);
+                substep += 1;
                 Ok(articulations)
             },
             Some(&bounds),

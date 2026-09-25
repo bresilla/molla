@@ -18,6 +18,7 @@ pub use molla_sim as sim;
 pub use molla_storage as storage;
 
 mod articulated_response;
+pub mod devices;
 mod joint_limits;
 mod joint_mass;
 pub mod barrier_contact;
@@ -55,7 +56,8 @@ mod xpbd;
 
 pub use barrier_solver::BarrierSolver;
 pub use crba::mass_matrix;
-pub use featherstone::FeatherstoneSolver;
+pub use featherstone::{FeatherstoneSolver, JointEffort};
+pub use loop_forces::LoopReaction;
 pub use ik::{IkConfig, IkObjective, IkResult, IkSolver, ik_solver_health};
 pub use jacobian::jacobian;
 pub use math::robust_loss::RobustLoss;

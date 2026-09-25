@@ -191,6 +191,9 @@ pub struct ColliderDesc {
     pub enabled: bool,
     pub sensor: bool,
     pub user_tag: u64,
+    /// Velocity of the collider's surface in its own frame, as a belt
+    /// running over it: contacts are dragged along its tangential part.
+    pub surface_velocity: Vec3,
 }
 
 impl ColliderDesc {
@@ -211,6 +214,7 @@ impl ColliderDesc {
             enabled: true,
             sensor: false,
             user_tag: 0,
+            surface_velocity: Vec3::ZERO,
         }
     }
 }
@@ -919,6 +923,29 @@ impl RigidScene {
         self.description.colliders.get(&id)
     }
 
+    /// Set a collider's belt surface velocity (its own frame) in place,
+    /// without a rebuild; a change wakes the scene so resting bodies ride it.
+    pub fn set_collider_surface_velocity(&mut self, id: ColliderHandle, velocity: Vec3) -> Result<()> {
+        if !velocity.is_finite() {
+            return Err(Error::Build("collider surface velocity must be finite".into()));
+        }
+        let desc = self
+            .description
+            .colliders
+            .get_mut(&id)
+            .ok_or_else(|| missing("collider"))?;
+        if desc.surface_velocity == velocity {
+            return Ok(());
+        }
+        desc.surface_velocity = velocity;
+        let in_body = desc.pose.rotation * velocity;
+        for shape in self.snapshot.colliders.get(&id).into_iter().flatten() {
+            self.snapshot.model.shape_surface_velocity[shape.index()] = in_body;
+        }
+        self.activate_all();
+        Ok(())
+    }
+
     pub fn collider_is_enabled(&self, id: ColliderHandle) -> Result<bool> {
         let collider = self.collider(id).ok_or_else(|| missing("collider"))?;
         Ok(collider.enabled
@@ -1163,6 +1190,34 @@ impl RigidScene {
             for body in ends.into_iter().flatten() {
                 self.activate_body(body);
             }
+        }
+        Ok(())
+    }
+
+    /// Set a joint axis's brake damping in place, without a rebuild.
+    pub fn set_joint_brake(&mut self, id: JointHandle, axis: JointAxis, damping: Real) -> Result<()> {
+        if !damping.is_finite() || damping < 0.0 {
+            return Err(Error::Build("joint brake damping must be finite and nonnegative".into()));
+        }
+        axis.dof(self.joint(id).ok_or_else(|| missing("joint"))?.kind)?;
+        let settings = &mut self
+            .description
+            .joint_axes
+            .get_mut(&id)
+            .ok_or_else(|| missing("joint"))?[axis as usize];
+        if settings.brake == damping {
+            return Ok(());
+        }
+        settings.brake = damping;
+        if let (Some(joint), Some(dof)) =
+            (self.joint_index(id), self.snapshot.joint_layouts[&id][axis as usize])
+        {
+            let offset = self.model().joint_dof_offset.host()?[joint.index()] as usize;
+            self.snapshot.control.joint_damping.host_mut()?[offset + dof] = damping;
+        }
+        let ends = self.joint(id).map(|j| [j.parent, Some(j.child)]).unwrap_or_default();
+        for body in ends.into_iter().flatten() {
+            self.activate_body(body);
         }
         Ok(())
     }
@@ -1536,6 +1591,7 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         for &shape in &shapes {
             builder.set_shape_material(shape, desc.friction, desc.restitution)?;
             builder.set_shape_contact_material(shape, desc.contact_material)?;
+            builder.set_shape_surface_velocity(shape, desc.pose.rotation * desc.surface_velocity)?;
             builder.set_shape_collision_groups(shape, desc.memberships, desc.filter)?;
             builder.set_shape_flags(shape, flags)?;
             shape_colliders.push(id);
@@ -1690,11 +1746,14 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
     for (&id, joint) in &joints {
         let offset = model.joint_dof_offset.host()?[joint.index()] as usize;
         for axis in JointAxis::ALL {
-            if let Some(dof) = joint_layouts[&id][axis as usize]
-                && let Some(motor) = d.joint_axes[&id][axis as usize].motor
-            {
+            let Some(dof) = joint_layouts[&id][axis as usize] else {
+                continue;
+            };
+            let settings = d.joint_axes[&id][axis as usize];
+            if let Some(motor) = settings.motor {
                 motor.apply(&mut control, offset + dof)?;
             }
+            control.joint_damping.host_mut()?[offset + dof] = settings.brake;
         }
     }
     Ok(Snapshot {
@@ -1970,7 +2029,8 @@ fn copy_joint(
         joint_target_kd,
         joint_motor_model,
         joint_motor_max_force,
-        joint_force
+        joint_force,
+        joint_damping
     );
     Ok(())
 }

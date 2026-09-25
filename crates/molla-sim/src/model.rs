@@ -622,6 +622,10 @@ pub struct Model {
     pub shape_friction: Buffer<Real>,
     /// CPU penalty-contact parameters and friction combination rules.
     pub shape_contact_material: Vec<super::ContactMaterial>,
+    /// Per-shape surface velocity in the owning body frame (world for
+    /// static shapes): a belt surface moving over the shape, which CPU
+    /// penalty friction drags contacts along.
+    pub shape_surface_velocity: Vec<Vec3>,
     /// Per-shape **rolling** friction (m·μ) — opposes the angular
     /// velocity component perpendicular to the contact normal.
     /// Without this, balls/cylinders roll forever on a flat plane.
@@ -1019,6 +1023,7 @@ impl Model {
             shape_flags: Buffer::from_vec(Vec::new(), s),
             shape_friction: Buffer::from_vec(Vec::new(), s),
             shape_contact_material: Vec::new(),
+            shape_surface_velocity: Vec::new(),
             shape_rolling_friction: Buffer::from_vec(Vec::new(), s),
             shape_torsional_friction: Buffer::from_vec(Vec::new(), s),
             shape_restitution: Buffer::from_vec(Vec::new(), s),

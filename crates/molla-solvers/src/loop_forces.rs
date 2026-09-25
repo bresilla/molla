@@ -3,7 +3,7 @@
 use molla_core::{Error, Result};
 use molla_math::{Quat, Real, SpatialVector, Vec3};
 use molla_sim::joint_control::{JointAxis, JointMotor, JointSoftness, MotorModel};
-use molla_sim::runtime::RigidScene;
+use molla_sim::runtime::{JointHandle, RigidScene};
 use molla_sim::{JointTargetMode, JointType, State};
 
 #[cfg(test)]
@@ -15,12 +15,23 @@ mod selection;
 mod block_tests;
 
 struct Row {
+    joint: JointHandle,
+    /// Joint anchor on the child, from the child's centre of mass.
+    arm: Vec3,
     ends: Vec<(usize, SpatialVector)>,
     error: Real,
     rate: Real,
     softness: JointSoftness,
     motor: Option<JointMotor>,
     bounds: [Real; 2],
+}
+
+/// Force and torque a loop joint puts on its child body, world frame, the
+/// torque about the joint's anchor on the child.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LoopReaction {
+    pub force: Vec3,
+    pub torque: Vec3,
 }
 
 fn rows(scene: &RigidScene, state: &State, selected: Option<&[bool]>) -> Result<Vec<Row>> {
@@ -162,8 +173,11 @@ fn rows(scene: &RigidScene, state: &State, selected: Option<&[bool]>) -> Result<
                         + wrench.angular.dot(velocities[*body].angular)
                 })
                 .sum();
+            let child_center = poses[child].position + poses[child].rotation * centers[child];
             for (error, motor, bounds) in terms {
                 rows.push(Row {
+                    joint: id,
+                    arm: b.position - child_center,
                     ends: ends.clone(),
                     error,
                     rate,
@@ -177,12 +191,14 @@ fn rows(scene: &RigidScene, state: &State, selected: Option<&[bool]>) -> Result<
     Ok(rows)
 }
 
+/// Adds every loop joint's wrenches into `forces` and returns each joint's
+/// reaction on its child.
 pub(crate) fn apply(
     scene: &RigidScene,
     cache: &mut crate::articulated_response::ArticulatedResponse<'_>,
     dt: Real,
     forces: &mut [SpatialVector],
-) -> Result<()> {
+) -> Result<Vec<(JointHandle, LoopReaction)>> {
     apply_selected(scene, cache, dt, forces, None)
 }
 
@@ -192,13 +208,13 @@ pub(crate) fn apply_selected(
     dt: Real,
     forces: &mut [SpatialVector],
     selected: Option<&[bool]>,
-) -> Result<()> {
+) -> Result<Vec<(JointHandle, LoopReaction)>> {
     let state = cache.state();
     let _span = tracing::debug_span!("loop_forces").entered();
     let rows = tracing::debug_span!("loop_rows").in_scope(|| rows(scene, state, selected))?;
     let count = rows.len();
     if count == 0 {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let model = scene.model();
     let starts = model.articulation_start.host()?;
@@ -289,11 +305,20 @@ pub(crate) fn apply_selected(
     } else {
         bounded_solve(&response, &rhs, &bounds)?
     };
+    let mut reactions: Vec<(JointHandle, LoopReaction)> = Vec::new();
     for (row, impulse) in rows.iter().zip(impulses) {
         for &(body, wrench) in &row.ends {
             forces[body].linear += wrench.linear * (impulse / dt);
             forces[body].angular += wrench.angular * (impulse / dt);
         }
+        // The child is always the first end.
+        let (force, torque) = (row.ends[0].1.linear * (impulse / dt), row.ends[0].1.angular * (impulse / dt));
+        if reactions.last().is_none_or(|(joint, _)| *joint != row.joint) {
+            reactions.push((row.joint, LoopReaction::default()));
+        }
+        let reaction = &mut reactions.last_mut().expect("pushed above").1;
+        reaction.force += force;
+        reaction.torque += torque - row.arm.cross(force);
     }
     if forces
         .iter()
@@ -301,7 +326,7 @@ pub(crate) fn apply_selected(
     {
         return Err(Error::Solver("non-finite loop joint wrench".into()));
     }
-    Ok(())
+    Ok(reactions)
 }
 
 fn project_wrench(jacobian: &[Real], wrench: SpatialVector, projected: &mut [Real]) {

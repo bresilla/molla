@@ -220,4 +220,6 @@ pub struct JointAxisSettings {
     pub limits: Option<[Real; 2]>,
     pub locked: bool,
     pub motor: Option<JointMotor>,
+    /// Brake damping (N·m·s/rad or N·s/m); zero releases the brake.
+    pub brake: Real,
 }

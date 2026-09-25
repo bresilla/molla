@@ -35,6 +35,9 @@ pub struct Control {
     /// Direct joint torque/force feed-forward (N·m or N), added to
     /// any drive output. Length = `joint_dof_total`.
     pub joint_force: Buffer<Real>,
+    /// Per-DOF brake damping (N·m·s/rad or N·s/m): an implicit
+    /// `−c·q̇` effort. Length = `joint_dof_total`.
+    pub joint_damping: Buffer<Real>,
     /// External wrenches per body, world frame at COM.
     pub body_external_f: Buffer<SpatialVector>,
 }
@@ -53,6 +56,7 @@ impl Control {
             joint_motor_model: Buffer::from_vec(Vec::new(), Storage),
             joint_motor_max_force: Buffer::from_vec(Vec::new(), Storage),
             joint_force: Buffer::from_vec(Vec::new(), Storage),
+            joint_damping: Buffer::from_vec(Vec::new(), Storage),
             body_external_f: Buffer::from_vec(Vec::new(), Storage),
         }
     }
@@ -73,6 +77,7 @@ impl Control {
             joint_motor_model: Buffer::from_vec(vec![0; n_dof], Storage),
             joint_motor_max_force: Buffer::from_vec(vec![Real::INFINITY; n_dof], Storage),
             joint_force: Buffer::from_vec(vec![0.0; n_dof], Storage),
+            joint_damping: Buffer::from_vec(vec![0.0; n_dof], Storage),
             body_external_f: Buffer::from_vec(vec![SpatialVector::ZERO; model.body_count], Storage),
         }
     }
@@ -98,6 +103,7 @@ impl Control {
         up!(joint_motor_model);
         up!(joint_motor_max_force);
         up!(joint_force);
+        up!(joint_damping);
         up!(body_external_f);
         Ok(())
     }
