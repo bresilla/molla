@@ -466,3 +466,34 @@ fn strong_motors_holding_a_chain_at_its_stops_keep_stepping() {
         assert!(w.scene.body_velocity(body).unwrap().linear.length() < 1e-3);
     }
 }
+
+#[test]
+fn a_motor_lifts_a_heavy_load_hung_on_its_arm_through_a_soft_joint() {
+    use molla_sim::joint_control::{JointAxes, JointSoftness};
+    let (mut w, arm, joint) = arm(true);
+    let limits = MotorLimits { max_velocity: 1.0, ..Default::default() };
+    w.devices.motors.insert(&w.scene, joint, MotorSpec { limits, max_force: 1.0e5 }).unwrap();
+    run(&mut w, 0.5);
+    // 500 kg two metres out: far beyond what the arm's own inertia moves in a step.
+    let load = body(&mut w, Vec3::new(2.0, 0.0, 0.0), 500.0);
+    let hitch = w
+        .scene
+        .insert_joint(JointDesc {
+            parent: Some(arm),
+            child: load,
+            kind: JointType::D6,
+            axis: Vec3::X,
+            frame_parent: Transform::from_translation(Vec3::X),
+            frame_child: Transform::IDENTITY,
+        })
+        .unwrap();
+    w.scene.set_joint_locked_axes(hitch, JointAxes::ALL).unwrap();
+    w.scene
+        .set_joint_softness(hitch, Some(JointSoftness { natural_frequency: 8.0, damping_ratio: 1.0 }))
+        .unwrap();
+    w.devices.motors.command(joint, MotorCommand::Position(-0.5)).unwrap();
+    run(&mut w, 2.0);
+    let reading = w.devices.motors.reading(joint).unwrap();
+    assert!((reading.position + 0.5).abs() < 0.02, "{reading:?}");
+    assert!(reading.force.abs() > 500.0 * 9.81 * 1.5, "{reading:?}");
+}

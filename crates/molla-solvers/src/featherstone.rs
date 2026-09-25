@@ -1686,6 +1686,11 @@ fn cpu_step_inner<const LOCAL: bool>(
             q_dd[first..first + acceleration.len()].copy_from_slice(&acceleration);
         }
 
+        if stable_motor_feedback {
+            crate::joint_drives::react_velocity_drives(
+                model, control, state_out, art, &mut q_dd, efforts, dt, &mut joint_mass,
+            )?;
+        }
         crate::joint_limits::react_scalar_stops(
             model,
             state_out,
