@@ -131,6 +131,7 @@
 - [GPU spatial bins and reductions](./sensors/cloud_grid.md)
 - [GPU class and instance annotation](./sensors/annotation.md)
 - [IMU](./sensors/imu.md)
+- [Generic sensors (Webots set)](./sensors/generic_sensors.md)
 - [Asynchronous sensor readback](./sensors/readback.md)
 - [Sensor device loss and recovery boundaries](./sensors/device_lifecycle.md)
 - [Leased GPU snapshots](./sensors/snapshot.md)

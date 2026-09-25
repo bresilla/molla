@@ -36,6 +36,25 @@ pub mod cloud_processing;
 pub mod contact;
 #[cfg(feature = "gpu")]
 pub mod dataset;
+pub mod environment;
+pub use environment::{
+    CompassReading, Geodetic, GeoReference, Gps, GpsReading, InertialReading, WorldFrame, compass,
+    inertial_unit,
+};
+pub mod radio;
+pub use radio::{ALL_CHANNELS, Delivery, RadioEndpoint, RadioKind, RadioMedium};
+#[cfg(feature = "gpu")]
+pub mod ray_sensors;
+#[cfg(feature = "gpu")]
+pub use ray_sensors::{
+    DistanceKind, DistanceReading, DistanceSensors, DistanceSpec, JointReading, LightEnvironment,
+    LightReading, LightSensors, LightSource, RadarDetection, RadarSpec, RadarTarget, Radars,
+    cone_rays, joint_reading, lookup, range_finder,
+};
+pub mod recognition;
+pub use recognition::{RecognizedObject, recognize};
+pub mod touch;
+pub use touch::{ContactForceSample, TouchKind, TouchReading, TouchSensor};
 #[cfg(feature = "gpu")]
 pub mod frame_transform;
 #[cfg(feature = "gpu")]

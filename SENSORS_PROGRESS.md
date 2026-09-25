@@ -4643,3 +4643,20 @@ the overall goal remains active, not complete or blocked.
   - FOV and range unchanged;
   - window resize to 1200×850 and back.
 - Captures: `benchmarks/sensors/2026-09-25-viewer-interaction/lab-*.png`. The S08 inspection item is closed. The lifecycle tests cited above that were added after the 416-test lane run (frame pool, IMU foreign batch, cloud reset) were run individually on the RTX 4080 and pass.
+
+## Generic sensors (Webots set) — verified 2026-09-25
+
+### Accomplished
+
+- `molla-sensors` now models every device type in the Webots sensor guide. Models are engine-agnostic: host-only facts arrive as plain inputs.
+  - **Environment** (`environment`, no GPU): world up/north, WGS84 geodetic reference, GPS fixes with finite-difference velocity, compass, inertial unit.
+  - **Ray sensors** (`ray_sensors`, GPU): distance (laser, infra-red, sonar; lookup table), light (occluded sources plus sky), radar (field of view, occlusion, radial speed, radar-equation power), joint position, range finder (depth-only `TiledCamera`).
+  - **Touch** (`touch`): bumper, force and force-3d from host contact forces.
+  - **Radio** (`radio`): emitters and receivers — radio/infra-red/serial, channels, range, aperture, line of sight.
+  - **Recognition** (`recognition`): objects with image box, visible centroid and extent, from shape-index and depth channels.
+  - Accelerometer and gyro stay the IMU's channels.
+- Tests:
+  - 12 host unit tests (WGS84 round trips to below 1 µm; known ECEF points; GPS, compass and inertial conventions; touch; radio; recognition).
+  - `sensor_generic_gpu` (4 tests) checks distance, light, radar and joints against geometry-derived answers. Cases include a sonar echo from the ground ahead of the wall, an occluded radar target, and a light sensor under an overhang.
+- Full sensor lane: 442 tests pass. Documented in `book/src/sensors/generic_sensors.md`.
+- A readback lifecycle test asserted backpressure right after a cancel. That was racy, because `try_enqueue` legitimately reclaims a cancelled slot whose copy has already finished. The strict property (no reuse before `poll_releases` after mapping) stays asserted.
