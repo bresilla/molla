@@ -6,15 +6,102 @@
 //! host-described sources that a ray finds unblocked, plus sky light. Radars
 //! list host-named target bodies inside their field of view, range and line
 //! of sight, with radial speed and radar-equation received power. All of
-//! them take sensor world poses from the host and query [`SensorScene`]
-//! through one [`Raycaster`].
+//! them take sensor world poses from the host and cast through a
+//! [`RayQuery`]: the GPU [`SceneRays`] on a [`SensorScene`], the CPU
+//! [`RigidRays`] on a live rigid scene, or the host's own.
 
 use crate::raycast::Raycaster;
 use crate::scene::SensorScene;
 use molla_compute::Engine;
 use molla_core::{BodyId, Error, Result};
+use molla_geometry::raycast_cpu::CpuRaycaster;
 use molla_math::{Real, Transform, Vec3};
+use molla_sim::runtime::RigidScene;
 use molla_sim::{Model, State};
+
+/// Nearest hit of one ray: distance (infinite for a miss) and body
+/// (`BodyId::NONE` for static geometry or a miss).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NearestHit {
+    pub t: Real,
+    pub body: BodyId,
+}
+
+impl NearestHit {
+    pub const MISS: Self = Self {
+        t: Real::INFINITY,
+        body: BodyId::NONE,
+    };
+}
+
+/// Ray casting for the ray sensors.
+pub trait RayQuery {
+    /// Nearest hits of rays from `origins` along unit `directions` within
+    /// `max_distance`, one per ray.
+    fn cast(&mut self, origins: &[Vec3], directions: &[Vec3], max_distance: Real) -> Result<Vec<NearestHit>>;
+}
+
+/// [`RayQuery`] on a [`SensorScene`] with a GPU [`Raycaster`]; each cast
+/// waits for the device.
+pub struct SceneRays<'a> {
+    pub engine: &'a Engine,
+    pub raycaster: &'a mut Raycaster,
+    pub scene: &'a SensorScene,
+    pub state: &'a State,
+}
+
+impl RayQuery for SceneRays<'_> {
+    fn cast(&mut self, origins: &[Vec3], directions: &[Vec3], max_distance: Real) -> Result<Vec<NearestHit>> {
+        let hits = self
+            .raycaster
+            .cast_scene(self.engine, self.scene, self.state, origins, directions, max_distance)?;
+        Ok(hits.iter().map(|h| NearestHit { t: h.t, body: h.body_id }).collect())
+    }
+}
+
+/// [`RayQuery`] on a live rigid scene on the CPU, for the few rays of
+/// these sensors without a device round trip. Keep `caster` between calls
+/// so prepared collider geometry is reused.
+pub struct RigidRays<'a> {
+    pub scene: &'a RigidScene,
+    pub caster: &'a mut CpuRaycaster,
+}
+
+impl RayQuery for RigidRays<'_> {
+    fn cast(&mut self, origins: &[Vec3], directions: &[Vec3], max_distance: Real) -> Result<Vec<NearestHit>> {
+        origins
+            .iter()
+            .zip(directions)
+            .map(|(&origin, &direction)| {
+                let hit = self.caster.cast_ray(self.scene, origin, direction, max_distance)?;
+                Ok(hit.map_or(NearestHit::MISS, |h| NearestHit {
+                    t: h.distance,
+                    body: h.body.and_then(|b| self.scene.body_index(b)).unwrap_or(BodyId::NONE),
+                }))
+            })
+            .collect()
+    }
+}
+
+/// Runs `f` with a [`SceneRays`] on a sensor's own raycaster, which the
+/// host-only constructors leave out.
+fn with_scene_rays<T>(
+    raycaster: &mut Option<Raycaster>,
+    engine: &Engine,
+    scene: &SensorScene,
+    state: &State,
+    f: impl FnOnce(&mut SceneRays<'_>) -> Result<T>,
+) -> Result<T> {
+    let raycaster = raycaster
+        .as_mut()
+        .ok_or_else(|| Error::Build("ray sensor built for a host ray query has no GPU raycaster".into()))?;
+    f(&mut SceneRays {
+        engine,
+        raycaster,
+        scene,
+        state,
+    })
+}
 
 /// Piecewise-linear map from a measurement to an output value through
 /// `(input, output)` rows sorted by input; clamps outside the table and
@@ -101,21 +188,28 @@ pub fn cone_rays(rays: u32, aperture: Real) -> Vec<Vec3> {
 pub struct DistanceSensors {
     specs: Vec<DistanceSpec>,
     rays: Vec<Vec<Vec3>>,
-    raycaster: Raycaster,
+    raycaster: Option<Raycaster>,
 }
 
 impl DistanceSensors {
+    /// Sensors that cast on the GPU sensor scene with [`Self::update`].
     pub fn new(engine: &Engine, specs: Vec<DistanceSpec>) -> Result<Self> {
+        let mut sensors = Self::host(specs)?;
+        let total = sensors.rays.iter().map(Vec::len).sum::<usize>().max(1);
+        sensors.raycaster = Some(Raycaster::new(engine, total as u32)?);
+        Ok(sensors)
+    }
+
+    /// Sensors that cast through a host [`RayQuery`] with [`Self::update_with`].
+    pub fn host(specs: Vec<DistanceSpec>) -> Result<Self> {
         if specs.iter().any(|s| s.rays == 0 || !(s.max_range > 0.0) || !s.aperture.is_finite()) {
             return Err(Error::Build("distance sensor: rays, range or aperture invalid".into()));
         }
-        let rays: Vec<Vec<Vec3>> = specs.iter().map(|s| cone_rays(s.rays, s.aperture)).collect();
-        let total = rays.iter().map(Vec::len).sum::<usize>().max(1);
-        let raycaster = Raycaster::new(engine, total as u32)?;
+        let rays = specs.iter().map(|s| cone_rays(s.rays, s.aperture)).collect();
         Ok(Self {
             specs,
             rays,
-            raycaster,
+            raycaster: None,
         })
     }
 
@@ -123,7 +217,7 @@ impl DistanceSensors {
         &self.specs
     }
 
-    /// Readings for sensors at `poses` (world, one per spec).
+    /// Readings for sensors at `poses` (world, one per spec) on the GPU.
     pub fn update(
         &mut self,
         engine: &Engine,
@@ -131,6 +225,14 @@ impl DistanceSensors {
         state: &State,
         poses: &[Transform],
     ) -> Result<Vec<DistanceReading>> {
+        let mut raycaster = self.raycaster.take();
+        let out = with_scene_rays(&mut raycaster, engine, scene, state, |rays| self.update_with(rays, poses));
+        self.raycaster = raycaster;
+        out
+    }
+
+    /// Readings for sensors at `poses` (world, one per spec).
+    pub fn update_with(&self, query: &mut dyn RayQuery, poses: &[Transform]) -> Result<Vec<DistanceReading>> {
         if poses.len() != self.specs.len() {
             return Err(Error::Build("distance sensor: one pose per sensor".into()));
         }
@@ -142,7 +244,7 @@ impl DistanceSensors {
             }
         }
         let range = self.specs.iter().map(|s| s.max_range).fold(0.0, Real::max);
-        let hits = self.raycaster.cast_scene(engine, scene, state, &origins, &directions, range)?;
+        let hits = query.cast(&origins, &directions, range)?;
         let mut offset = 0;
         let mut out = Vec::with_capacity(self.specs.len());
         for (spec, rays) in self.specs.iter().zip(&self.rays) {
@@ -150,10 +252,10 @@ impl DistanceSensors {
             offset += rays.len();
             let in_range = |t: Real| if t <= spec.max_range { t } else { Real::INFINITY };
             let (distance, body) = match spec.kind {
-                DistanceKind::Laser => (in_range(own[0].t), own[0].body_id),
+                DistanceKind::Laser => (in_range(own[0].t), own[0].body),
                 DistanceKind::Sonar => own
                     .iter()
-                    .map(|h| (in_range(h.t), h.body_id))
+                    .map(|h| (in_range(h.t), h.body))
                     .fold((Real::INFINITY, BodyId::NONE), |a, b| if b.0 < a.0 { b } else { a }),
                 DistanceKind::InfraRed => {
                     let width = (spec.gaussian_width * spec.aperture).max(1e-9);
@@ -164,7 +266,7 @@ impl DistanceSensors {
                         weights += w;
                     }
                     let mean = sum / weights;
-                    (if mean < spec.max_range { mean } else { Real::INFINITY }, own[0].body_id)
+                    (if mean < spec.max_range { mean } else { Real::INFINITY }, own[0].body)
                 }
             };
             out.push(DistanceReading {
@@ -210,7 +312,7 @@ pub struct LightReading {
 /// A batch of light sensors facing their frames' +X.
 pub struct LightSensors {
     lookups: Vec<Vec<[Real; 2]>>,
-    raycaster: Raycaster,
+    raycaster: Option<Raycaster>,
     capacity: usize,
 }
 
@@ -218,22 +320,48 @@ pub struct LightSensors {
 const SHADOW_REACH: Real = 10_000.0;
 
 impl LightSensors {
-    /// `lookups` holds one irradiance-to-value table per sensor;
+    /// Sensors that cast on the GPU sensor scene with [`Self::update`];
+    /// `lookups` holds one irradiance-to-value table per sensor and
     /// `max_sources` bounds the lights per update.
     pub fn new(engine: &Engine, lookups: Vec<Vec<[Real; 2]>>, max_sources: usize) -> Result<Self> {
         let capacity = (lookups.len() * max_sources).max(1);
         Ok(Self {
-            raycaster: Raycaster::new(engine, capacity as u32)?,
+            raycaster: Some(Raycaster::new(engine, capacity as u32)?),
             lookups,
             capacity,
         })
     }
 
+    /// Sensors that cast through a host [`RayQuery`] with [`Self::update_with`].
+    pub fn host(lookups: Vec<Vec<[Real; 2]>>) -> Self {
+        Self {
+            lookups,
+            raycaster: None,
+            capacity: usize::MAX,
+        }
+    }
+
+    /// Readings on the GPU.
     pub fn update(
         &mut self,
         engine: &Engine,
         scene: &SensorScene,
         state: &State,
+        poses: &[Transform],
+        environment: &LightEnvironment,
+    ) -> Result<Vec<LightReading>> {
+        let mut raycaster = self.raycaster.take();
+        let out = with_scene_rays(&mut raycaster, engine, scene, state, |rays| {
+            self.update_with(rays, poses, environment)
+        });
+        self.raycaster = raycaster;
+        out
+    }
+
+    /// Readings for sensors at `poses` (world, one per table) under `environment`.
+    pub fn update_with(
+        &self,
+        query: &mut dyn RayQuery,
         poses: &[Transform],
         environment: &LightEnvironment,
     ) -> Result<Vec<LightReading>> {
@@ -261,8 +389,7 @@ impl LightSensors {
         let hits = if origins.is_empty() {
             Vec::new()
         } else {
-            self.raycaster
-                .cast_scene(engine, scene, state, &origins, &directions, SHADOW_REACH)?
+            query.cast(&origins, &directions, SHADOW_REACH)?
         };
         let up = environment.up.normalize_or_zero();
         let mut out = Vec::with_capacity(poses.len());
@@ -348,7 +475,7 @@ pub struct RadarDetection {
 
 /// Radar target lists against the owned scene.
 pub struct Radars {
-    raycaster: Raycaster,
+    raycaster: Option<Raycaster>,
     capacity: usize,
 }
 
@@ -361,22 +488,51 @@ fn host_arrays(model: &Model, state: &State) -> Result<(Vec<Transform>, Vec<moll
 }
 
 impl Radars {
-    /// `max_targets` bounds the candidates per radar update.
+    /// Radars that cast on the GPU sensor scene with [`Self::update`];
+    /// `max_targets` bounds the candidates per update.
     pub fn new(engine: &Engine, max_targets: usize) -> Result<Self> {
         Ok(Self {
-            raycaster: Raycaster::new(engine, max_targets.max(1) as u32)?,
+            raycaster: Some(Raycaster::new(engine, max_targets.max(1) as u32)?),
             capacity: max_targets.max(1),
         })
+    }
+
+    /// Radars that cast through a host [`RayQuery`] with [`Self::update_with`].
+    pub fn host() -> Self {
+        Self {
+            raycaster: None,
+            capacity: usize::MAX,
+        }
+    }
+
+    /// Detections on the GPU.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update(
+        &mut self,
+        engine: &Engine,
+        scene: &SensorScene,
+        model: &Model,
+        state: &State,
+        spec: &RadarSpec,
+        pose: Transform,
+        mount: BodyId,
+        targets: &[RadarTarget],
+    ) -> Result<Vec<RadarDetection>> {
+        let mut raycaster = self.raycaster.take();
+        let out = with_scene_rays(&mut raycaster, engine, scene, state, |rays| {
+            self.update_with(rays, model, state, spec, pose, mount, targets)
+        });
+        self.raycaster = raycaster;
+        out
     }
 
     /// Detections of `targets` for a radar at `pose` riding on `mount`
     /// (`BodyId::NONE` for a fixed radar), nearest first. Reads body poses
     /// and velocities from host-resident `state` and `model`.
     #[allow(clippy::too_many_arguments)]
-    pub fn update(
-        &mut self,
-        engine: &Engine,
-        scene: &SensorScene,
+    pub fn update_with(
+        &self,
+        query: &mut dyn RayQuery,
         model: &Model,
         state: &State,
         spec: &RadarSpec,
@@ -443,13 +599,11 @@ impl Radars {
                     (body_q[i].transform_point(com[i]) - pose.position) / d.distance
                 })
                 .collect();
-            let hits = self
-                .raycaster
-                .cast_scene(engine, scene, state, &origins, &directions, spec.max_range)?;
+            let hits = query.cast(&origins, &directions, spec.max_range)?;
             let keep: Vec<bool> = candidates
                 .iter()
                 .zip(&hits)
-                .map(|(d, h)| h.body_id == d.body || h.t >= d.distance - 1e-3)
+                .map(|(d, h)| h.body == d.body || h.t >= d.distance - 1e-3)
                 .collect();
             let mut kept = keep.into_iter();
             candidates.retain(|_| kept.next().unwrap_or(false));
@@ -486,6 +640,67 @@ pub fn joint_reading(model: &Model, state: &State, joint: usize) -> Result<Joint
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wall slab at x = 5 and a ball at (10, 5, 0) moving along +X, cast
+    /// on the CPU: the distance sensor ranges the wall, the wall shadows a
+    /// low sun but not a high one, and the radar sees the ball past the wall.
+    #[test]
+    fn host_ray_queries_drive_the_sensor_models() {
+        use molla_sim::runtime::{BodyDesc, ColliderDesc, ColliderGeometry};
+        let mut scene = RigidScene::new().unwrap();
+        let mut wall = ColliderDesc::new(ColliderGeometry::Cuboid {
+            half_extents: Vec3::new(0.1, 2.0, 2.0),
+        });
+        wall.pose = Transform::from_translation(Vec3::new(5.1, 0.0, 0.0));
+        scene.insert_collider(wall).unwrap();
+        let mut body = BodyDesc::default();
+        body.params.pose = Transform::from_translation(Vec3::new(10.0, 5.0, 0.0));
+        body.velocity = molla_math::SpatialVector::new(Vec3::X, Vec3::ZERO);
+        let handle = scene.insert_body(body).unwrap();
+        let mut ball = ColliderDesc::new(ColliderGeometry::Ball { radius: 0.5 });
+        ball.parent = Some(handle);
+        scene.insert_collider(ball).unwrap();
+        let ball = scene.body_index(handle).unwrap();
+        let mut caster = CpuRaycaster::default();
+        let mut rays = RigidRays {
+            scene: &scene,
+            caster: &mut caster,
+        };
+        let at = Transform::IDENTITY;
+
+        let distance = DistanceSensors::host(vec![DistanceSpec::default()]).unwrap();
+        let reading = distance.update_with(&mut rays, &[at]).unwrap()[0];
+        assert!((reading.distance - 5.0).abs() < 1e-9 && reading.body == BodyId::NONE, "{reading:?}");
+
+        let light = LightSensors::host(vec![Vec::new()]);
+        let sun = |towards: Vec3| LightEnvironment {
+            sources: vec![LightSource::Directional {
+                towards: towards.normalize(),
+                irradiance: 100.0,
+            }],
+            sky: 0.0,
+            up: Vec3::Z,
+        };
+        let shaded = light.update_with(&mut rays, &[at], &sun(Vec3::new(1.0, 0.0, 0.1))).unwrap()[0];
+        assert_eq!((shaded.visible, shaded.direct), (0, 0.0));
+        let lit = light.update_with(&mut rays, &[at], &sun(Vec3::new(1.0, 0.0, 1.0))).unwrap()[0];
+        assert!(lit.visible == 1 && (lit.direct - 100.0 * 0.5f64.sqrt()).abs() < 1e-9, "{lit:?}");
+
+        let radar = RadarSpec {
+            horizontal_fov: 1.2,
+            ..Default::default()
+        };
+        let target = [RadarTarget {
+            body: ball,
+            cross_section: 1.0,
+        }];
+        let seen = Radars::host()
+            .update_with(&mut rays, scene.model(), scene.state(), &radar, at, BodyId::NONE, &target)
+            .unwrap();
+        let d = 125f64.sqrt();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!((seen[0].distance - d).abs() < 1e-9 && (seen[0].radial_speed - 10.0 / d).abs() < 1e-9);
+    }
 
     #[test]
     fn lookup_interpolates_and_clamps() {

@@ -48,9 +48,11 @@ pub mod ray_sensors;
 #[cfg(feature = "gpu")]
 pub use ray_sensors::{
     DistanceKind, DistanceReading, DistanceSensors, DistanceSpec, JointReading, LightEnvironment,
-    LightReading, LightSensors, LightSource, RadarDetection, RadarSpec, RadarTarget, Radars,
-    cone_rays, joint_reading, lookup, range_finder,
+    LightReading, LightSensors, LightSource, NearestHit, RadarDetection, RadarSpec, RadarTarget,
+    Radars, RayQuery, RigidRays, SceneRays, cone_rays, joint_reading, lookup, range_finder,
 };
+#[cfg(feature = "gpu")]
+pub use molla_geometry::raycast_cpu::CpuRaycaster;
 pub mod recognition;
 pub use recognition::{RecognizedObject, recognize};
 pub mod touch;

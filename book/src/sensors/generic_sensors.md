@@ -74,6 +74,22 @@ sent) is a plain input from the host application.
   object's pixel count, image box, mean visible point and visible extent, in
   camera axes (−Z forward, +Y up).
 
+## Ray queries
+
+Distance, light and radar sensors cast through a `RayQuery`: a batch of
+rays in, the nearest hit distance and body of each out.
+
+- `new(engine, …)` and `update(engine, scene, state, …)` cast on the GPU
+  sensor scene through `SceneRays`. Each update waits for the device, so on a
+  device shared with a renderer it also waits for queued frames.
+- `host(…)` and `update_with(query, …)` take any `RayQuery`:
+  - `RigidRays` casts on a live `RigidScene` on the CPU. Keep its
+    `CpuRaycaster` between updates so prepared collider geometry is reused.
+  - A host with its own physics engine can answer the rays itself.
+
+These sensors cast a few rays each, so the CPU query is the cheaper choice
+beside a renderer. Both paths share one reduction.
+
 Noise models remain outside this layer (see `SENSORS.md` S10).
 
 ## Tests
@@ -83,6 +99,14 @@ Noise models remain outside this layer (see `SENSORS.md` S10).
 
   ```sh
   make test APP_TARGET='-p molla-sensors --no-default-features --lib'
+  ```
+
+- `ray_sensors::tests::host_ray_queries_drive_the_sensor_models` runs the
+  distance, light and radar models on a CPU `RigidRays` query (no adapter
+  needed):
+
+  ```sh
+  make test APP_TARGET='-p molla-sensors --features gpu --lib ray_sensors'
   ```
 
 - `sensor_generic_gpu` checks distance, light, radar and joint readings on a
