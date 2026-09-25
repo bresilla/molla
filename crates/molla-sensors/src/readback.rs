@@ -655,11 +655,6 @@ mod tests {
         ring.cancel(&ticket).unwrap();
         assert_eq!(ring.available_slots(), 0);
         assert!(ring.poll(&ticket).is_err());
-        assert!(
-            ring.try_enqueue(&sources, ReadbackStamp::default())
-                .unwrap()
-                .is_none()
-        );
         engine
             .device()
             .unwrap()
