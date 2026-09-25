@@ -122,6 +122,11 @@ fn brake_damps_the_spin_exponentially() {
     let expected = start.velocity * (-1.0f64).exp();
     assert!((later.velocity - expected).abs() < 0.01 * start.velocity.abs(), "{later:?} vs {expected}");
     assert_eq!(later.brake_damping, 4.0);
+    w.devices.motors.set_brake(&mut w.scene, joint, 0.0).unwrap();
+    w.step(DT).unwrap();
+    let released = w.devices.motors.reading(joint).unwrap();
+    assert_eq!((released.brake_damping, released.brake_force), (0.0, 0.0), "released brakes keep reporting");
+    assert!((released.velocity - later.velocity).abs() < 1e-9);
 }
 
 #[test]

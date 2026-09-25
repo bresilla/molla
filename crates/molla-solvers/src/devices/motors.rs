@@ -163,15 +163,22 @@ impl Motors {
         Ok(())
     }
 
-    /// Brake damping on `joint` (N·m·s/rad or N·s/m); zero releases it.
+    /// Puts a brake on `joint`, or changes its damping (N·m·s/rad or N·s/m);
+    /// zero releases it and keeps reporting.
     pub fn set_brake(&mut self, scene: &mut RigidScene, joint: JointHandle, damping: Real) -> Result<()> {
         let axis = axis_of(scene, joint)?;
         scene.set_joint_brake(joint, axis, damping)?;
-        if damping > 0.0 {
-            self.brakes.insert(joint, damping);
-        } else {
-            self.brakes.remove(&joint);
+        self.brakes.insert(joint, damping);
+        Ok(())
+    }
+
+    /// Takes the brake off `joint`.
+    pub fn remove_brake(&mut self, scene: &mut RigidScene, joint: JointHandle) -> Result<()> {
+        if self.brakes.remove(&joint).is_some() && scene.joint(joint).is_some() {
+            let axis = axis_of(scene, joint)?;
+            scene.set_joint_brake(joint, axis, 0.0)?;
         }
+        self.readings.remove(&joint);
         Ok(())
     }
 
