@@ -14,7 +14,7 @@
 //!     points along `up`; `θ = π/2` lies on the plane perpendicular
 //!     to `up` (the equator of the scan sphere).
 //!   * `φ` (azimuthal) is measured around `up`. `φ = 0` points along
-//!     `forward`; `φ = π/2` along `forward × up`.
+//!     `forward`; `φ = π/2` along `up × forward`.
 //!   * The scan is laid out **row-major over θ**: cell index
 //!     `k = row * n_phi + col` with `row = i_θ`, `col = i_φ`. Each
 //!     cell carries `subray_count` sub-rays back-to-back: the k-th
@@ -32,7 +32,8 @@
 
 #![cfg(feature = "gpu")]
 
-use crate::raycast::{RayHit, Raycaster};
+use crate::LidarLayoutLimits;
+use crate::raycast::{RayHit, Raycaster, RaycasterLimits};
 use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_math::{Real, Vec3};
@@ -120,6 +121,12 @@ impl ScanMetadata {
             .ok_or_else(|| Error::Solver("ScanMetadata: ray count exceeds u32".into()))
     }
 
+    /// Per-call CPU origin/direction payload, excluding retained ray storage and hit collection.
+    pub fn layout_storage_bytes(&self) -> Result<u64> {
+        self.validate()?;
+        Ok(u64::from(self.checked_ray_count()?) * 2 * size_of::<Vec3>() as u64)
+    }
+
     /// Total cell count (`n_theta * n_phi`). The cell index `k` for
     /// `(row, col)` is `row * n_phi + col`. Saturates for invalid metadata.
     pub fn cell_count(&self) -> u32 {
@@ -127,12 +134,15 @@ impl ScanMetadata {
     }
 
     /// Validate the metadata against the invariants the scan layout
-    /// assumes: `n_theta` / `n_phi` non-zero, theta/phi ranges
-    /// well-ordered and finite, max-distance positive,
+    /// assumes: `n_theta` / `n_phi` non-zero, finite origin, theta/phi ranges
+    /// well-ordered with finite endpoints and spans, max-distance positive,
     /// beam-divergence in `[0, π/2)`. Returns an `Error::Solver` with
     /// a precise message on the first violated invariant.
     pub fn validate(&self) -> Result<()> {
         self.checked_ray_count()?;
+        if !self.origin.is_finite() {
+            return Err(Error::Solver("ScanMetadata: origin must be finite".into()));
+        }
         if self.n_theta == 0 || self.n_phi == 0 {
             return Err(Error::Solver(format!(
                 "ScanMetadata: n_theta and n_phi must be non-zero (got {}, {})",
@@ -153,6 +163,11 @@ impl ScanMetadata {
                 return Err(Error::Solver(format!(
                     "ScanMetadata: {name} min > max ({} > {})",
                     range.0, range.1
+                )));
+            }
+            if !(range.1 - range.0).is_finite() {
+                return Err(Error::Solver(format!(
+                    "ScanMetadata: {name} span overflows"
                 )));
             }
         }
@@ -388,8 +403,17 @@ impl Lidar {
     /// uses `n_theta * n_phi * subray_count` rays, so size the budget
     /// to the peak cone-sampled load.
     pub fn new(engine: &Engine, max_rays: u32) -> Result<Self> {
+        Self::new_with_limits(engine, max_rays, RaycasterLimits::default())
+    }
+
+    /// Construct with an explicit shared-raycaster array storage budget.
+    pub fn new_with_limits(
+        engine: &Engine,
+        max_rays: u32,
+        limits: RaycasterLimits,
+    ) -> Result<Self> {
         Ok(Self {
-            raycaster: Raycaster::new(engine, max_rays.max(1))?,
+            raycaster: Raycaster::new_with_limits(engine, max_rays, limits)?,
             max_rays: max_rays.max(1),
         })
     }
@@ -411,17 +435,20 @@ impl Lidar {
         state: &State,
         scan: &ScanMetadata,
     ) -> Result<Scan> {
-        scan.validate()?;
-        let n_rays = scan.checked_ray_count()?;
-        if n_rays > self.max_rays {
-            return Err(Error::Solver(format!(
-                "lidar::cast: {n_rays} rays exceeds max_rays {} ({} cells × {} sub-rays)",
-                self.max_rays,
-                scan.cell_count(),
-                scan.effective_subray_count(),
-            )));
-        }
-        let (origins, directions) = self.lay_out_rays(scan);
+        self.cast_with_layout_limits(engine, model, state, scan, LidarLayoutLimits::default())
+    }
+
+    /// Cast with an explicit per-call CPU ray-layout budget, separate from retained storage.
+    pub fn cast_with_layout_limits(
+        &mut self,
+        engine: &Engine,
+        model: &Model,
+        state: &State,
+        scan: &ScanMetadata,
+        limits: LidarLayoutLimits,
+    ) -> Result<Scan> {
+        engine.check_device()?;
+        let (origins, directions) = terrestrial_layout(scan, self.max_rays, limits)?;
         let hits = self.raycaster.cast(
             engine,
             model,
@@ -435,44 +462,57 @@ impl Lidar {
             hits,
         })
     }
+}
 
-    /// Build the `(origins, directions)` lists from the scan recipe.
-    /// For each cell, the central ray is fired first and `K - 1`
-    /// extra rays are sampled in a Fibonacci spiral inside the
-    /// `beam_divergence` cone (H5).
-    fn lay_out_rays(&self, scan: &ScanMetadata) -> (Vec<Vec3>, Vec<Vec3>) {
-        let n = scan.ray_count() as usize;
-        let mut origins = Vec::with_capacity(n);
-        let mut dirs = Vec::with_capacity(n);
-        let (f, u, r) = scan.local_frame();
-        for i_theta in 0..scan.n_theta {
-            let theta = sample_axis(scan.theta_range, scan.n_theta, i_theta);
-            let st = theta.sin();
-            let ct = theta.cos();
-            for i_phi in 0..scan.n_phi {
-                let phi = sample_axis(scan.phi_range, scan.n_phi, i_phi);
-                let sp = phi.sin();
-                let cp = phi.cos();
-                let central = Vec3::new(
-                    f.x * st * cp + u.x * ct + r.x * st * sp,
-                    f.y * st * cp + u.y * ct + r.y * st * sp,
-                    f.z * st * cp + u.z * ct + r.z * st * sp,
-                );
-                // The central ray plus K - 1 cone samples per cell —
-                // even at K = 1 we still push a single (central) ray
-                // so the layout is always `cells × subray_count`.
-                cone_sample_into(
-                    central,
-                    scan.beam_divergence,
-                    scan.effective_subray_count(),
-                    scan.origin,
-                    &mut origins,
-                    &mut dirs,
-                );
-            }
-        }
-        (origins, dirs)
+fn terrestrial_layout(
+    scan: &ScanMetadata,
+    max_rays: u32,
+    limits: LidarLayoutLimits,
+) -> Result<(Vec<Vec3>, Vec<Vec3>)> {
+    limits.check(scan.layout_storage_bytes()?)?;
+    let rays = scan.checked_ray_count()?;
+    if rays > max_rays {
+        return Err(Error::Solver(format!(
+            "lidar layout: {rays} rays exceeds capacity {max_rays}"
+        )));
     }
+    let n = rays as usize;
+    let mut origins = layout_vec(n)?;
+    let mut dirs = layout_vec(n)?;
+    let (f, u, r) = scan.local_frame();
+    for i_theta in 0..scan.n_theta {
+        let theta = sample_axis(scan.theta_range, scan.n_theta, i_theta);
+        let st = theta.sin();
+        let ct = theta.cos();
+        for i_phi in 0..scan.n_phi {
+            let phi = sample_axis(scan.phi_range, scan.n_phi, i_phi);
+            let sp = phi.sin();
+            let cp = phi.cos();
+            let central = Vec3::new(
+                f.x * st * cp + u.x * ct + r.x * st * sp,
+                f.y * st * cp + u.y * ct + r.y * st * sp,
+                f.z * st * cp + u.z * ct + r.z * st * sp,
+            );
+            // Emit the central ray followed by the remaining cone samples.
+            cone_sample_into(
+                central,
+                scan.beam_divergence,
+                scan.effective_subray_count(),
+                scan.origin,
+                &mut origins,
+                &mut dirs,
+            );
+        }
+    }
+    Ok((origins, dirs))
+}
+
+fn layout_vec(count: usize) -> Result<Vec<Vec3>> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(count)
+        .map_err(|error| Error::Storage(format!("lidar layout allocation failed: {error}")))?;
+    Ok(values)
 }
 
 /// Fibonacci-spiral cone sampler. Pushes `K` rays (`origin`,
@@ -779,6 +819,13 @@ impl AerialScanMetadata {
             .ok_or_else(|| Error::Solver("AerialScanMetadata: ray count exceeds u32".into()))
     }
 
+    /// Per-call CPU ray and pulse origin/direction payload, excluding hit collection.
+    pub fn layout_storage_bytes(&self) -> Result<u64> {
+        self.validate()?;
+        let count = u64::from(self.checked_ray_count()?) + u64::from(self.checked_pulse_count()?);
+        Ok(count * 2 * size_of::<Vec3>() as u64)
+    }
+
     /// Validate the metadata before any GPU work. Returns an
     /// `Error::Solver` with a precise message on the first violated
     /// invariant: finite + non-degenerate footprint, positive
@@ -909,8 +956,17 @@ impl AerialLidar {
     /// Build a sensor with `max_rays` ray budget. Size for the peak
     /// `pulse_count * subray_count`.
     pub fn new(engine: &Engine, max_rays: u32) -> Result<Self> {
+        Self::new_with_limits(engine, max_rays, RaycasterLimits::default())
+    }
+
+    /// Construct with an explicit shared-raycaster array storage budget.
+    pub fn new_with_limits(
+        engine: &Engine,
+        max_rays: u32,
+        limits: RaycasterLimits,
+    ) -> Result<Self> {
         Ok(Self {
-            raycaster: Raycaster::new(engine, max_rays.max(1))?,
+            raycaster: Raycaster::new_with_limits(engine, max_rays, limits)?,
             max_rays: max_rays.max(1),
         })
     }
@@ -928,17 +984,21 @@ impl AerialLidar {
         state: &State,
         scan: &AerialScanMetadata,
     ) -> Result<AerialScan> {
-        scan.validate()?;
-        let n_rays = scan.checked_ray_count()?;
-        if n_rays > self.max_rays {
-            return Err(Error::Solver(format!(
-                "aerial_lidar::cast: {n_rays} rays exceeds max_rays {} ({} pulses × {} sub-rays)",
-                self.max_rays,
-                scan.pulse_count(),
-                scan.effective_subray_count()
-            )));
-        }
-        let (origins, directions, pulse_origins, pulse_dirs) = aerial_layout(scan);
+        self.cast_with_layout_limits(engine, model, state, scan, LidarLayoutLimits::default())
+    }
+
+    /// Cast with an explicit per-call CPU ray/pulse-layout budget, separate from retained storage.
+    pub fn cast_with_layout_limits(
+        &mut self,
+        engine: &Engine,
+        model: &Model,
+        state: &State,
+        scan: &AerialScanMetadata,
+        limits: LidarLayoutLimits,
+    ) -> Result<AerialScan> {
+        engine.check_device()?;
+        let (origins, directions, pulse_origins, pulse_dirs) =
+            aerial_layout(scan, self.max_rays, limits)?;
         let hits = self.raycaster.cast(
             engine,
             model,
@@ -962,14 +1022,24 @@ impl AerialLidar {
 /// footprint's upper face; pulse directions are nadir tilted by a
 /// Halton-distributed cone offset; sub-rays inside each pulse are
 /// the H5 Fibonacci-cone sampler.
-fn aerial_layout(scan: &AerialScanMetadata) -> (Vec<Vec3>, Vec<Vec3>, Vec<Vec3>, Vec<Vec3>) {
-    let n_pulses = scan.pulse_count();
+fn aerial_layout(
+    scan: &AerialScanMetadata,
+    max_rays: u32,
+    limits: LidarLayoutLimits,
+) -> Result<(Vec<Vec3>, Vec<Vec3>, Vec<Vec3>, Vec<Vec3>)> {
+    limits.check(scan.layout_storage_bytes()?)?;
+    let n_pulses = scan.checked_pulse_count()?;
     let k = scan.effective_subray_count();
-    let total = (n_pulses * k) as usize;
-    let mut origins = Vec::with_capacity(total);
-    let mut dirs = Vec::with_capacity(total);
-    let mut pulse_origins = Vec::with_capacity(n_pulses as usize);
-    let mut pulse_dirs = Vec::with_capacity(n_pulses as usize);
+    let rays = scan.checked_ray_count()?;
+    if rays > max_rays {
+        return Err(Error::Solver(format!(
+            "aerial lidar layout: {rays} rays exceeds capacity {max_rays}"
+        )));
+    }
+    let mut origins = layout_vec(rays as usize)?;
+    let mut dirs = layout_vec(rays as usize)?;
+    let mut pulse_origins = layout_vec(n_pulses as usize)?;
+    let mut pulse_dirs = layout_vec(n_pulses as usize)?;
     let xs = scan.footprint_max.x.max(scan.footprint_min.x);
     let xn = scan.footprint_max.x.min(scan.footprint_min.x);
     let zs = scan.footprint_max.z.max(scan.footprint_min.z);
@@ -1004,7 +1074,7 @@ fn aerial_layout(scan: &AerialScanMetadata) -> (Vec<Vec3>, Vec<Vec3>, Vec<Vec3>,
             &mut dirs,
         );
     }
-    (origins, dirs, pulse_origins, pulse_dirs)
+    Ok((origins, dirs, pulse_origins, pulse_dirs))
 }
 
 /// `i`-th value (`i ≥ 1`) of the radical-inverse Halton sequence in
@@ -1106,5 +1176,131 @@ mod aerial_tests {
             assert!((0.0..1.0).contains(&u), "u {u} out of [0,1)");
             assert!((0.0..1.0).contains(&v), "v {v} out of [0,1)");
         }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_origins_and_overflowing_angle_spans_fail_before_layout() {
+        let mut scan = ScanMetadata::new(Vec3::ZERO, 2, 2);
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            scan.origin = Vec3::splat(value);
+            assert!(scan.validate().is_err());
+            assert!(scan.layout_storage_bytes().is_err());
+            assert!(terrestrial_layout(&scan, 4, Default::default()).is_err());
+        }
+        scan.origin = Vec3::ZERO;
+        scan.theta_range = (-f64::MAX, f64::MAX);
+        assert!(scan.validate().is_err());
+        assert!(terrestrial_layout(&scan, 4, Default::default()).is_err());
+        scan.theta_range = (0.0, std::f64::consts::PI);
+        scan.phi_range = (-f64::MAX, f64::MAX);
+        assert!(scan.validate().is_err());
+        assert!(terrestrial_layout(&scan, 4, Default::default()).is_err());
+        scan.phi_range = (f64::MAX, f64::MAX);
+        assert!(scan.validate().is_ok());
+        let (_, dirs) = terrestrial_layout(&scan, 4, Default::default()).unwrap();
+        assert!(dirs.iter().all(|d| d.is_finite()));
+    }
+
+    #[test]
+    fn terrestrial_layout_budget_counts_both_vectors_before_expansion() {
+        let mut scan = ScanMetadata::new(Vec3::new(1.0, 2.0, 3.0), 2, 3);
+        scan.subray_count = 4;
+        scan.beam_divergence = 0.1;
+        let bytes = scan.layout_storage_bytes().unwrap();
+        assert_eq!(bytes, 24 * 2 * size_of::<Vec3>() as u64);
+        assert!(
+            terrestrial_layout(
+                &scan,
+                24,
+                LidarLayoutLimits {
+                    max_layout_bytes: bytes - 1
+                }
+            )
+            .is_err()
+        );
+        let limit = LidarLayoutLimits {
+            max_layout_bytes: bytes,
+        };
+        assert!(terrestrial_layout(&scan, 23, limit).is_err());
+        let (origins, directions) = terrestrial_layout(&scan, 24, limit).unwrap();
+        assert_eq!(origins.len(), 24);
+        assert_eq!(directions.len(), 24);
+        assert_eq!(
+            (size_of_val(origins.as_slice()) + size_of_val(directions.as_slice())) as u64,
+            bytes
+        );
+        assert!(origins.iter().all(|&p| p == scan.origin));
+        assert!(directions.iter().all(|d| (d.length() - 1.0).abs() < 1e-12));
+    }
+
+    #[test]
+    fn aerial_layout_budget_includes_returned_pulse_summaries() {
+        let mut scan =
+            AerialScanMetadata::new(Vec3::new(0.0, 2.0, 0.0), Vec3::new(1.0, 2.0, 1.0), 3.0);
+        scan.subray_count = 4;
+        scan.beam_divergence = 0.1;
+        scan.cone_angle = 0.2;
+        let bytes = scan.layout_storage_bytes().unwrap();
+        assert_eq!(bytes, (12 + 3) * 2 * size_of::<Vec3>() as u64);
+        assert!(
+            aerial_layout(
+                &scan,
+                12,
+                LidarLayoutLimits {
+                    max_layout_bytes: bytes - 1
+                }
+            )
+            .is_err()
+        );
+        let limit = LidarLayoutLimits {
+            max_layout_bytes: bytes,
+        };
+        assert!(aerial_layout(&scan, 11, limit).is_err());
+        let (origins, dirs, pulse_origins, pulse_dirs) = aerial_layout(&scan, 12, limit).unwrap();
+        assert_eq!(
+            (
+                origins.len(),
+                dirs.len(),
+                pulse_origins.len(),
+                pulse_dirs.len()
+            ),
+            (12, 12, 3, 3)
+        );
+        assert_eq!(
+            [&origins, &dirs, &pulse_origins, &pulse_dirs]
+                .iter()
+                .map(|v| size_of_val(v.as_slice()) as u64)
+                .sum::<u64>(),
+            bytes
+        );
+        for p in 0..3 {
+            assert_eq!(&origins[p * 4..p * 4 + 4], &[pulse_origins[p]; 4]);
+            assert!((dirs[p * 4] - pulse_dirs[p]).length() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn layout_extremes_fail_before_vectors_and_capacity_failures_return_errors() {
+        let terrestrial = ScanMetadata::new(Vec3::ZERO, u32::MAX, 1);
+        assert!(terrestrial_layout(&terrestrial, u32::MAX, LidarLayoutLimits::default()).is_err());
+        let aerial = AerialScanMetadata::new(Vec3::ZERO, Vec3::ONE, u32::MAX as f64);
+        assert!(aerial_layout(&aerial, u32::MAX, LidarLayoutLimits::default()).is_err());
+        let unlimited = LidarLayoutLimits {
+            max_layout_bytes: u64::MAX,
+        };
+        assert!(terrestrial_layout(&terrestrial, 1, unlimited).is_err());
+        assert!(aerial_layout(&aerial, 1, unlimited).is_err());
+        assert!(layout_vec(usize::MAX).is_err());
+        let mut invalid = terrestrial;
+        invalid.n_phi = 2;
+        assert!(invalid.layout_storage_bytes().is_err());
+        let mut invalid = aerial;
+        invalid.subray_count = 2;
+        assert!(invalid.layout_storage_bytes().is_err());
     }
 }

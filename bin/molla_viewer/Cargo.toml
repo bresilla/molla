@@ -30,6 +30,7 @@ log_diag = []
 # Physics kernels use wgpu 29 independently of the Bevy renderer.
 molla = { path = "../../crates/molla" }
 molla-vehicle = { path = "../../crates/molla-vehicle" }
+pollster = "0.4"
 wgpu = { version = "29", default-features = false, features = [
     "wgsl",
     "vulkan",

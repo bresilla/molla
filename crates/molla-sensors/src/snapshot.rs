@@ -205,10 +205,7 @@ impl DeviceSnapshotPool {
 
     /// Poll completion callbacks without waiting; CPU leases keep slots occupied.
     pub fn available_slots(&mut self) -> Result<usize> {
-        self.health.check()?;
-        if let Some(error) = &self.failure {
-            return Err(Error::Gpu(error.clone()));
-        }
+        self.check()?;
         if let Err(error) = self.device.poll(wgpu::PollType::Poll) {
             let error = format!("snapshot device poll: {error}");
             self.failure = Some(error.clone());
@@ -330,7 +327,7 @@ impl DeviceSnapshotPool {
 
     /// Invalidate prior generations without reusing their occupied slots.
     pub fn reset(&mut self) -> Result<()> {
-        self.health.check()?;
+        self.check()?;
         self.generation = self
             .generation
             .checked_add(1)
@@ -339,9 +336,18 @@ impl DeviceSnapshotPool {
     }
 
     pub fn is_current(&self, snapshot: &DeviceSnapshot) -> bool {
-        !self.health.is_lost()
+        self.check().is_ok()
             && Arc::ptr_eq(&self.owner, &snapshot.slot.owner)
             && self.generation == snapshot.slot.generation
+    }
+
+    /// Device loss and a failed completion poll are both terminal.
+    fn check(&self) -> Result<()> {
+        self.health.check()?;
+        if let Some(error) = &self.failure {
+            return Err(Error::Gpu(error.clone()));
+        }
+        Ok(())
     }
 }
 
@@ -514,5 +520,59 @@ mod tests {
                 timeout: Some(std::time::Duration::from_secs(10)),
             })
             .unwrap();
+    }
+
+    #[test]
+    #[ignore = "needs a real GPU"]
+    fn released_snapshots_wait_for_copy_completion_and_poll_failure_is_terminal() {
+        let engine = Engine::new_gpu().expect("GPU required");
+        let wait = || {
+            engine
+                .device()
+                .unwrap()
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(10)),
+                })
+                .unwrap();
+        };
+        let source = crate::readback::DeviceBuffer::from_host(
+            &engine,
+            vec![7u32],
+            molla_storage::BufferUsage::StorageReadWrite,
+        )
+        .unwrap();
+        let mut pool = DeviceSnapshotPool::new(
+            &engine,
+            DeviceSnapshotConfig {
+                slots: 1,
+                bytes_per_slot: 4,
+                max_total_bytes: 4,
+            },
+        )
+        .unwrap();
+        let capture = |pool: &mut DeviceSnapshotPool| {
+            pool.try_capture(
+                &[source.readback_source(0..1).unwrap()],
+                ReadbackStamp::default(),
+            )
+        };
+
+        // Released by the CPU, but no poll has observed the copy completing.
+        drop(capture(&mut pool).unwrap().unwrap());
+        assert!(Arc::strong_count(&pool.slots[0].in_flight) > 1);
+        assert!(!slot_available(&pool.slots[0]));
+        wait();
+        assert!(slot_available(&pool.slots[0]));
+
+        let held = capture(&mut pool).unwrap().unwrap();
+        wait();
+        assert!(pool.is_current(&held));
+        pool.failure = Some("injected poll failure".into());
+        assert!(pool.available_slots().is_err());
+        assert!(capture(&mut pool).is_err());
+        assert!(pool.reset().is_err());
+        assert!(!pool.is_current(&held));
+        assert_eq!(pool.stats().captures, 2);
     }
 }

@@ -17,6 +17,9 @@ pub enum Backend {
     AutoGpu,
     /// Force a specific `wgpu` backend.
     Gpu(wgpu::Backends),
+    /// A device and queue adopted from another owner through
+    /// [`Engine::from_device`]; never selectable through [`Engine::new`].
+    External,
 }
 
 /// Human-readable info about the selected adapter. Useful in `--version`
@@ -36,7 +39,7 @@ pub struct AdapterInfo {
 }
 
 impl AdapterInfo {
-    fn from_wgpu(info: wgpu::AdapterInfo) -> Self {
+    pub fn from_wgpu(info: wgpu::AdapterInfo) -> Self {
         Self {
             vendor: info.vendor,
             name: info.name,
@@ -94,7 +97,8 @@ impl DeviceHealth {
         Ok(())
     }
 
-    fn record(&self, reason: wgpu::DeviceLostReason, message: String) {
+    /// Records the first loss; later calls keep the original diagnostic.
+    pub fn record(&self, reason: wgpu::DeviceLostReason, message: String) {
         let mut loss = self.loss.lock().unwrap_or_else(|e| e.into_inner());
         if loss.is_none() {
             *loss = Some(DeviceLoss { reason, message });
@@ -137,6 +141,29 @@ impl Engine {
             Backend::Cpu => Ok(Self::new_cpu()),
             Backend::AutoGpu => init_gpu(wgpu::Backends::PRIMARY),
             Backend::Gpu(b) => init_gpu(b),
+            Backend::External => Err(Error::Gpu(
+                "external backend: construct with Engine::from_device".into(),
+            )),
+        }
+    }
+
+    /// Adopt a device and queue owned elsewhere, such as a renderer.
+    ///
+    /// The owner keeps its own device-lost callback; this engine's
+    /// [`DeviceHealth`] only reports what the owner forwards through
+    /// [`DeviceHealth::record`]. Every Molla resource created through this
+    /// engine belongs to the adopted device and must be dropped before it.
+    pub fn from_device(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        adapter_info: Option<AdapterInfo>,
+    ) -> Self {
+        Self {
+            backend: Backend::External,
+            adapter_info,
+            device: Some(device),
+            queue: Some(queue),
+            health: Some(Arc::new(DeviceHealth::default())),
         }
     }
 
@@ -239,6 +266,11 @@ fn init_gpu(backends: wgpu::Backends) -> Result<Engine> {
 #[cfg(test)]
 mod loss_tests {
     use super::*;
+
+    #[test]
+    fn external_backend_is_not_selectable() {
+        assert!(Engine::new(Backend::External).is_err());
+    }
 
     #[test]
     fn cpu_engine_has_no_device_loss_signal() {

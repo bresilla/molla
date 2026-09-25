@@ -77,7 +77,13 @@ impl RaycastMergeKernel {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::raycast_merge"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/raycast_merge.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("../shaders/ray_shapes.wgsl"),
+                    include_str!("../shaders/raycast_merge.wgsl"),
+                )
+                .into(),
+            ),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::raycast_merge pipeline layout"),

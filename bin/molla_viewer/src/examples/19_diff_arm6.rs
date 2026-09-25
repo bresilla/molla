@@ -487,18 +487,6 @@ fn draw_diff_arm6_gizmos(sim: Res<Sim>, state: Res<DiffArm6ExampleState>, mut gi
     }
 }
 
-fn hit_to_world(hit: &RayHit) -> Option<Vec3> {
-    if hit.shape_id.is_some() {
-        Some(Vec3::new(
-            hit.point.x as f32,
-            hit.point.y as f32,
-            hit.point.z as f32,
-        ))
-    } else {
-        None
-    }
-}
-
 // Draw the lidar's rays + hit points as Bevy gizmos. Hit rays are
 // red with a small white cross at the hit point; missed rays are
 // dim cyan extending to the max range. Lidar origin gets a small
@@ -723,5 +711,4 @@ fn diff_arm6_pane(ui: &mut egui::Ui, state: &mut DiffArm6ExampleState) {
          Stage 23.1.3 (full Featherstone-2008 §10 derivation).",
     );
 }
-
 

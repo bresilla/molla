@@ -353,9 +353,9 @@ fn every_channel_mask_has_explicit_empty_ranges_and_center_geometry() {
             if mask == 0 {
                 0
             } else if cfg.channels.contains(Ch::COLOR) {
-                21
+                22
             } else {
-                3
+                4
             }
         );
         same(
@@ -373,6 +373,130 @@ fn every_channel_mask_has_explicit_empty_ranges_and_center_geometry() {
         );
         drop(submitted);
         drain(&engine);
+    }
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn aperture_refit_reuse_matches_raw_queries_after_cancel_and_gpu_motion() {
+    let _guard = GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().unwrap();
+    let mut builder = ModelBuilder::new();
+    let body = builder.add_body(Default::default());
+    builder
+        .add_shape_plane(BodyId::NONE, Vec3::Y, Transform::IDENTITY)
+        .unwrap();
+    builder
+        .add_shape_sphere(body, 0.6, Transform::IDENTITY)
+        .unwrap();
+    for i in 0..65 {
+        builder
+            .add_shape_sphere(
+                BodyId::NONE,
+                0.5,
+                Transform::from_translation(Vec3::X * (10.0 + i as Real * 2.0)),
+            )
+            .unwrap();
+    }
+    let mut model = builder.build().unwrap();
+    model
+        .upload_to_device(engine.device().unwrap(), engine.queue().unwrap())
+        .unwrap();
+    let mut state = model.state().unwrap();
+    state
+        .upload_to_device(engine.device().unwrap(), engine.queue().unwrap())
+        .unwrap();
+    let scene = SensorScene::from_model(&engine, &model, Default::default()).unwrap();
+    let cfg = config(9, 7, 5);
+    let mut raw = camera(&engine, cfg, 1);
+    for (interval, quality_ratio_percent) in [(0, None), (2, None), (2, Some(125))] {
+        let policy = molla_sensors::SceneRebuildPolicy {
+            interval,
+            quality_ratio_percent,
+            ..Default::default()
+        };
+        let mut direct = camera(&engine, cfg, 1);
+        let mut standalone = camera(&engine, cfg, 1);
+        direct.set_scene_rebuild_policy(policy).unwrap();
+        standalone.set_scene_rebuild_policy(policy).unwrap();
+        let mut pool = direct.output_pool(&engine, pools(2)).unwrap();
+        let mut canceled = SensorCommandBatch::new(&engine).unwrap();
+        direct
+            .encode_scene(&mut canceled, &engine, &scene, &state, &mut pool, stamp(0))
+            .unwrap()
+            .unwrap();
+        drop(canceled);
+        assert_eq!(pool.available_slots().unwrap(), 2);
+        let mut history = None;
+        for (sample, position) in [
+            Vec3::new(0.0, 0.7, 0.0),
+            Vec3::new(0.8, 1.4, 0.0),
+            Vec3::new(-0.5, 0.9, 0.1),
+            Vec3::new(0.0, 0.7, 0.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let pose: molla_math::GpuTransform = Transform::from_translation(position).into();
+            engine.queue().unwrap().write_buffer(
+                state.body_q.device_buffer().unwrap(),
+                0,
+                bytemuck::bytes_of(&pose),
+            );
+            state.body_q.mark_device_dirty();
+            raw.dispatch(&engine, &model, &state).unwrap();
+            let expected = read(
+                &engine,
+                &CHANNELS.map(|channel| raw.readback_source(channel, 0..63).unwrap()),
+            );
+            same(
+                &legacy(&engine, &scene, &state, &mut standalone),
+                &expected,
+                Ch::ALL,
+            );
+            let mut batch = SensorCommandBatch::new(&engine).unwrap();
+            let out = direct
+                .encode_scene(
+                    &mut batch,
+                    &engine,
+                    &scene,
+                    &state,
+                    &mut pool,
+                    stamp(sample as u64 + 1),
+                )
+                .unwrap()
+                .unwrap();
+            let submitted = batch.submit().unwrap();
+            let frame = submitted.frame(&out.frame).unwrap();
+            same(&collect(&engine, frame), &expected, Ch::ALL);
+            if let Some((old, pixels)) = &history {
+                same(&collect(&engine, old), pixels, Ch::ALL);
+            } else {
+                history = Some((frame.clone(), expected));
+            }
+            drop(submitted);
+            drain(&engine);
+        }
+        assert!(state.body_q.host().is_err());
+        let stats = direct.query_stats();
+        assert_eq!(stats.scene_builds, 1);
+        assert_eq!(stats.encoded_queries, 25);
+        assert_eq!(
+            stats.scene_rebuilds,
+            if interval != 0 && quality_ratio_percent.is_none() {
+                13
+            } else {
+                0
+            }
+        );
+        assert_eq!(
+            stats.scene_quality_checks,
+            if quality_ratio_percent.is_some() {
+                13
+            } else {
+                0
+            }
+        );
     }
 }
 
@@ -479,6 +603,24 @@ fn cancellation_bad_inputs_empty_scene_and_device_loss_do_not_publish_old_images
             .is_err()
     );
     assert!(batch.submit().unwrap().index.is_none());
+    let foreign_camera = camera(&foreign, cfg, 1);
+    let mut foreign_pool = foreign_camera.output_pool(&foreign, pools(1)).unwrap();
+    {
+        let mut batch = SensorCommandBatch::new(&engine).unwrap();
+        assert!(
+            c.encode_scene(&mut batch, &engine, &scene, &state, &mut foreign_pool, stamp(0))
+                .is_err()
+        );
+        assert!(batch.submit().unwrap().index.is_none());
+    }
+    {
+        let mut batch = SensorCommandBatch::new(&foreign).unwrap();
+        assert!(
+            c.encode_scene(&mut batch, &foreign, &scene, &state, &mut pool, stamp(0))
+                .is_err()
+        );
+    }
+    assert_eq!(foreign_pool.stats().reserved_frames, 0);
     assert_eq!(pool.stats().reserved_frames, 0);
     assert_eq!(c.dispatch_stats().trace_preparations, 0);
     let mut batch = SensorCommandBatch::new(&engine).unwrap();
@@ -630,7 +772,7 @@ fn moving_triangle_and_terrain_replacement_preserve_leased_geometry_and_strict_r
             .unwrap()
             .unwrap();
         let submitted = batch.submit().unwrap();
-        assert_eq!(submitted.stats.kernel_dispatches, 25);
+        assert_eq!(submitted.stats.kernel_dispatches, 18);
         held.push((
             submitted.frame(&out.frame).unwrap().clone(),
             out.scene_stamp,
@@ -661,4 +803,47 @@ fn moving_triangle_and_terrain_replacement_preserve_leased_geometry_and_strict_r
         let normal = cpu.channel::<Vec3>(2).unwrap()[0];
         assert!((normal - if version == 3 { Vec3::ZERO } else { Vec3::Y }).length() < 2e-5);
     }
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn scene_shape_colors_drive_camera_albedo_and_reject_bad_input() {
+    let _guard = GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().unwrap();
+    let foreign = Engine::new_gpu().unwrap();
+    let (_model, state, mut scene) = fixture(&engine);
+    let colors = [Vec3::new(0.0, 0.0, 1.0), Vec3::new(1.0, 0.0, 0.0)];
+    assert!(scene.set_shape_colors(&engine, &colors[..1]).is_err());
+    assert!(
+        scene
+            .set_shape_colors(&engine, &[Vec3::X, Vec3::splat(Real::NAN)])
+            .is_err()
+    );
+    assert!(scene.set_shape_colors(&foreign, &colors).is_err());
+    let stamp_before = scene.stamp();
+    scene.set_shape_colors(&engine, &colors).unwrap();
+    assert_eq!(scene.stamp(), stamp_before);
+
+    let mut c = camera(&engine, config(9, 9, 1), 1);
+    let mut pool = c.output_pool(&engine, pools(1)).unwrap();
+    let mut batch = SensorCommandBatch::new(&engine).unwrap();
+    let out = c
+        .encode_scene(&mut batch, &engine, &scene, &state, &mut pool, stamp(1))
+        .unwrap()
+        .unwrap();
+    let submitted = batch.submit().unwrap();
+    let cpu = collect(&engine, submitted.frame(&out.frame).unwrap());
+    let albedo = cpu.channel::<u32>(3).unwrap();
+    let shape = cpu.channel::<u32>(4).unwrap();
+    let mut seen = [0; 2];
+    for (albedo, shape) in albedo.iter().zip(&shape) {
+        let expected = match shape {
+            0 => 0xffff_0000,
+            1 => 0xff00_00ff,
+            _ => continue,
+        };
+        seen[*shape as usize] += 1;
+        assert_eq!(*albedo, expected, "shape {shape}");
+    }
+    assert!(seen.iter().all(|count| *count > 0), "{seen:?}");
 }

@@ -1,5 +1,7 @@
 //! Device-resident cloud construction, rigid transforms, filters and stable compaction.
 
+use crate::host_arrays::filled;
+use crate::plan_scratch::PlanScratch;
 use crate::{
     Compare, EncodedLidarBatch, LidarDeviceBatch, LidarPattern,
     device_results::{
@@ -9,12 +11,23 @@ use crate::{
     dispatch::BindingsCache,
     readback::{BufferLease, DeviceBuffer, ReadbackSource, ReadbackStamp},
 };
+use crate::{ProcessorStorageLimits, ProcessorStorageUsage};
 use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_kernels::{CloudDescriptor, CloudProcessBindings, CloudProcessKernel};
 use molla_math::{Real, Transform, Vec3};
+use arrayvec::ArrayVec;
 use molla_storage::{BufferElement, BufferUsage};
 use std::{any::TypeId, ops::Range, sync::Arc};
+
+/// Validated per-job input count, raster, transform, filter and stamp.
+type CloudMetadata = (
+    u32,
+    Option<CloudRaster>,
+    Transform,
+    CloudFilter,
+    ReadbackStamp,
+);
 
 /// 112-byte GPU/host record. Flags: valid=1, color=2, scalar=4, angles=8.
 #[repr(C)]
@@ -320,6 +333,7 @@ impl<'a> CloudFrame<'a> {
 }
 
 pub struct CloudProcessor {
+    storage_usage: ProcessorStorageUsage,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     config: CloudProcessorConfig,
@@ -331,11 +345,26 @@ pub struct CloudProcessor {
     kernel: CloudProcessKernel,
     direct: BindingsCache<CloudProcessBindings>,
     layouts: Vec<CloudLayout>,
+    scratch: PlanScratch<CloudDescriptor, CloudMetadata>,
     stats: CloudProcessingStats,
 }
 
 impl CloudProcessor {
+    /// Requested construction payload, excluding driver staging, metadata and output pools.
+    pub fn storage_usage(&self) -> ProcessorStorageUsage {
+        self.storage_usage
+    }
+
     pub fn new(engine: &Engine, config: CloudProcessorConfig) -> Result<Self> {
+        Self::new_with_storage_limits(engine, config, ProcessorStorageLimits::default())
+    }
+
+    /// Validate device budgets and combined construction payload before allocating arrays.
+    pub fn new_with_storage_limits(
+        engine: &Engine,
+        config: CloudProcessorConfig,
+        limits: ProcessorStorageLimits,
+    ) -> Result<Self> {
         engine.check_device()?;
         let device = engine
             .device()
@@ -345,20 +374,22 @@ impl CloudProcessor {
             .queue()
             .ok_or_else(|| Error::Gpu("cloud requires queue".into()))?
             .clone();
-        let bytes = checked_budget(config, &device.limits())?;
+        let storage_usage = ProcessorStorageUsage::for_cloud(config, &device.limits())?;
+        limits.check(storage_usage)?;
+        let bytes = storage_usage.device_bytes;
         let work = DeviceBuffer::from_host(
             engine,
-            vec![CloudPoint::default(); config.max_points as usize],
+            filled(config.max_points as usize, CloudPoint::default())?,
             BufferUsage::StorageReadWrite,
         )?;
         let output = DeviceBuffer::from_host(
             engine,
-            vec![CloudPoint::default(); config.max_points as usize],
+            filled(config.max_points as usize, CloudPoint::default())?,
             BufferUsage::StorageReadWrite,
         )?;
         let counts = DeviceBuffer::from_host(
             engine,
-            vec![0u32; 1 + config.max_jobs as usize * 5],
+            filled(1 + config.max_jobs as usize * 5, 0u32)?,
             BufferUsage::StorageReadWrite,
         )?;
         let buffer = |size, label| {
@@ -384,6 +415,7 @@ impl CloudProcessor {
             config.max_jobs,
         )?;
         Ok(Self {
+            storage_usage,
             device,
             queue,
             config,
@@ -395,6 +427,7 @@ impl CloudProcessor {
             kernel,
             direct: BindingsCache::with_capacity(128),
             layouts: Vec::new(),
+            scratch: PlanScratch::default(),
             stats: CloudProcessingStats {
                 buffer_allocations: 8,
                 buffer_bytes: bytes,
@@ -467,7 +500,8 @@ impl CloudProcessor {
             return Err(Error::Solver("cloud: job budget exceeded".into()));
         }
         batch.check_source_capacity(jobs.iter().map(|job| job.input.sources().len()).sum())?;
-        let (descriptors, layouts, count) = self.plan(jobs)?;
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let (layouts, count) = self.plan(jobs, &mut scratch.descriptors)?;
         let specs = self.output_specs();
         let ranges = [0..count as usize, 0..1 + jobs.len() * 5];
         let mut copied = 0;
@@ -496,8 +530,9 @@ impl CloudProcessor {
                         offset += source.channel.bytes as u64;
                     }
                 }
-                self.encode_direct(encoder, outputs, &descriptors, count)
+                self.encode_direct(encoder, outputs, &scratch.descriptors, count)
             })?;
+        self.scratch = scratch;
         let Some(frame) = frame else {
             return Ok(None);
         };
@@ -538,9 +573,11 @@ impl CloudProcessor {
         if jobs.len() > self.config.max_jobs as usize {
             return Err(Error::Solver("cloud: job budget exceeded".into()));
         }
-        let mut receipts: Vec<&EncodedSensorFrame> = Vec::with_capacity(64);
-        let mut indices = Vec::with_capacity(jobs.len() * 5);
-        let mut metadata = Vec::with_capacity(jobs.len());
+        let mut receipts: ArrayVec<&EncodedSensorFrame, 64> = ArrayVec::new();
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.clear();
+        let mut indices = std::mem::take(&mut scratch.indices);
+        let mut metadata = std::mem::take(&mut scratch.metadata);
         for job in jobs {
             let mut lengths = [0u32; 5];
             for (i, source) in job.input.sources().iter().enumerate() {
@@ -574,7 +611,7 @@ impl CloudProcessor {
                 {
                     index
                 } else {
-                    if receipts.len() == 64 {
+                    if receipts.is_full() {
                         return Err(Error::Solver(
                             "cloud: pending dependency budget exceeded".into(),
                         ));
@@ -595,7 +632,9 @@ impl CloudProcessor {
             };
             metadata.push((lengths[0], raster, job.transform, job.filter, job.stamp));
         }
-        let (descriptors, layouts, count) = self.plan_metadata(metadata.into_iter().map(Ok))?;
+        let planned = self.plan_metadata(metadata.drain(..).map(Ok), &mut scratch.descriptors);
+        scratch.metadata = metadata;
+        let (layouts, count) = planned?;
         let specs = self.output_specs();
         let ranges = [0..count as usize, 0..1 + jobs.len() * 5];
         let mut copied = 0;
@@ -637,10 +676,13 @@ impl CloudProcessor {
                             copied += bytes;
                         }
                     }
-                    self.encode_direct(encoder, outputs, &descriptors, count)
+                    self.encode_direct(encoder, outputs, &scratch.descriptors, count)
                 },
             )?
         };
+        indices.clear();
+        scratch.indices = indices;
+        self.scratch = scratch;
         let Some(frame) = frame else {
             return Ok(None);
         };
@@ -690,7 +732,8 @@ impl CloudProcessor {
 
     pub fn process(&mut self, jobs: &[CloudJob<'_>]) -> Result<CloudFrame<'_>> {
         self.output.check_device()?;
-        let (descriptors, layouts, count) = self.plan(jobs)?;
+        let mut descriptors = Vec::new();
+        let (layouts, count) = self.plan(jobs, &mut descriptors)?;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -753,7 +796,11 @@ impl CloudProcessor {
         })
     }
 
-    fn plan(&self, jobs: &[CloudJob<'_>]) -> Result<(Vec<CloudDescriptor>, Vec<CloudLayout>, u32)> {
+    fn plan(
+        &self,
+        jobs: &[CloudJob<'_>],
+        descriptors: &mut Vec<CloudDescriptor>,
+    ) -> Result<(Vec<CloudLayout>, u32)> {
         if jobs.len() > self.config.max_jobs as usize {
             return Err(Error::Solver("cloud: job budget exceeded".into()));
         }
@@ -775,25 +822,19 @@ impl CloudProcessor {
                 }
             };
             Ok((count, raster, job.transform, job.filter, job.stamp))
-        }))
+        }), descriptors)
     }
 
+    /// Validates jobs into `descriptors`; returns the caller's layouts and point count.
     fn plan_metadata(
         &self,
-        jobs: impl ExactSizeIterator<
-            Item = Result<(
-                u32,
-                Option<CloudRaster>,
-                Transform,
-                CloudFilter,
-                ReadbackStamp,
-            )>,
-        >,
-    ) -> Result<(Vec<CloudDescriptor>, Vec<CloudLayout>, u32)> {
+        jobs: impl ExactSizeIterator<Item = Result<CloudMetadata>>,
+        descriptors: &mut Vec<CloudDescriptor>,
+    ) -> Result<(Vec<CloudLayout>, u32)> {
         if jobs.len() > self.config.max_jobs as usize {
             return Err(Error::Solver("cloud: job budget exceeded".into()));
         }
-        let mut descriptors = Vec::with_capacity(jobs.len());
+        descriptors.clear();
         let mut layouts = Vec::with_capacity(jobs.len());
         let mut total = 0u32;
         for metadata in jobs {
@@ -852,7 +893,7 @@ impl CloudProcessor {
             });
             total = end;
         }
-        Ok((descriptors, layouts, total))
+        Ok((layouts, total))
     }
 
     fn check_source<T: BufferElement>(&self, source: &ReadbackSource<'_>) -> Result<u32> {
@@ -983,7 +1024,7 @@ fn check_stamp(stamp: ReadbackStamp) -> Result<()> {
     Ok(())
 }
 
-fn checked_budget(config: CloudProcessorConfig, limits: &wgpu::Limits) -> Result<u64> {
+pub(crate) fn checked_budget(config: CloudProcessorConfig, limits: &wgpu::Limits) -> Result<u64> {
     if config.max_points == 0
         || config.max_jobs == 0
         || config.max_jobs > 1024
@@ -1025,6 +1066,48 @@ fn checked_budget(config: CloudProcessorConfig, limits: &wgpu::Limits) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires GPU"]
+    fn construction_budget_matches_host_arrays_and_upload_payload() {
+        use crate::sensor_storage::tests::buffer_bytes;
+        let engine = Engine::new_gpu().unwrap();
+        let config = CloudProcessorConfig {
+            max_points: 257,
+            max_jobs: 3,
+            max_buffer_bytes: u64::MAX,
+        };
+        let usage =
+            ProcessorStorageUsage::for_cloud(config, &engine.device().unwrap().limits()).unwrap();
+        assert!(
+            CloudProcessor::new_with_storage_limits(
+                &engine,
+                config,
+                ProcessorStorageLimits {
+                    max_construction_bytes: usage.construction_bytes - 1,
+                }
+            )
+            .is_err()
+        );
+        let processor = CloudProcessor::new_with_storage_limits(
+            &engine,
+            config,
+            ProcessorStorageLimits {
+                max_construction_bytes: usage.construction_bytes,
+            },
+        )
+        .unwrap();
+        assert_eq!(processor.storage_usage(), usage);
+        assert_eq!(processor.stats().buffer_bytes, usage.device_bytes);
+        crate::processor_storage::tests::check_live(
+            usage,
+            &[
+                buffer_bytes(&processor.work.buffer),
+                buffer_bytes(&processor.output.buffer),
+                buffer_bytes(&processor.counts.buffer),
+            ],
+        );
+    }
 
     #[test]
     fn layouts_and_exact_buffer_budget_match_shader_strides() {

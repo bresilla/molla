@@ -6,6 +6,7 @@ use crate::{
     CameraChannels, CameraDispatchStats, EncodedCamera, ImageOp, PendingAnnotationJob,
     PendingImageJob, RayQueryStats, SceneStamp, SensorCommandBatch, SensorFramePool,
     SensorFramePoolConfig, SensorFramePoolStats, SensorScene, TiledCamera, TiledCameraConfig,
+    TiledCameraLimits,
 };
 use arrayvec::ArrayVec;
 use molla_compute::Engine;
@@ -182,6 +183,8 @@ pub struct CameraBatch {
     device: Arc<wgpu::Device>,
     owner: Arc<()>,
     limits: CameraBatchLimits,
+    storage_limits: TiledCameraLimits,
+    storage_bytes: u64,
     groups: Vec<TiledCamera>,
     images: Arc<[CameraImageLayout]>,
     generation: u64,
@@ -275,15 +278,31 @@ impl<'a> CameraImage<'a> {
 
 impl CameraBatch {
     pub fn new(engine: &Engine, specs: &[CameraSpec], limits: CameraBatchLimits) -> Result<Self> {
+        Self::new_with_storage_limits(engine, specs, limits, TiledCameraLimits::default())
+    }
+
+    /// Preflight the combined fixed-array payload of every group before GPU allocation.
+    pub fn new_with_storage_limits(
+        engine: &Engine,
+        specs: &[CameraSpec],
+        limits: CameraBatchLimits,
+        storage_limits: TiledCameraLimits,
+    ) -> Result<Self> {
         engine.check_device()?;
         let device = engine
             .device()
             .ok_or_else(|| Error::Gpu("camera batch requires GPU".into()))?
             .clone();
         let plan = plan(specs, limits, &device.limits())?;
+        let storage_bytes = plan.storage_bytes(storage_limits, &device.limits())?;
         let mut groups = Vec::with_capacity(plan.groups.len());
         for group in plan.groups {
-            let mut camera = TiledCamera::new(engine, group.config, group.members.len())?;
+            let mut camera = TiledCamera::new_with_limits(
+                engine,
+                group.config,
+                group.members.len(),
+                storage_limits,
+            )?;
             for (index, member) in group.members.into_iter().enumerate() {
                 camera.set_camera_pose(index, specs[member].pose)?;
             }
@@ -293,6 +312,8 @@ impl CameraBatch {
             device,
             owner: Arc::new(()),
             limits,
+            storage_limits,
+            storage_bytes,
             groups,
             images: plan.images.into(),
             generation: 0,
@@ -303,6 +324,11 @@ impl CameraBatch {
 
     pub fn layouts(&self) -> &[CameraImageLayout] {
         &self.images
+    }
+
+    /// Sum of configured group array payloads, including reserved lazy aperture scratch.
+    pub fn storage_bytes(&self) -> u64 {
+        self.storage_bytes
     }
 
     pub fn output_pool(
@@ -465,6 +491,23 @@ impl CameraBatch {
         self.groups.get(index).map(TiledCamera::query_stats)
     }
 
+    pub fn scene_rebuild_policy(&self, group: usize) -> Option<crate::SceneRebuildPolicy> {
+        self.groups
+            .get(group)
+            .map(TiledCamera::scene_rebuild_policy)
+    }
+
+    pub fn set_scene_rebuild_policy(
+        &mut self,
+        group: usize,
+        policy: crate::SceneRebuildPolicy,
+    ) -> Result<()> {
+        self.groups
+            .get_mut(group)
+            .ok_or_else(|| Error::Build("camera batch: unknown group".into()))?
+            .set_scene_rebuild_policy(policy)
+    }
+
     pub fn is_current(&self, stamp: &CameraBatchStamp) -> bool {
         Arc::ptr_eq(&self.owner, &stamp.owner) && self.generation == stamp.generation
     }
@@ -493,9 +536,11 @@ impl CameraBatch {
         engine.check_device()?;
         self.check_engine(engine)?;
         let generation = self.next_generation()?;
-        let replacement = Self::new(engine, specs, self.limits)?;
+        let replacement =
+            Self::new_with_storage_limits(engine, specs, self.limits, self.storage_limits)?;
         self.groups = replacement.groups;
         self.images = replacement.images;
+        self.storage_bytes = replacement.storage_bytes;
         self.generation = generation;
         self.stats.reconfigurations += 1;
         Ok(())
@@ -594,6 +639,29 @@ struct Plan {
     images: Vec<CameraImageLayout>,
 }
 
+impl Plan {
+    fn storage_bytes(&self, limits: TiledCameraLimits, device: &wgpu::Limits) -> Result<u64> {
+        let mut total = 0u64;
+        for group in &self.groups {
+            let usage = limits.check(
+                group.config.width,
+                group.config.height,
+                group.members.len(),
+                device,
+            )?;
+            total = total
+                .checked_add(usage.total_bytes)
+                .ok_or_else(|| Error::Solver("camera batch: array storage overflow".into()))?;
+            if total > limits.max_storage_bytes {
+                return Err(Error::Solver(
+                    "camera batch: combined group array budget exceeded".into(),
+                ));
+            }
+        }
+        Ok(total)
+    }
+}
+
 fn plan(specs: &[CameraSpec], limits: CameraBatchLimits, device: &wgpu::Limits) -> Result<Plan> {
     if limits.max_cameras == 0
         || limits.max_cameras > 1024
@@ -664,6 +732,77 @@ fn plan(specs: &[CameraSpec], limits: CameraBatchLimits, device: &wgpu::Limits) 
 mod tests {
     use super::*;
     use molla_math::Quat;
+
+    #[test]
+    fn fixed_array_budget_sums_groups_before_construction() {
+        let config = TiledCameraConfig {
+            width: 8,
+            height: 8,
+            ..Default::default()
+        };
+        let specs = [
+            CameraSpec {
+                sensor_id: 1,
+                config,
+                pose: Transform::IDENTITY,
+            },
+            CameraSpec {
+                sensor_id: 2,
+                config: TiledCameraConfig {
+                    fov_y_radians: 0.8,
+                    ..config
+                },
+                pose: Transform::IDENTITY,
+            },
+        ];
+        let device = wgpu::Limits::default();
+        let planned = plan(&specs, Default::default(), &device).unwrap();
+        let one = crate::CameraStorageUsage::for_dimensions(8, 8, 1)
+            .unwrap()
+            .total_bytes;
+        let exact = TiledCameraLimits {
+            max_storage_bytes: one * 2,
+            ..Default::default()
+        };
+        assert_eq!(planned.storage_bytes(exact, &device).unwrap(), one * 2);
+        assert!(
+            planned
+                .storage_bytes(
+                    TiledCameraLimits {
+                        max_storage_bytes: one * 2 - 1,
+                        ..exact
+                    },
+                    &device
+                )
+                .is_err()
+        );
+        let shared = plan(
+            &[specs[0], CameraSpec { config, ..specs[1] }],
+            Default::default(),
+            &device,
+        )
+        .unwrap();
+        assert_eq!(
+            shared.storage_bytes(exact, &device).unwrap(),
+            crate::CameraStorageUsage::for_dimensions(8, 8, 2)
+                .unwrap()
+                .total_bytes
+        );
+        assert!(shared.storage_bytes(exact, &device).unwrap() < one * 2);
+        assert_eq!(
+            plan(&[], Default::default(), &device)
+                .unwrap()
+                .storage_bytes(
+                    TiledCameraLimits {
+                        max_storage_bytes: 0,
+                        ..exact
+                    },
+                    &device
+                )
+                .unwrap(),
+            0
+        );
+    }
 
     fn spec(id: u64) -> CameraSpec {
         CameraSpec {

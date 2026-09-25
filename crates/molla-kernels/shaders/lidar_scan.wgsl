@@ -99,10 +99,13 @@ fn reduce(@builtin(global_invocation_id) gid: vec3<u32>) {
     var minimum = s.origin.w;
     var maximum = 0.0;
     var count = 0u;
+    var invalid = false;
     for (var k = 0u; k < s.counts.w; k += 1u) {
         let i = begin + k;
         let t = distance[i];
-        if (shape[i] >= 0 && t > 0.0 && t < s.origin.w) {
+        if (shape[i] == -2) {
+            invalid = true;
+        } else if (shape[i] >= 0 && t > 0.0 && t < s.origin.w) {
             count += 1u;
             if (t < minimum) { minimum = t; nearest = i32(i); }
             if (t >= maximum) { maximum = t; farthest = i32(i); }
@@ -113,7 +116,7 @@ fn reduce(@builtin(global_invocation_id) gid: vec3<u32>) {
             normal[i] = vec4<f32>(0.0, 1.0, 0.0, 0.0);
         }
     }
-    first[pulse] = nearest;
-    last[pulse] = farthest;
-    hit_count[pulse] = count;
+    first[pulse] = select(nearest, -2, invalid);
+    last[pulse] = select(farthest, -2, invalid);
+    hit_count[pulse] = select(count, 0u, invalid);
 }

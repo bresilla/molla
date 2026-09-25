@@ -25,9 +25,23 @@ struct Counts {
 
 thread_local! {
     static ACTIVE: Cell<Option<Counts>> = const { Cell::new(None) };
+    static FAIL_SIZE: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 struct CountingAllocator;
+
+fn fail_allocation(size: usize) -> bool {
+    FAIL_SIZE
+        .try_with(|cell| {
+            if cell.get() == Some(size) {
+                cell.set(None);
+                true
+            } else {
+                false
+            }
+        })
+        .unwrap_or(false)
+}
 
 fn record(bytes: usize, reallocation: bool) {
     let _ = ACTIVE.try_with(|cell| {
@@ -42,6 +56,9 @@ fn record(bytes: usize, reallocation: bool) {
 
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if fail_allocation(layout.size()) {
+            return std::ptr::null_mut();
+        }
         let result = unsafe { System.alloc(layout) };
         if !result.is_null() {
             record(layout.size(), false);
@@ -49,6 +66,9 @@ unsafe impl GlobalAlloc for CountingAllocator {
         result
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        if fail_allocation(layout.size()) {
+            return std::ptr::null_mut();
+        }
         let result = unsafe { System.alloc_zeroed(layout) };
         if !result.is_null() {
             record(layout.size(), false);
@@ -59,6 +79,9 @@ unsafe impl GlobalAlloc for CountingAllocator {
         unsafe { System.dealloc(pointer, layout) };
     }
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        if fail_allocation(size) {
+            return std::ptr::null_mut();
+        }
         let result = unsafe { System.realloc(pointer, layout, size) };
         if !result.is_null() {
             record(size, true);
@@ -118,6 +141,333 @@ fn allocation_counter_tracks_alloc_zeroed_realloc_and_resets_after_unwind() {
     );
     assert!(std::panic::catch_unwind(|| measure(|| panic!("probe unwind"))).is_err());
     assert_eq!(measure(|| ()).1, Counts::default());
+}
+
+#[test]
+fn mesh_bvh_construction_reserves_only_occupied_nodes() {
+    use molla_geometry::{MeshBvh, MeshBvhNode};
+    let vertices = [Vec3::ZERO, Vec3::X, Vec3::Z];
+    let triangles = vec![[0, 1, 2]; 65_537];
+    let (tree, counts) = measure(|| MeshBvh::build(&vertices, &triangles, 8));
+    eprintln!(
+        "triangles={} nodes={} node_capacity={} node_stride={} construction={counts:?}",
+        triangles.len(),
+        tree.nodes.len(),
+        tree.nodes.capacity(),
+        size_of::<MeshBvhNode>(),
+    );
+    assert_eq!(tree.nodes.capacity(), tree.nodes.len());
+    assert_eq!(tree.triangle_order.len(), triangles.len());
+    assert_eq!(counts.reallocations, 0);
+    let expected = triangles.len() * (3 * size_of::<Vec3>() + size_of::<u32>())
+        + tree.nodes.len() * size_of::<MeshBvhNode>();
+    assert_eq!(counts.requested_bytes, expected as u64);
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn constructor_host_allocation_failure_returns_error_and_allows_retry() {
+    use molla_sensors::{
+        CloudGrid, CloudGridConfig, CloudPoint, CloudProcessor, CloudProcessorConfig,
+        ContactSensor, FrameTarget, FrameTransformSensor, ImuMount, ImuSensor, LidarBatch,
+        LidarBatchStorage, Raycaster, TiledCamera,
+    };
+    use molla_sim::Model;
+
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            FAIL_SIZE.with(|cell| cell.set(None));
+        }
+    }
+    fn reject<T>(label: &str, bytes: usize, create: impl FnOnce() -> molla_core::Result<T>) {
+        FAIL_SIZE.with(|cell| {
+            assert!(cell.get().is_none());
+            cell.set(Some(bytes));
+        });
+        let reset = Reset;
+        let result = create();
+        let consumed = FAIL_SIZE.with(|cell| cell.get().is_none());
+        drop(reset);
+        assert!(consumed, "{label}: allocation failure was not exercised");
+        let error = match result {
+            Ok(_) => panic!("{label}: constructor accepted failed allocation"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(&error, molla_core::Error::Storage(message) if message == "sensor host array allocation failed"),
+            "{label}: {error}"
+        );
+        eprintln!("{label}: rejected injected {bytes}-byte host allocation");
+    }
+
+    let engine = Engine::new_gpu().unwrap();
+    let count = 4099;
+    let mut model = Model::empty();
+    model.body_count = count;
+    reject("contact", count * size_of::<u32>(), || {
+        ContactSensor::new(&engine, &model)
+    });
+    let mounts = vec![
+        ImuMount {
+            body: BodyId::from_index(0),
+            local_pose: Transform::IDENTITY
+        };
+        count
+    ];
+    reject("imu", count * size_of::<u32>(), || {
+        ImuSensor::new(&engine, &model, &mounts)
+    });
+    let targets = vec![
+        FrameTarget {
+            body: BodyId::from_index(0),
+            local_pose: Transform::IDENTITY
+        };
+        count
+    ];
+    reject("frames", count * size_of::<u32>(), || {
+        FrameTransformSensor::new(&engine, &model, None, &targets)
+    });
+    reject("rays", count * size_of::<Vec3>(), || {
+        Raycaster::new(&engine, count as u32)
+    });
+    let config = TiledCameraConfig {
+        width: 1,
+        height: 1,
+        ..Default::default()
+    };
+    reject("camera poses", count * size_of::<Transform>(), || {
+        TiledCamera::new(&engine, config, count)
+    });
+    let descriptors = LidarBatchStorage::for_capacity(257, 1)
+        .unwrap()
+        .descriptor_device_bytes as usize;
+    reject("lidar descriptors", descriptors, || {
+        LidarBatch::new(&engine, 257, 1)
+    });
+
+    let image = ImageProcessorConfig {
+        max_pixels: count as u32,
+        max_images: 3,
+        max_operations_per_image: 2,
+        max_buffer_bytes: u64::MAX,
+    };
+    let annotation = AnnotationConfig {
+        max_pixels: count as u32,
+        max_images: 3,
+        max_labels: 5,
+        max_buffer_bytes: u64::MAX,
+    };
+    let cloud = CloudProcessorConfig {
+        max_points: count as u32,
+        max_jobs: 3,
+        max_buffer_bytes: u64::MAX,
+    };
+    let grid = CloudGridConfig {
+        max_points: count as u32,
+        max_cells: 17,
+        max_buffer_bytes: u64::MAX,
+    };
+    reject("image", count * size_of::<u32>(), || {
+        ImageProcessor::new(&engine, image)
+    });
+    reject("annotation", count * size_of::<u32>(), || {
+        AnnotationProcessor::new(&engine, annotation)
+    });
+    reject("cloud", count * size_of::<CloudPoint>(), || {
+        CloudProcessor::new(&engine, cloud)
+    });
+    reject("grid", count * size_of::<CloudPoint>(), || {
+        CloudGrid::new(&engine, grid)
+    });
+
+    drop(ContactSensor::new(&engine, &model).unwrap());
+    drop(ImuSensor::new(&engine, &model, &mounts).unwrap());
+    drop(FrameTransformSensor::new(&engine, &model, None, &targets).unwrap());
+    drop(Raycaster::new(&engine, count as u32).unwrap());
+    drop(TiledCamera::new(&engine, config, count).unwrap());
+    drop(LidarBatch::new(&engine, 257, 1).unwrap());
+    drop(ImageProcessor::new(&engine, image).unwrap());
+    drop(AnnotationProcessor::new(&engine, annotation).unwrap());
+    drop(CloudProcessor::new(&engine, cloud).unwrap());
+    drop(CloudGrid::new(&engine, grid).unwrap());
+    engine.check_device().unwrap();
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn processor_construction_preflight_rejects_before_large_host_allocations() {
+    use molla_sensors::{
+        CloudGrid, CloudGridConfig, CloudProcessor, CloudProcessorConfig, ProcessorStorageLimits,
+        ProcessorStorageUsage,
+    };
+    fn rejected<T>(label: &str, create: impl FnOnce() -> molla_core::Result<T>) {
+        let (result, counts) = measure(create);
+        let message = match result {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("{label}: under-budget constructor accepted"),
+        };
+        assert!(
+            message.contains("processor construction requires"),
+            "{label}: {message}"
+        );
+        assert!(counts.requested_bytes < 4096, "{label}: {counts:?}");
+        eprintln!("{label}: rejected before payload allocation; {counts:?}");
+    }
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap().limits();
+    let image = ImageProcessorConfig {
+        max_pixels: 65_537,
+        max_images: 3,
+        max_operations_per_image: 2,
+        max_buffer_bytes: u64::MAX,
+    };
+    let usage = ProcessorStorageUsage::for_image(image, &device).unwrap();
+    rejected("image", || {
+        ImageProcessor::new_with_storage_limits(
+            &engine,
+            image,
+            ProcessorStorageLimits {
+                max_construction_bytes: usage.device_bytes,
+            },
+        )
+    });
+    let annotation = AnnotationConfig {
+        max_pixels: 65_537,
+        max_images: 3,
+        max_labels: 5,
+        max_buffer_bytes: u64::MAX,
+    };
+    let usage = ProcessorStorageUsage::for_annotation(annotation, &device).unwrap();
+    rejected("annotation", || {
+        AnnotationProcessor::new_with_storage_limits(
+            &engine,
+            annotation,
+            ProcessorStorageLimits {
+                max_construction_bytes: usage.device_bytes,
+            },
+        )
+    });
+    let cloud = CloudProcessorConfig {
+        max_points: 65_537,
+        max_jobs: 3,
+        max_buffer_bytes: u64::MAX,
+    };
+    let usage = ProcessorStorageUsage::for_cloud(cloud, &device).unwrap();
+    rejected("cloud", || {
+        CloudProcessor::new_with_storage_limits(
+            &engine,
+            cloud,
+            ProcessorStorageLimits {
+                max_construction_bytes: usage.device_bytes,
+            },
+        )
+    });
+    let grid = CloudGridConfig {
+        max_points: 65_537,
+        max_cells: 17,
+        max_buffer_bytes: u64::MAX,
+    };
+    let usage = ProcessorStorageUsage::for_grid(grid, &device).unwrap();
+    rejected("grid", || {
+        CloudGrid::new_with_storage_limits(
+            &engine,
+            grid,
+            ProcessorStorageLimits {
+                max_construction_bytes: usage.device_bytes,
+            },
+        )
+    });
+    engine.check_device().unwrap();
+}
+
+#[test]
+#[ignore = "requires GPU to compile the scene"]
+fn scene_identity_snapshot_clones_and_successful_lookups_do_not_allocate() {
+    let engine = Engine::new_gpu().unwrap();
+    let mut builder = ModelBuilder::new();
+    let body = builder.add_body(Default::default());
+    builder
+        .add_shape_sphere(body, 1.0, Transform::IDENTITY)
+        .unwrap();
+    let model = builder.build().unwrap();
+    let mut scene = SensorScene::from_model(&engine, &model, Default::default()).unwrap();
+    let previous = scene.identities();
+    scene.replace_model(&engine, &model).unwrap();
+    let (_, counts) = measure(|| {
+        for _ in 0..1024 {
+            for snapshot in [scene.identities(), previous.clone()] {
+                let stamp = snapshot.stamp();
+                let shape = snapshot.shape_handle(stamp, 0).unwrap();
+                let owner = snapshot.shape_body(stamp, 0).unwrap().unwrap();
+                assert_eq!(snapshot.body_handle(stamp, body).unwrap(), Some(owner));
+                assert_eq!(snapshot.body_index(owner).unwrap(), body);
+                assert_eq!(snapshot.shape_index(shape).unwrap(), 0);
+                std::hint::black_box(snapshot);
+            }
+        }
+    });
+    assert_eq!(counts, Counts::default());
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn scene_query_budget_precedes_model_clone_conversion_and_upload() {
+    use molla_sim::{Heightfield, TriMesh};
+    let engine = Engine::new_gpu().unwrap();
+    let mut measured = Vec::new();
+    for kind in 0..3 {
+        let mut builder = ModelBuilder::new();
+        match kind {
+            0 => {
+                for _ in 0..65_537 {
+                    builder
+                        .add_shape_sphere(BodyId::NONE, 1.0, Transform::IDENTITY)
+                        .unwrap();
+                }
+            }
+            1 => {
+                let mesh = builder.add_mesh(TriMesh {
+                    vertices: vec![Vec3::ZERO, Vec3::X, Vec3::Z],
+                    indices: vec![[0, 1, 2]; 65_537],
+                });
+                builder
+                    .add_shape_trimesh(BodyId::NONE, mesh, Transform::IDENTITY)
+                    .unwrap();
+            }
+            _ => {
+                let field = builder.add_heightfield(Heightfield {
+                    nx: 257,
+                    nz: 257,
+                    cell_size: 1.0,
+                    cell_size_z: 1.0,
+                    origin: Vec3::ZERO,
+                    heights: vec![0.0; 257 * 257],
+                });
+                builder
+                    .add_shape_heightfield(BodyId::NONE, field, Transform::IDENTITY)
+                    .unwrap();
+            }
+        }
+        let model = builder.build().unwrap();
+        let (result, counts) = measure(|| {
+            SensorScene::from_model_with_query_budget(&engine, &model, Default::default(), 65_536)
+        });
+        let message = match result {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("kind={kind}: oversized scene accepted"),
+        };
+        assert!(
+            message.contains("scene query exceeds allocation budget"),
+            "{message}"
+        );
+        eprintln!("scene kind={kind}: {counts:?}");
+        measured.push(counts);
+    }
+    assert!(
+        measured.iter().all(|counts| counts.requested_bytes < 8192),
+        "{measured:?}"
+    );
 }
 
 #[test]

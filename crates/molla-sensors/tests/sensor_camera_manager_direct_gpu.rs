@@ -622,6 +622,37 @@ fn invalid_later_group_budgets_foreign_pools_empty_batches_and_loss_are_explicit
     assert!(out.images.is_empty());
     assert!(out.image_job(0, &[]).is_err());
     assert!(batch.submit().unwrap().index.is_none());
+    assert!(cameras.output_pool(&foreign, config(1)).is_err());
+    let mut foreign_pool = CameraBatch::new(&foreign, &specs, Default::default())
+        .unwrap()
+        .output_pool(&foreign, config(1))
+        .unwrap();
+    {
+        let mut batch = SensorCommandBatch::new(&engine).unwrap();
+        assert!(
+            cameras
+                .encode_scene(&mut batch, &engine, &scene, &state, &mut foreign_pool, None)
+                .is_err()
+        );
+        assert!(batch.submit().unwrap().index.is_none());
+    }
+    {
+        let mut batch = SensorCommandBatch::new(&foreign).unwrap();
+        assert!(
+            cameras
+                .encode_scene(&mut batch, &foreign, &scene, &state, &mut pool, None)
+                .is_err()
+        );
+    }
+    for group in 0..2 {
+        assert_eq!(foreign_pool.group_stats(group).unwrap().reserved_frames, 0);
+        assert_eq!(pool.group_stats(group).unwrap().reserved_frames, 0);
+    }
+    let mut pending = SensorCommandBatch::new(&engine).unwrap();
+    cameras
+        .encode_scene(&mut pending, &engine, &scene, &state, &mut pool, None)
+        .unwrap()
+        .unwrap();
     let mut batch = SensorCommandBatch::new(&engine).unwrap();
     engine.destroy_device().unwrap();
     assert!(
@@ -632,6 +663,17 @@ fn invalid_later_group_budgets_foreign_pools_empty_batches_and_loss_are_explicit
     assert!(batch.submit().is_err());
     assert!(pe.available_slots().is_err());
     assert!(pe.reset().is_err());
+    assert!(pending.submit().is_err());
+    assert!(pool.available_slots().is_err());
+    assert!(pool.reset().is_err());
+    let mut batch = SensorCommandBatch::new(&engine);
+    if let Ok(batch) = batch.as_mut() {
+        assert!(
+            cameras
+                .encode_scene(batch, &engine, &scene, &state, &mut pool, None)
+                .is_err()
+        );
+    }
 }
 
 #[test]
@@ -668,7 +710,7 @@ fn warm_groups_preserve_independent_moving_images_and_fixed_slot_resources() {
             assert_eq!(out.stamp.sample_id(), sample);
             let submitted = batch.submit().unwrap();
             assert_eq!(submitted.stats.encoded_frames, 3);
-            assert_eq!(submitted.stats.kernel_dispatches, 19);
+            assert_eq!(submitted.stats.kernel_dispatches, 22);
             assert_eq!(submitted.stats.output_clears, 15);
             assert_eq!(submitted.stats.input_upload_bytes, 4 * 32);
             assert_eq!(submitted.stats.submissions, 1);
@@ -735,6 +777,10 @@ fn warm_groups_preserve_independent_moving_images_and_fixed_slot_resources() {
             stats.accumulator_buffer_allocations,
             if i == 1 { 2 } else { 0 }
         );
-        assert_eq!(cameras.query_stats(i).unwrap().primitive_preparations, 1);
+        let query = cameras.query_stats(i).unwrap();
+        assert_eq!(query.primitive_preparations, 0);
+        assert_eq!(query.scene_builds, 1);
+        assert_eq!(query.scene_preparations, 1);
+        assert_eq!(query.refit_preparations, 1);
     }
 }

@@ -61,7 +61,7 @@ let readings = sensor.update(&engine, &contacts)?;
 for (body_idx, r) in readings.iter().enumerate() {
     if r.count > 0 {
         println!(
-            "body {body_idx}: {} contacts, depth={:.4} m, push direction={:?}",
+            "body {body_idx}: {} contacts, depth={:.4} m, signed normals={:?}",
             r.count, r.max_depth, r.normal_sum,
         );
     }
@@ -72,6 +72,13 @@ for (body_idx, r) in readings.iter().enumerate() {
 the model — i.e. the output vector always has length
 `model.body_count`. Bodies with no contacts this frame land at a
 zeroed reading; callers typically filter by `count > 0`.
+
+The four retained output arrays share a default 1 GiB host/device payload cap,
+checked before allocation. `new_with_limits(engine, model, SensorArrayLimits)`
+overrides it; `storage_usage()` reports the checked estimate. Contact/CSR inputs,
+collection and leased output pools are not included. An empty model allocates no
+output array payload and accepts a zero-byte cap. See
+[fixed-array storage budgets](imu.md#fixed-array-storage-budgets).
 
 `dispatch(engine, contacts)` returns `ContactDeviceReadings`: borrowed
 `DeviceBuffer` channels named `count`, `max_depth`, `normal_sum` and
@@ -105,8 +112,14 @@ Command encoders and driver upload staging are not counted as preparations.
 shared command streams without submission or authority bookkeeping. Validate
 the CSR/active ranges and mark output buffers device-authoritative yourself.
 Submit before changing a reused parameter buffer; distinct pending parameter
-sets require separate prepared bindings. Public sensor-level producer batching
-and direct dispatch into leased output slots remain pending.
+sets require separate prepared bindings. Public `encode` supports mixed producer
+batches and leased output slots, including explicit clearing on empty contacts.
+
+Viewer example 07 asynchronously collects the four displayed aggregate channels.
+Reset discards old displayed/pending results and waits for a new physics step;
+it does not reinterpret stale collision data as a sample of the reset scene.
+The arrows display signed geometric normal sums, not forces. See
+[viewer integration and acceptance status](viewer.md).
 
 ## Performance
 

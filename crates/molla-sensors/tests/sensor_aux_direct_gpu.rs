@@ -857,6 +857,22 @@ fn direct_auxiliary_validation_rejects_foreign_stale_and_malformed_inputs_before
                 .is_err()
         );
     }
+    {
+        let mut batch = SensorCommandBatch::new(&foreign).unwrap();
+        assert!(
+            imu.encode(
+                &mut batch,
+                &foreign,
+                &model,
+                &state,
+                0.1,
+                &mut ip,
+                Default::default()
+            )
+            .is_err()
+        );
+        assert_eq!(batch.stats().history_copies, 0);
+    }
     assert_eq!(ip.stats().reserved_frames, 0);
     let mut prime = SensorCommandBatch::new(&engine).unwrap();
     assert!(
@@ -877,4 +893,95 @@ fn direct_auxiliary_validation_rejects_foreign_stale_and_malformed_inputs_before
     assert!(prime.submit().is_err());
     assert!(ip.available_slots().is_err());
     assert!(contact.output_pool(&engine, config(1)).is_err());
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn contact_backpressure_foreign_pools_and_device_loss_are_explicit() {
+    let _guard = GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().unwrap();
+    let foreign = Engine::new_gpu().unwrap();
+    let (model, _, _) = fixture(&engine, 70);
+    let (foreign_model, _, _) = fixture(&foreign, 70);
+    let inputs = contacts(&engine, 70);
+    let mut sensor = ContactSensor::new(&engine, &model).unwrap();
+    let mut pool = sensor.output_pool(&engine, config(1)).unwrap();
+
+    // A completed but still held frame keeps its only slot.
+    let mut batch = SensorCommandBatch::new(&engine).unwrap();
+    let receipt = sensor
+        .encode(&mut batch, &engine, &inputs, &mut pool, Default::default())
+        .unwrap()
+        .unwrap();
+    let held = batch.submit().unwrap().frame(&receipt).unwrap().clone();
+    drain(&engine);
+    let preparations = sensor.dispatch_stats().binding_preparations;
+    {
+        let mut blocked = SensorCommandBatch::new(&engine).unwrap();
+        assert!(
+            sensor
+                .encode(&mut blocked, &engine, &inputs, &mut pool, Default::default())
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(blocked.stats().encoded_frames, 0);
+        assert_eq!(blocked.submit().unwrap().stats.submissions, 0);
+    }
+    assert_eq!(pool.stats().backpressure, 1);
+    assert_eq!(sensor.dispatch_stats().binding_preparations, preparations);
+    assert_eq!(contact_values(&engine, &held).channel::<u32>(0).unwrap()[1], 2);
+    drop(held);
+    assert_eq!(pool.available_slots().unwrap(), 1);
+    let mut batch = SensorCommandBatch::new(&engine).unwrap();
+    assert!(
+        sensor
+            .encode(&mut batch, &engine, &inputs, &mut pool, Default::default())
+            .unwrap()
+            .is_some()
+    );
+    drop(batch.submit().unwrap());
+    drain(&engine);
+
+    // Foreign pools and batches fail before any slot is reserved.
+    assert!(sensor.output_pool(&foreign, config(1)).is_err());
+    let foreign_sensor = ContactSensor::new(&foreign, &foreign_model).unwrap();
+    let mut foreign_pool = foreign_sensor.output_pool(&foreign, config(1)).unwrap();
+    let reserved = pool.stats().reserved_frames;
+    {
+        let mut batch = SensorCommandBatch::new(&engine).unwrap();
+        assert!(
+            sensor
+                .encode(&mut batch, &engine, &inputs, &mut foreign_pool, Default::default())
+                .is_err()
+        );
+        assert_eq!(batch.stats().encoded_frames, 0);
+    }
+    {
+        let mut batch = SensorCommandBatch::new(&foreign).unwrap();
+        assert!(
+            sensor
+                .encode(&mut batch, &foreign, &inputs, &mut pool, Default::default())
+                .is_err()
+        );
+    }
+    assert_eq!(foreign_pool.stats().reserved_frames, 0);
+    assert_eq!(pool.stats().reserved_frames, reserved);
+
+    // Known device loss fails the pending batch and every later use.
+    let mut pending = SensorCommandBatch::new(&engine).unwrap();
+    sensor
+        .encode(&mut pending, &engine, &inputs, &mut pool, Default::default())
+        .unwrap()
+        .unwrap();
+    engine.destroy_device().unwrap();
+    assert!(pending.submit().is_err());
+    assert!(pool.available_slots().is_err());
+    assert!(sensor.output_pool(&engine, config(1)).is_err());
+    if let Ok(mut batch) = SensorCommandBatch::new(&engine) {
+        assert!(
+            sensor
+                .encode(&mut batch, &engine, &inputs, &mut pool, Default::default())
+                .is_err()
+        );
+    }
 }

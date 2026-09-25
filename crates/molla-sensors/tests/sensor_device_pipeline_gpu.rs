@@ -14,6 +14,107 @@ static GPU: Mutex<()> = Mutex::new(());
 
 #[test]
 #[ignore = "needs a real GPU"]
+fn auxiliary_commands_submit_transactionally_and_poison_on_failure() {
+    use molla_sensors::SensorCommandBatch;
+    let _lock = GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().unwrap();
+    let buffer =
+        DeviceBuffer::from_host(&engine, vec![7u32], BufferUsage::StorageReadWrite).unwrap();
+    let mut ring = ReadbackRing::new(
+        &engine,
+        ReadbackConfig {
+            slots: 1,
+            bytes_per_slot: 8,
+            max_total_bytes: 8,
+        },
+    )
+    .unwrap();
+    let read = |ring: &mut ReadbackRing| {
+        let ticket = ring
+            .try_enqueue(
+                &[buffer.readback_source(0..1).unwrap()],
+                ReadbackStamp::default(),
+            )
+            .unwrap()
+            .unwrap();
+        ring.wait(&ticket, Duration::from_secs(30))
+            .unwrap()
+            .channel::<u32>(0)
+            .unwrap()[0]
+    };
+    let mut batch = SensorCommandBatch::new(&engine).unwrap();
+    assert!(
+        batch
+            .encode_auxiliary(|encoder| {
+                encoder.clear_buffer(buffer.device_buffer()?, 0, None);
+                Err(molla_core::Error::Solver("fixture cancellation".into()))
+            })
+            .is_err()
+    );
+    let called = std::cell::Cell::new(false);
+    assert!(
+        batch
+            .encode_auxiliary(|_| {
+                called.set(true);
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(!called.get());
+    assert!(batch.submit().is_err());
+    assert_eq!(read(&mut ring), 7);
+    let mut batch = SensorCommandBatch::new(&engine).unwrap();
+    batch
+        .encode_auxiliary(|encoder| {
+            encoder.clear_buffer(buffer.device_buffer()?, 0, None);
+            Ok(())
+        })
+        .unwrap();
+    let submission = batch.submit().unwrap();
+    assert_eq!(submission.stats.submissions, 1);
+    assert_eq!(submission.stats.auxiliary_encodes, 1);
+    assert!(submission.into_frames().is_empty());
+    assert_eq!(read(&mut ring), 0);
+    let empty = SensorCommandBatch::new(&engine).unwrap().submit().unwrap();
+    assert!(empty.index.is_none());
+    assert_eq!(empty.stats.submissions, 0);
+    let mut bounded = SensorCommandBatch::new(&engine).unwrap();
+    for _ in 0..128 {
+        bounded.encode_auxiliary(|_| Ok(())).unwrap();
+    }
+    assert!(
+        bounded
+            .encode_auxiliary(|_| {
+                called.set(true);
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(!called.get());
+    assert_eq!(bounded.submit().unwrap().stats.auxiliary_encodes, 128);
+    let mut panicking = SensorCommandBatch::new(&engine).unwrap();
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = panicking.encode_auxiliary(|_| panic!("fixture auxiliary panic"));
+        }))
+        .is_err()
+    );
+    assert!(panicking.submit().is_err());
+    let mut batch = SensorCommandBatch::new(&engine).unwrap();
+    engine.destroy_device().unwrap();
+    assert!(
+        batch
+            .encode_auxiliary(|_| {
+                called.set(true);
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(!called.get());
+}
+
+#[test]
+#[ignore = "needs a real GPU"]
 fn imu_gpu_consumer_and_async_snapshots_do_not_download_intermediate_outputs() {
     let _lock = GPU.lock().unwrap_or_else(|e| e.into_inner());
     let engine = Engine::new_gpu().unwrap();

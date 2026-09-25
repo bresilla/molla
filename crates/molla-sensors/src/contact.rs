@@ -26,6 +26,7 @@ use crate::device_results::{
 };
 use crate::dispatch::{BindingsCache, SensorDispatchStats};
 use crate::readback::{DeviceBuffer, ReadbackConfig, ReadbackRing, ReadbackStamp, ReadbackStats};
+use crate::{SensorArrayLimits, SensorArrayStorage};
 use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_kernels::{ContactAggregateBindings, ContactAggregateKernel};
@@ -63,6 +64,7 @@ pub struct ContactSensor {
     leased_bindings: BindingsCache<ContactAggregateBindings>,
     dispatch_stats: SensorDispatchStats,
     body_count: u32,
+    storage_usage: SensorArrayStorage,
     out_count: DeviceBuffer<u32>,
     out_max_depth: DeviceBuffer<Real>,
     out_normal_sum: DeviceBuffer<Vec3>,
@@ -72,6 +74,15 @@ pub struct ContactSensor {
 
 impl ContactSensor {
     pub fn new(engine: &Engine, model: &Model) -> Result<Self> {
+        Self::new_with_limits(engine, model, SensorArrayLimits::default())
+    }
+
+    /// Construct with a combined retained host/device array budget.
+    pub fn new_with_limits(
+        engine: &Engine,
+        model: &Model,
+        limits: SensorArrayLimits,
+    ) -> Result<Self> {
         engine.check_device()?;
         let device = engine
             .device()
@@ -80,20 +91,17 @@ impl ContactSensor {
         let n = model.body_count;
         let body_count = u32::try_from(n)
             .map_err(|_| Error::Solver("contact sensor: too many bodies".into()))?;
-        let limits = device.limits();
-        if n as u64 * 16 > limits.max_storage_buffer_binding_size as u64
-            || n as u64 * 16 > limits.max_buffer_size
-            || body_count.div_ceil(64) > limits.max_compute_workgroups_per_dimension
-        {
-            return Err(Error::Solver(
-                "contact sensor: capacity exceeds GPU limits".into(),
-            ));
-        }
+        let storage_usage = SensorArrayStorage::for_contact(n)?;
+        limits.check(storage_usage, body_count, 0, &device.limits())?;
         let usage = BufferUsage::StorageReadWrite;
-        let out_count = DeviceBuffer::from_host(engine, vec![0u32; n], usage)?;
-        let out_max_depth = DeviceBuffer::from_host(engine, vec![0.0; n], usage)?;
-        let out_normal_sum = DeviceBuffer::from_host(engine, vec![Vec3::ZERO; n], usage)?;
-        let out_centroid = DeviceBuffer::from_host(engine, vec![Vec3::ZERO; n], usage)?;
+        let out_count =
+            DeviceBuffer::from_host(engine, crate::host_arrays::filled(n, 0u32)?, usage)?;
+        let out_max_depth =
+            DeviceBuffer::from_host(engine, crate::host_arrays::filled(n, 0.0)?, usage)?;
+        let out_normal_sum =
+            DeviceBuffer::from_host(engine, crate::host_arrays::filled(n, Vec3::ZERO)?, usage)?;
+        let out_centroid =
+            DeviceBuffer::from_host(engine, crate::host_arrays::filled(n, Vec3::ZERO)?, usage)?;
 
         Ok(Self {
             kernel: ContactAggregateKernel::new(&device),
@@ -101,6 +109,7 @@ impl ContactSensor {
             leased_bindings: BindingsCache::with_capacity(128),
             dispatch_stats: SensorDispatchStats::default(),
             body_count,
+            storage_usage,
             out_count,
             out_max_depth,
             out_normal_sum,
@@ -113,6 +122,11 @@ impl ContactSensor {
     /// at construction time).
     pub fn body_count(&self) -> u32 {
         self.body_count
+    }
+
+    /// Combined retained host/device array payload, excluding collection and output pools.
+    pub fn storage_usage(&self) -> SensorArrayStorage {
+        self.storage_usage
     }
 
     /// Run the kernel against the current `contacts` and return one
@@ -401,5 +415,34 @@ impl ContactSensor {
             .as_ref()
             .map(ReadbackRing::stats)
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sensor_storage::tests::{assert_payload, buffer_bytes};
+
+    #[test]
+    #[ignore = "requires GPU"]
+    fn contact_array_estimate_matches_allocated_payload_including_empty_model() {
+        let engine = Engine::new_gpu().unwrap();
+        for bodies in [0, 3] {
+            let mut builder = molla_sim::ModelBuilder::new();
+            for _ in 0..bodies {
+                builder.add_body(Default::default());
+            }
+            let model = builder.build().unwrap();
+            let sensor = ContactSensor::new(&engine, &model).unwrap();
+            assert_payload(
+                sensor.storage_usage(),
+                &[
+                    buffer_bytes(&sensor.out_count.buffer),
+                    buffer_bytes(&sensor.out_max_depth.buffer),
+                    buffer_bytes(&sensor.out_normal_sum.buffer),
+                    buffer_bytes(&sensor.out_centroid.buffer),
+                ],
+            );
+        }
     }
 }

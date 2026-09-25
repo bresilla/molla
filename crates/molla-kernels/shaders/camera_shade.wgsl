@@ -31,10 +31,10 @@ fn shade(@builtin(global_invocation_id) gid: vec3<u32>) {
     let mask = params.channels;
     if id < 0 || u32(id) >= params.shape_count || !(t > 0.0 && t < params.max_distance) {
         if (mask & 1u) != 0u { out_color[i] = 0u; }
-        if (mask & 2u) != 0u { out_depth[i] = -1.0; }
+        if (mask & 2u) != 0u { out_depth[i] = select(-1.0, -2.0, id == -2); }
         if (mask & 4u) != 0u { out_normal[i] = vec4<f32>(0.0); }
         if (mask & 8u) != 0u { out_albedo[i] = 0u; }
-        if (mask & 16u) != 0u { out_shape[i] = 0xffffffffu; }
+        if (mask & 16u) != 0u { out_shape[i] = select(0xffffffffu, 0xfffffffeu, id == -2); }
         return;
     }
     let n = normal[i].xyz;

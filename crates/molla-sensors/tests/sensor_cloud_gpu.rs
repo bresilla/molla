@@ -831,3 +831,134 @@ fn finite_large_angle_interpolation_does_not_overflow_and_transform_overflow_is_
         1
     );
 }
+
+#[test]
+#[ignore = "needs a real GPU"]
+fn extreme_finite_transforms_and_distance_filters_guard_overflow_before_arithmetic() {
+    let _lock = GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().unwrap();
+    let mut proc = processor(&engine, 1, 1);
+    let mut ring = ring(&engine, 1, 1, 1);
+    let max = f32::MAX as f64;
+    let mut point = CloudPoint::new(Vec3::ZERO, 0, 0);
+    let cases = [
+        (Vec3::X, Vec3::X, 0.0, None, [0, 1, 0], Vec3::ZERO),
+        (-Vec3::X, -Vec3::X, 0.0, None, [0, 1, 0], Vec3::ZERO),
+        (Vec3::X, -Vec3::X, 0.0, None, [1, 0, 0], Vec3::ZERO),
+        (Vec3::X, Vec3::ZERO, 0.0, None, [1, 0, 0], Vec3::X),
+        (
+            Vec3::X,
+            Vec3::ZERO,
+            std::f64::consts::FRAC_PI_2,
+            None,
+            [1, 0, 0],
+            Vec3::Y,
+        ),
+        (
+            Vec3::X + Vec3::Y,
+            Vec3::ZERO,
+            std::f64::consts::FRAC_PI_4,
+            None,
+            [0, 1, 0],
+            Vec3::ZERO,
+        ),
+        (
+            Vec3::X + Vec3::Y,
+            -Vec3::Y,
+            std::f64::consts::FRAC_PI_4,
+            None,
+            [1, 0, 0],
+            Vec3::Y * (2.0_f64.sqrt() - 1.0),
+        ),
+        (
+            Vec3::X,
+            Vec3::ZERO,
+            0.0,
+            Some((-Vec3::X * max, max)),
+            [0, 0, 1],
+            Vec3::ZERO,
+        ),
+        (
+            Vec3::X + Vec3::Y,
+            Vec3::ZERO,
+            0.0,
+            Some((Vec3::ZERO, max)),
+            [0, 0, 1],
+            Vec3::ZERO,
+        ),
+        (
+            Vec3::X,
+            Vec3::ZERO,
+            0.0,
+            Some((Vec3::ZERO, max)),
+            [1, 0, 0],
+            Vec3::X,
+        ),
+        (
+            Vec3::splat(0.1),
+            Vec3::ZERO,
+            0.0,
+            Some((Vec3::ZERO, max)),
+            [1, 0, 0],
+            Vec3::splat(0.1),
+        ),
+    ];
+    for (index, (position, translation, angle, distance, counts, expected)) in
+        cases.into_iter().enumerate()
+    {
+        let input = source(&engine, vec![CloudPoint::new(position * max, 0, 0)]);
+        let frame = proc
+            .process(&[CloudJob {
+                input: CloudInput::Points(input.readback_source(0..1).unwrap()),
+                transform: Transform::new(translation * max, Quat::from_rotation_z(angle)),
+                filter: CloudFilter {
+                    distance,
+                    ..Default::default()
+                },
+                stamp: Default::default(),
+            }])
+            .unwrap();
+        let out = collect(&frame, &mut ring);
+        let summary = CloudSummary::from_words(&out.channel::<u32>(2).unwrap()).unwrap();
+        assert_eq!(
+            [summary.count, summary.invalid, summary.filtered],
+            counts,
+            "case {index}"
+        );
+        if counts[0] == 1 {
+            let point = out.channel::<CloudPoint>(1).unwrap()[0];
+            let actual = vec3(point.position) / max;
+            assert!(
+                actual.is_finite() && (actual - expected).length() < 3e-6,
+                "case {index}: {actual:?}"
+            );
+        }
+    }
+    for normal in [true, false] {
+        let target = if normal {
+            &mut point.normal
+        } else {
+            &mut point.direction
+        };
+        target[..3].copy_from_slice(&[f32::MAX, f32::MAX, 0.0]);
+        let input = source(&engine, vec![point]);
+        let frame = proc
+            .process(&[CloudJob {
+                input: CloudInput::Points(input.readback_source(0..1).unwrap()),
+                transform: Transform::new(
+                    Vec3::ZERO,
+                    Quat::from_rotation_z(std::f64::consts::FRAC_PI_4),
+                ),
+                filter: Default::default(),
+                stamp: Default::default(),
+            }])
+            .unwrap();
+        let out = collect(&frame, &mut ring);
+        let summary = CloudSummary::from_words(&out.channel::<u32>(2).unwrap()).unwrap();
+        assert_eq!(
+            [summary.count, summary.invalid, summary.filtered],
+            [0, 1, 0]
+        );
+        point = CloudPoint::new(Vec3::ZERO, 0, 0);
+    }
+}

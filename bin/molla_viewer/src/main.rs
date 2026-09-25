@@ -54,9 +54,9 @@ use molla::geometry::CollisionPipeline;
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
 use molla::sensors::{
-    AerialLidar, AerialScanMetadata, BodyContactReading, BoundingBox2D, CameraChannels,
-    ContactSensor, Dataset, ImuMount, ImuReading, ImuSensor, Lidar, RayHit, Raycaster,
-    ScanMetadata, TiledCamera, TiledCameraConfig,
+    AerialScanMetadata, BodyContactReading, BoundingBox2D, CameraChannels,
+    ContactSensor, ImuMount, ImuReading, ImuSensor, Raycaster,
+    ScanMetadata, SensorCommandBatch, TiledCamera, TiledCameraConfig,
 };
 use molla::solvers::{
     FeatherstoneSolver, IkConfig, IkObjective, IkSolver, Solver as _, SphConfig, SphSimulation,
@@ -65,6 +65,20 @@ use molla::solvers::{
 
 #[cfg(test)]
 mod viewer_readback_tests;
+#[cfg(test)]
+mod viewer_sensor_tests;
+
+mod sensor_preview;
+mod viewer_controls;
+mod sensor_timing;
+mod sensor_lab;
+mod lidar_preview;
+mod camera_preview;
+mod annotation_preview;
+use annotation_preview::AnnotationPreview;
+use camera_preview::{CameraPreview, CameraRequest};
+use lidar_preview::LidarPreview;
+use sensor_preview::{SensorPreview, ViewerSensorClock, preview_pool_config, sensor_preview_pane, sensor_preview_scroll};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[global_allocator]
@@ -205,6 +219,7 @@ include!("examples/105_lidar_v2.rs");
 include!("examples/106_aerial_lidar_pass.rs");
 include!("examples/107_solar_sky.rs");
 include!("examples/108_synthetic_annotation.rs");
+include!("examples/144_sensor_lab.rs");
 include!("examples/109_tire_model_lab.rs");
 include!("examples/110_vehicle_offroad.rs");
 include!("examples/118_bekker_sinkage.rs");
@@ -248,11 +263,19 @@ include!("examples/50_fem_stokes.rs");
 
 fn main() {
     let geometry = WindowGeometry::load("molla_viewer");
+    let mut window = geometry.to_window("molla viewer");
+    // Unattended scripted runs must not block on a compositor that throttles
+    // covered windows: vsync'd acquire would time out and abort the run.
+    if std::env::var_os("MOLLA_VIEWER_ACTIONS").is_some()
+        || std::env::var_os("MOLLA_VIEWER_SCREENSHOT").is_some()
+    {
+        window.present_mode = bevy::window::PresentMode::AutoNoVsync;
+    }
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin {
-                primary_window: Some(geometry.to_window("molla viewer")),
+                primary_window: Some(window),
                 ..default()
             })
             .set(bevy::log::LogPlugin {
@@ -264,7 +287,14 @@ fn main() {
     .add_plugins(EguiPlugin::default())
     .add_plugins(FrameTimeDiagnosticsPlugin::default())
     .add_plugins(EntityCountDiagnosticsPlugin::default())
-    .add_plugins(WireframePlugin::default());
+    .add_plugins(WireframePlugin::default())
+    .insert_gizmo_config(
+        ContactNormalGizmos,
+        GizmoConfig {
+            depth_bias: -1.0,
+            ..default()
+        },
+    );
     #[cfg(not(feature = "profile"))]
     app.add_plugins(RenderDiagnosticsPlugin);
     #[cfg(any(feature = "profile", feature = "log_diag"))]
@@ -293,7 +323,7 @@ fn main() {
         })
         .insert_resource(SimRunState::default())
         .insert_resource(SimStats::default())
-        .insert_resource(PendingSceneSwitch(None))
+        .insert_resource(PendingSceneSwitch(scene_from_env()))
         .insert_resource(SceneDescriptionPaneState::default())
         .insert_resource(MouseGrab::default())
         .insert_resource(ActivityView::default())
@@ -328,6 +358,7 @@ fn main() {
         .insert_resource(AerialLidarExampleState::default())
         .insert_resource(SolarSkyExampleState::default())
         .insert_resource(SynthAnnotationExampleState::default())
+        .insert_resource(SensorLabState::default())
         .insert_resource(TireLabExampleState::default())
         .insert_resource(VehicleOffroadExampleState::default())
         .insert_resource(TerrainLabExampleState::default())
@@ -374,6 +405,10 @@ fn main() {
         });
     let initial_scene = Scene::Pile;
     let (sim, visuals) = Sim::build_scene(initial_scene);
+    if let Some(script) = ViewerScript::from_env() {
+        app.insert_resource(script)
+            .add_systems(Update, run_viewer_script);
+    }
     app.insert_resource(sim)
         .insert_resource(BodyVisuals(visuals))
         .add_systems(Startup, setup)
@@ -460,14 +495,17 @@ fn main() {
         // PLAN_HELIOS scenes — each viewer scene has its own update +
         // draw pair; registered separately to stay under the chain
         // tuple-arity ceiling.
-        .add_systems(Update, update_lidar_v2_example)
-        .add_systems(Update, draw_lidar_v2_gizmos)
-        .add_systems(Update, update_aerial_lidar_example)
-        .add_systems(Update, draw_aerial_lidar_gizmos)
+        .add_systems(Update, update_lidar_v2_example.after(step_simulation))
+        .add_systems(Update, draw_lidar_v2_gizmos.after(update_lidar_v2_example))
+        .add_systems(Update, update_aerial_lidar_example.after(step_simulation))
+        .add_systems(Update, draw_aerial_lidar_gizmos.after(update_aerial_lidar_example))
         .add_systems(Update, update_solar_sky_example)
         .add_systems(Update, draw_solar_sky_gizmos)
-        .add_systems(Update, update_synth_annotation_example)
-        .add_systems(Update, draw_synth_annotation_gizmos)
+        .add_systems(Update, update_synth_annotation_example.after(step_simulation))
+        .add_systems(Update, draw_synth_annotation_gizmos.after(update_synth_annotation_example))
+        .add_systems(Update, update_sensor_lab_motion.after(step_simulation).before(sync_transforms))
+        .add_systems(Update, update_sensor_lab.after(update_sensor_lab_motion))
+        .add_systems(Update, draw_sensor_lab.after(update_sensor_lab))
         .add_systems(Update, update_tire_lab_example)
         .add_systems(Update, draw_tire_lab_gizmos)
         .add_systems(Update, update_vehicle_offroad_example)
@@ -1025,12 +1063,24 @@ fn tire_scene_truth_notes(scene: Scene) -> Option<TireSceneTruthNotes> {
 /// Per-frame physics timing. Each EMA in microseconds.
 #[derive(Resource, Default)]
 struct SimStats {
+    revision: Option<u64>,
     smoothed_step_us: f64,
     smoothed_solve_us: f64,
     smoothed_collide_us: f64,
     smoothed_download_us: f64,
     last_contacts: u32,
     arm_logged: bool,
+}
+
+impl SimStats {
+    fn begin_revision(&mut self, revision: u64) {
+        if self.revision != Some(revision) {
+            *self = Self {
+                revision: Some(revision),
+                ..Self::default()
+            };
+        }
+    }
 }
 
 /// Bundle of the three ribbon resources so `control_pane` stays
@@ -1119,6 +1169,10 @@ struct SceneStates<'w> {
 /// hard 16-element ceiling and `control_pane` already runs near it.
 #[derive(bevy::ecs::system::SystemParam)]
 struct PaneSceneStates<'w> {
+    sensor_lab: ResMut<'w, SensorLabState>,
+    annotation: Res<'w, SynthAnnotationExampleState>,
+    lidar_v2: Res<'w, LidarV2ExampleState>,
+    aerial_lidar: Res<'w, AerialLidarExampleState>,
     arm: ResMut<'w, ArmExampleState>,
     gpu_ik: ResMut<'w, GpuIkArmState>,
     gpu_np: ResMut<'w, GpuNpExampleState>,
@@ -1182,10 +1236,11 @@ struct PaneSceneStates<'w> {
 }
 
 /// Owns the molla simulation. **GPU-first** per the project rule —
-/// `Engine::new_gpu()` is hard-required at startup, no CPU fallback.
+/// A GPU adapter is required at startup; there is no CPU fallback.
 #[derive(Resource)]
 struct Sim {
     scene: Scene,
+    sensor_clock: ViewerSensorClock,
     model: mp::Model,
     state_a: mp::State,
     state_b: mp::State,
@@ -1895,6 +1950,7 @@ enum Scene {
     /// while a candidate car drives on the current estimate so the two
     /// visibly converge. The μ-iteration trace is a gizmo strip chart.
     VehicleSysid,
+    SensorLab,
 }
 
 impl Scene {
@@ -2054,10 +2110,16 @@ impl Scene {
         Scene::TireRealistic,
         Scene::TerrainLab,
         Scene::VehicleSysid,
+        Scene::SensorLab,
     ];
+
+    fn sensor_only(self) -> bool {
+        matches!(self, Self::LidarV2 | Self::AerialLidarPass | Self::SyntheticAnnotation | Self::SensorLab)
+    }
 
     fn label(self) -> &'static str {
         match self {
+            Scene::SensorLab => "144 Shared-scene sensor lab",
             Scene::Pile => "01 Pile",
             Scene::Rope => "02 Rope",
             Scene::Tower => "03 Tower",
@@ -2216,6 +2278,7 @@ impl Scene {
 
     fn description(self) -> &'static str {
         match self {
+            Scene::SensorLab => "A prescribed moving triangle-mesh occluder shares one GPU sensor scene with independently scheduled LiDAR and camera queries. An IMU follows its analytic body velocity. The pane controls rates, scan layout and FOV, displays camera/IMU data and sample timing; colored LiDAR hits reveal occlusion of the stationary sphere. This is a sensing calibration fixture, not a dynamics solver.",
             Scene::Pile => {
                 "Drops a mixed pile of rigid bodies onto the floor to exercise basic contact, friction, and settling. The expected behavior is a noisy stack that loses energy and comes to rest without exploding or drifting away."
             }
@@ -2597,16 +2660,16 @@ impl Scene {
                 "A real weakly-compressible SPH dam break. A tall water column held against one wall collapses, surges across the tank floor, and runs up the far wall before sloshing back. Driven by the GPU WCSPH solver — not the MPM-as-fluid path."
             }
             Scene::LidarV2 => {
-                "A terrestrial LiDAR scan over analytical primitives + a TriMesh ground. The new `Lidar` sensor lays out a (θ, φ) grid; hits are drawn as small spheres coloured by distance. The right pane exposes scan-grid size, beam divergence, and sub-ray count so cone widening is visible on the fly."
+                "A GPU-generated terrestrial LiDAR grid over analytical primitives and a triangle-mesh ground. Hits are drawn as spheres coloured by distance. The pane shows the fixed grid, divergence and sub-ray settings, sample age, and bounded asynchronous collection status."
             }
             Scene::AerialLidarPass => {
-                "An aerial LiDAR pass over a TriMesh ground with a couple of obstacles. Pulse origins are Halton-distributed across the footprint AABB and fired nadir; the resulting point cloud is drawn over the ground plane, density scaling with the pulses-per-m² knob."
+                "A GPU-generated aerial LiDAR pass over a triangle-mesh ground and a box obstacle. Halton-distributed pulse origins fire nadir rays. The pass runs once on scene entry or reset; the pane shows fixed coverage/density and asynchronous collection status."
             }
             Scene::SolarSky => {
                 "An outdoor scene lit by `molla_math::solar_position`. A flat ground plus a few cubes sits at a (lat, lon); the sun direction is computed from a slider-driven date/time and used to shade the bodies, so the lighting visibly arcs across the sky as you scrub time."
             }
             Scene::SyntheticAnnotation => {
-                "A synthetic-annotation dataset preview. Three labelled bodies (cube, sphere, capsule) sit on a ground; their per-instance bounding boxes — derived from the `TiledCamera`'s SHAPE_INDEX channel via the new `Dataset` post-process — are drawn as wireframe gizmos to make the dataset export visually auditable."
+                "A GPU camera-to-annotation preview. Three labelled bodies (cube, sphere, capsule) sit on an unlabelled ground. The pane shows inclusive pixel bounding boxes computed on GPU from the camera's shape indices. Approximate world-space wireframes mark detected bodies; they are not projected pixel boxes."
             }
             Scene::TireModelLab => {
                 "A wheel-model laboratory. The molla-vehicle tire models — `RigidTire`, `TmSimpleTire`, `Pac89Tire`, and the native `RealBrushTireModel` adapter — are evaluated across a slip-ratio sweep and a slip-angle sweep; the resulting longitudinal (Fx) and lateral (Fy) force curves are drawn as 3-D line plots so empirical reference curves can be compared against the reusable real-brush force law. Right-rail knobs vary the normal load (Fz) and friction coefficient."
@@ -2773,6 +2836,13 @@ impl Scene {
     fn physics_audit(self) -> ScenePhysicsAudit {
         use PhysicsAuditStatus::{Complete, CpuOnly, ManualGpu, Partial};
         match self {
+            Scene::SensorLab => ScenePhysicsAudit {
+                status: ManualGpu,
+                reference_case: "shared-scene moving TriMesh occlusion with scheduled LiDAR/camera/IMU",
+                cpu_proof: "analytic prescribed pose/velocity and independent cadence/IMU references",
+                gpu_proof: "make test-viewer-sensors",
+                notes: "kinematic sensing fixture; visual/performance acceptance tracked in SENSORS.md",
+            },
             Scene::Pile => ScenePhysicsAudit {
                 status: Complete,
                 reference_case: "rigid pile / stacking",
@@ -3237,8 +3307,8 @@ impl Scene {
                 status: ManualGpu,
                 reference_case: "labelled-scene render + per-instance bbox extraction",
                 cpu_proof: "dataset.rs bbox-invariant and annotate_checked tests",
-                gpu_proof: "make test-gpu P=molla-sensors T=dataset_export_gpu",
-                notes: "H9 viewer scene — TiledCamera SHAPE_INDEX channel + Dataset post-process, bboxes drawn as wireframes",
+                gpu_proof: "make test-viewer-sensors; make test-gpu P=molla-sensors T=sensor_annotation_gpu",
+                notes: "GPU camera-to-annotation chain with asynchronous box-only display; world-space detection markers and pixel bounds in pane",
             },
             Scene::TireModelLab => ScenePhysicsAudit {
                 status: CpuOnly,
@@ -3467,11 +3537,8 @@ struct ClothObstacle;
 #[derive(Resource, Default)]
 struct WireframeOn(bool);
 
-/// Per-frame configuration for the Lidar example. Driven by the
-/// right-rail panel sliders. The `update_lidar` system rebuilds N
-/// rays from this config every frame, runs the GPU raycaster, and
-/// stashes the results in [`LidarState`] for the gizmo system.
-#[derive(Resource, Clone, Copy)]
+/// Scan layout and simulation-time rotation settings for the LiDAR pane.
+#[derive(Resource, Clone, Copy, PartialEq)]
 struct LidarConfig {
     /// World-space lidar origin.
     origin: Vec3,
@@ -3715,6 +3782,7 @@ impl Sim {
             Scene::AerialLidarPass => build_aerial_lidar_model(),
             Scene::SolarSky => build_solar_sky_model(),
             Scene::SyntheticAnnotation => build_synth_annotation_model(),
+            Scene::SensorLab => build_sensor_lab_model(),
             Scene::TireModelLab => build_tire_lab_model(),
             Scene::VehicleOffroad => build_vehicle_model(), // reuse the chassis + wheels
             Scene::BekkerSinkage => build_bekker_sinkage_model(),
@@ -3803,7 +3871,7 @@ impl Sim {
         }
 
         // GPU-first: bring up wgpu and bind the XPBD GPU solver.
-        let engine = Engine::new_gpu().expect(
+        let engine = sensor_timing::viewer_engine().expect(
             "molla viewer is GPU-first; wgpu adapter required. \
              Run via `make run RELEASE=1` (nixVulkan-wrapped).",
         );
@@ -3887,6 +3955,7 @@ impl Sim {
         (
             Self {
                 scene,
+                sensor_clock: ViewerSensorClock::default(),
                 model,
                 state_a,
                 state_b,
@@ -3976,6 +4045,7 @@ impl Sim {
         Self::tune_scene_solver(scene, &mut solver);
 
         self.scene = scene;
+        self.sensor_clock.reset();
         self.model = model;
         self.state_a = state_a;
         self.state_b = state_b;
@@ -4041,8 +4111,12 @@ impl Sim {
 
         let device = self.engine.device().unwrap().clone();
         let queue = self.engine.queue().unwrap().clone();
-        let _ = self.state_a.download_from_device(&device, &queue);
-        let _ = self.state_b.download_from_device(&device, &queue);
+        for state in [&mut self.state_a, &mut self.state_b] {
+            readback_buffer(&mut state.body_q, &device, &queue).expect("reset body pose readback");
+            readback_buffer(&mut state.body_qd, &device, &queue).expect("reset body velocity readback");
+            readback_buffer(&mut state.particle_q, &device, &queue).expect("reset particle position readback");
+            readback_buffer(&mut state.particle_qd, &device, &queue).expect("reset particle velocity readback");
+        }
 
         self.state_a
             .body_q
@@ -4085,6 +4159,7 @@ impl Sim {
 
         let _ = self.state_a.upload_to_device(&device, &queue);
         let _ = self.state_b.upload_to_device(&device, &queue);
+        self.sensor_clock.reset();
     }
 }
 
@@ -4206,6 +4281,212 @@ fn build_cloth_mesh(sim: &Sim) -> Mesh {
     // frame in `sync_cloth_mesh` so sagging looks lit.
     mesh.compute_normals();
     mesh
+}
+
+/// `MOLLA_VIEWER_SCENE` selects the start scene by its full label or, when
+/// unique, its leading number, case-insensitively; unknown or ambiguous
+/// values keep the default and list the candidates.
+fn scene_from_env() -> Option<Scene> {
+    let wanted = std::env::var("MOLLA_VIEWER_SCENE").ok()?;
+    let wanted = wanted.trim().to_ascii_lowercase();
+    let exact = Scene::ALL
+        .iter()
+        .copied()
+        .find(|scene| scene.label().to_ascii_lowercase() == wanted);
+    if exact.is_some() {
+        return exact;
+    }
+    let numbered: Vec<Scene> = Scene::ALL
+        .iter()
+        .copied()
+        .filter(|scene| scene.label().split_whitespace().next() == Some(wanted.as_str()))
+        .collect();
+    match numbered.as_slice() {
+        [scene] => Some(*scene),
+        [] => {
+            eprintln!("MOLLA_VIEWER_SCENE={wanted:?} matches no scene label");
+            None
+        }
+        candidates => {
+            let labels: Vec<&str> = candidates.iter().map(|scene| scene.label()).collect();
+            eprintln!("MOLLA_VIEWER_SCENE={wanted:?} is ambiguous; use a full label: {labels:?}");
+            None
+        }
+    }
+}
+
+/// Frame-scripted actions for unattended runs. `MOLLA_VIEWER_ACTIONS` is a
+/// comma-separated `frame:action` list with the actions `pause`, `play`,
+/// `step`, `reset`, `shot=<path.png>`, `exit`, the pointer actions
+/// `move=x/y`, `press`, `release`, `click=x/y` and `drag=x0/y0/x1/y1`
+/// (logical window pixels, delivered as window input messages over the
+/// following frames) and `resize=<w>x<h>` (logical window size).
+/// `MOLLA_VIEWER_SCREENSHOT=<path>` is shorthand for one shot at
+/// `MOLLA_VIEWER_SCREENSHOT_FRAME` (default 240) followed by `exit` 90
+/// frames later.
+#[derive(Resource)]
+struct ViewerScript {
+    actions: Vec<(u64, ScriptAction)>,
+    frames: u64,
+}
+
+enum ScriptAction {
+    Pause,
+    Play,
+    Step,
+    Reset,
+    Shot(String),
+    Exit,
+    Cursor(Vec2),
+    Button(bool),
+    Resize(Vec2),
+}
+
+/// Frames a scripted drag spends moving between its press and release.
+const SCRIPT_DRAG_STEPS: u64 = 8;
+
+fn script_point(text: &str) -> Option<Vec<f32>> {
+    text.split('/').map(|part| part.trim().parse::<f32>().ok()).collect()
+}
+
+/// Expands one scripted entry into its per-frame primitive actions.
+fn script_actions(frame: u64, action: &str) -> Option<Vec<(u64, ScriptAction)>> {
+    let simple = |action| Some(vec![(frame, action)]);
+    match action {
+        "pause" => return simple(ScriptAction::Pause),
+        "play" => return simple(ScriptAction::Play),
+        "step" => return simple(ScriptAction::Step),
+        "reset" => return simple(ScriptAction::Reset),
+        "exit" => return simple(ScriptAction::Exit),
+        "press" => return simple(ScriptAction::Button(true)),
+        "release" => return simple(ScriptAction::Button(false)),
+        _ => {}
+    }
+    let (name, value) = action.split_once('=')?;
+    match (name, script_point(value).as_deref()) {
+        ("shot", _) => simple(ScriptAction::Shot(value.to_string())),
+        ("move", Some(&[x, y])) => simple(ScriptAction::Cursor(Vec2::new(x, y))),
+        ("click", Some(&[x, y])) => Some(vec![
+            (frame, ScriptAction::Cursor(Vec2::new(x, y))),
+            (frame + 1, ScriptAction::Button(true)),
+            (frame + 2, ScriptAction::Button(false)),
+        ]),
+        ("drag", Some(&[x0, y0, x1, y1])) => {
+            let (from, to) = (Vec2::new(x0, y0), Vec2::new(x1, y1));
+            let mut steps = vec![
+                (frame, ScriptAction::Cursor(from)),
+                (frame + 1, ScriptAction::Button(true)),
+            ];
+            for step in 1..=SCRIPT_DRAG_STEPS {
+                let at = from.lerp(to, step as f32 / SCRIPT_DRAG_STEPS as f32);
+                steps.push((frame + 1 + step, ScriptAction::Cursor(at)));
+            }
+            steps.push((frame + 2 + SCRIPT_DRAG_STEPS, ScriptAction::Button(false)));
+            Some(steps)
+        }
+        ("resize", _) => {
+            let (w, h) = value.split_once('x')?;
+            let size = Vec2::new(w.trim().parse().ok()?, h.trim().parse().ok()?);
+            simple(ScriptAction::Resize(size))
+        }
+        _ => None,
+    }
+}
+
+impl ViewerScript {
+    fn from_env() -> Option<Self> {
+        let mut actions = Vec::new();
+        if let Ok(path) = std::env::var("MOLLA_VIEWER_SCREENSHOT") {
+            let at = std::env::var("MOLLA_VIEWER_SCREENSHOT_FRAME")
+                .ok()
+                .and_then(|frame| frame.parse().ok())
+                .unwrap_or(240);
+            actions.push((at, ScriptAction::Shot(path)));
+            actions.push((at + 90, ScriptAction::Exit));
+        }
+        if let Ok(list) = std::env::var("MOLLA_VIEWER_ACTIONS") {
+            for entry in list.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+                let parsed = entry.split_once(':').and_then(|(frame, action)| {
+                    script_actions(frame.trim().parse::<u64>().ok()?, action.trim())
+                });
+                match parsed {
+                    Some(steps) => actions.extend(steps),
+                    None => eprintln!("MOLLA_VIEWER_ACTIONS: ignoring `{entry}`"),
+                }
+            }
+        }
+        if actions.is_empty() {
+            return None;
+        }
+        actions.sort_by_key(|(frame, _)| *frame);
+        Some(Self { actions, frames: 0 })
+    }
+}
+
+fn run_viewer_script(
+    mut commands: Commands,
+    mut script: ResMut<ViewerScript>,
+    mut run: ResMut<SimRunState>,
+    mut sim: ResMut<Sim>,
+    mut exit: MessageWriter<AppExit>,
+    mut windows: Query<(Entity, &mut Window), With<bevy::window::PrimaryWindow>>,
+    mut pointer: (
+        MessageWriter<bevy::window::CursorMoved>,
+        MessageWriter<bevy::input::mouse::MouseButtonInput>,
+    ),
+    mut cursor: Local<Vec2>,
+) {
+    use bevy::input::{ButtonState, mouse::MouseButtonInput};
+    use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+    use bevy::window::CursorMoved;
+    script.frames += 1;
+    let frame = script.frames;
+    let Ok((window_entity, mut window)) = windows.single_mut() else {
+        return;
+    };
+    if frame == 1 {
+        eprintln!(
+            "viewer script: window {}x{} logical, scale factor {}",
+            window.width(),
+            window.height(),
+            window.scale_factor()
+        );
+    }
+    for (_, action) in script.actions.iter().filter(|(at, _)| *at == frame) {
+        match action {
+            ScriptAction::Pause => run.paused = true,
+            ScriptAction::Play => run.paused = false,
+            ScriptAction::Step => run.step_once = true,
+            ScriptAction::Reset => sim.reset(),
+            ScriptAction::Shot(path) => {
+                commands
+                    .spawn(Screenshot::primary_window())
+                    .observe(save_to_disk(path.clone()));
+            }
+            ScriptAction::Exit => {
+                exit.write(AppExit::Success);
+            }
+            ScriptAction::Cursor(position) => {
+                pointer.0.write(CursorMoved {
+                    window: window_entity,
+                    position: *position,
+                    delta: Some(*position - *cursor),
+                });
+                *cursor = *position;
+            }
+            ScriptAction::Button(pressed) => {
+                pointer.1.write(MouseButtonInput {
+                    button: MouseButton::Left,
+                    state: if *pressed { ButtonState::Pressed } else { ButtonState::Released },
+                    window: window_entity,
+                });
+            }
+            ScriptAction::Resize(size) => {
+                window.resolution.set(size.x, size.y);
+                eprintln!("viewer script: frame {frame} requested {}x{}", size.x, size.y);
+            }
+        }
+    }
 }
 
 fn handle_input(
@@ -4425,46 +4706,17 @@ fn apply_scene_switch(
     // Drop any in-flight grab — its body/particle index belongs to the
     // outgoing model and would dangle against the new one.
     grab.state = None;
-    // The Raycaster's pipeline + GPU buffers were tied to the previous
-    // model's wgpu device. Drop it so the next `update_lidar` rebuilds
-    // it against the new sim.
-    lidar.raycaster = None;
-    lidar.raycaster_capacity = 0;
-    lidar.rays.clear();
+    *lidar = LidarState::default();
     // Same for the IMU sensor — its prev_qd buffer is sized to the old
     // model's body_count.
-    imu.sensor = None;
-    imu.last = None;
-    imu.smoothed_accel_mag = 0.0;
-    imu.smoothed_gyro_mag = 0.0;
+    *imu = ImuExampleState::default();
     // Contact sensor is sized to body_count too — drop on switch.
-    contact.sensor = None;
-    contact.readings.clear();
+    *contact = ContactExampleState::default();
     // Arm PD controller is bound to a specific joint_dof_total —
     // drop and rebuild on the next arm-scene step.
     arm.controller = None;
     arm.elapsed = 0.0;
-    // Camera sensor's TiledCamera owns wgpu pipelines + buffers tied
-    // to the previous Sim's device — drop it; the next
-    // `update_camera_example` will rebuild against the new sim.
-    camera.sensor = None;
-    camera.elapsed = 0.0;
-    camera.last_pose = None;
-    // Drop the per-channel Bevy Image handles + cached egui texture
-    // ids — the next `update_camera_example` will reallocate against
-    // the new sim. `bevy_egui::free_egui_textures_system` cleans up the
-    // egui-side mapping when the strong handle drops.
-    camera.image_color = None;
-    camera.image_depth = None;
-    camera.image_normal = None;
-    camera.image_albedo = None;
-    camera.image_index = None;
-    camera.tex_id_color = None;
-    camera.tex_id_depth = None;
-    camera.tex_id_normal = None;
-    camera.tex_id_albedo = None;
-    camera.tex_id_index = None;
-    camera.last_depth_range = None;
+    camera.reset_preview();
 
     for e in bodies_q.iter() {
         commands.entity(e).despawn();
@@ -4513,10 +4765,15 @@ fn step_simulation(
     mut reference_pendulum_state: ResMut<ReferencePendulumState>,
 ) {
     let (gpu_np, gpu_bp) = (&mut gpu_toggles.0, &mut gpu_toggles.1);
+    stats.begin_revision(sim.sensor_clock.revision);
     if run.paused && !run.step_once {
         return;
     }
     run.step_once = false;
+    if sim.scene.sensor_only() {
+        for _ in 0..SUBSTEPS_PER_FRAME { sim.sensor_clock.advance(); }
+        return;
+    }
     // GPU IK arm scene is purely kinematic; `update_gpu_ik_arm`
     // already wrote `joint_q` + `body_q` on the host. Skipping the
     // physics step here keeps the IK pose stable across frames.
@@ -4628,10 +4885,7 @@ fn step_simulation(
             | Scene::PhaseFieldFracture
             | Scene::Vehicle
             | Scene::SphDamBreak
-            | Scene::LidarV2
-            | Scene::AerialLidarPass
             | Scene::SolarSky
-            | Scene::SyntheticAnnotation
             | Scene::TireModelLab
             | Scene::VehicleOffroad
             | Scene::BekkerSinkage
@@ -4695,6 +4949,7 @@ fn step_simulation(
         contacts,
         solver,
         pipeline,
+        sensor_clock,
         ..
     } = &mut *sim;
 
@@ -4738,6 +4993,7 @@ fn step_simulation(
             readback_buffer(&mut state_a.particle_qd, &device, &queue).expect("particle velocity readback");
         }
         total_download_us += d0.elapsed().as_secs_f64() * 1_000_000.0;
+        sensor_clock.advance();
     }
     let solve_us = solve_start.elapsed().as_secs_f64() * 1_000_000.0;
     let total_us = frame_start.elapsed().as_secs_f64() * 1_000_000.0;
@@ -5544,33 +5800,37 @@ fn control_pane(
             );
             ui.separator();
 
-            readout(
-                ui,
-                "Phys total",
-                &format!("{:>4.0} µs", stats.smoothed_step_us),
-            );
-            readout(
-                ui,
-                "  · collide",
-                &format!("{:>4.0} µs", stats.smoothed_collide_us),
-            );
-            readout(
-                ui,
-                "  · dispatch",
-                &format!("{:>4.0} µs", stats.smoothed_solve_us),
-            );
-            readout(
-                ui,
-                "  · download",
-                &format!("{:>4.0} µs", stats.smoothed_download_us),
-            );
-            readout(ui, "Contacts", &format!("{}", stats.last_contacts));
-            ui.separator();
+            if scene.sensor_only() {
+                readout(ui, "Physics", "sensor-only (no solve)");
+            } else {
+                readout(
+                    ui,
+                    "Phys total",
+                    &format!("{:>4.0} µs", stats.smoothed_step_us),
+                );
+                readout(
+                    ui,
+                    "  · collide",
+                    &format!("{:>4.0} µs", stats.smoothed_collide_us),
+                );
+                readout(
+                    ui,
+                    "  · dispatch",
+                    &format!("{:>4.0} µs", stats.smoothed_solve_us),
+                );
+                readout(
+                    ui,
+                    "  · download",
+                    &format!("{:>4.0} µs", stats.smoothed_download_us),
+                );
+                readout(ui, "Contacts", &format!("{}", stats.last_contacts));
+                ui.separator();
 
-            readout(ui, "Solver", "XPBD-GPU");
+                readout(ui, "Solver", "XPBD-GPU");
+                readout(ui, "Friction", &format!("{PLANE_FRICTION:.2}"));
+                readout(ui, "Restitution", &format!("{PLANE_RESTITUTION:.2}"));
+            }
             readout(ui, "Adapter", &sim.adapter_label);
-            readout(ui, "Friction", &format!("{PLANE_FRICTION:.2}"));
-            readout(ui, "Restitution", &format!("{PLANE_RESTITUTION:.2}"));
             ui.separator();
 
             // Activity view toggle.
@@ -5592,18 +5852,16 @@ fn control_pane(
             });
             ui.separator();
 
-            ui.horizontal(|ui| {
-                let label = if run.paused { "▶ Play" } else { "⏸ Pause" };
-                if button(ui, label, accent_color).clicked() {
-                    run.paused = !run.paused;
-                }
-                if run.paused && button(ui, "Step", accent_color).clicked() {
-                    run.step_once = true;
-                }
-                if button(ui, "Reset", accent_color).clicked() {
-                    sim.reset();
-                }
-            });
+            let controls = viewer_controls::playback_controls(ui, run.paused, accent_color);
+            if controls.pause.clicked() {
+                run.paused = !run.paused;
+            }
+            if controls.step.clicked() {
+                run.step_once = true;
+            }
+            if controls.reset.clicked() {
+                sim.reset();
+            }
 
             ui.add_space(4.0);
             ui.small("LMB drag · T activity · W wireframe");
@@ -5730,12 +5988,16 @@ fn control_pane(
         let anchor = PaneAnchor::RightRail(RailZone::Start);
         Pane2::new(PANE_SCENE, title, anchor, accent_color)
             .resize(PaneResize::BOTH)
-            .show(ctx, |ui| {
+            .show(ctx, |ui| sensor_preview_scroll(ui, scene, |ui| {
                 scene_description_pane(ui, scene, &mut description_pane);
                 match scene {
                     Scene::Lidar => lidar_pane(ui, &mut lidar_config, lidar_state),
                     Scene::Imu => imu_pane(ui, imu_state),
                     Scene::Contact => contact_pane(ui, contact_state),
+                    Scene::LidarV2 => lidar_v2_pane(ui, &pane_states.lidar_v2),
+                    Scene::AerialLidarPass => aerial_lidar_pane(ui, &pane_states.aerial_lidar),
+                    Scene::SyntheticAnnotation => synth_annotation_pane(ui, &pane_states.annotation),
+                    Scene::SensorLab => sensor_lab_pane(ui, &mut pane_states.sensor_lab),
                     Scene::Arm => arm_pane(ui, &mut pane_states.arm, &sim, &mut pending),
                     Scene::Shapes => shapes_pane(ui, &sim),
                     Scene::GpuIkArm => gpu_ik_pane(ui, &mut pane_states.gpu_ik, &sim),
@@ -5963,7 +6225,7 @@ fn control_pane(
                     }
                     _ => {}
                 }
-            });
+            }));
     }
 }
 

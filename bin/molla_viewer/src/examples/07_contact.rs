@@ -1,9 +1,12 @@
-// Contact example runtime state. Lazy-initialised when entering the
-// Contact scene; reset on scene switch. Stores the latest per-body
-// readings for the right-rail readout and the gizmo system.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct ContactNormalGizmos;
+
 #[derive(Resource, Default)]
 struct ContactExampleState {
     sensor: Option<ContactSensor>,
+    preview: Option<SensorPreview>,
+    revision: Option<u64>,
+    error: Option<String>,
     readings: Vec<BodyContactReading>,
 }
 
@@ -66,43 +69,100 @@ fn build_contact_model() -> (mp::Model, Vec<BodyVisual>) {
     (b.build().expect("model"), visuals)
 }
 
-fn update_contact_example(sim: ResMut<Sim>, mut state: ResMut<ContactExampleState>) {
+fn update_contact_example(sim: Res<Sim>, mut state: ResMut<ContactExampleState>) {
     if sim.scene != Scene::Contact {
-        if state.sensor.is_some() {
-            state.sensor = None;
-            state.readings.clear();
-        }
+        *state = ContactExampleState::default();
         return;
     }
-
-    if state.sensor.is_none() {
-        match ContactSensor::new(&sim.engine, &sim.model) {
-            Ok(s) => state.sensor = Some(s),
-            Err(e) => {
-                warn!("contact sensor init failed: {e}");
-                return;
-            }
-        }
+    if state.revision != Some(sim.sensor_clock.revision) {
+        *state = ContactExampleState {
+            revision: Some(sim.sensor_clock.revision),
+            ..Default::default()
+        };
     }
-
-    let Sim {
-        ref engine,
-        ref contacts,
-        ..
-    } = *sim;
-    let sensor = state.sensor.as_mut().expect("contact sensor");
-    match sensor.update(engine, contacts) {
-        Ok(r) => state.readings = r,
-        Err(e) => warn!("contact sensor update failed: {e}"),
+    if let Some(preview) = &mut state.preview {
+        preview.now = sim.sensor_clock.time();
+    }
+    if state.error.is_none()
+        && let Err(error) = state.sample(&sim)
+    {
+        warn!("contact preview failed: {error}");
+        state.error = Some(error.to_string());
     }
 }
 
-// Camera-sensor demo — orbits a single `TiledCamera` around the
-// scene each frame and downloads every channel. The right-rail pane
-// (`camera_pane`) reads from the cached arrays. No-op when the
-// scene isn't active.
+impl ContactExampleState {
+    fn sample(&mut self, sim: &Sim) -> molla::core::Result<()> {
+        if self.sensor.is_none() {
+            let sensor = ContactSensor::new(&sim.engine, &sim.model)?;
+            let bytes = (sim.model.body_count as u64)
+                .checked_mul(40)
+                .ok_or_else(|| {
+                    molla::core::Error::Storage("contact preview capacity overflow".into())
+                })?;
+            let pool = sensor.output_pool(&sim.engine, preview_pool_config(bytes)?)?;
+            self.preview = Some(SensorPreview::new(&sim.engine, pool, bytes)?);
+            self.sensor = Some(sensor);
+        }
+        let preview = self.preview.as_mut().expect("initialized preview");
+        if let Some(frame) = preview.poll_latest(sim.sensor_clock)? {
+            self.readings.clear();
+            for (((count, max_depth), normal_sum), centroid) in frame
+                .channel_iter::<u32>(0)?
+                .zip(frame.channel_iter::<f64>(1)?)
+                .zip(frame.channel_iter::<MVec3>(2)?)
+                .zip(frame.channel_iter::<MVec3>(3)?)
+            {
+                self.readings.push(BodyContactReading {
+                    count,
+                    max_depth,
+                    normal_sum,
+                    centroid,
+                });
+            }
+        }
+        let clock = sim.sensor_clock;
+        if clock.tick == 0 || !preview.begin_sample(clock.tick)? {
+            return Ok(());
+        }
+        let start = std::time::Instant::now();
+        let mut batch = SensorCommandBatch::new(&sim.engine)?;
+        let timed = preview.begin_gpu(&mut batch, &sim.engine)?;
+        let Some(sample) = self.sensor.as_mut().expect("sensor").encode(
+            &mut batch,
+            &sim.engine,
+            &sim.contacts,
+            &mut preview.pool,
+            clock.stamp(7),
+        )?
+        else {
+            preview.deferred += 1;
+            return Ok(());
+        };
+        preview.end_gpu(&mut batch, &sim.engine, timed)?;
+        let submission = batch.submit()?;
+        preview.submitted(clock.tick, start);
+        preview.collect_gpu(clock.stamp(7), timed)?;
+        let frame = submission.frame(&sample)?;
+        let n = sim.model.body_count;
+        preview.enqueue(
+            &[
+                frame.channel::<u32>(0)?.readback_source(0..n)?,
+                frame.channel::<f64>(1)?.readback_source(0..n)?,
+                frame.channel::<MVec3>(2)?.readback_source(0..n)?,
+                frame.channel::<MVec3>(3)?.readback_source(0..n)?,
+            ],
+            frame.stamp(),
+        )?;
+        Ok(())
+    }
+}
 
-fn draw_contact_gizmos(sim: Res<Sim>, state: Res<ContactExampleState>, mut gizmos: Gizmos) {
+fn draw_contact_gizmos(
+    sim: Res<Sim>,
+    state: Res<ContactExampleState>,
+    mut gizmos: Gizmos<ContactNormalGizmos>,
+) {
     if sim.scene != Scene::Contact {
         return;
     }
@@ -124,7 +184,7 @@ fn draw_contact_gizmos(sim: Res<Sim>, state: Res<ContactExampleState>, mut gizmo
         );
         let len = normal_sum.length();
         if len < 1e-6 {
-            // Sandwiched body — net force ~0. Just mark the centroid.
+            // Opposing contact normals cancel at the centroid.
             gizmos.sphere(centroid, 0.04, dot_color);
             continue;
         }
@@ -132,7 +192,9 @@ fn draw_contact_gizmos(sim: Res<Sim>, state: Res<ContactExampleState>, mut gizmo
         // Arrow length: 0.15m base + scaled by depth (capped).
         let arrow_len = 0.15 + (r.max_depth as f32 * 5.0).min(0.4);
         let tip = centroid + dir * arrow_len;
-        gizmos.line(centroid, tip, arrow_color);
+        gizmos
+            .arrow(centroid, tip, arrow_color)
+            .with_tip_length(arrow_len * 0.35);
         // Tiny "+" cross at the tail.
         let cross = 0.04;
         gizmos.line(
@@ -148,16 +210,10 @@ fn draw_contact_gizmos(sim: Res<Sim>, state: Res<ContactExampleState>, mut gizmo
     }
 }
 
-// Draw the Stage-23 diff-arm scene's overlays:
-//   - Yellow sphere at the target XYZ.
-//   - When `show_trajectory` is on, a polyline through the
-//     per-iteration EE positions, fading from cool (early iter) to
-//     warm (late iter) so the GD progression reads at a glance.
-//   - Small dot at the live EE position (last body[1] tip in the
-
 fn contact_pane(ui: &mut egui::Ui, state: &ContactExampleState) {
     ui.add_space(2.0);
     readout(ui, "Sensor", "GPU contact aggregate");
+    sensor_preview_pane(ui, state.preview.as_ref(), state.error.as_deref());
     let total_contacts: u32 = state.readings.iter().map(|r| r.count).sum();
     let in_contact: usize = state.readings.iter().filter(|r| r.count > 0).count();
     let max_depth: f64 = state
@@ -165,7 +221,10 @@ fn contact_pane(ui: &mut egui::Ui, state: &ContactExampleState) {
         .iter()
         .map(|r| r.max_depth)
         .fold(0.0_f64, f64::max);
-    readout(ui, "Bodies", &format!("{}", state.readings.len()));
+    readout(ui, "Sampled bodies", &format!("{}", state.readings.len()));
+    if state.readings.is_empty() && state.error.is_none() {
+        ui.small("Waiting for a physics sample.");
+    }
     readout(ui, "In contact", &format!("{}", in_contact));
     readout(ui, "Σ contacts", &format!("{}", total_contacts));
     readout(ui, "Max depth", &format!("{max_depth:.4} m"));
@@ -181,7 +240,7 @@ fn contact_pane(ui: &mut egui::Ui, state: &ContactExampleState) {
                     "—".to_string()
                 } else {
                     format!(
-                        "n={} d={:.4} push=({:>5.2},{:>5.2},{:>5.2})",
+                        "n={} d={:.4} normals=({:>5.2},{:>5.2},{:>5.2})",
                         r.count, r.max_depth, r.normal_sum.x, r.normal_sum.y, r.normal_sum.z,
                     )
                 };
@@ -190,10 +249,8 @@ fn contact_pane(ui: &mut egui::Ui, state: &ContactExampleState) {
         });
     ui.separator();
     ui.small(
-        "Yellow arrows in the viewport point along the net push \
-         direction at each body's contact centroid; length scales \
-         with penetration depth.",
+        "Yellow overlay arrows show summed signed contact normals at the centroid, \
+         including through bodies. \
+         Length scales with penetration depth; this is not a force measurement.",
     );
 }
-
-

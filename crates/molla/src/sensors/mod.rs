@@ -69,6 +69,14 @@ pub use molla_sensors::{
     SensorCommandBatch, SensorCommandStats, SensorFrame, SensorFrameChannel, SensorFramePool,
     SensorFramePoolConfig, SensorFramePoolStats, SensorSubmission, device_results,
 };
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{INVALID_SCENE_DISTANCE, INVALID_SCENE_INDEX, INVALID_SCENE_SHAPE_ID};
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{
+    SceneAcceleration, SceneAccelerationConfig, SceneAccelerationStats, SceneAccelerationStorage,
+    SceneAccelerationView, SceneBvhNode, SceneRebuildPolicy, SceneRebuildStorage,
+    scene_acceleration,
+};
 pub use molla_sensors::{ScheduledSample, SensorSchedule, SensorScheduler, scheduler};
 #[cfg(feature = "gpu")]
 pub use molla_sensors::{camera_batch, image_processing, lidar_batch, readback, scene, snapshot};
@@ -80,9 +88,10 @@ pub use molla_sensors::{
     ContactDeviceReadings, DeviceCommandBatch, DeviceSnapshot, DeviceSnapshotConfig,
     DeviceSnapshotPool, DeviceSnapshotStats, EncodedCameraBatch, EncodedLidarBatch,
     FrameDeviceReadings, ImuDeviceReadings, LidarBatch, LidarBatchStats, LidarDeviceBatch,
-    LidarPattern, LidarScan, LidarScanRange, RayDeviceHits, RayQueryStats, SceneStamp,
-    SensorDispatchStats, SensorScene, SensorSceneOptions, SnapshotChannel,
-    UnsupportedGeometryPolicy, UnsupportedShape,
+    LidarPattern, LidarScan, LidarScanRange, RayDeviceHits, RayQueryStats, SceneIdentitySnapshot,
+    SceneStamp, SensorBodyHandle, SensorDispatchStats, SensorScene, SensorSceneOptions,
+    SensorSceneRemap, SensorShapeHandle, SnapshotChannel, UnsupportedGeometryPolicy,
+    UnsupportedShape,
 };
 
 #[cfg(feature = "gpu")]
@@ -98,11 +107,19 @@ pub use molla_sensors::{
     read_xyz_rgb, reflectance_filter, rotate_cloud, scalar_filter, transform_cloud,
     translate_cloud, write_ply_ascii, write_ptx, write_xyz_rgb, xyz_filter,
 };
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{CameraStorageUsage, TiledCameraLimits, camera_storage};
 pub use molla_sensors::{
     DiffRay, DiffSdfShape, RayScene, compute_grad_raycast, compute_loss_l2, forward_with_loss,
 };
 #[cfg(feature = "gpu")]
-pub use raycast::{EncodedRayQuery, RayHit, Raycaster};
+pub use molla_sensors::{LidarBatchLimits, LidarBatchStorage, LidarLayoutLimits, lidar_storage};
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{ProcessorStorageLimits, ProcessorStorageUsage, processor_storage};
+#[cfg(feature = "gpu")]
+pub use molla_sensors::{SensorArrayLimits, SensorArrayStorage, sensor_storage};
+#[cfg(feature = "gpu")]
+pub use raycast::{EncodedRayQuery, RayHit, RayStorageUsage, Raycaster, RaycasterLimits};
 #[cfg(feature = "gpu")]
 pub use tiled_camera::{
     CameraChannels, EncodedCamera, PhysicalOptics, TiledCamera, TiledCameraConfig,

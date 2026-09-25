@@ -1,7 +1,7 @@
 //! Device-resident terrestrial/aerial ray layouts and sub-ray return selection.
 
 use crate::{
-    AerialScanMetadata, RayDeviceHits, Raycaster, ScanMetadata,
+    AerialScanMetadata, RayDeviceHits, Raycaster, RaycasterLimits, ScanMetadata,
     device_results::{
         EncodedSensorFrame, SensorChannelSpec, SensorCommandBatch, SensorFramePool,
         SensorFramePoolConfig,
@@ -9,6 +9,7 @@ use crate::{
     dispatch::BindingsCache,
     readback::{DeviceBuffer, ReadbackStamp, ReadbackStats},
 };
+use crate::{LidarBatchLimits, LidarBatchStorage};
 use crate::{SceneStamp, SensorScene};
 use molla_compute::Engine;
 use molla_core::{Error, Result};
@@ -42,6 +43,7 @@ pub struct LidarScanRange {
 }
 
 /// First/last contain global ray indices, or -1 for an all-miss pulse.
+/// Invalid owned-scene poses preserve -2 ray distance/shape and first/last, with zero hit count.
 /// Tied nearest selects the first sub-ray; tied farthest selects the last.
 /// Submit consumers or enqueue snapshots before dispatching another batch.
 pub struct LidarDeviceBatch<'a> {
@@ -86,43 +88,61 @@ pub struct LidarBatch {
     count: DeviceBuffer<u32>,
     max_scans: usize,
     max_rays: u32,
+    storage_usage: LidarBatchStorage,
     stats: LidarBatchStats,
 }
 
 impl LidarBatch {
     pub fn new(engine: &Engine, max_scans: usize, max_rays: u32) -> Result<Self> {
+        Self::new_with_limits(engine, max_scans, max_rays, LidarBatchLimits::default())
+    }
+
+    /// Override the shared-ray sub-budget while retaining the default combined array cap.
+    pub fn new_with_ray_limits(
+        engine: &Engine,
+        max_scans: usize,
+        max_rays: u32,
+        limits: RaycasterLimits,
+    ) -> Result<Self> {
+        Self::new_with_limits(
+            engine,
+            max_scans,
+            max_rays,
+            LidarBatchLimits {
+                ray_limits: limits,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Construct with combined fixed-array and shared-ray budgets, checked before allocation.
+    pub fn new_with_limits(
+        engine: &Engine,
+        max_scans: usize,
+        max_rays: u32,
+        limits: LidarBatchLimits,
+    ) -> Result<Self> {
         engine.check_device()?;
-        if max_scans == 0 || max_scans > 1024 || max_rays == 0 || max_rays > i32::MAX as u32 {
-            return Err(Error::Solver(
-                "lidar batch: invalid scan/ray capacity".into(),
-            ));
-        }
         let device = engine
             .device()
             .ok_or_else(|| Error::Gpu("lidar batch requires GPU".into()))?
             .clone();
-        let descriptor_bytes = max_scans as u64 * 128;
-        if descriptor_bytes > device.limits().max_storage_buffer_binding_size as u64
-            || descriptor_bytes > device.limits().max_buffer_size
-        {
-            return Err(Error::Solver(
-                "lidar batch: descriptors exceed GPU capacity".into(),
-            ));
-        }
-        let raycaster = Raycaster::new(engine, max_rays)?;
+        let storage_usage = limits.check(max_scans, max_rays, &device.limits())?;
+        let descriptor_bytes = storage_usage.descriptor_device_bytes;
+        let raycaster = Raycaster::new_with_limits(engine, max_rays, limits.ray_limits)?;
         let first = DeviceBuffer::from_host(
             engine,
-            vec![-1; max_rays as usize],
+            crate::host_arrays::filled(max_rays as usize, -1)?,
             BufferUsage::StorageReadWrite,
         )?;
         let last = DeviceBuffer::from_host(
             engine,
-            vec![-1; max_rays as usize],
+            crate::host_arrays::filled(max_rays as usize, -1)?,
             BufferUsage::StorageReadWrite,
         )?;
         let count = DeviceBuffer::from_host(
             engine,
-            vec![0_u32; max_rays as usize],
+            crate::host_arrays::filled(max_rays as usize, 0u32)?,
             BufferUsage::StorageReadWrite,
         )?;
         let descriptors = device.create_buffer(&wgpu::BufferDescriptor {
@@ -157,18 +177,24 @@ impl LidarBatch {
             kernel,
             direct: BindingsCache::with_capacity(128),
             descriptors,
-            host_descriptors: Vec::with_capacity(max_scans),
-            ranges: Vec::with_capacity(max_scans),
+            host_descriptors: crate::host_arrays::reserved(max_scans)?,
+            ranges: crate::host_arrays::reserved(max_scans)?,
             first,
             last,
             count,
             max_scans,
             max_rays,
+            storage_usage,
             stats: LidarBatchStats {
                 binding_preparations: 1,
                 ..Default::default()
             },
         })
+    }
+
+    /// Retained array payload, excluding scenes, bindings, output leases and readback.
+    pub fn storage_usage(&self) -> LidarBatchStorage {
+        self.storage_usage
     }
 
     fn output_specs(&self) -> [SensorChannelSpec; 9] {
@@ -261,6 +287,9 @@ impl LidarBatch {
             return Err(Error::Solver("lidar batch: invalid timestamp".into()));
         }
         let (rays, pulses, max_distance) = self.plan(scans)?;
+        if rays != 0 {
+            self.raycaster.preflight_rebuild(scene)?;
+        }
         if rays != 0 && scene.model.body_count != 0 {
             if state.body_q.len() != scene.model.body_count {
                 return Err(Error::Solver(
@@ -306,8 +335,7 @@ impl LidarBatch {
                     pulses,
                 );
                 let queries = self.raycaster.encode_owned_scene(
-                    device,
-                    queue,
+                    engine,
                     encoder,
                     scene,
                     state,
@@ -380,6 +408,9 @@ impl LidarBatch {
         }
         let (rays, pulses, max_distance) = self.plan(scans)?;
         if rays > 0 {
+            if let Some(scene) = scene {
+                self.raycaster.preflight_rebuild(scene)?;
+            }
             let queue = engine
                 .queue()
                 .ok_or_else(|| Error::Gpu("lidar batch requires queue".into()))?;
@@ -455,6 +486,14 @@ impl LidarBatch {
 
     pub fn query_stats(&self) -> crate::raycast::RayQueryStats {
         self.raycaster.query_stats()
+    }
+
+    pub fn scene_rebuild_policy(&self) -> crate::SceneRebuildPolicy {
+        self.raycaster.scene_rebuild_policy()
+    }
+
+    pub fn set_scene_rebuild_policy(&mut self, policy: crate::SceneRebuildPolicy) -> Result<()> {
+        self.raycaster.set_scene_rebuild_policy(policy)
     }
 
     /// Invalidate static mesh snapshots after geometry/model changes.
@@ -560,6 +599,28 @@ fn prepare(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires GPU"]
+    fn lidar_storage_estimate_matches_allocated_arrays_and_reserved_metadata() {
+        let engine = Engine::new_gpu().unwrap();
+        let sensor = LidarBatch::new(&engine, 3, 65).unwrap();
+        let shared = crate::RayStorageUsage::for_capacity(65).unwrap();
+        let payload = [
+            crate::sensor_storage::tests::buffer_bytes(&sensor.first.buffer),
+            crate::sensor_storage::tests::buffer_bytes(&sensor.last.buffer),
+            crate::sensor_storage::tests::buffer_bytes(&sensor.count.buffer),
+        ];
+        let host = payload.iter().map(|b| b.0).sum::<u64>()
+            + (sensor.host_descriptors.capacity() * size_of::<LidarScanDescriptor>()) as u64
+            + (sensor.ranges.capacity() * size_of::<LidarScanRange>()) as u64;
+        let device = payload.iter().map(|b| b.1).sum::<u64>() + sensor.descriptors.size();
+        let usage = sensor.storage_usage();
+        assert_eq!(usage.host_bytes, shared.host_bytes + host);
+        assert_eq!(usage.device_bytes, shared.device_bytes + device);
+        assert_eq!(usage.descriptor_device_bytes, sensor.descriptors.size());
+        assert_eq!(usage.total_bytes, usage.host_bytes + usage.device_bytes);
+    }
 
     #[test]
     fn descriptors_reject_invalid_gpu_metadata_without_allocation() {

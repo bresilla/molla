@@ -1,5 +1,6 @@
 //! Bounded device-resident spatial membership and per-cell reductions.
 
+use crate::host_arrays::filled;
 use crate::{
     CloudPoint,
     device_results::{
@@ -9,6 +10,7 @@ use crate::{
     dispatch::BindingsCache,
     readback::{DeviceBuffer, ReadbackSource, ReadbackStamp},
 };
+use crate::{ProcessorStorageLimits, ProcessorStorageUsage};
 use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_kernels::{CloudGridBindings, CloudGridKernel, CloudGridParams};
@@ -202,6 +204,7 @@ fn checked_range(range: &Range<usize>, count: usize) -> Result<()> {
 }
 
 pub struct CloudGrid {
+    storage_usage: ProcessorStorageUsage,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     config: CloudGridConfig,
@@ -215,7 +218,21 @@ pub struct CloudGrid {
 }
 
 impl CloudGrid {
+    /// Requested construction payload, excluding driver staging, metadata and output pools.
+    pub fn storage_usage(&self) -> ProcessorStorageUsage {
+        self.storage_usage
+    }
+
     pub fn new(engine: &Engine, config: CloudGridConfig) -> Result<Self> {
+        Self::new_with_storage_limits(engine, config, ProcessorStorageLimits::default())
+    }
+
+    /// Validate device budgets and combined construction payload before allocating arrays.
+    pub fn new_with_storage_limits(
+        engine: &Engine,
+        config: CloudGridConfig,
+        limits: ProcessorStorageLimits,
+    ) -> Result<Self> {
         engine.check_device()?;
         let device = engine
             .device()
@@ -225,24 +242,26 @@ impl CloudGrid {
             .queue()
             .ok_or_else(|| Error::Gpu("cloud grid requires queue".into()))?
             .clone();
-        let bytes = checked_budget(config, &device.limits())?;
+        let storage_usage = ProcessorStorageUsage::for_grid(config, &device.limits())?;
+        limits.check(storage_usage)?;
+        let bytes = storage_usage.device_bytes;
         let points = DeviceBuffer::from_host(
             engine,
-            vec![CloudPoint::default(); config.max_points as usize],
+            filled(config.max_points as usize, CloudPoint::default())?,
             BufferUsage::StorageReadWrite,
         )?;
         let indices = DeviceBuffer::from_host(
             engine,
-            vec![0u32; config.max_points as usize],
+            filled(config.max_points as usize, 0u32)?,
             BufferUsage::StorageReadWrite,
         )?;
         let cells = DeviceBuffer::from_host(
             engine,
-            vec![CloudGridCell::default(); config.max_cells as usize],
+            filled(config.max_cells as usize, CloudGridCell::default())?,
             BufferUsage::StorageReadWrite,
         )?;
         let diagnostics =
-            DeviceBuffer::from_host(engine, vec![0u32; 6], BufferUsage::StorageReadWrite)?;
+            DeviceBuffer::from_host(engine, filled(6, 0u32)?, BufferUsage::StorageReadWrite)?;
         let kernel = CloudGridKernel::new(
             &device,
             [
@@ -255,6 +274,7 @@ impl CloudGrid {
             config.max_cells,
         )?;
         Ok(Self {
+            storage_usage,
             device,
             queue,
             config,
@@ -527,7 +547,7 @@ impl CloudGrid {
     }
 }
 
-fn checked_budget(config: CloudGridConfig, limits: &wgpu::Limits) -> Result<u64> {
+pub(crate) fn checked_budget(config: CloudGridConfig, limits: &wgpu::Limits) -> Result<u64> {
     let n = config.max_points as u64;
     let c = config.max_cells as u64;
     let blocks = c.div_ceil(256);
@@ -558,6 +578,49 @@ fn checked_budget(config: CloudGridConfig, limits: &wgpu::Limits) -> Result<u64>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires GPU"]
+    fn construction_budget_matches_host_arrays_and_upload_payload() {
+        use crate::sensor_storage::tests::buffer_bytes;
+        let engine = Engine::new_gpu().unwrap();
+        let config = CloudGridConfig {
+            max_points: 257,
+            max_cells: 17,
+            max_buffer_bytes: u64::MAX,
+        };
+        let usage =
+            ProcessorStorageUsage::for_grid(config, &engine.device().unwrap().limits()).unwrap();
+        assert!(
+            CloudGrid::new_with_storage_limits(
+                &engine,
+                config,
+                ProcessorStorageLimits {
+                    max_construction_bytes: usage.construction_bytes - 1,
+                }
+            )
+            .is_err()
+        );
+        let processor = CloudGrid::new_with_storage_limits(
+            &engine,
+            config,
+            ProcessorStorageLimits {
+                max_construction_bytes: usage.construction_bytes,
+            },
+        )
+        .unwrap();
+        assert_eq!(processor.storage_usage(), usage);
+        assert_eq!(processor.stats().buffer_bytes, usage.device_bytes);
+        crate::processor_storage::tests::check_live(
+            usage,
+            &[
+                buffer_bytes(&processor.points.buffer),
+                buffer_bytes(&processor.indices.buffer),
+                buffer_bytes(&processor.cells.buffer),
+                buffer_bytes(&processor.diagnostics.buffer),
+            ],
+        );
+    }
 
     #[test]
     fn grid_wire_budget_and_limits() {

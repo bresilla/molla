@@ -70,6 +70,14 @@ The returned `Vec` only
 contains the caller-supplied targets; the reference is an
 implementation slot.
 
+All retained target/configuration and output arrays, including the optional
+reference slot, share a default 1 GiB host/device payload cap.
+`new_with_limits(engine, model, reference, targets, SensorArrayLimits)` overrides
+it; `storage_usage()` reports the checked estimate. The caller-owned body-pose
+buffer is checked against device limits but is not included in owned storage.
+Collection and leased output pools have separate budgets. See
+[fixed-array storage budgets](imu.md#fixed-array-storage-budgets).
+
 ### Device-resident outputs
 
 `encode` can also write directly into protected output slots and compose multiple
@@ -106,8 +114,8 @@ counters exclude construction, command encoders, readback and driver staging.
 `FrameTransformKernel::prepare` / `encode_prepared` allow lower-level shared
 command streams. The caller validates indices/ranges, tracks output authority
 and submits before rewriting a prepared parameter buffer. Use distinct bindings
-for differing parameters in one pending batch. Sensor-level producer batching
-and directly leased output slots remain pending.
+for differing parameters in one pending batch. The public sensor `encode` path
+composes these operations into directly leased output slots.
 
 If you want both an absolute readout and a chain-relative readout
 of the same frame, register it twice: once with `None` reference (or

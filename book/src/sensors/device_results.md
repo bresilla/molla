@@ -151,6 +151,9 @@ for pose changes. Converted heightfields and standalone triangles use the
 owned scene's mesh path. Exact distance ties retain analytical hits before
 meshes, then the earliest mesh instance. Hits at `max_distance` are misses.
 Miss channels contain distance/shape `-1`, point zero and normal +Y.
+Invalid included scene poses instead write distance/shape `-2`, point/normal zero
+to every active ray. Channel availability is not numerical validity; see
+[invalid owned-scene results](contracts.md#invalid-owned-scene-results).
 
 This entry point accepts **CPU ray arrays**. It validates finite origins,
 finite nonzero directions, matching counts, capacity and a positive finite f32
@@ -175,7 +178,13 @@ Direct queries retain up to 128 primitive variants, 128 query/merge pairs per
 active mesh instance and 64 miss initializers. A changed scene ID/revision
 clears direct geometry-dependent bindings. Old submitted frames remain
 readable after replacement, but `resolve_body` on the replacement scene rejects
-their old scene stamp. Existing raw-model dispatch/cast paths remain unchanged.
+their old scene stamp. Retain `scene.identities()` together with the query's
+actual `SceneStamp` to resolve historical dense shape/body indices into stable
+handles; the immutable table survives replacement and scene destruction without
+retaining GPU geometry. Explicit replacement remaps preserve selected handles,
+while removed handles cannot alias new objects. See [scene identities](scene.md#stable-body-and-shape-handles).
+Frames do not attach those CPU tables automatically. Existing raw-model
+dispatch/cast paths remain unchanged.
 `LidarBatch::encode_scene` shares the owned-query implementation with generated
 GPU rays, followed by per-scan clipping and pulse selection; see
 [LiDAR batches](lidar_batch.md). `TiledCamera::encode_scene` composes generated-ray
@@ -207,6 +216,15 @@ if the caller drops all frame handles before submission. The callback must
 only read those input bindings and use resources from the same device. Failed
 or panicking consumer callbacks poison the batch. No CPU collection is required.
 Arbitrary raw shader work in `encode_with_frames` is not included in producer kernel counters.
+
+`encode_auxiliary(|encoder| ...)` encodes commands without sensor-frame inputs,
+such as timestamp markers and query resolves. Use resources from this batch's device
+and encode through the provided encoder; do not issue queue writes or submissions.
+The hook does not retain sensor-frame leases: frame consumers still need
+`encode_with_frames` or `encode_with_pending`. At most 128 auxiliary callbacks
+are accepted per batch. Successful callbacks count in `auxiliary_encodes`, not
+producer kernel dispatch counts. Callback error/panic poisons the batch and prevents
+submission. Auxiliary-only batches submit normally; truly empty batches do not.
 
 ## Pre-submission GPU chains
 
@@ -373,5 +391,116 @@ The suite additionally tests 64 outputs plus 64 retained inputs together, inline
 result iteration with zero measured allocations, completion lease release, and
 retained upload scratch conversion/authority for scalar/vector/transform values.
 The audit reports current costs; it is deliberately **not** a passing claim for
-the zero-allocation gate. The full S02 allocation/performance gate and broader
-lifecycle gates remain unfinished. Gearbox integration is not part of this change.
+zero heap allocation per frame (see the attribution below).
+
+### Warm-frame resource retention and attribution
+
+`sensor_resource_retention_gpu` (feature `resource-counters`, which enables
+wgpu's internal object counters) drains the device and snapshots live buffers,
+buffer memory, textures, texture views, bind groups and layouts, compute
+pipelines, pipeline layouts, shader modules, query sets, samplers and command
+encoders after four warm frames, then asserts all of them unchanged after 32
+more. Three chains are covered, each in one submission per frame:
+
+| Chain | Live buffers / bind groups (cumulative) |
+|---|---|
+| Four 9×7 cameras → image processing → annotation | 83 / 11 |
+| 16-ray `Raycaster` + two 8×32 `LidarBatch` scans → `CloudProcessor` → `CloudGrid` | 167 / 32 |
+| IMU + contacts + frame transforms over eight mounts | 230 / 42 |
+
+A second test installs a backtrace-attributing global allocator and assigns
+each warm-frame allocation to the first non-plumbing crate on its stack
+(generic `<T as trait_crate::Trait>` frames count as the trait's crate):
+
+| Chain | Allocations per warm frame | Molla-owned before → after | wgpu-owned |
+|---|---|---|---|
+| Camera/image/annotation | 188 → 182 | 8 → 2 | 180 |
+| Ray/LiDAR/cloud/grid | 299 → 294 | 7 → 2 | 292 |
+| IMU/contact/frame | 113 → 112 | 1 → 0 | 112 |
+
+The reduction came from a process-unique `BatchId` in place of a per-batch
+`Arc` owner token and from retained `PlanScratch` planning storage in the
+annotation, image and cloud processors. The remaining Molla allocations are the
+per-frame layout and scan metadata returned to the caller inside receipts; the
+rest is wgpu command submission. Counts are exact and stable across frames on
+the recorded RTX 4080/Vulkan runs, not portable guarantees.
+
+```sh
+make test-sensor-resources A=--nocapture
+```
+
+## Lifecycle audit
+
+Every producer and pool was checked against seven lifecycle properties:
+
+- **P1:** bounded in-flight work with explicit backpressure;
+- **P2:** no reuse before GPU completion;
+- **P3:** no reuse before CPU release;
+- **P4:** foreign engine or device rejection;
+- **P5:** reset/generation invalidation;
+- **P6:** cancellation/poison;
+- **P7:** known device loss.
+
+Producers that write into a `SensorFramePool` inherit P2/P3 from that pool.
+
+| Producer / pool | Lifecycle tests |
+|---|---|
+| `SensorFramePool`, `SensorCommandBatch` | `device_results` unit tests (P1–P7), `released_frames_wait_for_gpu_completion_and_poll_failure_is_terminal` (strict P2, terminal poll failure) |
+| `ReadbackRing` | `sensor_readback_gpu`, `cancelled_slots_are_reclaimed_only_by_poll_releases_after_mapping`, `sensor_device_loss_gpu` |
+| `DeviceSnapshotPool` | `sensor_snapshot_gpu`, `released_snapshots_wait_for_copy_completion_and_poll_failure_is_terminal` |
+| IMU / contact / frame transforms | `sensor_aux_direct_gpu` including `contact_backpressure_foreign_pools_and_device_loss_are_explicit`, `sensor_direct_outputs_gpu` |
+| `Raycaster`, `LidarBatch` | `sensor_ray_direct_gpu`, `sensor_scene_rebuild_gpu`, `sensor_lidar_direct_gpu` (foreign pools and batches) |
+| `TiledCamera`, `CameraBatch` | `sensor_camera_direct_gpu`, `sensor_camera_manager_direct_gpu` (foreign pools/batches, device loss with groups pending) |
+| Image / annotation / cloud / grid | `sensor_image_direct_gpu`, `sensor_annotation_direct_gpu`, `sensor_cloud_direct_gpu` (reset invalidates held frames), `sensor_grid_direct_gpu` |
+
+The audit found one defect. After a terminal poll failure, `DeviceSnapshotPool`
+still accepted `reset()`, and `is_current()` could still return true, because
+both checked only device loss. Both now share the pool's terminal-state check,
+matching `SensorFramePool`. Strict P2 is tested without polling: wgpu runs
+completion callbacks only inside a later poll or submit, so a submitted but
+unobserved slot must read as occupied. Gearbox integration is not part of this change.
+
+## Processor construction budgets
+
+`ImageProcessor`, `AnnotationProcessor`, `CloudProcessor` and `CloudGrid` retain
+host mirrors as well as device arrays. Device-only dispatch does not mean these
+host mirrors are absent. Their existing `max_buffer_bytes` configs cap device
+buffer payloads; `new` additionally applies a default 1 GiB combined construction
+payload cap. `new_with_storage_limits` overrides that cap explicitly.
+
+`ProcessorStorageUsage::for_image`, `for_annotation`, `for_cloud` and `for_grid`
+validate configurations/device limits and estimate payloads without allocating
+the arrays. `storage_usage()` reports the same estimate on a constructed processor.
+The estimate sums retained host arrays, device arrays including kernel scratch/
+uniforms, and the largest sequential upload-packing array. This conservatively
+counts all retained arrays alongside that temporary packing; it is not a measured
+process peak. Driver staging, allocator overhead, pipelines/bindings, per-frame
+metadata, caller-owned inputs and output/readback pools are excluded.
+
+```rust
+use molla_sensors::{
+    CloudProcessor, CloudProcessorConfig, ProcessorStorageLimits, ProcessorStorageUsage,
+};
+
+let config = CloudProcessorConfig::default();
+let usage = ProcessorStorageUsage::for_cloud(config, &engine.device().unwrap().limits())?;
+let processor = CloudProcessor::new_with_storage_limits(
+    &engine,
+    config,
+    ProcessorStorageLimits { max_construction_bytes: usage.construction_bytes },
+)?;
+assert_eq!(processor.storage_usage(), usage);
+```
+
+Both device and combined payload checks run before host arrays and GPU buffers
+are allocated. Host arrays and upload conversion storage reserve fallibly; dirty
+host/device authority assertions are unchanged. Four GPU fixtures compare the
+retained host arrays and largest packing payload with actual mirrored buffers.
+Kernel-only device sizes are additionally source-audited and covered by the
+existing device-budget formulas; this does not measure allocator or driver peaks.
+
+The calling-thread preflight regression uses 65,537 pixels/points and a cap that
+fits device buffers but not host mirrors/packing. Each rejected constructor
+requested 116 bytes for its error message. Temporarily moving image preflight
+after allocation makes the unchanged regression fail at 1,509,413 requested bytes.
+These checks are separate from warm-frame zero-allocation and performance gates.

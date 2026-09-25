@@ -18,6 +18,7 @@ use crate::device_results::{
 };
 use crate::dispatch::{BindingsCache, SensorDispatchStats};
 use crate::readback::{DeviceBuffer, ReadbackConfig, ReadbackRing, ReadbackStamp, ReadbackStats};
+use crate::{SensorArrayLimits, SensorArrayStorage};
 use molla_compute::Engine;
 use molla_core::{BodyId, Error, Result};
 use molla_kernels::{FrameTransformBindings, FrameTransformKernel};
@@ -62,6 +63,7 @@ pub struct FrameTransformSensor {
     has_reference: bool,
     target_count: u32,
     body_count: usize,
+    storage_usage: SensorArrayStorage,
 
     target_body: Buffer<u32>,
     target_local_pos: Buffer<Vec3>,
@@ -83,6 +85,23 @@ impl FrameTransformSensor {
         model: &Model,
         reference: Option<FrameTarget>,
         targets: &[FrameTarget],
+    ) -> Result<Self> {
+        Self::new_with_limits(
+            engine,
+            model,
+            reference,
+            targets,
+            SensorArrayLimits::default(),
+        )
+    }
+
+    /// Construct with a combined retained host/device array budget.
+    pub fn new_with_limits(
+        engine: &Engine,
+        model: &Model,
+        reference: Option<FrameTarget>,
+        targets: &[FrameTarget],
+        limits: SensorArrayLimits,
     ) -> Result<Self> {
         engine.check_device()?;
         if targets.is_empty() {
@@ -106,25 +125,17 @@ impl FrameTransformSensor {
             .ok_or_else(|| Error::Solver("frame_transform: target count overflow".into()))?;
         let target_count = u32::try_from(n)
             .map_err(|_| Error::Solver("frame_transform: too many targets".into()))?;
-        let largest_bytes = (model.body_count as u64)
-            .checked_mul(32)
-            .map(|bytes| bytes.max(n as u64 * 16))
-            .ok_or_else(|| Error::Solver("frame_transform: buffer size overflow".into()))?;
-        let limits = device.limits();
-        if largest_bytes > limits.max_storage_buffer_binding_size as u64
-            || largest_bytes > limits.max_buffer_size
-            || target_count.div_ceil(64) > limits.max_compute_workgroups_per_dimension
-        {
-            return Err(Error::Solver(
-                "frame_transform: capacity exceeds GPU limits".into(),
-            ));
-        }
-        let mut all: Vec<FrameTarget> = Vec::with_capacity(n);
-        if let Some(r) = reference {
-            all.push(r);
-        }
-        all.extend_from_slice(targets);
-        for (i, t) in all.iter().enumerate() {
+        let bodies = u32::try_from(model.body_count)
+            .map_err(|_| Error::Solver("frame_transform: too many bodies".into()))?;
+        let storage_usage = SensorArrayStorage::for_frames(targets.len(), has_ref)?;
+        limits.check(
+            storage_usage,
+            target_count,
+            u64::from(bodies) * 32,
+            &device.limits(),
+        )?;
+        let all = || reference.iter().chain(targets.iter());
+        for (i, t) in all().enumerate() {
             if t.body.index() >= model.body_count {
                 return Err(Error::Solver(format!(
                     "FrameTransformSensor::new: target {i} body {} out of range (count={})",
@@ -143,18 +154,38 @@ impl FrameTransformSensor {
             }
         }
 
-        let body_idx: Vec<u32> = all.iter().map(|t| t.body.index() as u32).collect();
-        let local_pos: Vec<Vec3> = all.iter().map(|t| t.local_pose.position).collect();
-        let local_rot: Vec<Quat> = all.iter().map(|t| t.local_pose.rotation).collect();
+        let target = |i: usize| {
+            if let Some(reference) = reference.as_ref() {
+                if i == 0 {
+                    return reference;
+                }
+                &targets[i - 1]
+            } else {
+                &targets[i]
+            }
+        };
+        let body_idx = crate::host_arrays::from_fn(n, |i| target(i).body.index() as u32)?;
+        let local_pos = crate::host_arrays::from_fn(n, |i| target(i).local_pose.position)?;
+        let local_rot = crate::host_arrays::from_fn(n, |i| target(i).local_pose.rotation)?;
 
         let mut target_body = Buffer::from_vec(body_idx, BufferUsage::Storage);
         let mut target_local_pos = Buffer::from_vec(local_pos, BufferUsage::Storage);
         let mut target_local_rot = Buffer::from_vec(local_rot, BufferUsage::Storage);
         let usage = BufferUsage::StorageReadWrite;
-        let world_pos = DeviceBuffer::from_host(engine, vec![Vec3::ZERO; n], usage)?;
-        let world_rot = DeviceBuffer::from_host(engine, vec![Quat::IDENTITY; n], usage)?;
-        let relative_pos = DeviceBuffer::from_host(engine, vec![Vec3::ZERO; n], usage)?;
-        let relative_rot = DeviceBuffer::from_host(engine, vec![Quat::IDENTITY; n], usage)?;
+        let world_pos =
+            DeviceBuffer::from_host(engine, crate::host_arrays::filled(n, Vec3::ZERO)?, usage)?;
+        let world_rot = DeviceBuffer::from_host(
+            engine,
+            crate::host_arrays::filled(n, Quat::IDENTITY)?,
+            usage,
+        )?;
+        let relative_pos =
+            DeviceBuffer::from_host(engine, crate::host_arrays::filled(n, Vec3::ZERO)?, usage)?;
+        let relative_rot = DeviceBuffer::from_host(
+            engine,
+            crate::host_arrays::filled(n, Quat::IDENTITY)?,
+            usage,
+        )?;
 
         target_body.ensure_device(&device)?;
         target_local_pos.ensure_device(&device)?;
@@ -171,6 +202,7 @@ impl FrameTransformSensor {
             has_reference: has_ref,
             target_count,
             body_count: model.body_count,
+            storage_usage,
             target_body,
             target_local_pos,
             target_local_rot,
@@ -180,6 +212,11 @@ impl FrameTransformSensor {
             relative_rot,
             readback: None,
         })
+    }
+
+    /// Combined retained host/device array payload, excluding collection and output pools.
+    pub fn storage_usage(&self) -> SensorArrayStorage {
+        self.storage_usage
     }
 
     /// Run the kernel against `state` and return one reading per
@@ -423,5 +460,40 @@ impl FrameTransformSensor {
             .as_ref()
             .map(ReadbackRing::stats)
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sensor_storage::tests::{assert_payload, buffer_bytes};
+
+    #[test]
+    #[ignore = "requires GPU"]
+    fn frame_array_estimate_matches_allocated_payload_with_optional_reference() {
+        let engine = Engine::new_gpu().unwrap();
+        let mut builder = molla_sim::ModelBuilder::new();
+        let body = builder.add_body(Default::default());
+        let model = builder.build().unwrap();
+        let target = FrameTarget {
+            body,
+            local_pose: Transform::IDENTITY,
+        };
+        for reference in [None, Some(target)] {
+            let sensor =
+                FrameTransformSensor::new(&engine, &model, reference, &[target; 3]).unwrap();
+            assert_payload(
+                sensor.storage_usage(),
+                &[
+                    buffer_bytes(&sensor.target_body),
+                    buffer_bytes(&sensor.target_local_pos),
+                    buffer_bytes(&sensor.target_local_rot),
+                    buffer_bytes(&sensor.world_pos.buffer),
+                    buffer_bytes(&sensor.world_rot.buffer),
+                    buffer_bytes(&sensor.relative_pos.buffer),
+                    buffer_bytes(&sensor.relative_rot.buffer),
+                ],
+            );
+        }
     }
 }

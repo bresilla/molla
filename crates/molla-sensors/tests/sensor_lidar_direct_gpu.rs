@@ -278,7 +278,7 @@ fn independent_mixed_scans_feed_clouds_in_one_submission_and_match_legacy() {
     assert_eq!(batch.stats().input_upload_bytes, 4 * 128);
     let submitted = batch.submit().unwrap();
     assert_eq!(submitted.stats.submissions, 1);
-    assert_eq!(submitted.stats.kernel_dispatches, 13);
+    assert_eq!(submitted.stats.kernel_dispatches, 11);
     assert_eq!(submitted.stats.output_clears, 20);
     assert_eq!(ra.scene_stamp, scene.stamp());
     let fa = submitted.frame(&ra.frame).unwrap().clone();
@@ -432,8 +432,11 @@ fn warm_output_slots_follow_current_body_poses_without_rebuilding_bindings() {
         drain(&engine);
     }
     assert_eq!(lidar.stats().binding_preparations, 5);
-    assert_eq!(lidar.query_stats().primitive_preparations, 8);
-    assert_eq!(lidar.query_stats().mesh_preparations, 8);
+    assert_eq!(lidar.query_stats().primitive_preparations, 0);
+    assert_eq!(lidar.query_stats().mesh_preparations, 0);
+    assert_eq!(lidar.query_stats().scene_builds, 1);
+    assert_eq!(lidar.query_stats().scene_preparations, 12);
+    assert_eq!(lidar.query_stats().refit_preparations, 2);
     assert_eq!(pool.stats().buffer_allocations, 36);
     assert_eq!(lidar.stats().encoded_batches, 24);
     assert_eq!(lidar.stats().submissions, 0);
@@ -563,6 +566,43 @@ fn empty_cancellation_preflight_and_known_loss_do_not_publish_stale_lidar() {
         assert!(batch.submit().unwrap().index.is_none());
         assert_eq!(pool.stats().reserved_frames, 0);
     }
+    let foreign_lidar = LidarBatch::new(&foreign, 1, 4).unwrap();
+    let mut foreign_pool = foreign_lidar.output_pool(&foreign, pool_config(1)).unwrap();
+    {
+        let mut batch = SensorCommandBatch::new(&engine).unwrap();
+        assert!(
+            lidar
+                .encode_scene(
+                    &mut batch,
+                    &engine,
+                    &scene,
+                    &state,
+                    &scans,
+                    &mut foreign_pool,
+                    stamp(0)
+                )
+                .is_err()
+        );
+        assert!(batch.submit().unwrap().index.is_none());
+    }
+    {
+        let mut batch = SensorCommandBatch::new(&foreign).unwrap();
+        assert!(
+            lidar
+                .encode_scene(
+                    &mut batch,
+                    &foreign,
+                    &scene,
+                    &state,
+                    &scans,
+                    &mut pool,
+                    stamp(0)
+                )
+                .is_err()
+        );
+    }
+    assert_eq!(foreign_pool.stats().reserved_frames, 0);
+    assert_eq!(pool.stats().reserved_frames, 0);
     assert_eq!(lidar.stats().descriptor_upload_bytes, 0);
     assert_eq!(lidar.stats().binding_preparations, 1);
     let mut batch = SensorCommandBatch::new(&engine).unwrap();

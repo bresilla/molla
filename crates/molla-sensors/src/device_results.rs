@@ -5,7 +5,15 @@ use arrayvec::ArrayVec;
 use molla_compute::{DeviceHealth, Engine};
 use molla_core::{Error, Result};
 use molla_storage::BufferElement;
-use std::{any::TypeId, marker::PhantomData, ops::Range, sync::Arc};
+use std::{
+    any::TypeId,
+    marker::PhantomData,
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SensorChannelSpec {
@@ -356,16 +364,28 @@ impl<'a, T: BufferElement> SensorFrameChannel<'a, T> {
     }
 }
 
+/// Identity of one command batch; process-unique and never reused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BatchId(u64);
+
+static NEXT_BATCH: AtomicU64 = AtomicU64::new(0);
+
+impl BatchId {
+    fn next() -> Self {
+        Self(NEXT_BATCH.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 /// Opaque receipt; it has no readable channels until its batch submits.
 #[derive(Clone)]
 pub struct EncodedSensorFrame {
-    owner: Arc<()>,
+    owner: BatchId,
     index: usize,
 }
 
 impl EncodedSensorFrame {
     pub(crate) fn same_receipt(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.owner, &other.owner) && self.index == other.index
+        self.owner == other.owner && self.index == other.index
     }
 }
 
@@ -483,6 +503,8 @@ pub struct SensorCommandStats {
     pub input_upload_bytes: u64,
     /// Successful pending-input callbacks, including custom output producers.
     pub downstream_encodes: u64,
+    /// Successful auxiliary callbacks; not producer kernel dispatches.
+    pub auxiliary_encodes: u64,
 }
 
 pub(crate) trait SubmitAction: Send {
@@ -504,7 +526,7 @@ impl Drop for PendingCommit<'_> {
 }
 
 pub struct SensorSubmission {
-    owner: Arc<()>,
+    owner: BatchId,
     frames: ArrayVec<SensorFrame, 64>,
     pub index: Option<wgpu::SubmissionIndex>,
     pub stats: SensorCommandStats,
@@ -512,7 +534,7 @@ pub struct SensorSubmission {
 
 impl SensorSubmission {
     pub fn frame(&self, receipt: &EncodedSensorFrame) -> Result<&SensorFrame> {
-        if !Arc::ptr_eq(&self.owner, &receipt.owner) {
+        if self.owner != receipt.owner {
             return Err(Error::Storage(
                 "sensor output: receipt belongs to another batch".into(),
             ));
@@ -537,7 +559,7 @@ pub struct SensorCommandBatch<'a> {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     health: Arc<DeviceHealth>,
-    owner: Arc<()>,
+    owner: BatchId,
     encoder: wgpu::CommandEncoder,
     frames: ArrayVec<SensorFrame, 64>,
     failed: bool,
@@ -560,7 +582,7 @@ impl<'a> SensorCommandBatch<'a> {
             device,
             queue: engine.queue().expect("checked engine").clone(),
             health: engine.device_health().expect("checked engine").clone(),
-            owner: Arc::new(()),
+            owner: BatchId::next(),
             encoder,
             frames: ArrayVec::new(),
             inputs: ArrayVec::new(),
@@ -669,6 +691,29 @@ impl<'a> SensorCommandBatch<'a> {
             .active_range())
     }
 
+    /// Encode auxiliary commands such as timestamp markers and query resolves.
+    ///
+    /// This does not retain sensor-frame leases. Frame consumers must use
+    /// `encode_with_frames` or `encode_with_pending` instead. The callback must
+    /// use this encoder and this device's resources, not queue writes or submissions.
+    /// At most 128 callbacks per batch. Callback failure poisons the batch.
+    pub fn encode_auxiliary(
+        &mut self,
+        encode: impl FnOnce(&mut wgpu::CommandEncoder) -> Result<()>,
+    ) -> Result<()> {
+        self.health.check()?;
+        if self.failed || self.stats.auxiliary_encodes == 128 {
+            return Err(Error::Storage(
+                "sensor batch: poisoned or auxiliary limit exceeded".into(),
+            ));
+        }
+        self.failed = true;
+        encode(&mut self.encoder)?;
+        self.failed = false;
+        self.stats.auxiliary_encodes += 1;
+        Ok(())
+    }
+
     /// Encode raw read-only consumers of submitted frames, retaining their slots
     /// through GPU completion. The callback must use only this device's resources
     /// and must not write input bindings or submit separate commands using them.
@@ -709,7 +754,7 @@ impl<'a> SensorCommandBatch<'a> {
             ));
         }
         for receipt in receipts {
-            if !Arc::ptr_eq(&self.owner, &receipt.owner) || receipt.index >= self.frames.len() {
+            if self.owner != receipt.owner || receipt.index >= self.frames.len() {
                 return Err(Error::Storage(
                     "sensor batch: pending receipt belongs to another batch".into(),
                 ));
@@ -877,7 +922,7 @@ impl<'a> SensorCommandBatch<'a> {
         self.stats.kernel_dispatches = dispatches;
         self.failed = false;
         Ok(Some(EncodedSensorFrame {
-            owner: self.owner.clone(),
+            owner: self.owner,
             index,
         }))
     }
@@ -888,7 +933,7 @@ impl<'a> SensorCommandBatch<'a> {
         if self.failed {
             return Err(Error::Gpu("sensor batch: poisoned".into()));
         }
-        if self.frames.is_empty() && self.inputs.is_empty() {
+        if self.frames.is_empty() && self.inputs.is_empty() && self.stats.auxiliary_encodes == 0 {
             return Ok(SensorSubmission {
                 owner: self.owner,
                 frames: self.frames,
@@ -927,15 +972,15 @@ mod tests {
     #[test]
     fn receipt_deduplication_uses_owner_identity_and_output_index() {
         let first = EncodedSensorFrame {
-            owner: Arc::new(()),
+            owner: BatchId::next(),
             index: 0,
         };
         let next = EncodedSensorFrame {
-            owner: first.owner.clone(),
+            owner: first.owner,
             index: 1,
         };
         let foreign = EncodedSensorFrame {
-            owner: Arc::new(()),
+            owner: BatchId::next(),
             index: 0,
         };
         assert!(first.same_receipt(&first.clone()));
@@ -1459,5 +1504,68 @@ mod tests {
         assert_eq!(receipts.len(), 64);
         assert_eq!(pool.available_slots().unwrap(), 64);
         assert_eq!(pool.stats().buffer_allocations, 64);
+    }
+
+    #[test]
+    #[ignore = "requires GPU"]
+    fn released_frames_wait_for_gpu_completion_and_poll_failure_is_terminal() {
+        let engine = Engine::new_gpu().unwrap();
+        let specs = [SensorChannelSpec::of::<u32>(4)];
+        let mut pool = SensorFramePool::new(
+            &engine,
+            SensorFramePoolConfig {
+                slots: 1,
+                max_total_bytes: 16,
+            },
+            &specs,
+        )
+        .unwrap();
+        let wait = || {
+            engine
+                .device()
+                .unwrap()
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(30)),
+                })
+                .unwrap();
+        };
+        let encode = |pool: &mut SensorFramePool| {
+            let mut batch = SensorCommandBatch::new(&engine).unwrap();
+            let receipt = batch
+                .encode_output(pool, &specs, &[0..4], Default::default(), |_, _, encoder, outputs| {
+                    encoder.clear_buffer(&outputs[0], 0, None);
+                    Ok(1)
+                })
+                .unwrap()
+                .unwrap();
+            let submitted = batch.submit().unwrap();
+            assert_eq!(submitted.stats.submissions, 1);
+            submitted.frame(&receipt).unwrap().clone()
+        };
+
+        // Released by the CPU, but no poll has observed the submission completing.
+        drop(encode(&mut pool));
+        assert!(Arc::strong_count(&pool.slots[0].in_flight) > 1);
+        assert!(!OutputSlot::available(&pool.slots[0]));
+        wait();
+        assert!(OutputSlot::available(&pool.slots[0]));
+
+        let held = encode(&mut pool);
+        wait();
+        assert!(pool.is_current(&held));
+        pool.failure = Some("injected poll failure".into());
+        assert!(pool.available_slots().is_err());
+        assert!(pool.reset().is_err());
+        assert!(!pool.is_current(&held));
+        let mut batch = SensorCommandBatch::new(&engine).unwrap();
+        assert!(
+            batch
+                .encode_output(&mut pool, &specs, &[0..4], Default::default(), |_, _, _, _| {
+                    panic!("must not encode")
+                })
+                .is_err()
+        );
+        assert_eq!(pool.stats().reserved_frames, 2);
     }
 }

@@ -120,6 +120,7 @@
 
 # Sensors
 
+- [Geometry, frames and numerical contracts](./sensors/contracts.md)
 - [Raycaster](./sensors/raycaster.md)
 - [Sensor geometry snapshots](./sensors/scene.md)
 - [Device-resident LiDAR batches](./sensors/lidar_batch.md)
@@ -135,6 +136,11 @@
 - [Leased GPU snapshots](./sensors/snapshot.md)
 - [Direct leased sensor outputs](./sensors/device_results.md)
 - [Simulation-time scheduling](./sensors/scheduler.md)
+- [Viewer sensor integration](./sensors/viewer.md)
+- [Per-frame sensor latency measurements](./sensors/latency_benchmarks.md)
+- [Camera and processing-chain latency](./sensors/camera_latency_benchmarks.md)
+- [LiDAR cloud/grid-chain latency](./sensors/cloud_latency_benchmarks.md)
+- [Physics and sensor combined-load measurements](./sensors/physics_latency_benchmarks.md)
 - [Contact sensor](./sensors/contact_sensor.md)
 - [Frame transform](./sensors/frame_transform.md)
 

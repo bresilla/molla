@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+cargo 1.94.1 (29ea6fb6a 2026-03-24)
+rustc 1.94.1 (e408947bf 2026-03-25)
+Linux 7.0.0-31-generic x86_64 GNU/Linux
+367d92c142f4a266b321f39b65be34ad788592f0
+Dirty/untracked entries: 105
+Crate source/manifests fingerprint: 6d46d0ed83a52eaca8ef8389c3545c65ba4c73127f5ec6590ced11e167d66125  -
+44a57b02ececf666e79e86a96a8de8df8b937896c7abfaceb2f04d271117a491  Cargo.toml
+cd13123e4f2ecf739bad3a6cd1fc9a78c8e2c27abae8650416123d86c16bd2fc  Cargo.lock
+8199876a9cd9f145fd30683e7059bbeade77d285d7f137d17c8e18828690a19b  Makefile
+5461ec001d59dbae5a3ad77334ca785d1cca9057afd9461daa36fe704f28d186  flake.nix
+939a9ff710459348b8930578f12b47c678dcfb45366243bc8d9fe311ba485ecd  flake.lock
+name, driver_version, utilization.gpu [%], memory.used [MiB], memory.total [MiB]
+NVIDIA GeForce RTX 4080, 595.84, 0 %, 2682 MiB, 16376 MiB

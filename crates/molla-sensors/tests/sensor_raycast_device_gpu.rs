@@ -108,15 +108,19 @@ fn retained_query_bindings_handle_ping_pong_and_geometry_replacement() {
                 assert_eq!(stats.primitive_preparations, warm.primitive_preparations);
                 assert_eq!(stats.mesh_preparations, warm.mesh_preparations);
                 assert_eq!(stats.merge_preparations, warm.merge_preparations);
+                assert_eq!(stats.refit_preparations, warm.refit_preparations);
             }
         }
     }
     let stats = sensor.query_stats();
     assert_eq!(stats.encoded_queries, 16);
     assert_eq!(stats.submissions, 16);
-    assert_eq!(stats.primitive_preparations, 4);
-    assert_eq!(stats.mesh_preparations, 6);
-    assert_eq!(stats.merge_preparations, 2);
+    assert_eq!(stats.primitive_preparations, 0);
+    assert_eq!(stats.mesh_preparations, 0);
+    assert_eq!(stats.merge_preparations, 0);
+    assert_eq!(stats.scene_builds, 2);
+    assert_eq!(stats.scene_preparations, 14);
+    assert_eq!(stats.refit_preparations, 4);
     assert_eq!(sensor.readback_stats().submissions, 0);
     assert_eq!(scene.mesh_count(), 1);
 }

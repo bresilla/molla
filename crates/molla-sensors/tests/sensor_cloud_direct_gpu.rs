@@ -499,7 +499,9 @@ fn warm_slots_cancellation_reset_backpressure_and_zero_tails_are_independent() {
             frames.push(batch.submit().unwrap().frame(&out.frame).unwrap().clone());
         }
         assert_eq!(pool.available_slots().unwrap(), 0);
+        assert!(frames.iter().all(|frame| pool.is_current(frame)));
         pool.reset().unwrap();
+        assert!(frames.iter().all(|frame| !pool.is_current(frame)));
         let jobs = [job(CloudInput::Points(
             input.readback_source(0..1).unwrap(),
         ))];

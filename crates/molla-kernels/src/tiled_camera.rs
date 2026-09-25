@@ -205,7 +205,13 @@ impl CameraTraceKernel {
     pub fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::camera_trace"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/camera_trace.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("../shaders/ray_shapes.wgsl"),
+                    include_str!("../shaders/camera_trace.wgsl")
+                )
+                .into(),
+            ),
         });
         // 8 read-only storage buffers in model bind group:
         // shape_geom_kind, shape_geom_data, shape_body, shape_transform,

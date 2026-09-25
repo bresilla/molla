@@ -6,16 +6,17 @@ LiDAR and camera tracing paths.
 `encode_scene` supports [direct leased outputs](device_results.md) and mixed
 producer batches over owned scenes. It uploads checked host rays into leased
 input channels and computes primitive/moving-mesh hits directly into the leased
-result channels. Generated-ray public composition remains pending; existing
+result channels. `LidarBatch` and `TiledCamera` use generated rays in the same
+device-only command batches; existing
 `dispatch`, `dispatch_scene`, `cast` and `cast_scene` remain available.
 
 The implementation lives in `crates/molla-sensors/src/raycast.rs` with
-the heavy math (per-primitive ray intersection + outward-normal
-computation) in `crates/molla-kernels/shaders/raycast.wgsl`. Following molla's
+the shared primitive intersections in `crates/molla-kernels/shaders/ray_shapes.wgsl`
+and owned-scene traversal in `scene_trace.wgsl`. Following molla's
 GPU-first rule, the Rust orchestrator owns the per-batch ray / hit
 buffers and the dispatch wrapper. Intersections and nearest-hit mesh reduction
 execute on GPU. `dispatch` returns device channels without waiting or collecting;
-`cast` collects the four active hit channels together after the last mesh pass.
+`cast` collects the four active hit channels together after the query completes.
 
 ## What it computes
 
@@ -28,7 +29,7 @@ pub struct RayHit {
     pub body_id: BodyId,          // owner body, BodyId::NONE for static
     pub t: Real,                  // hit distance along the ray (f64::INFINITY = miss)
     pub point: Vec3,              // world-space hit point
-    pub normal: Vec3,             // world-space outward surface normal
+    pub normal: Vec3,             // outward primitive normal; ray-opposing mesh normal
 }
 ```
 
@@ -40,9 +41,9 @@ Invalid rays return an error for the batch, rather than an ordinary miss.
 
 ## Supported primitives
 
-The primitive GPU kernel walks every shape for each ray. Triangle meshes use
-local-space GPU BVHs with rigid instance poses; there is not yet a top-level
-scene acceleration structure.
+Owned-scene queries traverse a refitted finite-instance hierarchy and shared local
+mesh BVHs, with infinite planes handled separately. Raw-model queries retain the
+linear primitive loop and per-instance mesh passes. See [scene acceleration](scene.md#shared-accelerated-queries).
 
 | Kind     | Math                                              |
 | -------- | ------------------------------------------------- |
@@ -52,7 +53,7 @@ scene acceleration structure.
 | Cylinder | Infinite cylinder + 2 disc caps                   |
 | Cone     | Finite side surface and circular base            |
 | Ellipsoid | Quadratic in scaled local coordinates           |
-| Plane    | Single half-space (`+Y` outward normal in local)  |
+| Plane    | Infinite boundary plane with its configured local normal |
 
 Each primitive transforms the ray into the shape's local frame using
 the inverse of the body world pose × shape local pose, intersects in
@@ -63,7 +64,9 @@ back into world space.
 |---|---|
 | Static/body-attached TriMesh | Local GPU BVH, live instance pose and GPU nearest-hit merge |
 | Standalone Triangle, Heightfield | Converted by `SensorScene`; skipped by raw-model queries |
-| ConvexHull, RoundCylinder, SDF | Rejected by default in `SensorScene`; skipped by raw-model queries |
+| ConvexHull | Triangulated by `SensorScene`; skipped by raw-model queries |
+| RoundCylinder | Dilated cylinder approximation in `SensorScene`; skipped by raw-model queries |
+| SDF | Rejected by default in `SensorScene`; skipped by raw-model queries |
 
 Use [owned sensor scenes](./scene.md) for shared immutable geometry, revisions,
 terrain conversion and explicit unsupported-shape diagnostics. Raw-model queries
@@ -73,6 +76,8 @@ after edits/replacement. Pose changes reuse local BVHs. `clear_mesh_cache()`
 explicitly releases the legacy cache; owned scenes use `replace_model` instead.
 The separate `raycast_adjoint` helper uses CPU finite differences over
 spheres/planes; it is not a triangle-query fallback.
+Its finite nonzero ray directions are also normalized for metric distances.
+Unlike the GPU sensor's `Result` API, invalid CPU adjoint rays return infinity.
 
 ## API
 
@@ -99,14 +104,57 @@ buffers up-front and is cheap thereafter: every `cast` call reuses
 the same device storage, so spinning up a new sensor per frame is
 unnecessary (and wasteful). The `max_rays` parameter is the
 capacity ceiling; calls with fewer rays simply dispatch a smaller
-threadgroup count.
+threadgroup count. A zero requested capacity preserves the legacy one-slot minimum.
+
+### Ray-array storage budgets
+
+`new` uses `RaycasterLimits::default()`: a **1 GiB combined host/device ray-array
+payload budget**. `RayStorageUsage::for_capacity(max_rays)` reports that payload
+without creating an engine, allocating arrays or accessing a GPU. `new_with_limits`
+accepts an explicit override, but GPU binding-size/buffer-size/workgroup limits
+still apply independently. Validation precedes ray-array allocation and pipeline
+creation; an oversized request returns an error rather than allocating or chunking.
+
+```rust
+use molla::sensors::{Raycaster, RaycasterLimits, RayStorageUsage};
+
+let storage = RayStorageUsage::for_capacity(1_000_000)?;
+let sensor = Raycaster::new_with_limits(&engine, storage.capacity, RaycasterLimits {
+    max_ray_storage_bytes: storage.total_bytes,
+})?;
+```
+
+The estimate includes six ray/hit channel arrays, three mesh-hit scratch arrays,
+their host mirrors, two retained packed upload arrays and the static body-pose
+fallback. GPU payload is `96 * capacity + 32` bytes; host payload uses the actual
+Rust element sizes. The result reports host, device and combined bytes separately.
+Unit/GPU tests compare this estimate with constructed array lengths and GPU
+buffer sizes, including the one-slot minimum.
+
+This is **not a process-wide memory or peak-allocation cap**. It excludes mesh/BVH
+caches, owned-scene refit storage, model/state storage, pipeline/binding metadata, allocator/driver overhead,
+temporary upload packing/staging, optional readback, leased output pools, caller
+ray vectors and returned host hit vectors. Passing validation does not guarantee
+that the machine has enough free memory. Budget those other resources separately.
+
+Legacy `Lidar` and `AerialLidar` expose matching `new_with_limits` constructors.
+`LidarBatch::new_with_ray_limits` and `TiledCamera::new_with_ray_limits` override
+their shared raycaster budget; descriptors, pulse outputs, camera poses/images
+and aperture storage are additional. Their ordinary constructors use the same
+1 GiB default. Heterogeneous `CameraBatch` uses that default per homogeneous
+group, separately from its aggregate pixel and leased-output budgets.
+
+The default can now reject a large capacity that previously passed individual
+buffer checks. This is an explicit capacity error, not silent truncation or a
+change to valid scan results. Callers needing more ray storage must opt into a
+larger budget and still satisfy device limits.
 
 The orchestrator validates input slices on every call:
 
 - `origins.len() == directions.len()`.
 - `origins.len() <= max_rays` (set at construction).
 - Finite GPU-representable origins/range and finite nonzero directions.
-- GPU buffer/workgroup capacity limits before construction allocates ray arrays.
+- Aggregate ray-array budget and GPU buffer/workgroup capacity limits before construction allocates ray arrays.
 
 Failures surface as `Error::Solver`.
 
@@ -154,19 +202,20 @@ An empty batch does not dispatch or collect. A collection wait is bounded to
 
 Direct `Raycaster::dispatch` normalizes/uploads CPU ray slices. For generated
 terrestrial/aerial rays use [device-resident LiDAR batches](./lidar_batch.md),
-which retains rays and sub-ray reductions on GPU. `Raycaster` now encodes
+which retains rays and sub-ray reductions on GPU. Raw-model `Raycaster` queries encode
 primitive queries (or miss initialization), each mesh traversal and its nearest-hit
 merge into one command buffer and submits once per nonempty query. Separate
 uniform buffers for each mesh/merge preserve instance IDs and parameters within
-that shared submission.
+that shared submission. Owned scenes instead encode dependency-ordered refit levels
+followed by one shared hierarchy traversal, retaining the same submission boundary.
 
 `query_stats()` reports encoded queries, direct query submissions and cumulative
-primitive/mesh/merge binding preparations. A primitive or mesh preparation creates
+legacy primitive/mesh/merge binding preparations. A primitive or mesh preparation creates
 one uniform buffer and four bind groups; a merge preparation creates one uniform
 and one bind group. These counters exclude initial construction, geometry uploads,
 command encoder/buffer creation and wgpu's internal upload staging.
 
-The sensor retains two input-buffer variants for the primitive pass and two per
+The raw-model path retains two input-buffer variants for the primitive pass and two per
 mesh instance, supporting alternating physics state buffers without rebinding
 after warm-up. Pose values, active ray counts and ranges may change without new
 bindings. Replaced buffer identities rebuild affected bindings; removed mesh
@@ -174,12 +223,23 @@ instances are pruned after a nonempty query. More than two rotating input-buffer
 variants can cause bounded cache churn. Legacy mesh-content comparisons/CPU ray
 uploads still have their documented costs.
 
+Owned-scene queries instead report `scene_builds`, `scene_rebuilds`, `scene_quality_checks`, `scene_preparations`
+and `refit_preparations`. They keep up to 128 trace-binding variants and two body-pose
+refit variants. Trace parameters are immutable; a new count/range or buffer set
+prepares a new variant, while changed pose values reuse bindings. These counters
+do not prove zero allocations inside wgpu or end-to-end speedups.
+
 The low-level kernel compatibility dispatch methods still allocate temporary
-bindings. Full shared execution across different sensors, leased outputs for
-unsubmitted consumers and top-level scene acceleration remain unfinished. The
-prepared kernel encode APIs require distinct parameter sets for commands with
-different arguments, and submission before rewriting a parameter set; they are
-not independently versioned output leases.
+bindings. Their queue-written prepared parameters require submission before
+rewriting a parameter set. The shared owned-scene path uses immutable parameters
+and [leased output frames](device_results.md); low-level bindings alone are not
+independently versioned output leases. [Periodic GPU rebuilding](scene.md#periodic-gpu-spatial-rebuilding)
+uses a bounded per-producer policy without pose readback. Its counter/cadence track
+encoded queries, including cancelled batches; empty queries and backpressure do not
+advance it. Optional [GPU quality-triggered rebuilding](scene.md#gpu-quality-triggered-rebuilding)
+measures normalized hierarchy area and conditionally reorders without host readback.
+Its encoded-check counter is separate from executed GPU decisions. Full lifecycle/
+allocation and performance acceptance remain unfinished.
 
 ## Ray bundle generation
 

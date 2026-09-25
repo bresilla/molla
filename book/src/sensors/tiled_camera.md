@@ -5,6 +5,13 @@ sensor. A single `dispatch()` submits the passes for every camera in the batch
 and writes per-pixel `(depth, color, normal, albedo, shape_index)`
 into device buffers of shape `(num_cameras, height, width)`.
 
+Owned-scene invalid poses produce depth `-2` and shape ID `u32::MAX - 1`, not
+ordinary misses. Enable depth or shape indices when checking validity: zero
+color/albedo/normal alone cannot distinguish invalid geometry from a miss.
+Aperture accumulation preserves the center depth/shape sentinel. Dispatch and
+readback success do not assert valid scene poses; see
+[query validity](contracts.md#invalid-owned-scene-results).
+
 It's the workhorse for pixel-observation RL environments, where you
 typically have one camera per parallel world and want all of them
 rendered in lock-step so the policy sees a tensor of shape
@@ -27,6 +34,12 @@ Each aperture sample runs these device stages:
 2. **Closest-hit query** (`Raycaster`). Shared primitive queries, mesh BVH
    traversal and GPU nearest-hit merging select visibility. Rigid moving mesh
    instances consume live GPU body poses without rebuilding vertices/BVHs.
+
+   Owned-scene bounds refit on the center sample of every frame. Later aperture
+   samples reuse those bounds within the same encoding call. Scheduled periodic
+   or quality-triggered spatial rebuilding retains its post-reorder refit and
+   query-count cadence. Separate frames always refresh, including after canceled
+   batches; no bounds-readiness state persists across frame encodings.
 
 3. **Shading** (`CameraShadeKernel`). Closest-hit distance/normal/shape ID and
    per-shape colors produce the selected [`CameraChannels`](#channels). Hits
@@ -75,6 +88,32 @@ any frame via `set_config()` — including the channels mask, so you
 can render only depth on most frames and turn on the full RGBA +
 normal stack only for the frames you log.
 
+### Fixed-array storage budgets
+
+Construction checks a default 1 GiB combined host/device camera-array budget
+before allocating buffers. `CameraStorageUsage::for_dimensions(width, height,
+num_cameras)` estimates the shared ray arrays, all five image channels, camera
+poses and pose-packing scratch, the empty color fallback, and reserved aperture
+sums/uniform. All channels count even with `CameraChannels::NONE`; aperture
+storage counts even in pinhole mode. Changing channels or optics therefore does
+not bypass the fixed-array limit. `storage_usage()` returns this estimate, not
+current driver memory usage.
+
+`TiledCamera::new_with_limits` accepts `TiledCameraLimits` with
+`max_storage_bytes` and a separate `ray_limits` sub-budget. Both default to
+1 GiB and both must pass, along with device binding and dispatch limits.
+`new_with_ray_limits` overrides only the ray sub-budget, retaining the default
+combined camera cap. For example, four 1280×720 images exceed the default
+combined cap even though their ray arrays fit the ray-only budget. An explicit
+larger cap permits such configurations only when device limits also allow them.
+
+This is an array-payload budget, not a process peak-memory cap. Scene/query
+resources, other uniforms/bindings, driver/upload staging, temporary packing,
+caller-owned data and leased output/readback pools are excluded. Aperture sums
+are still allocated lazily; their reserved GPU bytes are reported separately.
+See also [ray-array budgets](raycaster.md#ray-array-storage-budgets) and
+`crates/molla-sensors/src/camera_storage.rs`.
+
 `PhysicalOptics` supplies focal length/sensor width (both positive to override
 FOV), aperture diameter, focal distance and aperture sample count. Zero aperture
 is pinhole. Sample counts 0/1 select the center; counts through 1024 are accepted,
@@ -104,7 +143,8 @@ The semantics:
 
 - **COLOR** — Lambert-shaded RGB packed into a `u32` (8 bits per
   channel). Cheap, suitable for visualisation thumbnails.
-- **DEPTH** — `Real` (`f64`) ray-parametric `t` per pixel. `-1.0`
+- **DEPTH** — `Real` (`f64`) metric distance along the normalized pixel ray,
+  not camera-axis Z depth. `-1.0`
   marks a miss. This is the channel the depth-loss / pose-recovery
   loops consume.
 - **NORMAL** — world-space outward normal per pixel as `Vec3`. Zero
@@ -433,10 +473,14 @@ Default limits are 64 cameras, 16 groups and 4,000,000 aggregate pixels.
 Configured limits allow at most 1,024 cameras and 64 groups. Checked dimensions,
 per-group storage/dispatch capacity, poses, configurations and unique IDs are
 validated before allocating camera storage. Aggregate pixels include every image,
-even those with no enabled channels. These limits bound image capacity, not total
-GPU bytes, driver allocation or the transient old-plus-new reconfiguration peak.
-Readback/snapshot pools have separate byte budgets. Oversized groups are rejected,
-not automatically split.
+even those with no enabled channels. In addition, the fixed-array budget above
+defaults to 1 GiB **summed across all groups**, checked before constructing any
+group's GPU buffers. `new_with_storage_limits` accepts an explicit
+`TiledCameraLimits`; `storage_bytes()` reports the summed estimate, and
+`reconfigure` preserves that cap. An empty batch has zero camera-array payload.
+The cap does not include driver allocation or the transient old-plus-new
+reconfiguration peak. Readback/snapshot pools have separate byte budgets.
+Oversized groups are rejected, not automatically split.
 
 ## Tiled multi-camera × multi-world layout
 
@@ -456,8 +500,8 @@ use shared GPU visibility. Owned scenes additionally convert Triangle and
 Heightfield geometry. Unsupported owned geometry is rejected by default or
 explicitly reported with ReportAndSkip; legacy raw-model omissions remain those
 of the Raycaster. Camera color/albedo ranges feed [GPU image processing](image_processing.md)
-without host collection. Top-level acceleration/refits, stable application handles
-remain pending. Direct tiled and heterogeneous camera outputs support leased
+without host collection. Owned scenes provide top-level acceleration/refits and
+stable application handles; see [scene snapshots](scene.md). Direct tiled and heterogeneous camera outputs support leased
 ownership and pending image/annotation consumers; whole-pipeline allocation and
 performance gates remain open.
 

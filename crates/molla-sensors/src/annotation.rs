@@ -1,5 +1,7 @@
 //! Device-resident shape-instance masks and per-camera semantic bounds.
 
+use crate::host_arrays::filled;
+use crate::plan_scratch::PlanScratch;
 use crate::{
     BoundingBox2D, CameraChannels, CameraImage, MISS_SHAPE_ID,
     device_results::{
@@ -9,11 +11,13 @@ use crate::{
     dispatch::BindingsCache,
     readback::{BufferLease, DeviceBuffer, ReadbackSource, ReadbackStamp},
 };
+use crate::{ProcessorStorageLimits, ProcessorStorageUsage};
 use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_kernels::{AnnotationBindings, AnnotationKernel};
+use arrayvec::ArrayVec;
 use molla_storage::{BufferElement, BufferUsage};
-use std::{any::TypeId, collections::HashSet, ops::Range, sync::Arc};
+use std::{any::TypeId, ops::Range, sync::Arc};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -225,6 +229,7 @@ fn subrange(active: &Range<usize>, range: Range<usize>) -> Result<Range<usize>> 
 }
 
 pub struct AnnotationProcessor {
+    storage_usage: ProcessorStorageUsage,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     config: AnnotationConfig,
@@ -240,11 +245,26 @@ pub struct AnnotationProcessor {
     label_count: u32,
     label_revision: u64,
     layouts: Vec<AnnotationLayout>,
+    scratch: PlanScratch<[u32; 4]>,
     stats: AnnotationStats,
 }
 
 impl AnnotationProcessor {
+    /// Requested construction payload, excluding driver staging, metadata and output pools.
+    pub fn storage_usage(&self) -> ProcessorStorageUsage {
+        self.storage_usage
+    }
+
     pub fn new(engine: &Engine, config: AnnotationConfig) -> Result<Self> {
+        Self::new_with_storage_limits(engine, config, ProcessorStorageLimits::default())
+    }
+
+    /// Validate device budgets and combined construction payload before allocating arrays.
+    pub fn new_with_storage_limits(
+        engine: &Engine,
+        config: AnnotationConfig,
+        limits: ProcessorStorageLimits,
+    ) -> Result<Self> {
         engine.check_device()?;
         let device = engine
             .device()
@@ -254,28 +274,30 @@ impl AnnotationProcessor {
             .queue()
             .ok_or_else(|| Error::Gpu("annotation requires queue".into()))?
             .clone();
-        let bytes = checked_budget(config, &device.limits())?;
+        let storage_usage = ProcessorStorageUsage::for_annotation(config, &device.limits())?;
+        limits.check(storage_usage)?;
+        let bytes = storage_usage.device_bytes;
         let shapes = DeviceBuffer::from_host(
             engine,
-            vec![0u32; config.max_pixels as usize],
+            filled(config.max_pixels as usize, 0u32)?,
             BufferUsage::StorageReadWrite,
         )?;
         let classes = DeviceBuffer::from_host(
             engine,
-            vec![0u32; config.max_pixels as usize],
+            filled(config.max_pixels as usize, 0u32)?,
             BufferUsage::StorageReadWrite,
         )?;
         let boxes = DeviceBuffer::from_host(
             engine,
-            vec![
-                DeviceBoundingBox::default();
-                config.max_images as usize * config.max_labels as usize
-            ],
+            filled(
+                config.max_images as usize * config.max_labels as usize,
+                DeviceBoundingBox::default(),
+            )?,
             BufferUsage::StorageReadWrite,
         )?;
         let counts = DeviceBuffer::from_host(
             engine,
-            vec![0u32; config.max_images as usize * 4],
+            filled(config.max_images as usize * 4, 0u32)?,
             BufferUsage::StorageReadWrite,
         )?;
         let storage = |size, label| {
@@ -306,6 +328,7 @@ impl AnnotationProcessor {
             [config.max_pixels, config.max_images, config.max_labels],
         )?;
         Ok(Self {
+            storage_usage,
             device,
             queue,
             config,
@@ -321,6 +344,7 @@ impl AnnotationProcessor {
             label_count: 0,
             label_revision: 0,
             layouts: Vec::new(),
+            scratch: PlanScratch::default(),
             stats: AnnotationStats {
                 buffer_allocations: 8,
                 buffer_bytes: bytes,
@@ -395,7 +419,8 @@ impl AnnotationProcessor {
         self.shapes.check_device()?;
         batch.check_device(&self.device)?;
         batch.check_source_capacity(jobs.len())?;
-        let (descriptors, layouts, pixels) = self.plan(jobs)?;
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let (layouts, pixels) = self.plan(jobs, &mut scratch)?;
         let specs = self.output_specs();
         let ranges = self.output_ranges(pixels, jobs.len());
         let frame =
@@ -411,8 +436,9 @@ impl AnnotationProcessor {
                         );
                     }
                 }
-                self.encode_direct(encoder, outputs, &descriptors, pixels)
+                self.encode_direct(encoder, outputs, &scratch.descriptors, pixels)
             })?;
+        self.scratch = scratch;
         let Some(frame) = frame else {
             return Ok(None);
         };
@@ -450,8 +476,9 @@ impl AnnotationProcessor {
         if jobs.len() > self.config.max_images as usize {
             return Err(Error::Solver("annotation: image budget exceeded".into()));
         }
-        let mut receipts: Vec<&EncodedSensorFrame> = Vec::with_capacity(64);
-        let mut indices = Vec::with_capacity(jobs.len());
+        let mut receipts: ArrayVec<&EncodedSensorFrame, 64> = ArrayVec::new();
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.clear();
         for job in jobs {
             batch.pending_range::<u32>(job.frame, job.channel, job.pixels.clone())?;
             let index = if let Some(index) = receipts
@@ -460,7 +487,7 @@ impl AnnotationProcessor {
             {
                 index
             } else {
-                if receipts.len() == 64 {
+                if receipts.is_full() {
                     return Err(Error::Solver(
                         "annotation: pending dependency budget exceeded".into(),
                     ));
@@ -468,16 +495,21 @@ impl AnnotationProcessor {
                 receipts.push(job.frame);
                 receipts.len() - 1
             };
-            indices.push(index);
+            scratch.indices.push(index);
         }
-        let (descriptors, layouts, pixels) = self.plan_metadata(jobs.iter().map(|job| {
-            (
-                job.width,
-                job.height,
-                job.pixels.len() as u64 * 4,
-                job.stamp,
-            )
-        }))?;
+        let mut indices = std::mem::take(&mut scratch.indices);
+        let planned = self.plan_metadata(
+            jobs.iter().map(|job| {
+                (
+                    job.width,
+                    job.height,
+                    job.pixels.len() as u64 * 4,
+                    job.stamp,
+                )
+            }),
+            &mut scratch,
+        );
+        let (layouts, pixels) = planned?;
         let specs = self.output_specs();
         let ranges = self.output_ranges(pixels, jobs.len());
         let frame = if jobs.is_empty() {
@@ -503,10 +535,13 @@ impl AnnotationProcessor {
                             );
                         }
                     }
-                    self.encode_direct(encoder, outputs, &descriptors, pixels)
+                    self.encode_direct(encoder, outputs, &scratch.descriptors, pixels)
                 },
             )?
         };
+        indices.clear();
+        scratch.indices = indices;
+        self.scratch = scratch;
         let Some(frame) = frame else {
             return Ok(None);
         };
@@ -601,7 +636,10 @@ impl AnnotationProcessor {
 
     pub fn process(&mut self, jobs: &[AnnotationJob<'_>]) -> Result<AnnotationDeviceFrame<'_>> {
         self.shapes.check_device()?;
-        let (descriptors, layouts, pixels) = self.plan(jobs)?;
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let (layouts, pixels) = self.plan(jobs, &mut scratch)?;
+        let descriptors = std::mem::take(&mut scratch.descriptors);
+        self.scratch = scratch;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -659,7 +697,8 @@ impl AnnotationProcessor {
     fn plan(
         &self,
         jobs: &[AnnotationJob<'_>],
-    ) -> Result<(Vec<[u32; 4]>, Vec<AnnotationLayout>, u32)> {
+        scratch: &mut PlanScratch<[u32; 4]>,
+    ) -> Result<(Vec<AnnotationLayout>, u32)> {
         if jobs.len() > self.config.max_images as usize {
             return Err(Error::Solver("annotation: image budget exceeded".into()));
         }
@@ -674,26 +713,34 @@ impl AnnotationProcessor {
                 ));
             }
         }
-        self.plan_metadata(jobs.iter().map(|job| {
-            (
-                job.width,
-                job.height,
-                job.shapes.channel.bytes as u64,
-                job.stamp,
-            )
-        }))
+        self.plan_metadata(
+            jobs.iter().map(|job| {
+                (
+                    job.width,
+                    job.height,
+                    job.shapes.channel.bytes as u64,
+                    job.stamp,
+                )
+            }),
+            scratch,
+        )
     }
 
+    /// Validates jobs and fills `scratch.descriptors`; returns the layouts
+    /// handed to the caller and the total pixel count.
     fn plan_metadata(
         &self,
         jobs: impl ExactSizeIterator<Item = (u32, u32, u64, ReadbackStamp)>,
-    ) -> Result<(Vec<[u32; 4]>, Vec<AnnotationLayout>, u32)> {
+        scratch: &mut PlanScratch<[u32; 4]>,
+    ) -> Result<(Vec<AnnotationLayout>, u32)> {
         if jobs.len() > self.config.max_images as usize {
             return Err(Error::Solver("annotation: image budget exceeded".into()));
         }
-        let mut descriptors = Vec::with_capacity(jobs.len());
+        scratch.descriptors.clear();
+        scratch.ids.clear();
+        let descriptors = &mut scratch.descriptors;
+        let ids = &mut scratch.ids;
         let mut layouts = Vec::with_capacity(jobs.len());
-        let mut ids = HashSet::with_capacity(jobs.len());
         let mut total = 0u32;
         for (i, (width, height, bytes, stamp)) in jobs.enumerate() {
             let pixels = width
@@ -724,11 +771,11 @@ impl AnnotationProcessor {
             });
             total = end;
         }
-        Ok((descriptors, layouts, total))
+        Ok((layouts, total))
     }
 }
 
-fn checked_budget(config: AnnotationConfig, limits: &wgpu::Limits) -> Result<u64> {
+pub(crate) fn checked_budget(config: AnnotationConfig, limits: &wgpu::Limits) -> Result<u64> {
     let [p, i, l] = [
         config.max_pixels as u64,
         config.max_images as u64,
@@ -760,6 +807,52 @@ fn checked_budget(config: AnnotationConfig, limits: &wgpu::Limits) -> Result<u64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires GPU"]
+    fn construction_budget_matches_host_arrays_and_upload_payload() {
+        use crate::sensor_storage::tests::buffer_bytes;
+        let engine = Engine::new_gpu().unwrap();
+        let config = AnnotationConfig {
+            max_pixels: 257,
+            max_images: 3,
+            max_labels: 5,
+            max_buffer_bytes: u64::MAX,
+        };
+        let usage =
+            ProcessorStorageUsage::for_annotation(config, &engine.device().unwrap().limits())
+                .unwrap();
+        assert!(
+            AnnotationProcessor::new_with_storage_limits(
+                &engine,
+                config,
+                ProcessorStorageLimits {
+                    max_construction_bytes: usage.construction_bytes - 1,
+                }
+            )
+            .is_err()
+        );
+        let processor = AnnotationProcessor::new_with_storage_limits(
+            &engine,
+            config,
+            ProcessorStorageLimits {
+                max_construction_bytes: usage.construction_bytes,
+            },
+        )
+        .unwrap();
+        assert_eq!(processor.storage_usage(), usage);
+        assert_eq!(processor.stats().buffer_bytes, usage.device_bytes);
+        crate::processor_storage::tests::check_live(
+            usage,
+            &[
+                buffer_bytes(&processor.shapes.buffer),
+                buffer_bytes(&processor.classes.buffer),
+                buffer_bytes(&processor.boxes.buffer),
+                buffer_bytes(&processor.counts.buffer),
+            ],
+        );
+    }
+
     #[test]
     fn annotation_wire_budget_and_capacity_checks() {
         assert_eq!(std::mem::size_of::<ShapeLabel>(), 8);

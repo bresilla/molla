@@ -16,6 +16,8 @@ fn scheduler_is_available_through_facade_without_gpu() {
 #[cfg(feature = "gpu")]
 fn device_sensor_types_and_modules_are_exposed_by_facade() {
     use molla::sensors::*;
+    same::<RaycasterLimits, raycast::RaycasterLimits>();
+    same::<RayStorageUsage, raycast::RayStorageUsage>();
     same::<CameraBatch, camera_batch::CameraBatch>();
     same::<CameraBatchOutputPool, camera_batch::CameraBatchOutputPool>();
     same::<EncodedCameraBatch, camera_batch::EncodedCameraBatch>();
@@ -26,9 +28,18 @@ fn device_sensor_types_and_modules_are_exposed_by_facade() {
     same::<CameraImage<'static>, camera_batch::CameraImage<'static>>();
     same::<CameraImageLayout, camera_batch::CameraImageLayout>();
     same::<CameraSpec, camera_batch::CameraSpec>();
+    same::<CameraStorageUsage, camera_storage::CameraStorageUsage>();
+    same::<TiledCameraLimits, camera_storage::TiledCameraLimits>();
+    same::<SensorArrayLimits, sensor_storage::SensorArrayLimits>();
+    same::<SensorArrayStorage, sensor_storage::SensorArrayStorage>();
+    same::<ProcessorStorageLimits, processor_storage::ProcessorStorageLimits>();
+    same::<ProcessorStorageUsage, processor_storage::ProcessorStorageUsage>();
     same::<CameraDispatchStats, tiled_camera::CameraDispatchStats>();
     same::<EncodedCamera, tiled_camera::EncodedCamera>();
     same::<LidarBatch, lidar_batch::LidarBatch>();
+    same::<LidarBatchLimits, lidar_storage::LidarBatchLimits>();
+    same::<LidarBatchStorage, lidar_storage::LidarBatchStorage>();
+    same::<LidarLayoutLimits, lidar_storage::LidarLayoutLimits>();
     same::<EncodedLidarBatch, lidar_batch::EncodedLidarBatch>();
     same::<LidarBatchStats, lidar_batch::LidarBatchStats>();
     same::<LidarDeviceBatch<'static>, lidar_batch::LidarDeviceBatch<'static>>();
@@ -43,6 +54,21 @@ fn device_sensor_types_and_modules_are_exposed_by_facade() {
     same::<ImuDeviceReadings<'static>, imu::ImuDeviceReadings<'static>>();
     same::<EncodedImuSample, imu::EncodedImuSample>();
     same::<SceneStamp, scene::SceneStamp>();
+    assert_eq!(INVALID_SCENE_INDEX, scene::INVALID_SCENE_INDEX);
+    assert_eq!(INVALID_SCENE_DISTANCE, -2.0);
+    assert_eq!(INVALID_SCENE_SHAPE_ID, u32::MAX - 1);
+    same::<SceneAcceleration, scene_acceleration::SceneAcceleration>();
+    same::<SceneAccelerationConfig, scene_acceleration::SceneAccelerationConfig>();
+    same::<SceneAccelerationStorage, scene_acceleration::SceneAccelerationStorage>();
+    same::<SceneAccelerationStats, scene_acceleration::SceneAccelerationStats>();
+    same::<SceneAccelerationView<'static>, scene_acceleration::SceneAccelerationView<'static>>();
+    same::<SceneBvhNode, scene_acceleration::SceneBvhNode>();
+    let _ = SceneRebuildPolicy::default();
+    let _ = SceneRebuildStorage::for_leaves(128).unwrap();
+    same::<SceneIdentitySnapshot, scene::SceneIdentitySnapshot>();
+    same::<SensorBodyHandle, scene::SensorBodyHandle>();
+    same::<SensorShapeHandle, scene::SensorShapeHandle>();
+    same::<SensorSceneRemap<'static>, scene::SensorSceneRemap<'static>>();
     same::<SensorScene, scene::SensorScene>();
     same::<SensorSceneOptions, scene::SensorSceneOptions>();
     same::<UnsupportedGeometryPolicy, scene::UnsupportedGeometryPolicy>();

@@ -306,8 +306,11 @@ fn moving_meshes_primitive_occlusion_and_two_cameras_match_independent_oracle() 
         }
     }
     assert_eq!(camera.mesh_build_count(), 0);
-    assert_eq!(camera.query_stats().mesh_preparations, 3);
-    assert_eq!(camera.query_stats().primitive_preparations, 2);
+    assert_eq!(camera.query_stats().mesh_preparations, 0);
+    assert_eq!(camera.query_stats().primitive_preparations, 0);
+    assert_eq!(camera.query_stats().scene_builds, 1);
+    assert_eq!(camera.query_stats().scene_preparations, 2);
+    assert_eq!(camera.query_stats().refit_preparations, 2);
     assert_eq!(camera.query_stats().submissions, 0);
     assert_eq!(camera.dispatch_stats().submissions, 6);
     assert_eq!(camera.dispatch_stats().trace_preparations, 1);
@@ -413,7 +416,9 @@ fn camera_heightfield_and_triangle_visibility_match_cpu_triangles() {
     assert_eq!(scene.mesh_count(), 2);
     assert_eq!(camera.mesh_build_count(), 0);
     assert_eq!(camera.query_stats().primitive_preparations, 0);
-    assert_eq!(camera.query_stats().mesh_preparations, 2);
+    assert_eq!(camera.query_stats().mesh_preparations, 0);
+    assert_eq!(camera.query_stats().scene_preparations, 1);
+    assert_eq!(camera.query_stats().refit_preparations, 1);
 
     let mut edge_camera = TiledCamera::new(
         &engine,

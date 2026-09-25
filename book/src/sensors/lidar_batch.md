@@ -6,6 +6,61 @@ divergent sub-rays. No CPU ray vectors, intermediate downloads, or host hit
 reductions occur in this API. The legacy `Lidar::cast` and `AerialLidar::cast`
 retain their CPU layouts and synchronous return types.
 
+Owned-scene queries preserve invalid-pose distance/shape `-2` through range
+clipping. Invalid pulses have first/last `-2` and zero hit count, distinct from
+ordinary all-miss pulses (`-1`). Check distance or index, not hit count alone.
+See [query validity](contracts.md#invalid-owned-scene-results); raw-model calls
+still require valid finite rigid poses from the caller.
+
+## Storage budgets
+
+Construction checks a default 1 GiB combined retained host/device array budget
+before allocating any arrays. `LidarBatchStorage::for_capacity(max_scans, max_rays)`
+estimates the shared ray arrays, three return-index/count arrays on both host and
+device, device descriptors, and reserved host descriptor/range capacity. Return
+arrays are sized to `max_rays`, even when several sub-rays share each pulse.
+Unused scan capacity still counts; `storage_usage()` reports the fixed estimate.
+
+`LidarBatch::new_with_limits` accepts `LidarBatchLimits` with
+`max_storage_bytes` and `ray_limits`. The shared ray-array sub-budget is checked
+independently and also defaults to 1 GiB. Existing `new_with_ray_limits` overrides
+only that sub-budget; the default combined cap still applies. Individual device
+buffer, binding and dispatch limits remain enforced even with larger byte caps.
+Scan capacity is 1–1024 and ray capacity is 1–`i32::MAX`, further restricted by
+the device and storage limits.
+
+These budgets exclude scene/query acceleration, uniforms/bindings, driver/upload
+staging, per-result copied scan metadata, output leases and readback pools. They
+are fixed array-payload limits, not process peak-memory limits. See
+[ray-array budgets](raycaster.md#ray-array-storage-budgets) for the shared component.
+
+### Legacy CPU layouts
+
+`Lidar`/`AerialLidar` retain the ray-only constructor budget through their existing
+`new_with_limits`. Their synchronous `cast` additionally checks a default 1 GiB
+per-call CPU layout budget before expanding scan metadata into vectors.
+`cast_with_layout_limits(engine, model, state, scan, LidarLayoutLimits)` overrides
+that per-call cap without changing retained ray capacity or its constructor cap.
+
+`scan.layout_storage_bytes()` validates metadata and estimates the layout payload
+without expanding it. For terrestrial scans it is
+`2 * ray_count * size_of::<Vec3>()`; aerial scans additionally retain two vectors
+per pulse in the returned `AerialScan`, so it is
+`2 * (ray_count + pulse_count) * size_of::<Vec3>()`. Both paths use checked counts,
+reject requests beyond the sensor's ray capacity, and reserve vector storage
+fallibly before filling it. Allocator-reported reservation errors return `Err`;
+this does not guarantee recovery from operating-system memory exhaustion.
+Terrestrial metadata rejects non-finite origins and angular intervals whose
+endpoint difference overflows, even when both endpoints individually are finite.
+
+The CPU layout limit excludes collected `RayHit` records, readback staging,
+retained ray arrays and scene storage. It does not apply to device-generated
+`LidarBatch` layouts, which allocate no CPU ray vectors. Sampling order, cone
+sampling and Halton sequences are unchanged. `sensor_capacity_gpu` tests exact
+and under-budget calls against normal synchronous results; pure layout tests
+reject extreme counts before expansion. `make test-sensors` also runs the actual
+batched-array payload comparison and shared-ray storage tests.
+
 ## Independent scans
 
 ```rust

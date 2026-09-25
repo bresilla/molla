@@ -15,12 +15,13 @@
 //! BVHs and include triangle/heightfield conversion.
 
 use crate::{
+    CameraStorageUsage, TiledCameraLimits,
     device_results::{
         EncodedSensorFrame, SensorChannelSpec, SensorCommandBatch, SensorFramePool,
         SensorFramePoolConfig,
     },
     dispatch::BindingsCache,
-    raycast::{RayQueryStats, Raycaster},
+    raycast::{RayQueryStats, Raycaster, RaycasterLimits},
     readback::{ReadbackSource, ReadbackStamp},
     scene::{SceneStamp, SensorScene},
 };
@@ -217,6 +218,7 @@ pub struct TiledCamera {
     health: std::sync::Arc<molla_compute::DeviceHealth>,
     config: TiledCameraConfig,
     num_cameras: u32,
+    storage_usage: CameraStorageUsage,
     rays_kernel: CameraRaysKernel,
     shade_kernel: CameraShadeKernel,
     raycaster: Raycaster,
@@ -251,6 +253,34 @@ impl TiledCamera {
     /// looking at -Z) — call [`Self::set_camera_pose`] before the first
     /// [`Self::dispatch`] to point each camera at the scene.
     pub fn new(engine: &Engine, config: TiledCameraConfig, num_cameras: usize) -> Result<Self> {
+        Self::new_with_limits(engine, config, num_cameras, TiledCameraLimits::default())
+    }
+
+    /// Override the ray sub-budget while retaining the default combined camera-array budget.
+    pub fn new_with_ray_limits(
+        engine: &Engine,
+        config: TiledCameraConfig,
+        num_cameras: usize,
+        limits: RaycasterLimits,
+    ) -> Result<Self> {
+        Self::new_with_limits(
+            engine,
+            config,
+            num_cameras,
+            TiledCameraLimits {
+                ray_limits: limits,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Validate ray and combined fixed-array budgets before constructing any camera buffers.
+    pub fn new_with_limits(
+        engine: &Engine,
+        config: TiledCameraConfig,
+        num_cameras: usize,
+        limits: TiledCameraLimits,
+    ) -> Result<Self> {
         engine.check_device()?;
         validate_config(&config)?;
         if num_cameras == 0 {
@@ -273,20 +303,37 @@ impl TiledCamera {
             .ok_or_else(|| Error::Gpu("TiledCamera: engine has no GPU queue".into()))?
             .clone();
 
-        let n_pixels =
-            checked_pixel_count(config.width, config.height, num_cameras, &device.limits())?;
-        let mut poses =
-            Buffer::from_vec(vec![Transform::IDENTITY; num_cameras], BufferUsage::Storage);
-        let mut empty_color = Buffer::from_vec(vec![Vec3::ZERO], BufferUsage::Storage);
-        let raycaster = Raycaster::new(engine, n_pixels as u32)?;
+        let storage_usage =
+            limits.check(config.width, config.height, num_cameras, &device.limits())?;
+        let n_pixels = storage_usage.pixels as usize;
+        let raycaster = Raycaster::new_with_limits(engine, n_pixels as u32, limits.ray_limits)?;
+        let mut poses = Buffer::from_vec(
+            crate::host_arrays::filled(num_cameras, Transform::IDENTITY)?,
+            BufferUsage::Storage,
+        );
+        let mut empty_color = Buffer::from_vec(
+            crate::host_arrays::filled(1, Vec3::ZERO)?,
+            BufferUsage::Storage,
+        );
 
-        let mut depth = Buffer::from_vec(vec![-1.0_f64; n_pixels], BufferUsage::StorageReadWrite);
-        let mut color = Buffer::from_vec(vec![0_u32; n_pixels], BufferUsage::StorageReadWrite);
-        let mut normal =
-            Buffer::from_vec(vec![Vec3::ZERO; n_pixels], BufferUsage::StorageReadWrite);
-        let mut albedo = Buffer::from_vec(vec![0_u32; n_pixels], BufferUsage::StorageReadWrite);
+        let mut depth = Buffer::from_vec(
+            crate::host_arrays::filled(n_pixels, -1.0_f64)?,
+            BufferUsage::StorageReadWrite,
+        );
+        let mut color = Buffer::from_vec(
+            crate::host_arrays::filled(n_pixels, 0_u32)?,
+            BufferUsage::StorageReadWrite,
+        );
+        let mut normal = Buffer::from_vec(
+            crate::host_arrays::filled(n_pixels, Vec3::ZERO)?,
+            BufferUsage::StorageReadWrite,
+        );
+        let mut albedo = Buffer::from_vec(
+            crate::host_arrays::filled(n_pixels, 0_u32)?,
+            BufferUsage::StorageReadWrite,
+        );
         let mut shape_index = Buffer::from_vec(
-            vec![0xffff_ffff_u32; n_pixels],
+            crate::host_arrays::filled(n_pixels, 0xffff_ffff_u32)?,
             BufferUsage::StorageReadWrite,
         );
 
@@ -298,7 +345,7 @@ impl TiledCamera {
         albedo.ensure_device(&device)?;
         shape_index.ensure_device(&device)?;
 
-        let mut pose_upload = Vec::with_capacity(num_cameras);
+        let mut pose_upload = crate::host_arrays::reserved(num_cameras)?;
         poses.upload_with_scratch(&queue, &mut pose_upload)?;
         empty_color.upload(&queue)?;
         depth.upload(&queue)?;
@@ -319,6 +366,7 @@ impl TiledCamera {
             dispatch_stats: CameraDispatchStats::default(),
             config,
             num_cameras: num_cameras as u32,
+            storage_usage,
             rays_kernel: CameraRaysKernel::new(&device),
             shade_kernel: CameraShadeKernel::new(&device),
             poses,
@@ -338,9 +386,15 @@ impl TiledCamera {
         self.num_cameras
     }
 
+    pub fn storage_usage(&self) -> CameraStorageUsage {
+        self.storage_usage
+    }
+
     pub(crate) fn output_specs(&self) -> [SensorChannelSpec; 5] {
-        let pixels =
-            self.config.width as usize * self.config.height as usize * self.num_cameras as usize;
+        let pixels = (self.config.width as usize)
+            .checked_mul(self.config.height as usize)
+            .and_then(|pixels| pixels.checked_mul(self.num_cameras as usize))
+            .expect("camera dimensions are bounded by the construction budget");
         [
             SensorChannelSpec::of::<Real>(pixels),
             SensorChannelSpec::of::<u32>(pixels),
@@ -381,6 +435,7 @@ impl TiledCamera {
             &self.device.limits(),
         )?;
         if self.config.channels != CameraChannels::NONE {
+            self.raycaster.preflight_rebuild(scene)?;
             if state.body_q.len() != scene.model.body_count {
                 return Err(Error::Solver(
                     "camera: state/model body counts differ".into(),
@@ -562,7 +617,7 @@ impl TiledCamera {
                             },
                         },
                     )?;
-                    dispatches += self.raycaster.encode_generated(
+                    dispatches += self.raycaster.encode_camera_sample(
                         engine,
                         encoder,
                         &scene.model,
@@ -570,6 +625,7 @@ impl TiledCamera {
                         pixels,
                         self.config.max_distance as Real,
                         Some(scene),
+                        sample,
                     )?;
                     self.shade_kernel.encode_prepared(
                         queue,
@@ -732,6 +788,14 @@ impl TiledCamera {
         self.raycaster.query_stats()
     }
 
+    pub fn scene_rebuild_policy(&self) -> crate::SceneRebuildPolicy {
+        self.raycaster.scene_rebuild_policy()
+    }
+
+    pub fn set_scene_rebuild_policy(&mut self, policy: crate::SceneRebuildPolicy) -> Result<()> {
+        self.raycaster.set_scene_rebuild_policy(policy)
+    }
+
     pub fn mesh_build_count(&self) -> u64 {
         self.raycaster.mesh_build_count()
     }
@@ -809,6 +873,9 @@ impl TiledCamera {
         ];
         if self.config.channels == CameraChannels::NONE {
             return Ok(());
+        }
+        if let Some(scene) = scene {
+            self.raycaster.preflight_rebuild(scene)?;
         }
         let (shade_bindings, prepared) = self.shade_bindings.try_get_or_prepare(
             |binding| binding.matches(buffers),
@@ -894,7 +961,7 @@ impl TiledCamera {
                     },
                 },
             )?;
-            self.raycaster.encode_generated(
+            self.raycaster.encode_camera_sample(
                 engine,
                 &mut encoder,
                 model,
@@ -902,6 +969,7 @@ impl TiledCamera {
                 pixels,
                 self.config.max_distance as Real,
                 scene,
+                sample,
             )?;
             self.shade_kernel.encode_prepared(
                 queue,
@@ -1242,6 +1310,55 @@ pub(crate) fn validate_camera_pose(pose: Transform) -> Result<()> {
 #[cfg(test)]
 mod capacity_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires GPU"]
+    fn camera_storage_estimate_matches_allocated_arrays_and_aperture() {
+        let engine = Engine::new_gpu().unwrap();
+        let config = TiledCameraConfig {
+            width: 7,
+            height: 5,
+            ..Default::default()
+        };
+        let usage = CameraStorageUsage::for_dimensions(7, 5, 3).unwrap();
+        let limits = TiledCameraLimits {
+            max_storage_bytes: usage.total_bytes,
+            ..Default::default()
+        };
+        let camera = TiledCamera::new_with_limits(&engine, config, 3, limits).unwrap();
+        assert_eq!(camera.storage_usage(), usage);
+        let rays = crate::RayStorageUsage::for_capacity(usage.pixels).unwrap();
+        let buffers = [
+            camera.poses.device_buffer().unwrap(),
+            camera.empty_color.device_buffer().unwrap(),
+            camera.depth.device_buffer().unwrap(),
+            camera.color.device_buffer().unwrap(),
+            camera.normal.device_buffer().unwrap(),
+            camera.albedo.device_buffer().unwrap(),
+            camera.shape_index.device_buffer().unwrap(),
+        ];
+        let allocated = buffers.iter().map(|b| b.size()).sum::<u64>();
+        assert_eq!(
+            allocated + rays.device_bytes + usage.aperture_device_bytes,
+            usage.device_bytes
+        );
+        let host = size_of_val(camera.poses.host().unwrap())
+            + size_of_val(camera.empty_color.host().unwrap())
+            + size_of_val(camera.depth.host().unwrap())
+            + size_of_val(camera.color.host().unwrap())
+            + size_of_val(camera.normal.host().unwrap())
+            + size_of_val(camera.albedo.host().unwrap())
+            + size_of_val(camera.shape_index.host().unwrap())
+            + camera.pose_upload.capacity() * size_of::<<Transform as BufferElement>::Gpu>();
+        assert_eq!(host as u64 + rays.host_bytes, usage.host_bytes);
+        let aperture = CameraAccumulateKernel::new(
+            engine.device().unwrap(),
+            camera.color.device_buffer().unwrap(),
+            [7, 5, 3],
+        )
+        .unwrap();
+        assert_eq!(aperture.storage_bytes(), usage.aperture_device_bytes);
+    }
 
     #[test]
     fn invalid_camera_parameters_are_rejected_before_allocation() {

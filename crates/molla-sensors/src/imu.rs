@@ -24,6 +24,7 @@ use crate::device_results::{
 };
 use crate::dispatch::{BindingsCache, SensorDispatchStats};
 use crate::readback::{DeviceBuffer, ReadbackConfig, ReadbackRing, ReadbackStamp, ReadbackStats};
+use crate::{SensorArrayLimits, SensorArrayStorage};
 use molla_compute::Engine;
 use molla_core::{BodyId, Error, Result};
 use molla_kernels::{ImuBindings, ImuKernel};
@@ -72,6 +73,7 @@ pub struct ImuSensor {
     leased_bindings: BindingsCache<ImuBindings>,
     dispatch_stats: SensorDispatchStats,
     sensor_count: u32,
+    storage_usage: SensorArrayStorage,
 
     sensor_body: Buffer<u32>,
     sensor_local_pos: Buffer<Vec3>,
@@ -93,6 +95,16 @@ impl ImuSensor {
     /// Build a sensor batch with one IMU per entry in `mounts`. Cheap
     /// to construct; reusable across `update` calls.
     pub fn new(engine: &Engine, model: &Model, mounts: &[ImuMount]) -> Result<Self> {
+        Self::new_with_limits(engine, model, mounts, SensorArrayLimits::default())
+    }
+
+    /// Construct with a combined retained host/device array budget.
+    pub fn new_with_limits(
+        engine: &Engine,
+        model: &Model,
+        mounts: &[ImuMount],
+        limits: SensorArrayLimits,
+    ) -> Result<Self> {
         engine.check_device()?;
         if mounts.is_empty() {
             return Err(Error::Solver("ImuSensor::new: empty mount list".into()));
@@ -106,7 +118,12 @@ impl ImuSensor {
             .ok_or_else(|| Error::Gpu("imu: engine has no GPU queue".into()))?
             .clone();
 
-        // Validate body indices.
+        let n = mounts.len();
+        let storage_usage = SensorArrayStorage::for_imu(n, model.body_count)?;
+        let sensor_count =
+            u32::try_from(n).map_err(|_| Error::Solver("imu: too many mounts".into()))?;
+        limits.check(storage_usage, sensor_count, 0, &device.limits())?;
+
         for (i, m) in mounts.iter().enumerate() {
             let idx = m.body.index();
             if idx >= model.body_count {
@@ -115,38 +132,36 @@ impl ImuSensor {
                     model.body_count
                 )));
             }
+            if !m.local_pose.position.is_finite()
+                || !m.local_pose.position.as_vec3().is_finite()
+                || !m.local_pose.rotation.is_finite()
+                || (m.local_pose.rotation.length_squared() - 1.0).abs() > 1e-6
+            {
+                return Err(Error::Solver(format!("imu: invalid mount {i} pose")));
+            }
         }
 
-        let n = mounts.len();
-        let sensor_count =
-            u32::try_from(n).map_err(|_| Error::Solver("imu: too many mounts".into()))?;
-        let largest_bytes = (n as u64)
-            .checked_mul(16)
-            .zip((model.body_count as u64).checked_mul(32))
-            .map(|(sensor, body)| sensor.max(body))
-            .ok_or_else(|| Error::Solver("imu: buffer size overflow".into()))?;
-        let limits = device.limits();
-        if largest_bytes > limits.max_storage_buffer_binding_size as u64
-            || largest_bytes > limits.max_buffer_size
-            || sensor_count.div_ceil(64) > limits.max_compute_workgroups_per_dimension
-        {
-            return Err(Error::Solver("imu: capacity exceeds GPU limits".into()));
-        }
-        let body_idx: Vec<u32> = mounts.iter().map(|m| m.body.index() as u32).collect();
-        let local_pos: Vec<Vec3> = mounts.iter().map(|m| m.local_pose.position).collect();
-        let local_rot: Vec<Quat> = mounts.iter().map(|m| m.local_pose.rotation).collect();
+        let body_idx = crate::host_arrays::from_fn(n, |i| mounts[i].body.index() as u32)?;
+        let local_pos = crate::host_arrays::from_fn(n, |i| mounts[i].local_pose.position)?;
+        let local_rot = crate::host_arrays::from_fn(n, |i| mounts[i].local_pose.rotation)?;
 
         let mut sensor_body = Buffer::from_vec(body_idx, BufferUsage::Storage);
         let mut sensor_local_pos = Buffer::from_vec(local_pos, BufferUsage::Storage);
         let mut sensor_local_rot = Buffer::from_vec(local_rot, BufferUsage::Storage);
         let mut prev_body_qd = Buffer::from_vec(
-            vec![SpatialVector::ZERO; model.body_count],
+            crate::host_arrays::filled(model.body_count, SpatialVector::ZERO)?,
             BufferUsage::StorageReadWrite,
         );
-        let accel =
-            DeviceBuffer::from_host(engine, vec![Vec3::ZERO; n], BufferUsage::StorageReadWrite)?;
-        let gyro =
-            DeviceBuffer::from_host(engine, vec![Vec3::ZERO; n], BufferUsage::StorageReadWrite)?;
+        let accel = DeviceBuffer::from_host(
+            engine,
+            crate::host_arrays::filled(n, Vec3::ZERO)?,
+            BufferUsage::StorageReadWrite,
+        )?;
+        let gyro = DeviceBuffer::from_host(
+            engine,
+            crate::host_arrays::filled(n, Vec3::ZERO)?,
+            BufferUsage::StorageReadWrite,
+        )?;
 
         sensor_body.ensure_device(&device)?;
         sensor_local_pos.ensure_device(&device)?;
@@ -163,6 +178,7 @@ impl ImuSensor {
             leased_bindings: BindingsCache::with_capacity(128),
             dispatch_stats: SensorDispatchStats::default(),
             sensor_count,
+            storage_usage,
             sensor_body,
             sensor_local_pos,
             sensor_local_rot,
@@ -179,6 +195,11 @@ impl ImuSensor {
     /// Number of IMU mounts in the batch.
     pub fn sensor_count(&self) -> u32 {
         self.sensor_count
+    }
+
+    /// Combined retained host/device array payload, excluding collection and output pools.
+    pub fn storage_usage(&self) -> SensorArrayStorage {
+        self.storage_usage
     }
 
     /// Run the kernel against the current `state` with timestep `dt`.
@@ -534,5 +555,41 @@ impl SubmitAction for ImuSensor {
 
     fn cancel(&mut self) {
         self.pending_model = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sensor_storage::tests::{assert_payload, buffer_bytes};
+
+    #[test]
+    #[ignore = "requires GPU"]
+    fn imu_array_estimate_matches_allocated_payload() {
+        let engine = Engine::new_gpu().unwrap();
+        let mut builder = molla_sim::ModelBuilder::new();
+        let body = builder.add_body(Default::default());
+        builder.add_body(Default::default());
+        let model = builder.build().unwrap();
+        let sensor = ImuSensor::new(
+            &engine,
+            &model,
+            &[ImuMount {
+                body,
+                local_pose: Transform::IDENTITY,
+            }; 3],
+        )
+        .unwrap();
+        assert_payload(
+            sensor.storage_usage(),
+            &[
+                buffer_bytes(&sensor.sensor_body),
+                buffer_bytes(&sensor.sensor_local_pos),
+                buffer_bytes(&sensor.sensor_local_rot),
+                buffer_bytes(&sensor.prev_body_qd),
+                buffer_bytes(&sensor.accel.buffer),
+                buffer_bytes(&sensor.gyro.buffer),
+            ],
+        );
     }
 }

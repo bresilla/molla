@@ -1,0 +1,11 @@
+case	repeat	n	complete_p50_us	complete_p95_us	physics_cpu_p50_us	sensor_encode_p50_us	queue_span_p50_us	allocations_p50	reallocations_p50	requested_bytes_p50
+cpu_a32_steps10_cloud100k_camera640_device	0	512	1164.547	1218.052	559.891	19.058	NA	1063	60	516117
+cpu_a32_steps10_cloud100k_camera640_device	1	512	1147.565	1484.667	561.423	19.865	NA	1063	60	521217
+cpu_a32_steps10_cloud100k_camera640_device	2	512	1247.848	2271.213	565.151	20.567	NA	1063	60	521301
+cpu_a32_steps10_cloud100k_camera640_device	3	512	1151.252	1307.208	562.59	21.212	NA	1063	60	519153
+cpu_a32_steps10_cloud100k_camera640_device	4	512	1199.015	1503.802	564.616	20.426	NA	1063	60	520353
+gpu_a32_steps10_cloud100k_camera640_device	0	512	2206.934	3272.739	592.892	35.224	NA	3060	439	998612
+gpu_a32_steps10_cloud100k_camera640_device	1	512	2200.607	3290.514	510.593	31.063	NA	3060	439	919880
+gpu_a32_steps10_cloud100k_camera640_device	2	512	2218.641	3292.825	597.319	32.728	NA	3060	439	892352
+gpu_a32_steps10_cloud100k_camera640_device	3	512	2222.44	3295.813	600.277	33.768	NA	3060	442	1017188
+gpu_a32_steps10_cloud100k_camera640_device	4	512	2215.435	3101.259	527.326	29.243	NA	3060	439	963524

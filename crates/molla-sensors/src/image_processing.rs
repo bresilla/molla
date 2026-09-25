@@ -5,7 +5,9 @@ use crate::device_results::{
     SensorFramePoolConfig,
 };
 use crate::dispatch::BindingsCache;
+use crate::host_arrays::filled;
 use crate::readback::{BufferLease, DeviceBuffer, ReadbackSource, ReadbackStamp};
+use crate::{ProcessorStorageLimits, ProcessorStorageUsage};
 use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_kernels::{ImageProcessBindings, ImageProcessKernel};
@@ -140,6 +142,7 @@ pub struct ImageProcessingStats {
 }
 
 pub struct ImageProcessor {
+    storage_usage: ProcessorStorageUsage,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     config: ImageProcessorConfig,
@@ -148,6 +151,8 @@ pub struct ImageProcessor {
     kernel: ImageProcessKernel,
     direct: BindingsCache<ImageProcessBindings>,
     images: Vec<ProcessedImageLayout>,
+    /// Sensor identities of the frame being planned; capacity is retained.
+    plan_ids: HashSet<u64>,
     stats: ImageProcessingStats,
 }
 
@@ -199,7 +204,21 @@ impl<'a> ProcessedImage<'a> {
 }
 
 impl ImageProcessor {
+    /// Requested construction payload, excluding driver staging, metadata and output pools.
+    pub fn storage_usage(&self) -> ProcessorStorageUsage {
+        self.storage_usage
+    }
+
     pub fn new(engine: &Engine, config: ImageProcessorConfig) -> Result<Self> {
+        Self::new_with_storage_limits(engine, config, ProcessorStorageLimits::default())
+    }
+
+    /// Validate device budgets and combined construction payload before allocating arrays.
+    pub fn new_with_storage_limits(
+        engine: &Engine,
+        config: ImageProcessorConfig,
+        limits: ProcessorStorageLimits,
+    ) -> Result<Self> {
         engine.check_device()?;
         let device = engine
             .device()
@@ -209,16 +228,18 @@ impl ImageProcessor {
             .queue()
             .ok_or_else(|| Error::Gpu("image processing requires queue".into()))?
             .clone();
-        let bytes = checked_budget(config, &device.limits())?;
+        let storage_usage = ProcessorStorageUsage::for_image(config, &device.limits())?;
+        limits.check(storage_usage)?;
+        let bytes = storage_usage.device_bytes;
         let pixels = DeviceBuffer::from_host(
             engine,
-            vec![0u32; config.max_pixels as usize],
+            filled(config.max_pixels as usize, 0u32)?,
             BufferUsage::StorageReadWrite,
         )?;
         let slots = config.max_images * config.max_operations_per_image;
         let gains = DeviceBuffer::from_host(
             engine,
-            vec![Vec3::ZERO; slots as usize],
+            filled(slots as usize, Vec3::ZERO)?,
             BufferUsage::StorageReadWrite,
         )?;
         let kernel = ImageProcessKernel::new(
@@ -229,6 +250,7 @@ impl ImageProcessor {
             slots,
         )?;
         Ok(Self {
+            storage_usage,
             device,
             queue,
             config,
@@ -237,6 +259,7 @@ impl ImageProcessor {
             kernel,
             direct: BindingsCache::with_capacity(128),
             images: Vec::new(),
+            plan_ids: HashSet::new(),
             stats: ImageProcessingStats {
                 buffer_allocations: 4,
                 buffer_bytes: bytes,
@@ -376,10 +399,14 @@ impl ImageProcessor {
         for job in jobs {
             batch.pending_range::<u32>(job.frame, job.channel, job.pixels.clone())?;
         }
-        let images = self.plan_metadata(
+        let mut ids = std::mem::take(&mut self.plan_ids);
+        let planned = self.plan_metadata(
             jobs.iter()
                 .map(|job| (job.pixels.len(), job.operations, job.stamp)),
-        )?;
+            &mut ids,
+        );
+        self.plan_ids = ids;
+        let images = planned?;
         let (pixels, stages) = active_sizes(&images);
         let specs = self.output_specs();
         let ranges = [0..pixels, 0..stages];
@@ -537,7 +564,7 @@ impl ImageProcessor {
         Ok(ProcessedImages { processor: self })
     }
 
-    fn plan(&self, jobs: &[ImageJob<'_>]) -> Result<Vec<ProcessedImageLayout>> {
+    fn plan(&mut self, jobs: &[ImageJob<'_>]) -> Result<Vec<ProcessedImageLayout>> {
         if jobs.len() > self.config.max_images as usize {
             return Err(Error::Solver(
                 "image processing: image budget exceeded".into(),
@@ -555,22 +582,27 @@ impl ImageProcessor {
                 ));
             }
         }
-        self.plan_metadata(
+        let mut ids = std::mem::take(&mut self.plan_ids);
+        let planned = self.plan_metadata(
             jobs.iter()
                 .map(|job| (job.source.channel.bytes / 4, job.operations, job.stamp)),
-        )
+            &mut ids,
+        );
+        self.plan_ids = ids;
+        planned
     }
 
     fn plan_metadata<'a>(
         &self,
         jobs: impl ExactSizeIterator<Item = (usize, &'a [ImageOp], ReadbackStamp)>,
+        ids: &mut HashSet<u64>,
     ) -> Result<Vec<ProcessedImageLayout>> {
         if jobs.len() > self.config.max_images as usize {
             return Err(Error::Solver(
                 "image processing: image budget exceeded".into(),
             ));
         }
-        let mut ids = HashSet::with_capacity(jobs.len());
+        ids.clear();
         let mut images = Vec::with_capacity(jobs.len());
         let mut pixels = 0usize;
         let mut stages = 0usize;
@@ -620,7 +652,7 @@ fn active_sizes(images: &[ProcessedImageLayout]) -> (usize, usize) {
         .map_or((0, 0), |image| (image.pixels.end, image.stages.end))
 }
 
-fn checked_budget(config: ImageProcessorConfig, limits: &wgpu::Limits) -> Result<u64> {
+pub(crate) fn checked_budget(config: ImageProcessorConfig, limits: &wgpu::Limits) -> Result<u64> {
     if config.max_images == 0
         || config.max_images > 64
         || config.max_operations_per_image == 0
@@ -637,6 +669,11 @@ fn checked_budget(config: ImageProcessorConfig, limits: &wgpu::Limits) -> Result
     }
     let slots = config.max_images as u64 * config.max_operations_per_image as u64;
     let alignment = limits.min_uniform_buffer_offset_alignment as u64;
+    if !alignment.is_power_of_two() {
+        return Err(Error::Solver(
+            "image processing: invalid uniform alignment".into(),
+        ));
+    }
     let uniform = slots * 32u64.div_ceil(alignment) * alignment;
     let storage = [
         config.max_pixels as u64 * 4,
@@ -661,6 +698,48 @@ fn checked_budget(config: ImageProcessorConfig, limits: &wgpu::Limits) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires GPU"]
+    fn construction_budget_matches_host_arrays_and_upload_payload() {
+        use crate::sensor_storage::tests::buffer_bytes;
+        let engine = Engine::new_gpu().unwrap();
+        let config = ImageProcessorConfig {
+            max_pixels: 257,
+            max_images: 3,
+            max_operations_per_image: 2,
+            max_buffer_bytes: u64::MAX,
+        };
+        let usage =
+            ProcessorStorageUsage::for_image(config, &engine.device().unwrap().limits()).unwrap();
+        assert!(
+            ImageProcessor::new_with_storage_limits(
+                &engine,
+                config,
+                ProcessorStorageLimits {
+                    max_construction_bytes: usage.construction_bytes - 1,
+                }
+            )
+            .is_err()
+        );
+        let processor = ImageProcessor::new_with_storage_limits(
+            &engine,
+            config,
+            ProcessorStorageLimits {
+                max_construction_bytes: usage.construction_bytes,
+            },
+        )
+        .unwrap();
+        assert_eq!(processor.storage_usage(), usage);
+        assert_eq!(processor.stats().buffer_bytes, usage.device_bytes);
+        crate::processor_storage::tests::check_live(
+            usage,
+            &[
+                buffer_bytes(&processor.pixels.buffer),
+                buffer_bytes(&processor.gains.buffer),
+            ],
+        );
+    }
 
     #[test]
     fn buffer_budget_covers_pixels_reduction_gains_and_aligned_parameters() {

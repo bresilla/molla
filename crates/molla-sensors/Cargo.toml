@@ -24,6 +24,8 @@ gpu = [
     "molla-sim/gpu",
     "molla-storage/gpu",
 ]
+# wgpu internal object counters for the resource-retention regression.
+resource-counters = ["gpu", "wgpu/counters"]
 
 [dependencies]
 arrayvec = { version = "0.7.6", optional = true }
@@ -45,8 +47,19 @@ wgpu = { version = "29", optional = true, default-features = false, features = [
 ] }
 
 [dev-dependencies]
+pollster = "0.4"
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
 molla-geometry = { path = "../molla-geometry", default-features = false }
+
+[[bench]]
+name = "bench_camera_latency"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_sensor_latency"
+harness = false
+required-features = ["gpu"]
 
 [[bench]]
 name = "bench_sensor_camera"
@@ -55,6 +68,16 @@ required-features = ["gpu"]
 
 [[bench]]
 name = "bench_sensor_raycast"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_scene_refit"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_scene_queries"
 harness = false
 required-features = ["gpu"]
 
@@ -87,3 +110,7 @@ required-features = ["gpu"]
 name = "bench_sensor_cloud_export"
 harness = false
 required-features = ["gpu"]
+
+[[test]]
+name = "sensor_resource_retention_gpu"
+required-features = ["resource-counters"]

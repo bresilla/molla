@@ -30,7 +30,7 @@ fn merge_hits(@builtin(global_invocation_id) gid: vec3<u32>) {
     let t = mesh_t[i];
     if (mesh_tri[i] < 0 || !(t > 0.0 && t < params.max_distance)) { return; }
     if (hit_shape[i] >= 0 && hit_t[i] > 0.0 && !(t < hit_t[i])) { return; }
-    let direction = directions[i].xyz;
+    let direction = ray_scaled_direction(directions[i].xyz);
     var normal = vec3<f32>(0.0, 1.0, 0.0);
     let geometric = mesh_normal[i].xyz;
     let length_squared = dot(geometric, geometric);
@@ -40,6 +40,6 @@ fn merge_hits(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     hit_t[i] = t;
     hit_shape[i] = params.shape_id;
-    hit_point[i] = vec4<f32>(origins[i].xyz + direction * t, 0.0);
+    hit_point[i] = vec4<f32>(origins[i].xyz + direction * (t / length(direction)), 0.0);
     hit_normal[i] = vec4<f32>(normal, 0.0);
 }

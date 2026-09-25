@@ -50,6 +50,28 @@ pub struct MeshBvh {
 }
 
 impl MeshBvh {
+    /// Exact median-split node count, or `None` when it exceeds `usize`.
+    pub fn planned_node_count(triangles: usize, max_leaf_size: usize) -> Option<usize> {
+        if triangles == 0 {
+            return Some(0);
+        }
+        let leaf = max_leaf_size.max(1);
+        let mut level = 1usize;
+        while triangles / level > leaf {
+            level = level.checked_mul(2)?;
+        }
+        let splits = if triangles / level == leaf {
+            triangles % level
+        } else {
+            0
+        };
+        level
+            .checked_add(splits)?
+            .checked_sub(1)?
+            .checked_mul(2)?
+            .checked_add(1)
+    }
+
     /// Build a BVH for the given mesh. `vertices` is the mesh's
     /// vertex array; `indices` is the flat triangle list (each entry
     /// is a `[v0, v1, v2]` triple). `max_leaf_size` triangles per
@@ -59,6 +81,9 @@ impl MeshBvh {
         if n == 0 {
             return Self::default();
         }
+        let max_leaf = max_leaf_size.max(1);
+        let node_count =
+            Self::planned_node_count(n, max_leaf).expect("mesh BVH node count exceeds usize");
         // Per-triangle centroids + AABBs to drive the split.
         let mut centroid = Vec::with_capacity(n);
         let mut aabb = Vec::with_capacity(n);
@@ -70,8 +95,7 @@ impl MeshBvh {
             aabb.push((v0.min(v1).min(v2), v0.max(v1).max(v2)));
         }
         let mut order: Vec<u32> = (0..n as u32).collect();
-        let mut nodes = Vec::with_capacity(2 * n);
-        let max_leaf = max_leaf_size.max(1);
+        let mut nodes = Vec::with_capacity(node_count);
         // Reserve root (index 0).
         nodes.push(BvhNode {
             aabb_min: Vec3::splat(Real::INFINITY),
@@ -402,6 +426,34 @@ mod tests {
         let (lo, hi) = bvh.root_aabb();
         assert!((lo - Vec3::splat(-0.5)).length() < 1e-9);
         assert!((hi - Vec3::splat(0.5)).length() < 1e-9);
+    }
+
+    #[test]
+    fn planned_capacity_matches_actual_trees_across_leaf_sizes() {
+        let vertices = [Vec3::ZERO, Vec3::X, Vec3::Z];
+        for leaf in [0, 1, 2, 3, 4, 7, 8, 16, 129] {
+            for count in [0, 1, 7, 8, 9, 15, 16, 17, 31, 33, 49, 129, 257, 4097] {
+                let indices = vec![[0, 1, 2]; count];
+                let tree = MeshBvh::build(&vertices, &indices, leaf);
+                assert_eq!(
+                    MeshBvh::planned_node_count(count, leaf),
+                    Some(tree.nodes.len()),
+                    "count={count}, leaf={leaf}"
+                );
+                assert_eq!(
+                    tree.nodes.capacity(),
+                    tree.nodes.len(),
+                    "count={count}, leaf={leaf}"
+                );
+                assert_eq!(tree.triangle_order.len(), count);
+            }
+        }
+        assert_eq!(MeshBvh::planned_node_count(usize::MAX, 1), None);
+        assert_eq!(
+            MeshBvh::planned_node_count(usize::MAX / 2 + 1, 1),
+            Some(usize::MAX)
+        );
+        assert_eq!(MeshBvh::planned_node_count(usize::MAX, usize::MAX), Some(1));
     }
 
     #[test]

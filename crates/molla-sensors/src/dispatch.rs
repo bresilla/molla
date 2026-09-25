@@ -28,10 +28,6 @@ impl<T> BindingsCache<T> {
         }
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.entries.clear();
-    }
-
     pub(crate) fn get_or_prepare(
         &mut self,
         matches: impl Fn(&T) -> bool,

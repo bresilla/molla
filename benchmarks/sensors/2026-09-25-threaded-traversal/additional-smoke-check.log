@@ -1,0 +1,3 @@
+/tmp/molla-threaded-lidar-smoke.tsv cases=120 rows=240 first=120 samples=120 malformed=0
+/tmp/molla-threaded-cloud-smoke.tsv cases=96 rows=192 first=96 samples=96 malformed=0
+/tmp/molla-threaded-camera-smoke.tsv cases=56 rows=112 first=56 samples=56 malformed=0

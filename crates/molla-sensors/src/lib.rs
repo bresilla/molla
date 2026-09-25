@@ -60,6 +60,10 @@ pub mod lidar;
 #[cfg(feature = "gpu")]
 pub mod lidar_batch;
 #[cfg(feature = "gpu")]
+pub mod lidar_storage;
+#[cfg(feature = "gpu")]
+pub use lidar_storage::{LidarBatchLimits, LidarBatchStorage, LidarLayoutLimits};
+#[cfg(feature = "gpu")]
 pub mod pointcloud;
 #[cfg(feature = "gpu")]
 pub mod raycast;
@@ -68,7 +72,38 @@ pub mod raycast_adjoint;
 pub mod readback;
 #[cfg(feature = "gpu")]
 pub mod scene;
+#[cfg(feature = "gpu")]
+pub mod scene_acceleration;
+#[cfg(feature = "gpu")]
+mod scene_geometry;
+#[cfg(feature = "gpu")]
+mod scene_identity;
+#[cfg(feature = "gpu")]
+mod scene_rebuild;
+#[cfg(feature = "gpu")]
+mod scene_threading;
+#[cfg(feature = "gpu")]
+mod scene_trace;
+#[cfg(feature = "gpu")]
+pub use scene_acceleration::{
+    SceneAcceleration, SceneAccelerationConfig, SceneAccelerationStats, SceneAccelerationStorage,
+    SceneAccelerationView, SceneBvhNode,
+};
+#[cfg(feature = "gpu")]
+pub use scene_rebuild::{SceneRebuildPolicy, SceneRebuildStorage};
 pub mod scheduler;
+#[cfg(feature = "gpu")]
+pub mod sensor_storage;
+#[cfg(feature = "gpu")]
+pub use sensor_storage::{SensorArrayLimits, SensorArrayStorage};
+#[cfg(feature = "gpu")]
+mod host_arrays;
+#[cfg(feature = "gpu")]
+mod plan_scratch;
+#[cfg(feature = "gpu")]
+pub mod processor_storage;
+#[cfg(feature = "gpu")]
+pub use processor_storage::{ProcessorStorageLimits, ProcessorStorageUsage};
 #[cfg(feature = "gpu")]
 pub mod snapshot;
 #[cfg(feature = "gpu")]
@@ -78,7 +113,11 @@ pub use device_results::{
     SensorFramePoolConfig, SensorFramePoolStats, SensorSubmission,
 };
 #[cfg(feature = "gpu")]
+pub mod camera_storage;
+#[cfg(feature = "gpu")]
 pub mod tiled_camera;
+#[cfg(feature = "gpu")]
+pub use camera_storage::{CameraStorageUsage, TiledCameraLimits};
 
 #[cfg(feature = "gpu")]
 pub use camera_post::{
@@ -108,7 +147,10 @@ pub use pointcloud::{
     write_xyz_rgb, xyz_filter,
 };
 #[cfg(feature = "gpu")]
-pub use raycast::{EncodedRayQuery, RayDeviceHits, RayHit, RayQueryStats, Raycaster};
+pub use raycast::{
+    EncodedRayQuery, RayDeviceHits, RayHit, RayQueryStats, RayStorageUsage, Raycaster,
+    RaycasterLimits,
+};
 #[cfg(feature = "gpu")]
 mod dispatch;
 #[cfg(feature = "gpu")]
@@ -119,7 +161,9 @@ pub use raycast_adjoint::{
 };
 #[cfg(feature = "gpu")]
 pub use scene::{
-    SceneStamp, SensorScene, SensorSceneOptions, UnsupportedGeometryPolicy, UnsupportedShape,
+    INVALID_SCENE_DISTANCE, INVALID_SCENE_INDEX, INVALID_SCENE_SHAPE_ID, SceneIdentitySnapshot,
+    SceneStamp, SensorBodyHandle, SensorScene, SensorSceneOptions, SensorSceneRemap,
+    SensorShapeHandle, UnsupportedGeometryPolicy, UnsupportedShape,
 };
 pub use scheduler::{ScheduledSample, SensorSchedule, SensorScheduler};
 #[cfg(feature = "gpu")]

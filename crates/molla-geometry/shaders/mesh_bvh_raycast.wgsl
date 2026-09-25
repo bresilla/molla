@@ -47,31 +47,30 @@ fn multiply(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
 
 const MAX_STACK: u32 = 64u;
 
-fn ray_aabb(origin: vec3<f32>, inv_dir: vec3<f32>, lo: vec3<f32>, hi: vec3<f32>, max_t: f32) -> bool {
-    let t1 = (lo - origin) * inv_dir;
-    let t2 = (hi - origin) * inv_dir;
-    let tmin_v = min(t1, t2);
-    let tmax_v = max(t1, t2);
-    let tmin = max(tmin_v.x, max(tmin_v.y, tmin_v.z));
-    let tmax = min(tmax_v.x, min(tmax_v.y, tmax_v.z));
-    return tmax >= max(tmin, 0.0) && tmin <= max_t;
+fn ray_scaled_direction(direction: vec3<f32>) -> vec3<f32> {
+    let magnitude = max(abs(direction.x), max(abs(direction.y), abs(direction.z)));
+    if (magnitude == 0.0 || (bitcast<u32>(magnitude) & 0x7f800000u) == 0x7f800000u) {
+        return vec3<f32>(0.0);
+    }
+    let exponent = clamp((bitcast<u32>(magnitude) >> 23u) & 255u, 1u, 253u);
+    return direction * bitcast<f32>((254u - exponent) << 23u);
 }
 
-// Möller–Trumbore. Returns `t > 0` on hit, `-1.0` on miss.
-fn ray_triangle(origin: vec3<f32>, dir: vec3<f32>, v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> f32 {
-    let edge1 = v1 - v0;
-    let edge2 = v2 - v0;
-    let h = cross(dir, edge2);
-    let a = dot(edge1, h);
-    if (abs(a) < 1e-12) { return -1.0; }
-    let f = 1.0 / a;
-    let s = origin - v0;
-    let uu = f * dot(s, h);
-    if (uu < 0.0 || uu > 1.0) { return -1.0; }
-    let q = cross(s, edge1);
-    let vv = f * dot(dir, q);
-    if (vv < 0.0 || uu + vv > 1.0) { return -1.0; }
-    return f * dot(edge2, q);
+fn ray_aabb(origin: vec3<f32>, direction: vec3<f32>, lo: vec3<f32>, hi: vec3<f32>, max_t: f32) -> bool {
+    var near = 0.0;
+    var far = max_t;
+    for (var axis = 0u; axis < 3u; axis++) {
+        if (direction[axis] == 0.0) {
+            if (origin[axis] < lo[axis] || origin[axis] > hi[axis]) { return false; }
+        } else {
+            let a = (lo[axis] - origin[axis]) / direction[axis];
+            let b = (hi[axis] - origin[axis]) / direction[axis];
+            near = max(near, min(a, b));
+            far = min(far, max(a, b));
+            if (far < near) { return false; }
+        }
+    }
+    return true;
 }
 
 @compute @workgroup_size(64)
@@ -84,6 +83,10 @@ fn raycast_mesh(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if (u.node_count == 0u) { return; }
 
+    let direction = ray_scaled_direction(ray_direction[i].xyz);
+    let metric_scale = length(direction);
+    if (metric_scale < 1e-12) { return; }
+
     var pose = shape_poses[u.shape_id];
     if (u.body_id >= 0) {
         let body = body_poses[u32(u.body_id)];
@@ -92,14 +95,9 @@ fn raycast_mesh(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let inverse_rotation = vec4<f32>(-pose.rotation.xyz, pose.rotation.w);
     let origin = rotate(inverse_rotation, ray_origin[i].xyz - pose.position.xyz);
-    let dir = rotate(inverse_rotation, ray_direction[i].xyz);
-    let inv_dir = vec3<f32>(
-        select(1e30, 1.0 / dir.x, abs(dir.x) > 1e-30),
-        select(1e30, 1.0 / dir.y, abs(dir.y) > 1e-30),
-        select(1e30, 1.0 / dir.z, abs(dir.z) > 1e-30),
-    );
+    let dir = rotate(inverse_rotation, direction);
 
-    var best_t: f32 = u.max_distance;
+    var best_t: f32 = u.max_distance / metric_scale;
     var best_tri: i32 = -1;
     var best_n: vec3<f32> = vec3<f32>(0.0);
 
@@ -114,7 +112,7 @@ fn raycast_mesh(@builtin(global_invocation_id) gid: vec3<u32>) {
         let idx = stack[sp];
         if (idx >= u.node_count) { continue; }
         let node = bvh_nodes[idx];
-        if (!ray_aabb(origin, inv_dir, node.aabb_min.xyz, node.aabb_max.xyz, best_t)) { continue; }
+        if (!ray_aabb(origin, dir, node.aabb_min.xyz, node.aabb_max.xyz, best_t)) { continue; }
         let is_leaf = u32(node.aabb_min.w);
         if (is_leaf == 1u) {
             let prim_start = node.payload.x;
@@ -127,11 +125,12 @@ fn raycast_mesh(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let v0 = mesh_vertices[i0].xyz;
                 let v1 = mesh_vertices[i1].xyz;
                 let v2 = mesh_vertices[i2].xyz;
-                let t = ray_triangle(origin, dir, v0, v1, v2);
+                let triangle = mesh_triangle_hit(origin, dir, v0, v1, v2);
+                let t = triangle.t;
                 if (t > 0.0 && t < best_t) {
                     best_t = t;
                     best_tri = i32(tri_idx);
-                    best_n = cross(v1 - v0, v2 - v0);
+                    best_n = triangle.normal;
                 }
             }
         } else {
@@ -142,9 +141,9 @@ fn raycast_mesh(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    hit_t[i] = best_t;
     hit_tri[i] = best_tri;
     if (best_tri >= 0) {
+        hit_t[i] = best_t * metric_scale;
         hit_normal[i] = vec4<f32>(rotate(pose.rotation, normalize(best_n)), 0.0);
     }
 }

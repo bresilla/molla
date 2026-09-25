@@ -347,6 +347,9 @@ impl<T: BufferElement> Buffer<T> {
              host data — call download() before re-uploading"
         );
         scratch.clear();
+        scratch
+            .try_reserve_exact(self.host.len())
+            .map_err(|_| Error::Storage("buffer upload packing allocation failed".into()))?;
         scratch.extend(self.host.iter().map(BufferElement::to_gpu));
         queue.write_buffer(buf, 0, bytemuck::cast_slice(scratch));
         self.state = SyncState::InSync;

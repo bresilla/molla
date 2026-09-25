@@ -3,6 +3,11 @@
 #[derive(Resource, Default)]
 struct ImuExampleState {
     sensor: Option<ImuSensor>,
+    preview: Option<SensorPreview>,
+    revision: Option<u64>,
+    error: Option<String>,
+    last_device: Option<molla::sensors::SensorFrame>,
+    last_enqueued: Option<u64>,
     /// Most recent reading (for the right-rail readout). `None` until
     /// the sensor primes.
     last: Option<ImuReading>,
@@ -29,57 +34,107 @@ fn build_imu_model() -> (mp::Model, Vec<BodyVisual>) {
     (b.build().expect("model"), vec![BodyVisual::Sphere(0.4)])
 }
 
-fn update_imu_example(sim: ResMut<Sim>, mut state: ResMut<ImuExampleState>) {
+fn update_imu_example(
+    sim: Res<Sim>,
+    mut state: ResMut<ImuExampleState>,
+    ribbon: Res<RibbonOpen>,
+    placement: Res<RibbonPlacement>,
+) {
     if sim.scene != Scene::Imu {
-        if state.sensor.is_some() {
-            state.sensor = None;
-            state.last = None;
-            state.smoothed_accel_mag = 0.0;
-            state.smoothed_gyro_mag = 0.0;
-        }
+        *state = ImuExampleState::default();
         return;
     }
+    if state.revision != Some(sim.sensor_clock.revision) {
+        *state = ImuExampleState {
+            revision: Some(sim.sensor_clock.revision),
+            ..Default::default()
+        };
+    }
+    if let Some(preview) = &mut state.preview {
+        preview.now = sim.sensor_clock.time();
+    }
+    let display = find_item(RIBBON_ITEMS, PANE_SCENE).is_some_and(|item| {
+        let (rail, _, _) = placement.resolve(item);
+        ribbon.is_open(rail, PANE_SCENE)
+    });
+    if state.error.is_none()
+        && let Err(error) = state.sample(&sim, display)
+    {
+        warn!("imu preview failed: {error}");
+        state.error = Some(error.to_string());
+    }
+}
 
-    if state.sensor.is_none() {
-        // Body 0 is the bouncing sphere we built in `build_imu_model`.
-        let mounts = [ImuMount {
-            body: mp::BodyId::from_index(0),
-            local_pose: mp::Transform::IDENTITY,
-        }];
-        match ImuSensor::new(&sim.engine, &sim.model, &mounts) {
-            Ok(s) => state.sensor = Some(s),
-            Err(e) => {
-                warn!("imu sensor init failed: {e}");
-                return;
+impl ImuExampleState {
+    fn sample(&mut self, sim: &Sim, display: bool) -> molla::core::Result<()> {
+        if self.sensor.is_none() {
+            let sensor = ImuSensor::new(
+                &sim.engine,
+                &sim.model,
+                &[ImuMount {
+                    body: mp::BodyId::from_index(0),
+                    local_pose: mp::Transform::IDENTITY,
+                }],
+            )?;
+            let pool = sensor.output_pool(&sim.engine, preview_pool_config(32)?)?;
+            self.preview = Some(SensorPreview::new(&sim.engine, pool, 32)?);
+            self.sensor = Some(sensor);
+        }
+        let preview = self.preview.as_mut().expect("initialized preview");
+        if let Some(frame) = preview.poll_latest(sim.sensor_clock)? {
+            let accel = frame.channel_iter::<MVec3>(0)?.next();
+            let gyro = frame.channel_iter::<MVec3>(1)?.next();
+            if let Some((accelerometer, gyroscope)) = accel.zip(gyro) {
+                self.last = Some(ImuReading {
+                    accelerometer,
+                    gyroscope,
+                });
+                self.smoothed_accel_mag =
+                    0.8 * self.smoothed_accel_mag + 0.2 * accelerometer.length() as f32;
+                self.smoothed_gyro_mag =
+                    0.8 * self.smoothed_gyro_mag + 0.2 * gyroscope.length() as f32;
             }
         }
-    }
-
-    // dt for the IMU = the wall-clock time between consecutive frames'
-    // body_qd snapshots, which is `SUBSTEPS_PER_FRAME * FIXED_DT`
-    // (the integrator advances `body_qd` by that much per frame).
-    let frame_dt = (SUBSTEPS_PER_FRAME as f64) * FIXED_DT;
-    let Sim {
-        ref engine,
-        ref model,
-        ref state_a,
-        ..
-    } = *sim;
-    let sensor = state.sensor.as_mut().expect("sensor");
-    let readings = match sensor.update(engine, model, state_a, frame_dt) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("imu update failed: {e}");
-            return;
+        let clock = sim.sensor_clock;
+        if preview.begin_sample(clock.tick)? {
+            let start = std::time::Instant::now();
+            let mut batch = SensorCommandBatch::new(&sim.engine)?;
+            let timed = display && preview.begin_gpu(&mut batch, &sim.engine)?;
+            if let Some(sample) = self.sensor.as_mut().expect("sensor").encode(
+                &mut batch,
+                &sim.engine,
+                &sim.model,
+                &sim.state_a,
+                preview.sample_dt(clock.tick),
+                &mut preview.pool,
+                clock.stamp(6),
+            )? {
+                preview.end_gpu(&mut batch, &sim.engine, timed)?;
+                let submission = batch.submit()?;
+                preview.submitted(clock.tick, start);
+                preview.collect_gpu(clock.stamp(6), timed)?;
+                if !sample.priming {
+                    self.last_device = Some(submission.frame(&sample.frame)?.clone());
+                }
+            } else {
+                preview.deferred += 1;
+            }
         }
-    };
-    if let Some(&r) = readings.first() {
-        state.last = Some(r);
-        let alpha = 0.2_f32;
-        state.smoothed_accel_mag =
-            (1.0 - alpha) * state.smoothed_accel_mag + alpha * r.accelerometer.length() as f32;
-        state.smoothed_gyro_mag =
-            (1.0 - alpha) * state.smoothed_gyro_mag + alpha * r.gyroscope.length() as f32;
+        if display
+            && let Some(frame) = &self.last_device
+            && self.last_enqueued != Some(frame.stamp().sample_id)
+            && preview.readback.available_slots() > 0
+            && preview.enqueue(
+                &[
+                    frame.channel::<MVec3>(0)?.readback_source(0..1)?,
+                    frame.channel::<MVec3>(1)?.readback_source(0..1)?,
+                ],
+                frame.stamp(),
+            )?
+        {
+            self.last_enqueued = Some(frame.stamp().sample_id);
+        }
+        Ok(())
     }
 }
 
@@ -91,12 +146,13 @@ fn update_imu_example(sim: ResMut<Sim>, mut state: ResMut<ImuExampleState>) {
 fn imu_pane(ui: &mut egui::Ui, state: &ImuExampleState) {
     ui.add_space(2.0);
     readout(ui, "Sensor", "GPU IMU");
+    sensor_preview_pane(ui, state.preview.as_ref(), state.error.as_deref());
     ui.separator();
 
     match state.last {
         None => {
             ui.label("priming…");
-            ui.small("(first frame snapshots body_qd; reading shows next frame)");
+            ui.small("First sample snapshots velocity; later readings arrive asynchronously.");
         }
         Some(r) => {
             ui.label("Accelerometer (sensor frame)");
@@ -135,4 +191,3 @@ fn imu_pane(ui: &mut egui::Ui, state: &ImuExampleState) {
 // 5 GPU output channels lives in its own `bevy_frost::Normal`
 // container so the user can fold/unfold them individually; the
 // thumbnails inside use the pane's available width, so dragging
-

@@ -41,6 +41,7 @@ pub struct GpuBvhNode {
 
 const WORKGROUP_SIZE: u32 = 64;
 const MAX_TREE_DEPTH: u32 = 64;
+const RAYCAST_LEAF_SIZE: usize = 8;
 
 /// Per-mesh device buffers needed by the kernel: BVH nodes,
 /// triangle-order permutation, flat triangle indices, and vertex
@@ -61,9 +62,29 @@ impl MeshBvhGpu {
         vertices: &[Vec3],
         indices: &[[u32; 3]],
     ) -> Result<Self> {
+        let bvh = Self::build_validated(device, vertices, indices)?;
+        Self::upload_validated(device, queue, &bvh, vertices, indices)
+    }
+
+    /// Build and validate local geometry and tree limits without GPU allocation.
+    pub fn build_validated(
+        device: &wgpu::Device,
+        vertices: &[Vec3],
+        indices: &[[u32; 3]],
+    ) -> Result<MeshBvh> {
         validate_mesh(device, vertices, indices)?;
-        let bvh = MeshBvh::build(vertices, indices, 8);
-        Self::upload(device, queue, &bvh, vertices, indices)
+        let bvh = MeshBvh::build(vertices, indices, RAYCAST_LEAF_SIZE);
+        Self::validate(device, &bvh, vertices, indices)?;
+        Ok(bvh)
+    }
+
+    /// Exact node count of the median-split raycast tree, without building its arrays.
+    pub fn node_count_for_mesh(triangles: usize) -> Result<usize> {
+        if triangles > u32::MAX as usize {
+            return Err(Error::Gpu("mesh triangle count exceeds u32".into()));
+        }
+        MeshBvh::planned_node_count(triangles, RAYCAST_LEAF_SIZE)
+            .ok_or_else(|| Error::Gpu("mesh node count exceeds usize".into()))
     }
 
     /// Upload `bvh` plus `(vertices, indices)` to the device.
@@ -74,6 +95,17 @@ impl MeshBvhGpu {
         vertices: &[Vec3],
         indices: &[[u32; 3]],
     ) -> Result<Self> {
+        Self::validate(device, bvh, vertices, indices)?;
+        Self::upload_validated(device, queue, bvh, vertices, indices)
+    }
+
+    /// Validate mesh/tree geometry and device-size limits without allocating GPU buffers.
+    pub fn validate(
+        device: &wgpu::Device,
+        bvh: &MeshBvh,
+        vertices: &[Vec3],
+        indices: &[[u32; 3]],
+    ) -> Result<()> {
         validate_mesh(device, vertices, indices)?;
         validate_tree(bvh, indices.len())?;
         for node in bvh.nodes.iter().filter(|node| node.is_leaf == 1) {
@@ -92,6 +124,16 @@ impl MeshBvhGpu {
         }
         check_bytes(device, bvh.nodes.len(), 48)?;
         check_bytes(device, bvh.triangle_order.len(), 4)?;
+        Ok(())
+    }
+
+    fn upload_validated(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        bvh: &MeshBvh,
+        vertices: &[Vec3],
+        indices: &[[u32; 3]],
+    ) -> Result<Self> {
         let nodes_gpu: Vec<GpuBvhNode> = bvh
             .nodes
             .iter()
@@ -296,6 +338,8 @@ impl MeshBvhRaycastBindings {
 }
 
 impl MeshBvhRaycastKernel {
+    /// WGSL triangle intersection and normal calculation shared by mesh query kernels.
+    pub const TRIANGLE_SHADER: &'static str = include_str!("../shaders/ray_triangle.wgsl");
     /// Bind nodes/order/indices/vertices, rays, t/triangle/normal, body/shape poses.
     pub fn prepare(
         &self,
@@ -335,7 +379,8 @@ impl MeshBvhRaycastKernel {
         }
     }
 
-    /// Encode one instance; submit before reusing its uniform for different parameters.
+    /// Encode one instance with metric hit distances and range clipping.
+    /// Submit before reusing its uniform for different parameters.
     #[allow(clippy::too_many_arguments)]
     pub fn encode_prepared(
         &self,
@@ -378,7 +423,12 @@ impl MeshBvhRaycastKernel {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::mesh_bvh_raycast"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../shaders/mesh_bvh_raycast.wgsl").into(),
+                format!(
+                    "{}\n{}",
+                    Self::TRIANGLE_SHADER,
+                    include_str!("../shaders/mesh_bvh_raycast.wgsl")
+                )
+                .into(),
             ),
         });
         let layout_mesh = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -650,6 +700,26 @@ fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntr
 #[cfg(test)]
 mod validation_tests {
     use super::*;
+
+    #[test]
+    fn planned_raycast_node_count_matches_median_trees() {
+        let vertices = [Vec3::ZERO, Vec3::X, Vec3::Z];
+        for count in [
+            0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 49, 255, 256, 257, 1000, 4097,
+        ] {
+            let indices = vec![[0, 1, 2]; count];
+            let tree = MeshBvh::build(&vertices, &indices, RAYCAST_LEAF_SIZE);
+            assert_eq!(
+                MeshBvhGpu::node_count_for_mesh(count).unwrap(),
+                tree.nodes.len(),
+                "triangles={count}"
+            );
+        }
+        if let Some(too_many) = (u32::MAX as usize).checked_add(1) {
+            assert!(MeshBvhGpu::node_count_for_mesh(too_many).is_err());
+        }
+        assert!(MeshBvhGpu::node_count_for_mesh(u32::MAX as usize).unwrap() < u32::MAX as usize);
+    }
     use crate::MeshBvhNode;
 
     fn chain(levels: usize) -> MeshBvh {

@@ -4,7 +4,6 @@
 // "shape index = instance segmentation" channel is readable when zoomed.
 const CAMERA_IMG_W: u32 = 1280;
 const CAMERA_IMG_H: u32 = 720;
-const CAMERA_NUM_VIEWS: usize = 1;
 const CAMERA_ORBIT_RADIUS: f32 = 6.0;
 const CAMERA_ORBIT_HEIGHT: f32 = 2.5;
 const CAMERA_TARGET_HEIGHT: f32 = 1.0;
@@ -121,15 +120,11 @@ fn build_camera_model() -> (mp::Model, Vec<BodyVisual>) {
     (b.build().expect("camera scene model"), visuals)
 }
 
-// Per-frame state for the camera-sensor demo. The `TiledCamera` is
-// built lazily on first entry to the scene; pixel bytes for every
-// channel get written into Bevy `Image` assets each frame and the
-// right-rail pane displays them via `bevy_egui`'s user-texture path.
 #[derive(Resource)]
 struct CameraExampleState {
-    sensor: Option<TiledCamera>,
-    /// Wall-clock seconds since the scene started; drives the orbit.
-    elapsed: f32,
+    runtime: Option<CameraPreview>,
+    revision: Option<u64>,
+    error: Option<String>,
     /// FOV slider value (radians). Synchronised back into the sensor's
     /// config every frame. Ignored when `optics_enabled` is true and
     /// `focal_length_mm` / `sensor_width_mm` are both > 0.
@@ -180,8 +175,9 @@ struct CameraExampleState {
 impl Default for CameraExampleState {
     fn default() -> Self {
         Self {
-            sensor: None,
-            elapsed: 0.0,
+            runtime: None,
+            revision: None,
+            error: None,
             fov_y: 50f32.to_radians(),
             optics_enabled: false,
             focal_length_mm: 50.0,
@@ -547,191 +543,168 @@ fn spawn_body_entities(
     }
 }
 
-
 fn update_camera_example(
-    time: Res<Time>,
-    sim: ResMut<Sim>,
+    sim: Res<Sim>,
     mut state: ResMut<CameraExampleState>,
     mut images: ResMut<Assets<Image>>,
     mut user_textures: ResMut<EguiUserTextures>,
+    ribbon: Res<RibbonOpen>,
+    placement: Res<RibbonPlacement>,
 ) {
     if sim.scene != Scene::Camera {
+        if state.revision.is_some() {
+            state.reset_preview();
+        }
         return;
     }
-    state.elapsed += time.delta_secs();
-
-    if state.sensor.is_none() {
-        let cfg = TiledCameraConfig {
-            width: CAMERA_IMG_W,
-            height: CAMERA_IMG_H,
-            fov_y_radians: 50f32.to_radians(),
-            channels: CameraChannels::ALL,
-            ambient: MVec3::new(0.18, 0.18, 0.22),
-            light_dir: MVec3::new(-0.4, -0.85, -0.35).normalize(),
-            light_color: MVec3::new(1.0, 0.96, 0.88),
-            max_distance: 100.0,
-            near: 0.05,
-            optics: Default::default(),
-        };
-        match TiledCamera::new(&sim.engine, cfg, CAMERA_NUM_VIEWS) {
-            Ok(s) => {
-                state.fov_y = cfg.fov_y_radians;
-                state.sensor = Some(s);
-            }
-            Err(e) => {
-                warn!("TiledCamera init failed: {e}");
-                return;
-            }
-        }
+    if state.revision != Some(sim.sensor_clock.revision) {
+        state.reset_preview();
+        state.revision = Some(sim.sensor_clock.revision);
     }
-
-    // Lazily allocate one Bevy `Image` asset per channel + register it
-    // with `EguiUserTextures` so the pane can address it via TextureId.
-    if state.image_color.is_none() {
-        let (h_color, id_color) = alloc_thumb_image(&mut images, &mut user_textures);
-        let (h_depth, id_depth) = alloc_thumb_image(&mut images, &mut user_textures);
-        let (h_normal, id_normal) = alloc_thumb_image(&mut images, &mut user_textures);
-        let (h_albedo, id_albedo) = alloc_thumb_image(&mut images, &mut user_textures);
-        let (h_index, id_index) = alloc_thumb_image(&mut images, &mut user_textures);
-        state.image_color = Some(h_color);
-        state.image_depth = Some(h_depth);
-        state.image_normal = Some(h_normal);
-        state.image_albedo = Some(h_albedo);
-        state.image_index = Some(h_index);
-        state.tex_id_color = Some(id_color);
-        state.tex_id_depth = Some(id_depth);
-        state.tex_id_normal = Some(id_normal);
-        state.tex_id_albedo = Some(id_albedo);
-        state.tex_id_index = Some(id_index);
+    if let Some(runtime) = &mut state.runtime {
+        runtime.display.now = sim.sensor_clock.time();
     }
-
-    // Push the latest FOV / optics sliders into the sensor config
-    // (width/height can't change post-construction; everything else
-    // is per-dispatch). Snapshot the state values before borrowing
-    // `state.sensor` mutably.
+    let visible = find_item(RIBBON_ITEMS, PANE_SCENE).is_some_and(|item| {
+        let (rail, _, _) = placement.resolve(item);
+        ribbon.is_open(rail, PANE_SCENE)
+    });
+    if state.error.is_none()
+        && let Err(error) = state.sample(&sim, visible, &mut images, &mut user_textures)
     {
-        let fov_y = state.fov_y;
-        let optics_enabled = state.optics_enabled;
-        let focal_length_mm = state.focal_length_mm;
-        let sensor_width_mm = state.sensor_width_mm;
-        let lens_diameter_m = state.lens_diameter_m;
-        let focal_distance_m = state.focal_distance_m;
-        let aperture_samples = state.aperture_samples;
-        let sensor = state.sensor.as_mut().unwrap();
-        let mut cfg = *sensor.config();
-        cfg.fov_y_radians = fov_y;
-        if optics_enabled {
-            cfg.optics.focal_length_mm = focal_length_mm;
-            cfg.optics.sensor_width_mm = sensor_width_mm;
-            cfg.optics.lens_diameter_m = lens_diameter_m;
-            cfg.optics.focal_distance_m = focal_distance_m;
-            cfg.optics.aperture_samples = aperture_samples;
-        } else {
-            cfg.optics = molla::sensors::PhysicalOptics::default();
-        }
-        let _ = sensor.set_config(cfg);
+        warn!("camera preview failed: {error}");
+        state.error = Some(error.to_string());
+    }
+}
+
+impl CameraExampleState {
+    fn reset_preview(&mut self) {
+        self.runtime = None;
+        self.revision = None;
+        self.error = None;
+        self.last_pose = None;
+        self.last_depth_range = None;
     }
 
-    // Orbit the camera around the scene at fixed radius / height.
-    let theta = state.elapsed * 0.5; // rad/s — slow circle.
-    let eye = MVec3::new(
-        (CAMERA_ORBIT_RADIUS as f64) * theta.cos() as f64,
-        CAMERA_ORBIT_HEIGHT as f64,
-        (CAMERA_ORBIT_RADIUS as f64) * theta.sin() as f64,
-    );
-    let target = MVec3::new(0.0, CAMERA_TARGET_HEIGHT as f64, 0.0);
-    {
-        let sensor = state.sensor.as_mut().unwrap();
-        if let Err(e) = sensor.set_camera_look_at(0, eye, target, MVec3::Y) {
-            warn!("set_camera_look_at: {e}");
-            return;
+    fn request(&self, sim: &Sim) -> CameraRequest {
+        let theta = sim.sensor_clock.time() * 0.5;
+        CameraRequest {
+            tick: sim.sensor_clock.tick,
+            config: TiledCameraConfig {
+                width: CAMERA_IMG_W,
+                height: CAMERA_IMG_H,
+                fov_y_radians: self.fov_y,
+                channels: CameraChannels::ALL,
+                ambient: MVec3::new(0.18, 0.18, 0.22),
+                light_dir: MVec3::new(-0.4, -0.85, -0.35).normalize(),
+                light_color: MVec3::new(1.0, 0.96, 0.88),
+                max_distance: 100.0,
+                near: 0.05,
+                optics: if self.optics_enabled {
+                    molla::sensors::PhysicalOptics {
+                        focal_length_mm: self.focal_length_mm,
+                        sensor_width_mm: self.sensor_width_mm,
+                        lens_diameter_m: self.lens_diameter_m,
+                        focal_distance_m: self.focal_distance_m,
+                        aperture_samples: self.aperture_samples,
+                    }
+                } else {
+                    Default::default()
+                },
+            },
+            eye: MVec3::new(
+                f64::from(CAMERA_ORBIT_RADIUS) * theta.cos(),
+                f64::from(CAMERA_ORBIT_HEIGHT),
+                f64::from(CAMERA_ORBIT_RADIUS) * theta.sin(),
+            ),
+            target: MVec3::new(0.0, f64::from(CAMERA_TARGET_HEIGHT), 0.0),
+            exposure: self.exposure,
+            tone_map: self.tone_map_enabled,
+            gamma: self.gamma_enabled,
         }
     }
 
-    // Run both kernels and download every channel.
-    let Sim {
-        ref engine,
-        ref model,
-        ref state_a,
-        ..
-    } = *sim;
-    let (
-        last_pose,
-        snapshot_color,
-        snapshot_depth,
-        snapshot_normal,
-        snapshot_albedo,
-        snapshot_index,
-    ) = {
-        let sensor = state.sensor.as_mut().unwrap();
-        if let Err(e) = sensor.dispatch(engine, model, state_a) {
-            warn!("TiledCamera::dispatch: {e}");
-            return;
+    fn sample(
+        &mut self,
+        sim: &Sim,
+        visible: bool,
+        images: &mut Assets<Image>,
+        user_textures: &mut EguiUserTextures,
+    ) -> molla::core::Result<()> {
+        let request = self.request(sim);
+        if self.runtime.is_none() {
+            self.runtime = Some(CameraPreview::new(sim, request.config)?);
         }
-        let pose = sensor.poses_host().ok().and_then(|p| p.first().copied());
-        let c = sensor.download_color(engine).map(|s| s.to_vec());
-        let d = sensor.download_depth(engine).map(|s| s.to_vec());
-        let n = sensor.download_normal(engine).map(|s| s.to_vec());
-        let a = sensor.download_albedo(engine).map(|s| s.to_vec());
-        let i = sensor.download_shape_index(engine).map(|s| s.to_vec());
-        (pose, c, d, n, a, i)
-    };
-    state.last_pose = last_pose;
-
-    if let (Ok(c), Some(handle)) = (snapshot_color.as_ref(), state.image_color.as_ref()) {
-        // H11 — photographic post-process. Each pass mutates the
-        // `u32`-packed buffer in place; identity when the toggles
-        // are off and `exposure == 1.0`.
-        let mut color_proc = c.clone();
-        if (state.exposure - 1.0).abs() > 1.0e-3 {
-            molla::sensors::camera_post::apply_exposure(&mut color_proc, state.exposure);
+        if let Some((frame, pose)) = self
+            .runtime
+            .as_mut()
+            .expect("runtime")
+            .update(sim, request, visible)?
+        {
+            self.write_frame(&frame, images, user_textures)?;
+            self.last_pose = Some(pose);
         }
-        if state.tone_map_enabled {
-            molla::sensors::camera_post::apply_reinhard_tone_map(&mut color_proc);
-        }
-        if state.gamma_enabled {
-            molla::sensors::camera_post::apply_gamma_srgb(&mut color_proc);
-        }
-        if let Some(img) = images.get_mut(handle) {
-            write_rgba_u32_into_image(img, &color_proc);
-        }
+        Ok(())
     }
-    if let Ok(d) = snapshot_depth.as_ref() {
+
+    fn write_frame(
+        &mut self,
+        frame: &molla::sensors::readback::ReadbackFrame,
+        images: &mut Assets<Image>,
+        user_textures: &mut EguiUserTextures,
+    ) -> molla::core::Result<()> {
+        if self.image_color.is_none() {
+            let (handle, id) = alloc_thumb_image(images, user_textures);
+            self.image_color = Some(handle);
+            self.tex_id_color = Some(id);
+            let (handle, id) = alloc_thumb_image(images, user_textures);
+            self.image_depth = Some(handle);
+            self.tex_id_depth = Some(id);
+            let (handle, id) = alloc_thumb_image(images, user_textures);
+            self.image_normal = Some(handle);
+            self.tex_id_normal = Some(id);
+            let (handle, id) = alloc_thumb_image(images, user_textures);
+            self.image_albedo = Some(handle);
+            self.tex_id_albedo = Some(id);
+            let (handle, id) = alloc_thumb_image(images, user_textures);
+            self.image_index = Some(handle);
+            self.tex_id_index = Some(id);
+        }
+        let depth = frame.channel::<f64>(0)?;
+        let color = frame.channel::<u32>(1)?;
+        let normal = frame.channel::<MVec3>(2)?;
+        let albedo = frame.channel::<u32>(3)?;
+        let index = frame.channel::<u32>(4)?;
         let mut lo = f32::INFINITY;
         let mut hi = 0.0_f32;
-        for &v in d {
-            let f = v as f32;
-            if f > 0.0 {
-                if f < lo {
-                    lo = f;
-                }
-                if f > hi {
-                    hi = f;
-                }
+        for value in &depth {
+            let f = *value as f32;
+            if f.is_finite() && f > 0.0 {
+                lo = lo.min(f);
+                hi = hi.max(f);
             }
         }
         if !lo.is_finite() || hi <= lo {
             lo = 0.0;
             hi = 1.0;
         }
-        state.last_depth_range = Some((lo, hi));
-        if let Some(handle) = state.image_depth.as_ref()
-            && let Some(img) = images.get_mut(handle) {
-                write_depth_into_image(img, d, lo, hi);
-            }
+        self.last_depth_range = Some((lo, hi));
+        if let Some(image) = self.image_depth.as_ref().and_then(|h| images.get_mut(h)) {
+            write_depth_into_image(image, &depth, lo, hi);
+        }
+        if let Some(image) = self.image_color.as_ref().and_then(|h| images.get_mut(h)) {
+            write_rgba_u32_into_image(image, &color);
+        }
+        if let Some(image) = self.image_normal.as_ref().and_then(|h| images.get_mut(h)) {
+            write_normal_into_image(image, &normal);
+        }
+        if let Some(image) = self.image_albedo.as_ref().and_then(|h| images.get_mut(h)) {
+            write_rgba_u32_into_image(image, &albedo);
+        }
+        if let Some(image) = self.image_index.as_ref().and_then(|h| images.get_mut(h)) {
+            write_shape_index_into_image(image, &index);
+        }
+        Ok(())
     }
-    if let (Ok(n), Some(handle)) = (snapshot_normal.as_ref(), state.image_normal.as_ref())
-        && let Some(img) = images.get_mut(handle) {
-            write_normal_into_image(img, n);
-        }
-    if let (Ok(a), Some(handle)) = (snapshot_albedo.as_ref(), state.image_albedo.as_ref())
-        && let Some(img) = images.get_mut(handle) {
-            write_rgba_u32_into_image(img, a);
-        }
-    if let (Ok(i), Some(handle)) = (snapshot_index.as_ref(), state.image_index.as_ref())
-        && let Some(img) = images.get_mut(handle) {
-            write_shape_index_into_image(img, i);
-        }
 }
 
 // Allocate a `CAMERA_IMG_W × CAMERA_IMG_H` RGBA8 Bevy image and
@@ -741,11 +714,20 @@ fn alloc_thumb_image(
     images: &mut Assets<Image>,
     user_textures: &mut EguiUserTextures,
 ) -> (Handle<Image>, egui::TextureId) {
+    alloc_sensor_image(images, user_textures, CAMERA_IMG_W, CAMERA_IMG_H)
+}
+
+fn alloc_sensor_image(
+    images: &mut Assets<Image>,
+    user_textures: &mut EguiUserTextures,
+    width: u32,
+    height: u32,
+) -> (Handle<Image>, egui::TextureId) {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let size = Extent3d {
-        width: CAMERA_IMG_W,
-        height: CAMERA_IMG_H,
+        width,
+        height,
         depth_or_array_layers: 1,
     };
     let img = Image::new_fill(
@@ -877,6 +859,12 @@ fn camera_pane(
     // visible at the top of the pane body, above the channel containers.
     ui.add_space(2.0);
     readout(ui, "Sensor", "GPU TiledCamera");
+    sensor_preview_pane(
+        ui,
+        state.runtime.as_ref().map(|r| &r.display),
+        state.error.as_deref(),
+    );
+    ui.small("Paused edits refresh the image; orbit follows simulation time.");
     readout(
         ui,
         "Resolution",
@@ -893,16 +881,33 @@ fn camera_pane(
         );
     }
     ui.separator();
+    // Editable knobs get their own id scopes so the preview and the eye
+    // readout above cannot shift their automatic ids during a drag.
     let mut fov_deg = state.fov_y.to_degrees();
     if ui
-        .add(egui::Slider::new(&mut fov_deg, 20.0..=110.0).text("FOV° (vert)"))
+        .push_id("camera_fov", |ui| {
+            ui.add(egui::Slider::new(&mut fov_deg, 20.0..=110.0).text("FOV° (vert)"))
+        })
+        .inner
         .changed()
     {
         state.fov_y = fov_deg.to_radians();
     }
     ui.separator();
+    ui.push_id("camera_optics", |ui| camera_optics(ui, state));
+    ui.separator();
+    ui.push_id("camera_post", |ui| {
+        ui.label("Post-process (H11)");
+        ui.add(egui::Slider::new(&mut state.exposure, 0.1..=4.0).text("Exposure"));
+        ui.checkbox(&mut state.tone_map_enabled, "Reinhard tone-map");
+        ui.checkbox(&mut state.gamma_enabled, "sRGB gamma");
+    });
+    ui.separator();
+    camera_pane_outputs(ui, state, pane_id, anchor, accent);
+}
 
-    // ── H10: Physical optics knobs ────────────────────────────────
+/// H10 physical optics knobs.
+fn camera_optics(ui: &mut egui::Ui, state: &mut CameraExampleState) {
     ui.checkbox(&mut state.optics_enabled, "Physical optics (H10)");
     if state.optics_enabled {
         ui.add(
@@ -921,16 +926,17 @@ fn camera_pane(
         };
         ui.small(format!("→ effective HFOV ≈ {:.1}°", hfov.to_degrees()));
     }
-    ui.separator();
+}
 
-    // ── H11: Photographic post-process knobs ──────────────────────
-    ui.label("Post-process (H11)");
-    ui.add(egui::Slider::new(&mut state.exposure, 0.1..=4.0).text("Exposure"));
-    ui.checkbox(&mut state.tone_map_enabled, "Reinhard tone-map");
-    ui.checkbox(&mut state.gamma_enabled, "sRGB gamma");
-    ui.separator();
-
-    if state.tex_id_color.is_none() {
+/// Channel containers and per-channel outputs below the camera knobs.
+fn camera_pane_outputs(
+    ui: &mut egui::Ui,
+    state: &mut CameraExampleState,
+    pane_id: egui::Id,
+    anchor: PaneAnchor,
+    accent: egui::Color32,
+) {
+    if state.last_pose.is_none() {
         ui.add_space(6.0);
         ui.small("waiting for first GPU dispatch…");
         return;
@@ -983,4 +989,3 @@ fn camera_pane(
 
 // Trivial Model for the MPM scene — just a static "ground" body
 // used by the standard renderer to keep the camera oriented.  The
-

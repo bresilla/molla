@@ -64,7 +64,7 @@ fn converted_terrain_and_triangle_hits_match_independent_planes() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(batch.stats().kernel_dispatches, 5);
+    assert_eq!(batch.stats().kernel_dispatches, 3);
     let submitted = batch.submit().unwrap();
     let cpu = collect(&engine, submitted.frame(&receipt.frame).unwrap());
     assert_eq!(cpu.channel::<i32>(3).unwrap(), [0, 0, 1, -1]);
@@ -295,7 +295,7 @@ fn mixed_primitive_moving_mesh_queries_compose_with_frames_and_match_legacy() {
         assert_eq!(a.scene_stamp, scene.stamp());
         assert_eq!(batch.stats().submissions, 0);
         assert_eq!(batch.stats().input_upload_bytes, (65 + 9) * 32);
-        assert_eq!(batch.stats().kernel_dispatches, 11);
+        assert_eq!(batch.stats().kernel_dispatches, 9);
         assert_eq!(batch.stats().output_clears, 12);
         let submitted = batch.submit().unwrap();
         assert_eq!(submitted.stats.submissions, 1);
@@ -573,9 +573,12 @@ fn four_slot_ping_pong_scene_queries_reuse_all_warmed_bindings() {
         }
         assert_eq!(pool.available_slots().unwrap(), 0);
         let stats = sensor.query_stats();
-        assert_eq!(stats.primitive_preparations, if round == 0 { 4 } else { 8 });
-        assert_eq!(stats.mesh_preparations, if round == 0 { 8 } else { 12 });
-        assert_eq!(stats.merge_preparations, if round == 0 { 8 } else { 12 });
+        assert_eq!(stats.primitive_preparations, 0);
+        assert_eq!(stats.mesh_preparations, 0);
+        assert_eq!(stats.merge_preparations, 0);
+        assert_eq!(stats.scene_builds, 1);
+        assert_eq!(stats.scene_preparations, if round == 0 { 4 } else { 8 });
+        assert_eq!(stats.refit_preparations, 2);
         drain(&engine);
         drop(frames);
         assert_eq!(pool.available_slots().unwrap(), 4);

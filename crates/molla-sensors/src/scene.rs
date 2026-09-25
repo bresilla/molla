@@ -1,9 +1,12 @@
 //! Owned, revisioned geometry/color snapshots with shared local-space mesh BVHs.
 
 use crate::readback::DeviceBuffer;
+use crate::scene_geometry::{DEFAULT_QUERY_BYTES, SceneGeometry};
+pub use crate::scene_identity::{
+    SceneIdentitySnapshot, SensorBodyHandle, SensorSceneRemap, SensorShapeHandle,
+};
 use molla_compute::Engine;
 use molla_core::{BodyId, Error, Result};
-use molla_geometry::MeshBvhGpu;
 use molla_math::{Real, Transform, Vec3};
 use molla_sim::{Model, ShapeGeometry, TriMesh};
 use molla_storage::{Buffer, BufferUsage};
@@ -16,6 +19,13 @@ use std::{
 };
 
 static NEXT_SCENE: AtomicU64 = AtomicU64::new(1);
+
+/// Owned-scene ray shape and LiDAR first/last index when any included geometry has an invalid pose.
+pub const INVALID_SCENE_INDEX: i32 = -2;
+/// Owned-scene ray distance and camera radial depth when the scene pose is invalid.
+pub const INVALID_SCENE_DISTANCE: Real = -2.0;
+/// Owned-scene camera shape ID when the scene pose is invalid; distinct from u32::MAX misses.
+pub const INVALID_SCENE_SHAPE_ID: u32 = u32::MAX - 1;
 
 /// Shape indices are scoped to this scene identity and geometry revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,10 +68,12 @@ pub struct UnsupportedShape {
 pub struct SensorScene {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) model: Model,
-    meshes: Vec<MeshBvhGpu>,
+    pub(crate) geometry: SceneGeometry,
+    max_query_bytes: u64,
     stamp: SceneStamp,
     options: SensorSceneOptions,
     unsupported: Vec<UnsupportedShape>,
+    identities: SceneIdentitySnapshot,
 }
 
 impl SensorScene {
@@ -70,21 +82,50 @@ impl SensorScene {
         source: &Model,
         options: SensorSceneOptions,
     ) -> Result<Self> {
+        Self::from_model_with_query_budget(engine, source, options, DEFAULT_QUERY_BYTES)
+    }
+
+    /// Limit packed shape/mesh GPU payload; excludes model copies, host trees and refit/ray storage.
+    pub fn from_model_with_query_budget(
+        engine: &Engine,
+        source: &Model,
+        options: SensorSceneOptions,
+        max_query_bytes: u64,
+    ) -> Result<Self> {
+        let scene_id = NEXT_SCENE
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| Error::Build("sensor scene identity exhausted".into()))?;
+        let stamp = SceneStamp {
+            scene_id,
+            geometry_revision: 1,
+        };
+        Self::compile(engine, source, options, max_query_bytes, stamp, None, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile(
+        engine: &Engine,
+        source: &Model,
+        options: SensorSceneOptions,
+        max_query_bytes: u64,
+        stamp: SceneStamp,
+        previous: Option<&SceneIdentitySnapshot>,
+        remap: Option<SensorSceneRemap<'_>>,
+    ) -> Result<Self> {
         engine.check_device()?;
         let device = engine
             .device()
             .ok_or_else(|| Error::Gpu("sensor scene requires GPU".into()))?
             .clone();
-        let queue = engine
-            .queue()
-            .ok_or_else(|| Error::Gpu("sensor scene requires queue".into()))?;
         let n = source.shape_count;
-        if (n as u64).checked_mul(32).is_none_or(|bytes| {
-            bytes > device.limits().max_storage_buffer_binding_size as u64
-                || bytes > device.limits().max_buffer_size
+        if [n, source.body_count].into_iter().any(|count| {
+            (count as u64).checked_mul(32).is_none_or(|bytes| {
+                bytes > device.limits().max_storage_buffer_binding_size as u64
+                    || bytes > device.limits().max_buffer_size
+            })
         }) {
             return Err(Error::Build(
-                "sensor scene: shape capacity exceeds GPU limits".into(),
+                "sensor scene: shape/body capacity exceeds GPU limits".into(),
             ));
         }
         if n > i32::MAX as usize
@@ -98,6 +139,7 @@ impl SensorScene {
             ));
         }
         let bodies = source.shape_body.host()?;
+        SceneGeometry::check_source_budget(source, options, max_query_bytes, &device.limits())?;
         let transforms = source.shape_transform.host()?;
         let colors = source.shape_color.host()?;
         if colors
@@ -114,6 +156,8 @@ impl SensorScene {
             }
             validate_pose(pose)?;
         }
+        let identities =
+            SceneIdentitySnapshot::build(stamp, source.body_count, bodies, previous, remap)?;
         let mut model = Model::empty();
         model.body_count = source.body_count;
         model.shape_count = n;
@@ -160,11 +204,37 @@ impl SensorScene {
                     mesh_source = Some((2, field_id));
                     None
                 }
-                ShapeGeometry::RoundCylinder { .. }
-                | ShapeGeometry::ConvexHull { .. }
-                | ShapeGeometry::Sdf { .. } => {
+                ShapeGeometry::ConvexHull { hull_id }
+                    if source
+                        .hulls
+                        .get(hull_id as usize)
+                        .is_some_and(|points| points.len() >= 4) =>
+                {
+                    mesh_source = Some((3, hull_id));
+                    None
+                }
+                ShapeGeometry::RoundCylinder {
+                    half_height,
+                    radius,
+                    border_radius,
+                } => {
+                    if !(border_radius as f32).is_finite() || border_radius < 0.0 {
+                        return Err(Error::Build(
+                            "sensor scene: invalid round cylinder border".into(),
+                        ));
+                    }
+                    let dilated = ShapeGeometry::Cylinder {
+                        half_height: half_height + border_radius,
+                        radius: radius + border_radius,
+                    };
+                    model.shape_geometry[shape] = dilated;
+                    Some((
+                        4,
+                        radial(half_height + border_radius, radius + border_radius, false)?,
+                    ))
+                }
+                ShapeGeometry::ConvexHull { .. } | ShapeGeometry::Sdf { .. } => {
                     let kind = match geometry {
-                        ShapeGeometry::RoundCylinder { .. } => "RoundCylinder",
                         ShapeGeometry::ConvexHull { .. } => "ConvexHull",
                         _ => "Sdf",
                     };
@@ -250,6 +320,38 @@ impl SensorScene {
                             }
                             mesh
                         }
+                        ShapeGeometry::ConvexHull { hull_id } => {
+                            let points = &source.hulls[hull_id as usize];
+                            if points.iter().any(|p| !p.is_finite()) {
+                                return Err(Error::Build(
+                                    "sensor scene: non-finite convex hull".into(),
+                                ));
+                            }
+                            let hull = molla_geometry::convex_hull(points);
+                            if hull.faces.is_empty() {
+                                if options.unsupported == UnsupportedGeometryPolicy::Reject {
+                                    return Err(Error::Build(format!(
+                                        "sensor scene: degenerate ConvexHull at shape {shape}"
+                                    )));
+                                }
+                                unsupported.push(UnsupportedShape {
+                                    shape_index: shape as u32,
+                                    kind: "ConvexHull",
+                                });
+                                continue;
+                            }
+                            check_budget(
+                                vertices,
+                                triangles,
+                                hull.vertices.len(),
+                                hull.faces.len(),
+                                options,
+                            )?;
+                            TriMesh {
+                                vertices: hull.vertices,
+                                indices: hull.faces,
+                            }
+                        }
                         _ => unreachable!(),
                     };
                     vertices += mesh.vertices.len();
@@ -263,60 +365,111 @@ impl SensorScene {
                 model.shape_geometry[shape] = ShapeGeometry::TriMesh { mesh_id: id };
             }
         }
-        let meshes = model
-            .meshes
-            .iter()
-            .map(|mesh| MeshBvhGpu::from_mesh(&device, queue, &mesh.vertices, &mesh.indices))
-            .collect::<Result<Vec<_>>>()?;
+        SceneGeometry::check_model_budget(&model, max_query_bytes, &device.limits())?;
         model.shape_body = uploaded(engine, bodies.to_vec())?;
         model.shape_transform = uploaded(engine, transforms.to_vec())?;
         model.shape_geom_kind = uploaded(engine, kinds)?;
         model.shape_geom_data = uploaded(engine, data)?;
         model.shape_color = uploaded(engine, colors.to_vec())?;
-        let scene_id = NEXT_SCENE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-            .map_err(|_| Error::Build("sensor scene identity exhausted".into()))?;
+        let geometry = SceneGeometry::new(&device, &model, max_query_bytes)?;
         Ok(Self {
             device,
             model,
-            meshes,
-            stamp: SceneStamp {
-                scene_id,
-                geometry_revision: 1,
-            },
+            geometry,
+            max_query_bytes,
+            stamp,
             options,
             unsupported,
+            identities,
         })
     }
 
     pub fn stamp(&self) -> SceneStamp {
         self.stamp
     }
+
+    /// Retain a cheap immutable identity snapshot alongside asynchronous results.
+    pub fn identities(&self) -> SceneIdentitySnapshot {
+        self.identities.clone()
+    }
     pub fn mesh_count(&self) -> usize {
-        self.meshes.len()
+        self.model.meshes.len()
+    }
+    /// Allocated immutable query-atlas payload, including empty buffer padding.
+    pub fn query_device_bytes(&self) -> u64 {
+        self.geometry.device_bytes
     }
     pub fn unsupported_shapes(&self) -> &[UnsupportedShape] {
         &self.unsupported
     }
-    pub(crate) fn mesh(&self, id: u32) -> Result<&MeshBvhGpu> {
-        self.meshes
-            .get(id as usize)
-            .ok_or_else(|| Error::Build("sensor scene: invalid compiled mesh id".into()))
+
+    /// Replace the per-shape albedo cameras shade with, in source-model shape
+    /// order, writing into the existing device buffer so prepared bindings stay valid.
+    pub fn set_shape_colors(&mut self, engine: &Engine, colors: &[Vec3]) -> Result<()> {
+        engine.check_device()?;
+        if !Arc::ptr_eq(engine.device().expect("checked engine"), &self.device) {
+            return Err(Error::Gpu("sensor scene: foreign engine".into()));
+        }
+        if colors.len() != self.model.shape_color.len() {
+            return Err(Error::Build(format!(
+                "sensor scene: {} shape colors for {} shapes",
+                colors.len(),
+                self.model.shape_color.len()
+            )));
+        }
+        if colors
+            .iter()
+            .any(|color| !color.is_finite() || !color.as_vec3().is_finite())
+        {
+            return Err(Error::Build("sensor scene: non-finite shape color".into()));
+        }
+        self.model.shape_color.host_mut()?.copy_from_slice(colors);
+        self.model
+            .shape_color
+            .upload(engine.queue().expect("checked engine"))?;
+        Ok(())
     }
 
-    /// Compile a replacement transactionally; old geometry survives any validation failure.
+    /// Compile a replacement with new handles; failures preserve geometry, revision and identities.
     pub fn replace_model(&mut self, engine: &Engine, source: &Model) -> Result<()> {
+        self.replace(engine, source, None)
+    }
+
+    /// Preserve explicitly mapped handles; omitted old handles are retired, None entries are new.
+    pub fn replace_model_with_remap(
+        &mut self,
+        engine: &Engine,
+        source: &Model,
+        remap: SensorSceneRemap<'_>,
+    ) -> Result<()> {
+        self.replace(engine, source, Some(remap))
+    }
+
+    fn replace(
+        &mut self,
+        engine: &Engine,
+        source: &Model,
+        remap: Option<SensorSceneRemap<'_>>,
+    ) -> Result<()> {
         self.check_engine(engine)?;
         let revision = self
             .stamp
             .geometry_revision
             .checked_add(1)
             .ok_or_else(|| Error::Build("sensor scene revision exhausted".into()))?;
-        let mut replacement = Self::from_model(engine, source, self.options)?;
-        replacement.stamp = SceneStamp {
+        let stamp = SceneStamp {
             scene_id: self.stamp.scene_id,
             geometry_revision: revision,
         };
+        let replacement = Self::compile(
+            engine,
+            source,
+            self.options,
+            self.max_query_bytes,
+            stamp,
+            Some(&self.identities),
+            remap,
+        )?;
         *self = replacement;
         Ok(())
     }
@@ -356,7 +509,7 @@ fn uploaded<T: molla_storage::BufferElement>(engine: &Engine, values: Vec<T>) ->
     Ok(DeviceBuffer::from_host(engine, values, BufferUsage::Storage)?.buffer)
 }
 
-fn check_budget(
+pub(crate) fn check_budget(
     v: usize,
     t: usize,
     more_v: usize,

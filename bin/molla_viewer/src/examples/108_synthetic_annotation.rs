@@ -42,92 +42,95 @@ fn build_synth_annotation_model() -> (mp::Model, Vec<BodyVisual>) {
     (b.build().expect("synth annotation model"), visuals)
 }
 
-// Per-frame state for [`Scene::SyntheticAnnotation`].
 #[derive(Resource, Default)]
 struct SynthAnnotationExampleState {
-    camera: Option<TiledCamera>,
-    dataset: Dataset,
+    runtime: Option<AnnotationPreview>,
+    revision: Option<u64>,
+    error: Option<String>,
     boxes: Vec<BoundingBox2D>,
-    /// Pose-set sentinel so we only `set_camera_look_at` once.
-    pose_set: bool,
 }
 
-// Render the labelled scene through a [`TiledCamera`], then convert
-// the SHAPE_INDEX image to per-instance bounding boxes via the H9
-// [`Dataset`] post-process. Bboxes are cached for the gizmo system.
+fn synth_annotation_config() -> TiledCameraConfig {
+    TiledCameraConfig {
+        width: 192,
+        height: 192,
+        fov_y_radians: 45f32.to_radians(),
+        channels: CameraChannels::SHAPE_INDEX,
+        ambient: MVec3::new(0.18, 0.18, 0.22),
+        light_dir: MVec3::new(-0.4, -0.85, -0.35).normalize(),
+        light_color: MVec3::new(1.0, 0.96, 0.88),
+        max_distance: 30.0,
+        near: 0.05,
+        optics: Default::default(),
+    }
+}
+
 fn update_synth_annotation_example(sim: Res<Sim>, mut state: ResMut<SynthAnnotationExampleState>) {
     if sim.scene != Scene::SyntheticAnnotation {
-        state.boxes.clear();
-        state.pose_set = false;
+        *state = SynthAnnotationExampleState::default();
         return;
     }
-    if state.camera.is_none() {
-        let cfg = TiledCameraConfig {
-            width: 192,
-            height: 192,
-            fov_y_radians: 45f32.to_radians(),
-            channels: CameraChannels::ALL,
-            ambient: MVec3::new(0.18, 0.18, 0.22),
-            light_dir: MVec3::new(-0.4, -0.85, -0.35).normalize(),
-            light_color: MVec3::new(1.0, 0.96, 0.88),
-            max_distance: 30.0,
-            near: 0.05,
-            optics: Default::default(),
+    if state.revision != Some(sim.sensor_clock.revision) {
+        *state = SynthAnnotationExampleState {
+            revision: Some(sim.sensor_clock.revision),
+            ..Default::default()
         };
-        state.camera = Some(TiledCamera::new(&sim.engine, cfg, 1).expect("synth tc init"));
-        // Labels match the build order: shape 0 is the plane (unlabelled),
-        // 1/2/3 are box/sphere/capsule.
-        state.dataset.label_shapes(&[1], 1);
-        state.dataset.label_shapes(&[2], 2);
-        state.dataset.label_shapes(&[3], 3);
     }
-    // Pose set in its own scope so the camera borrow is released
-    // before we touch `state.pose_set`.
-    if !state.pose_set {
-        let pose_ok = {
-            let cam = state.camera.as_mut().unwrap();
-            cam.set_camera_look_at(
-                0,
-                MVec3::new(0.0, 2.6, 5.0),
-                MVec3::new(0.3, 0.5, 0.0),
-                MVec3::Y,
-            )
-            .is_ok()
-        };
-        if pose_ok {
-            state.pose_set = true;
-        }
+    if let Some(runtime) = &mut state.runtime {
+        runtime.display.now = sim.sensor_clock.time();
     }
-    // Dispatch + download in another scope. We pull `cfg` out so the
-    // host-side `annotate` call doesn't keep the camera borrowed.
-    let (image, cfg) = {
-        let cam = state.camera.as_mut().unwrap();
-        if let Err(e) = cam.dispatch(&sim.engine, &sim.model, &sim.state_a) {
-            warn!("synth annotation camera dispatch failed: {e}");
-            return;
-        }
-        let cfg = *cam.config();
-        let image: Vec<u32> = match cam.download_shape_index(&sim.engine) {
-            Ok(s) => s.to_vec(),
-            Err(e) => {
-                warn!("synth annotation shape index download failed: {e}");
-                return;
-            }
-        };
-        (image, cfg)
-    };
-    let frame = state.dataset.annotate(
-        0,
-        &image[..(cfg.width * cfg.height) as usize],
-        cfg.width,
-        cfg.height,
-    );
-    state.boxes = frame.bboxes;
+    if state.error.is_none()
+        && let Err(error) = state.sample(&sim)
+    {
+        warn!("annotation preview failed: {error}");
+        state.error = Some(error.to_string());
+    }
 }
 
-// Draw a wireframe 3-D bounding box around each labelled body so
-// the detection is visible in the scene view. The per-class colour
-// matches the dataset class id.
+impl SynthAnnotationExampleState {
+    fn sample(&mut self, sim: &Sim) -> molla::core::Result<()> {
+        if self.runtime.is_none() {
+            self.runtime = Some(AnnotationPreview::new(sim)?);
+        }
+        if let Some(frame) = self.runtime.as_mut().expect("runtime").update(sim)? {
+            self.boxes.clear();
+            self.boxes.extend(
+                frame
+                    .channel_iter::<molla::sensors::DeviceBoundingBox>(0)?
+                    .filter_map(molla::sensors::DeviceBoundingBox::to_cpu),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn synth_annotation_pane(ui: &mut egui::Ui, state: &SynthAnnotationExampleState) {
+    readout(ui, "Pipeline", "GPU camera → instance boxes");
+    readout(ui, "Resolution", "192 × 192");
+    readout(
+        ui,
+        "Visible labelled instances",
+        &state.boxes.len().to_string(),
+    );
+    sensor_preview_pane(
+        ui,
+        state.runtime.as_ref().map(|r| &r.display),
+        state.error.as_deref(),
+    );
+    ui.small("Pixel bounds below; viewport wireframes mark detected bodies, not projected boxes.");
+    for bbox in &state.boxes {
+        ui.label(format!(
+            "Shape {} · class {} · {} pixels",
+            bbox.shape_id, bbox.class_id, bbox.pixel_count
+        ));
+        ui.small(format!(
+            "Inclusive bounds: ({}, {})–({}, {})",
+            bbox.x_min, bbox.y_min, bbox.x_max, bbox.y_max
+        ));
+    }
+}
+
+// Approximate world-space markers for bodies with a completed pixel detection.
 fn draw_synth_annotation_gizmos(
     sim: Res<Sim>,
     state: Res<SynthAnnotationExampleState>,
@@ -136,9 +139,6 @@ fn draw_synth_annotation_gizmos(
     if sim.scene != Scene::SyntheticAnnotation {
         return;
     }
-    // Recover each labelled body's world AABB from the model's shape
-    // metadata. The cube uses `Box.half_extents`, the sphere uses its
-    // radius, the capsule uses (half_h + radius) along Y.
     let shape_body = match sim.model.shape_body.host() {
         Ok(s) => s,
         Err(_) => return,
@@ -153,7 +153,9 @@ fn draw_synth_annotation_gizmos(
         if body_idx < 0 {
             continue;
         }
-        let pose = body_q[body_idx as usize];
+        let Some(pose) = body_q.get(body_idx as usize) else {
+            continue;
+        };
         let centre = Vec3::new(
             pose.position.x as f32,
             pose.position.y as f32,
@@ -178,4 +180,3 @@ fn draw_synth_annotation_gizmos(
 // ── V1-V2 Tire-model lab ───────────────────────────────────────────
 
 // Trivial model — just the floor plane. The tire-model curves are
-

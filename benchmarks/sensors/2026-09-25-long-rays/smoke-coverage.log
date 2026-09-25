@@ -1,0 +1,4 @@
+/tmp/molla-long-rays-lidar-smoke.tsv cases=120 rows=240 first=120 samples=120 violations=0
+/tmp/molla-long-rays-cloud-smoke.tsv cases=96 rows=192 first=96 samples=96 violations=0
+/tmp/molla-long-rays-camera-smoke.tsv cases=56 rows=112 first=56 samples=56 violations=0
+/tmp/molla-long-rays-physics-smoke.tsv cases=48 rows=96 first=48 samples=48 violations=0

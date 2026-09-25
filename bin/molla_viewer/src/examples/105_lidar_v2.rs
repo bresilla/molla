@@ -1,8 +1,4 @@
-// ── Stage H4-H6 LiDAR v2 viewer wiring ─────────────────────────────
-
-// A small scene of analytical primitives plus a TriMesh ground —
-// chosen so the [`Scene::LidarV2`] scan exercises both the new H4
-// `Lidar`/`ScanMetadata` path and the H1 mesh-BVH raycast.
+// LiDAR scan-grid scene with analytical primitives and a triangle ground.
 fn build_lidar_v2_model() -> (mp::Model, Vec<BodyVisual>) {
     let mut b = mp::ModelBuilder::new();
     let mut visuals = Vec::new();
@@ -45,70 +41,96 @@ fn build_lidar_v2_model() -> (mp::Model, Vec<BodyVisual>) {
 // Per-frame state for the H4-H6 LiDAR v2 viewer scene.
 #[derive(Resource, Default)]
 struct LidarV2ExampleState {
-    /// Built lazily on first entry.
-    lidar: Option<Lidar>,
+    runtime: Option<LidarPreview>,
+    revision: Option<u64>,
+    error: Option<String>,
     /// Settled hit cloud: `(world_point, t)` per real return.
     hits: Vec<(Vec3, f32)>,
     /// Scanner origin in world (for the marker gizmo).
     origin: Vec3,
 }
 
-// Drives [`Scene::LidarV2`]: lazily builds the [`Lidar`], casts a
-// scan against the procedural scene every frame, and stashes the
-// returns for [`draw_lidar_v2_gizmos`].
-fn update_lidar_v2_example(
-    sim: Res<Sim>,
-    mut state: ResMut<LidarV2ExampleState>,
-    run: Res<SimRunState>,
-) {
+// Submits a scan per new simulation frame and polls displayed hits.
+fn update_lidar_v2_example(sim: Res<Sim>, mut state: ResMut<LidarV2ExampleState>) {
     if sim.scene != Scene::LidarV2 {
-        state.hits.clear();
+        *state = LidarV2ExampleState::default();
         return;
     }
-    if run.paused {
-        return;
+    if state.revision != Some(sim.sensor_clock.revision) {
+        *state = LidarV2ExampleState {
+            revision: Some(sim.sensor_clock.revision),
+            ..Default::default()
+        };
     }
-    // 24 × 64 × 3 sub-rays ≈ 4600 rays / frame — modest, fast.
-    let n_theta: u32 = 24;
-    let n_phi: u32 = 64;
-    let subray_count: u32 = 3;
-    let budget = n_theta * n_phi * subray_count + 64;
-    if state.lidar.is_none() {
-        state.lidar = Some(Lidar::new(&sim.engine, budget).expect("LidarV2 init"));
+    if let Some(runtime) = &mut state.runtime {
+        runtime.display.now = sim.sensor_clock.time();
     }
+    if state.error.is_none()
+        && let Err(error) = state.sample(&sim)
+    {
+        warn!("LiDAR v2 preview failed: {error}");
+        state.error = Some(error.to_string());
+    }
+}
+
+fn lidar_v2_metadata() -> ScanMetadata {
     let origin = MVec3::new(0.0, 1.7, -2.2);
-    state.origin = Vec3::new(origin.x as f32, origin.y as f32, origin.z as f32);
-    let mut meta = ScanMetadata::new(origin, n_theta, n_phi);
+    let mut meta = ScanMetadata::new(origin, 24, 64);
     // Downward hemisphere band, looking at the scene.
     meta.theta_range = (
         std::f64::consts::FRAC_PI_2 + 0.2,
         std::f64::consts::PI - 0.05,
     );
     meta.phi_range = (-0.7, 0.7);
-    meta.subray_count = subray_count;
+    meta.subray_count = 3;
     meta.beam_divergence = 0.006;
     meta.max_distance = 25.0;
-    let scan =
-        match state
-            .lidar
-            .as_mut()
-            .unwrap()
-            .cast(&sim.engine, &sim.model, &sim.state_a, &meta)
-        {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("lidar v2 cast failed: {e}");
-                return;
-            }
-        };
-    state.hits.clear();
-    state.hits.reserve(scan.hits.len());
-    for h in &scan.hits {
-        if h.shape_id.is_some() {
-            let p = Vec3::new(h.point.x as f32, h.point.y as f32, h.point.z as f32);
-            state.hits.push((p, h.t as f32));
+    meta
+}
+
+impl LidarV2ExampleState {
+    fn sample(&mut self, sim: &Sim) -> molla::core::Result<()> {
+        let meta = lidar_v2_metadata();
+        meta.validate()?;
+        self.origin = meta.origin.as_vec3();
+        if self.runtime.is_none() {
+            self.runtime = Some(LidarPreview::new(
+                sim,
+                meta.checked_ray_count()?,
+                false,
+                false,
+            )?);
         }
+        let scan = molla::sensors::LidarScan {
+            sensor_id: 105,
+            pattern: molla::sensors::LidarPattern::Terrestrial(meta),
+        };
+        if let Some(frame) = self.runtime.as_mut().expect("runtime").update(sim, scan)? {
+            self.hits.clear();
+            for ((t, shape), point) in frame
+                .channel_iter::<f64>(0)?
+                .zip(frame.channel_iter::<i32>(1)?)
+                .zip(frame.channel_iter::<MVec3>(2)?)
+            {
+                if shape >= 0 {
+                    self.hits.push((point.as_vec3(), t as f32));
+                }
+            }
+        }
+        Ok(())
     }
+}
+
+fn lidar_v2_pane(ui: &mut egui::Ui, state: &LidarV2ExampleState) {
+    readout(ui, "Pattern", "24 × 64 pulses; 3 sub-rays/pulse");
+    readout(ui, "Rays / range", "4608 / 25 m");
+    readout(ui, "Beam half-angle", "0.006 rad");
+    readout(ui, "Displayed hits", &state.hits.len().to_string());
+    sensor_preview_pane(
+        ui,
+        state.runtime.as_ref().map(|r| &r.display),
+        state.error.as_deref(),
+    );
 }
 
 // Renders the [`Scene::LidarV2`] hit cloud as small spheres coloured
@@ -126,5 +148,3 @@ fn draw_lidar_v2_gizmos(sim: Res<Sim>, state: Res<LidarV2ExampleState>, mut gizm
 }
 
 // ── Stage H7 AerialLidar viewer wiring ─────────────────────────────
-
-

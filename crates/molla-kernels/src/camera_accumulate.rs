@@ -24,6 +24,11 @@ impl CameraAccumulateBindings {
 }
 
 impl CameraAccumulateKernel {
+    /// Owned aperture-sum and parameter buffer payload, excluding the borrowed color buffer.
+    pub fn storage_bytes(&self) -> u64 {
+        self.sums.size() + self.uniform.size()
+    }
+
     pub fn new(device: &wgpu::Device, color: &wgpu::Buffer, dimensions: [u32; 3]) -> Result<Self> {
         let count = dimensions
             .into_iter()

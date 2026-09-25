@@ -177,8 +177,17 @@ silently conflated. GPU computation is f32; input and transform values must be
 representable and rotation must be normalized. Threshold behavior near f32
 rounding boundaries can differ from a f64 CPU oracle.
 
-Distance testing scales the displacement before taking its norm rather than
-overflowing a squared norm. Angular interpolation computes its normalized fraction
+Transforms check same-sign addition before overflow. Large rotations use
+power-of-two scaling and validate the final coordinate before restoring its
+magnitude; translation can cancel an otherwise overflowing rotated position.
+Ordinary coordinates retain the original rotation arithmetic, and identity
+rotation preserves the input vector. An unrepresentable transformed position,
+normal or direction counts as invalid.
+
+Distance testing checks subtraction and scales the displacement before taking its
+norm rather than overflowing a squared norm. A displacement outside the finite
+f32 range exceeds every supported finite radius and counts as filtered, not as an
+invalid input point. Angular interpolation computes its normalized fraction
 before multiplication; large finite angular endpoints need not produce intermediate
 overflow. Invalid job configurations fail as a whole before encoding: reversed
 bounds, negative/nonfinite radii, nonfinite thresholds/times, mismatched ray

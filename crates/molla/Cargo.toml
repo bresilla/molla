@@ -87,6 +87,11 @@ criterion = { version = "0.5", default-features = false, features = ["plotters",
 rustfft = "6"
 
 [[bench]]
+name = "bench_sensor_physics_latency"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
 name = "step_cpu"
 harness = false
 

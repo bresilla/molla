@@ -3419,6 +3419,7 @@ dependencies = [
  "molla-math",
  "molla-sim",
  "molla-storage",
+ "pollster",
  "wgpu 29.0.4",
 ]
 
@@ -3482,6 +3483,7 @@ dependencies = [
  "mimalloc",
  "molla",
  "molla-vehicle",
+ "pollster",
  "wgpu 29.0.4",
 ]
 

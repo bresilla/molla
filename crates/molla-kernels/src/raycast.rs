@@ -116,7 +116,14 @@ impl RaycastKernel {
     pub fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::raycast"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/raycast.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "{}\n{}",
+                    include_str!("../shaders/ray_shapes.wgsl"),
+                    include_str!("../shaders/raycast.wgsl")
+                )
+                .into(),
+            ),
         });
 
         // 5 read-only storage buffers in the model bind group:

@@ -627,4 +627,56 @@ mod tests {
         ring.slots[0].completion.lock().unwrap().1 = Some(Ok(()));
         assert_eq!(ring.poll(&ticket).unwrap().unwrap().byte_len(), 0);
     }
+
+    #[test]
+    #[ignore = "needs a real GPU"]
+    fn cancelled_slots_are_reclaimed_only_by_poll_releases_after_mapping() {
+        let engine = Engine::new_gpu().unwrap();
+        let source = DeviceBuffer::from_host(
+            &engine,
+            vec![7u32, 8],
+            molla_storage::BufferUsage::StorageReadWrite,
+        )
+        .unwrap();
+        let mut ring = ReadbackRing::new(
+            &engine,
+            ReadbackConfig {
+                slots: 1,
+                bytes_per_slot: 8,
+                max_total_bytes: 8,
+            },
+        )
+        .unwrap();
+        let sources = [source.readback_source(0..2).unwrap()];
+        let ticket = ring
+            .try_enqueue(&sources, ReadbackStamp::default())
+            .unwrap()
+            .unwrap();
+        ring.cancel(&ticket).unwrap();
+        assert_eq!(ring.available_slots(), 0);
+        assert!(ring.poll(&ticket).is_err());
+        assert!(
+            ring.try_enqueue(&sources, ReadbackStamp::default())
+                .unwrap()
+                .is_none()
+        );
+        engine
+            .device()
+            .unwrap()
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(10)),
+            })
+            .unwrap();
+        assert_eq!(ring.available_slots(), 0);
+        ring.poll_releases().unwrap();
+        assert_eq!(ring.available_slots(), 1);
+        let ticket = ring
+            .try_enqueue(&sources, ReadbackStamp::default())
+            .unwrap()
+            .unwrap();
+        let frame = ring.wait(&ticket, Duration::from_secs(10)).unwrap();
+        assert_eq!(frame.channel::<u32>(0).unwrap(), vec![7, 8]);
+        assert_eq!(ring.stats().staging_allocations, 1);
+    }
 }

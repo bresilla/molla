@@ -28,11 +28,8 @@
 
 use molla_math::{Real, Vec3};
 
-/// World-space ray. Direction is **not** required to be unit-length;
-/// the trace returns `t` along whatever `direction` you pass in.
-/// Mirroring `Raycaster::cast`'s convention here keeps interop with
-/// the GPU sensor straightforward — the same `(origin, direction)`
-/// pair gives the same hit distance.
+/// World-space ray with a finite nonzero direction; trace distances are in meters.
+/// Invalid rays produce infinity in the CPU adjoint helper.
 #[derive(Copy, Clone, Debug)]
 pub struct Ray {
     pub origin: Vec3,
@@ -167,6 +164,17 @@ impl RayScene {
     }
 
     fn closest_hit(&self, params: &[Real], ray: &Ray) -> Real {
+        if !ray.origin.is_finite() || !ray.direction.is_finite() {
+            return Real::INFINITY;
+        }
+        let scale = ray.direction.abs().max_element();
+        if scale == 0.0 {
+            return Real::INFINITY;
+        }
+        let ray = &Ray {
+            origin: ray.origin,
+            direction: (ray.direction / scale).normalize(),
+        };
         let mut best = Real::INFINITY;
         for shape in &self.shapes {
             let t = match *shape {

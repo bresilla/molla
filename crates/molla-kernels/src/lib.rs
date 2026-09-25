@@ -102,6 +102,12 @@ mod robust_loss;
 #[cfg(feature = "gpu")]
 mod scan;
 #[cfg(feature = "gpu")]
+mod scene_bounds;
+#[cfg(feature = "gpu")]
+mod scene_trace;
+#[cfg(feature = "gpu")]
+mod scene_rebuild;
+#[cfg(feature = "gpu")]
 mod sensor_bindings;
 #[cfg(feature = "gpu")]
 mod soft_bvh_gpu;
@@ -268,6 +274,12 @@ pub use rnea::{InverseDynamicsKernel, inverse_dynamics_gpu};
 pub use robust_loss::{LossPair, RobustLossKernel};
 #[cfg(feature = "gpu")]
 pub use scan::ScanKernel;
+#[cfg(feature = "gpu")]
+pub use scene_bounds::{SceneBoundsBindings, SceneBoundsKernel};
+#[cfg(feature = "gpu")]
+pub use scene_trace::{SceneTraceBindings, SceneTraceKernel};
+#[cfg(feature = "gpu")]
+pub use scene_rebuild::SceneRebuildKernel;
 #[cfg(feature = "gpu")]
 pub use soft_bvh_gpu::SoftBvhGpu;
 #[cfg(feature = "gpu")]

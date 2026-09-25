@@ -223,6 +223,52 @@ fn assert_geometry(frame: &ReadbackFrame, expected: &Reference) {
 
 #[test]
 #[ignore = "needs a real GPU"]
+fn shared_and_legacy_camera_capsule_depth_ignores_hidden_cap_surfaces() {
+    let _lock = GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().unwrap();
+    let mut builder = ModelBuilder::new();
+    let body = builder.add_body(Default::default());
+    builder
+        .add_shape_capsule(body, 0.6, 0.4, Transform::IDENTITY)
+        .unwrap();
+    let mut model = builder.build().unwrap();
+    model
+        .upload_to_device(engine.device().unwrap(), engine.queue().unwrap())
+        .unwrap();
+    let mut state = model.state().unwrap();
+    state
+        .upload_to_device(engine.device().unwrap(), engine.queue().unwrap())
+        .unwrap();
+    let mut camera = TiledCamera::new(
+        &engine,
+        TiledCameraConfig {
+            width: W,
+            height: H,
+            channels: Ch::ALL,
+            ..Default::default()
+        },
+        CAMERAS as usize,
+    )
+    .unwrap();
+    camera
+        .set_camera_look_at(0, Vec3::ZERO, Vec3::Y, Vec3::Z)
+        .unwrap();
+    camera
+        .set_camera_look_at(1, Vec3::Y * 0.6, Vec3::NEG_Y, Vec3::Z)
+        .unwrap();
+    let legacy = reference(&engine, &model, &state, &camera);
+    camera.dispatch(&engine, &model, &state).unwrap();
+    let depth = camera.download_depth(&engine).unwrap();
+    for (camera_id, expected) in [1.0, 1.6].into_iter().enumerate() {
+        let pixel = camera_id * (W * H) as usize + (H / 2 * W + W / 2) as usize;
+        assert!((depth[pixel] - expected).abs() < 2e-5);
+        assert!((legacy.depth[pixel] - expected).abs() < 2e-5);
+        assert_eq!(legacy.ids[pixel], 0);
+    }
+}
+
+#[test]
+#[ignore = "needs a real GPU"]
 fn camera_masks_ping_pong_and_replaced_outputs_preserve_independent_channels() {
     let _lock = GPU.lock().unwrap_or_else(|e| e.into_inner());
     let engine = Engine::new_gpu().expect("GPU required");

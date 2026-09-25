@@ -1,0 +1,9 @@
+10:29:02
+GPU clocks set to "(gpuClkMin 2505, gpuClkMax 2505)" for GPU 00000000:01:00.0
+
+Warning: persistence mode is disabled on device 00000000:01:00.0. See the Known Issues section of the nvidia-smi(1) man page for more information. Run with [--help | -h] switch to get more information on how to enable persistence mode.
+All done.
+Memory clocks set to "(memClkMin 10501, memClkMax 10501)" for GPU 00000000:01:00.0
+
+Warning: persistence mode is disabled on device 00000000:01:00.0. See the Known Issues section of the nvidia-smi(1) man page for more information. Run with [--help | -h] switch to get more information on how to enable persistence mode.
+All done.

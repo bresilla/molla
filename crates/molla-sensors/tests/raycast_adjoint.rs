@@ -18,6 +18,51 @@ use molla_math::{Real, Vec3};
 use molla_sensors::DiffRay as Ray;
 use molla_sensors::raycast_adjoint::{RayScene, compute_grad_raycast, compute_loss_l2};
 
+#[test]
+fn metric_distances_and_gradients_do_not_depend_on_ray_magnitude() {
+    for scale in [1e-250, 0.125, 1.0, 8.0, 1e250] {
+        let mut sphere = RayScene::new();
+        sphere.add_sphere(0, 1.0);
+        let ray = Ray::new(Vec3::Z * 5.0, Vec3::NEG_Z * scale);
+        let hit = sphere.trace(&[0.0; 3], &[ray])[0];
+        assert!((hit - 4.0).abs() < 1e-12, "scale {scale}: {hit}");
+        assert!(
+            (sphere.trace(&[0.0; 3], &[Ray::new(Vec3::ZERO, Vec3::Z * scale)])[0] - 1.0).abs()
+                < 1e-12
+        );
+        let mut params = [0.0, 0.0, 0.3];
+        let gradient = compute_grad_raycast(&sphere, &mut params, &[4.0], &[ray], 1e-5);
+        assert!(gradient[0].abs() < 1e-10);
+        assert!(gradient[1].abs() < 1e-10);
+        assert!((gradient[2] - 0.3).abs() < 1e-8);
+        assert_eq!(params, [0.0, 0.0, 0.3]);
+        let mut plane_y = RayScene::new();
+        plane_y.add_plane_y(1.0);
+        let mut plane_z = RayScene::new();
+        plane_z.add_plane_z(1.0);
+        assert!(
+            (plane_y.trace(&[], &[Ray::new(Vec3::Y * 5.0, Vec3::NEG_Y * scale)])[0] - 4.0).abs()
+                < 1e-12
+        );
+        assert!((plane_z.trace(&[], &[ray])[0] - 4.0).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn adjoint_invalid_rays_keep_infinity_sentinel() {
+    let mut scene = RayScene::new();
+    scene.add_sphere(0, 1.0);
+    scene.add_plane_z(-2.0);
+    for ray in [
+        Ray::new(Vec3::Z * 5.0, Vec3::ZERO),
+        Ray::new(Vec3::Z * 5.0, Vec3::splat(f64::NAN)),
+        Ray::new(Vec3::Z * 5.0, Vec3::splat(f64::INFINITY)),
+        Ray::new(Vec3::splat(f64::NAN), Vec3::NEG_Z),
+    ] {
+        assert_eq!(scene.trace(&[0.0; 3], &[ray]), [f64::INFINITY]);
+    }
+}
+
 /// Build the camera grid used by every test in this file. Rays look
 /// down `−Z` from `z = +5`, sweeping a `±half` × `±half`-metre window
 /// centred at the origin. The window is sized so the sphere (r = 0.5)

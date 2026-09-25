@@ -38,15 +38,48 @@ accelerations and angular velocities into the sensor frame before
 returning them, so the policy sees the same numbers the embedded
 controller would see on the real robot.
 
+Construction rejects missing body indices, non-finite positions, positions that
+overflow f32, and non-finite or non-unit quaternions before allocating mount
+buffers. Quaternion squared length must differ from one by at most `1e-6`;
+invalid rotations are not silently normalized.
+
+## Fixed-array storage budgets
+
+`ImuSensor`, `ContactSensor` and `FrameTransformSensor` each default to a
+1 GiB combined retained host/device array-payload cap. `new_with_limits` accepts
+`SensorArrayLimits { max_storage_bytes }` as its last argument; existing `new`
+calls retain their signatures. All constructors validate the combined budget,
+individual buffer/binding limits and dispatch dimensions before array allocation.
+
+Pure `SensorArrayStorage` estimates are available before creating a GPU engine:
+
+- `for_imu(mounts, bodies)` includes mount body indices/local poses, both output
+  channels and previous-velocity history for **every model body**, not only mounts.
+- `for_contact(bodies)` includes four per-body output arrays. Zero bodies have
+  zero payload and can use a zero-byte cap.
+- `for_frames(targets, has_reference)` includes target body indices/local poses
+  and all four outputs, with one additional slot when a reference is present.
+
+Each sensor's `storage_usage()` reports host, device, total and largest-device-buffer
+payload bytes. These estimates exclude caller-owned model/state/contact inputs,
+uniforms/bindings, pipeline metadata, transient packing, driver/upload staging,
+readback/host collection and leased output pools. They are not process peak-memory
+caps. Inputs still must satisfy the device limits when bound; frame transforms
+check the full body-pose buffer even though they do not own or budget its storage.
+Empty IMU mount and frame target lists remain invalid.
+
+Source: `crates/molla-sensors/src/sensor_storage.rs`. Host tests exercise extreme
+counts without allocating those arrays; GPU tests compare estimates with retained
+host lengths and actual device-buffer sizes, including empty contacts and optional
+frame references. Run `make test-sensors` for both lanes.
+
 ## Specific force semantics
 
 The accelerometer outputs **specific force**, not coordinate
 acceleration. At rest on the ground, the IMU reads `+g` along
-whichever local axis points upward through the sensor (gravity is
-the reaction force the table applies to keep the chip stationary,
-not the literal acceleration of the chip in the world frame). A
-body in free fall reads ≈ 0. This matches every real-world IMU
-datasheet and Newton's convention.
+whichever local axis points upward through the sensor: the kernel subtracts
+gravitational acceleration from coordinate acceleration. At rest, coordinate
+acceleration is zero; in free fall it equals gravity, so the IMU reads ≈ 0.
 
 ## Acceleration via finite difference
 
@@ -167,8 +200,13 @@ staging and readback allocations are outside this counter.
 `ImuKernel::prepare` / `encode_prepared` support lower-level command composition.
 The caller owns history sequencing, range/index validity and output authority.
 Submit before updating a reused parameter buffer; different `dt` values in one
-pending batch need separate prepared bindings. Public sensor-level producer
-batching and direct dispatch into leased output slots remain pending.
+pending batch need separate prepared bindings. The public `encode` path manages
+leased output bindings and commits history only on successful batch submission.
+
+Viewer example 06 uses this path with bounded asynchronous collection, simulation
+timestamps and reset invalidation. It does not sample repeated paused states;
+after backpressure its finite-difference interval spans the time since the last
+submitted snapshot. See [viewer integration and acceptance status](viewer.md).
 
 ## Cross-references
 

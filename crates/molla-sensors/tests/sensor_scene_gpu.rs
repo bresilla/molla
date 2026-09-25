@@ -6,12 +6,258 @@ use molla_math::{Quat, Transform, Vec3};
 use molla_sensors::readback::{ReadbackConfig, ReadbackRing, ReadbackStamp};
 use molla_sensors::{
     LidarBatch, LidarPattern, LidarScan, Raycaster, ScanMetadata, SensorScene, SensorSceneOptions,
-    UnsupportedGeometryPolicy,
+    SensorSceneRemap, UnsupportedGeometryPolicy,
 };
 use molla_sim::{BodyParams, Control, Heightfield, Model, ModelBuilder, State, TriMesh};
 use std::{sync::Mutex, time::Duration};
 
 static GPU: Mutex<()> = Mutex::new(());
+
+#[test]
+#[ignore = "requires GPU"]
+fn stable_handles_follow_dense_remaps_and_retained_readback_identity() {
+    let _guard = GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().unwrap();
+    let build = |reordered: bool, mesh_height: f64| {
+        let mut builder = ModelBuilder::new();
+        let positions = if reordered { [4.0, -4.0] } else { [-4.0, 4.0] };
+        for x in positions {
+            builder.add_body(BodyParams::new().with_position(Vec3::X * x));
+        }
+        let mesh = builder.add_mesh(quad(mesh_height));
+        let mesh_body = BodyId(if reordered { 1 } else { 0 });
+        let sphere_body = BodyId(if reordered { 0 } else { 1 });
+        if !reordered {
+            builder
+                .add_shape_trimesh(mesh_body, mesh, Transform::IDENTITY)
+                .unwrap();
+        }
+        builder
+            .add_shape_sphere(sphere_body, 0.5, Transform::IDENTITY)
+            .unwrap();
+        builder
+            .add_shape_box(BodyId::NONE, Vec3::splat(0.5), Transform::IDENTITY)
+            .unwrap();
+        if reordered {
+            builder
+                .add_shape_trimesh(mesh_body, mesh, Transform::IDENTITY)
+                .unwrap();
+        }
+        upload(&engine, builder)
+    };
+    let (model, state) = build(false, 0.0);
+    let mut scene = SensorScene::from_model(&engine, &model, Default::default()).unwrap();
+    let original = scene.identities();
+    let original_stamp = original.stamp();
+    let bodies = [0, 1].map(|i| {
+        original
+            .body_handle(original_stamp, BodyId(i))
+            .unwrap()
+            .unwrap()
+    });
+    let shapes = [0, 1, 2].map(|i| original.shape_handle(original_stamp, i).unwrap());
+    let origins = [-4.0, 4.0, 0.0].map(|x| Vec3::new(x, 5.0, 0.0));
+    let mut rays = Raycaster::new(&engine, 3).unwrap();
+    let mut ring = ReadbackRing::new(
+        &engine,
+        ReadbackConfig {
+            slots: 1,
+            bytes_per_slot: 16,
+            max_total_bytes: 16,
+        },
+    )
+    .unwrap();
+    let view = rays
+        .dispatch_scene(&engine, &scene, &state, &origins, &[Vec3::NEG_Y; 3], 10.0)
+        .unwrap();
+    let result_stamp = view.scene_stamp.unwrap();
+    let ticket = ring
+        .try_enqueue(
+            &[view.shape.readback_source(0..3).unwrap()],
+            ReadbackStamp {
+                scene_revision: result_stamp.geometry_revision,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+    let (reordered, reordered_state) = build(true, 1.0);
+    scene
+        .replace_model_with_remap(
+            &engine,
+            &reordered,
+            SensorSceneRemap {
+                bodies: &[Some(bodies[1]), Some(bodies[0])],
+                shapes: &[Some(shapes[1]), Some(shapes[2]), Some(shapes[0])],
+            },
+        )
+        .unwrap();
+    let current = scene.identities();
+    assert_eq!(current.body_index(bodies[0]).unwrap(), BodyId(1));
+    assert_eq!(current.body_index(bodies[1]).unwrap(), BodyId(0));
+    assert_eq!(scene.mesh_count(), 1);
+    let hits = rays
+        .cast_scene(
+            &engine,
+            &scene,
+            &reordered_state,
+            &origins,
+            &[Vec3::NEG_Y; 3],
+            10.0,
+        )
+        .unwrap();
+    for (i, hit) in hits.iter().enumerate() {
+        let index = hit.shape_id.unwrap();
+        assert_eq!(index, [2, 0, 1][i]);
+        assert_eq!(
+            current.shape_handle(current.stamp(), index).unwrap(),
+            shapes[i]
+        );
+        assert_eq!(
+            current.shape_body(current.stamp(), index).unwrap(),
+            if i == 2 { None } else { Some(bodies[i]) }
+        );
+        assert!((hit.t - [4.0, 4.5, 4.5][i]).abs() < 1e-5);
+    }
+    assert!(current.shape_handle(result_stamp, 0).is_err());
+    assert!(scene.resolve_body(result_stamp, 0).is_err());
+
+    let frame = ring.wait(&ticket, Duration::from_secs(10)).unwrap();
+    assert_eq!(frame.channel::<i32>(0).unwrap(), [0, 1, 2]);
+    for (i, &index) in frame.channel::<i32>(0).unwrap().iter().enumerate() {
+        assert_eq!(
+            original.shape_handle(result_stamp, index as u32).unwrap(),
+            shapes[i]
+        );
+    }
+    scene
+        .replace_model_with_remap(
+            &engine,
+            &reordered,
+            SensorSceneRemap {
+                bodies: &[Some(bodies[1]), None],
+                shapes: &[Some(shapes[1]), Some(shapes[2]), None],
+            },
+        )
+        .unwrap();
+    let replaced = scene.identities();
+    assert!(replaced.body_index(bodies[0]).is_err());
+    assert!(replaced.shape_index(shapes[0]).is_err());
+    let new_shape = replaced.shape_handle(replaced.stamp(), 2).unwrap();
+    assert_ne!(new_shape, shapes[0]);
+    assert!(current.shape_index(new_shape).is_err());
+    assert_eq!(replaced.shape_index(shapes[1]).unwrap(), 0);
+    let hits = rays
+        .cast_scene(
+            &engine,
+            &scene,
+            &reordered_state,
+            &origins,
+            &[Vec3::NEG_Y; 3],
+            10.0,
+        )
+        .unwrap();
+    assert_eq!(
+        replaced
+            .shape_handle(replaced.stamp(), hits[0].shape_id.unwrap())
+            .unwrap(),
+        new_shape
+    );
+    assert!(
+        scene
+            .replace_model_with_remap(
+                &engine,
+                &reordered,
+                SensorSceneRemap {
+                    bodies: &[Some(bodies[1]), Some(bodies[0])],
+                    shapes: &[Some(shapes[1]), Some(shapes[2]), Some(shapes[0])],
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(scene.stamp(), replaced.stamp());
+    drop((scene, rays, model, state, reordered, reordered_state));
+    assert_eq!(original.body_index(bodies[0]).unwrap(), BodyId(0));
+    assert_eq!(
+        original.shape_body(original_stamp, 0).unwrap(),
+        Some(bodies[0])
+    );
+    assert_eq!(
+        current.shape_body(current.stamp(), 2).unwrap(),
+        Some(bodies[0])
+    );
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn handle_remap_and_geometry_failures_leave_the_scene_transaction_unchanged() {
+    let _guard = GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().unwrap();
+    let (mut model, state) = upload(&engine, mesh_builder(0.0));
+    let mut scene = SensorScene::from_model(&engine, &model, Default::default()).unwrap();
+    let other = SensorScene::from_model(&engine, &model, Default::default()).unwrap();
+    let old = scene.identities();
+    let handle = old.shape_handle(old.stamp(), 0).unwrap();
+    let foreign = other.identities().shape_handle(other.stamp(), 0).unwrap();
+    for shapes in [&[][..], &[Some(foreign)][..]] {
+        assert!(
+            scene
+                .replace_model_with_remap(
+                    &engine,
+                    &model,
+                    SensorSceneRemap {
+                        bodies: &[],
+                        shapes
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(scene.stamp(), old.stamp());
+        assert_eq!(scene.identities().shape_index(handle).unwrap(), 0);
+    }
+    let vertex = model.meshes[0].indices[0][0];
+    model.meshes[0].indices[0][0] = u32::MAX;
+    assert!(
+        scene
+            .replace_model_with_remap(
+                &engine,
+                &model,
+                SensorSceneRemap {
+                    bodies: &[],
+                    shapes: &[Some(handle)],
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(scene.stamp(), old.stamp());
+    assert_eq!(scene.identities().shape_index(handle).unwrap(), 0);
+    let mut rays = Raycaster::new(&engine, 1).unwrap();
+    let hit = rays
+        .cast_scene(
+            &engine,
+            &scene,
+            &state,
+            &[Vec3::Y * 5.0],
+            &[Vec3::NEG_Y],
+            10.0,
+        )
+        .unwrap();
+    assert_eq!(hit[0].shape_id, Some(0));
+    assert!((hit[0].t - 5.0).abs() < 1e-5);
+    model.meshes[0].indices[0][0] = vertex;
+    scene.replace_model(&engine, &model).unwrap();
+    assert!(scene.identities().shape_index(handle).is_err());
+    assert_eq!(old.shape_index(handle).unwrap(), 0);
+    assert_ne!(
+        scene.identities().shape_handle(scene.stamp(), 0).unwrap(),
+        handle
+    );
+    let saved = model.body_count;
+    model.body_count = usize::MAX;
+    assert!(scene.replace_model(&engine, &model).is_err());
+    model.body_count = saved;
+}
 
 fn quad(y: f64) -> TriMesh {
     TriMesh {
@@ -481,9 +727,63 @@ fn terrain_triangles_capabilities_and_lidar_scene_stamps() {
         .unwrap();
     assert_eq!(result.hits.scene_stamp, Some(scene.stamp()));
     let mut builder = ModelBuilder::new();
-    let hull = builder.add_hull(vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z]);
+    let cube: Vec<Vec3> = (0..8)
+        .map(|i| {
+            Vec3::new(
+                if i & 1 == 0 { -0.5 } else { 0.5 },
+                if i & 2 == 0 { -0.5 } else { 0.5 },
+                if i & 4 == 0 { -0.5 } else { 0.5 },
+            )
+        })
+        .collect();
+    let hull = builder.add_hull(cube);
     builder
-        .add_shape_convex_hull(BodyId::NONE, hull, Transform::IDENTITY)
+        .add_shape_convex_hull(
+            BodyId::NONE,
+            hull,
+            Transform::new(Vec3::new(0.0, 2.0, 0.0), Quat::IDENTITY),
+        )
+        .unwrap();
+    builder
+        .add_shape_round_cylinder(
+            BodyId::NONE,
+            0.5,
+            0.3,
+            0.1,
+            Transform::new(Vec3::new(6.0, 0.0, 0.0), Quat::IDENTITY),
+        )
+        .unwrap();
+    let (hulls, hull_state) = upload(&engine, builder);
+    let scene = SensorScene::from_model(&engine, &hulls, Default::default()).unwrap();
+    assert_eq!(scene.mesh_count(), 1);
+    assert!(scene.unsupported_shapes().is_empty());
+    let hits = Raycaster::new(&engine, 4)
+        .unwrap()
+        .cast_scene(
+            &engine,
+            &scene,
+            &hull_state,
+            &[
+                Vec3::new(0.1, 8.0, 0.1),
+                Vec3::new(3.0, 8.0, 0.0),
+                Vec3::new(6.0, 8.0, 0.0),
+                Vec3::new(6.35, 8.0, 0.0),
+            ],
+            &[Vec3::NEG_Y; 4],
+            20.0,
+        )
+        .unwrap();
+    assert_eq!(hits[0].shape_id, Some(0));
+    assert!((hits[0].t - 5.5).abs() < 1e-4, "{}", hits[0].t);
+    assert!((hits[0].normal - Vec3::Y).length() < 1e-4);
+    assert_eq!(hits[1].shape_id, None);
+    assert_eq!(hits[2].shape_id, Some(1));
+    assert!((hits[2].t - 7.4).abs() < 1e-4, "{}", hits[2].t);
+    assert_eq!(hits[3].shape_id, Some(1), "dilated radius covers the rim");
+    let mut builder = ModelBuilder::new();
+    let flat = builder.add_hull(vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::X + Vec3::Y]);
+    builder
+        .add_shape_convex_hull(BodyId::NONE, flat, Transform::IDENTITY)
         .unwrap();
     let (unsupported, _) = upload(&engine, builder);
     assert!(SensorScene::from_model(&engine, &unsupported, Default::default()).is_err());
@@ -496,7 +796,74 @@ fn terrain_triangles_capabilities_and_lidar_scene_stamps() {
         },
     )
     .unwrap();
+    assert_eq!(partial.mesh_count(), 0);
     assert_eq!(partial.unsupported_shapes().len(), 1);
     assert_eq!(partial.unsupported_shapes()[0].kind, "ConvexHull");
     assert_eq!(partial.unsupported_shapes()[0].shape_index, 0);
+}
+
+/// A 10 km strip mesh with one collinear triangle: grazing rays match the f64
+/// triangle oracle within the f32 distance budget, the degenerate triangle
+/// never reports a hit, and a ray parallel to the strip misses.
+#[test]
+#[ignore = "requires GPU"]
+fn grazing_long_strip_matches_oracle_and_degenerate_triangle_is_inert() {
+    let _guard = GPU.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().expect("GPU required");
+    let strip = TriMesh {
+        vertices: vec![
+            Vec3::new(0.0, 0.0, -1.0),
+            Vec3::new(10_000.0, 0.0, -1.0),
+            Vec3::new(10_000.0, 0.0, 1.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(20.0, 0.5, 0.0),
+            Vec3::new(30.0, 0.5, 0.0),
+            Vec3::new(40.0, 0.5, 0.0),
+        ],
+        indices: vec![[0, 1, 2], [0, 2, 3], [4, 5, 6]],
+    };
+    let mut builder = ModelBuilder::new();
+    let mesh = builder.add_mesh(strip.clone());
+    builder
+        .add_shape_trimesh(BodyId::NONE, mesh, Transform::IDENTITY)
+        .unwrap();
+    let (model, state) = upload(&engine, builder);
+    let scene = SensorScene::from_model(&engine, &model, Default::default()).unwrap();
+    let origin = Vec3::new(0.0, 1.0, 0.0);
+    let targets = [100.0, 1_000.0, 9_000.0];
+    let mut origins = vec![origin; 5];
+    origins[4] = Vec3::new(10.0, 0.5, 0.0);
+    let mut directions: Vec<Vec3> = targets
+        .iter()
+        .map(|x| Vec3::new(*x, -1.0, 0.0).normalize())
+        .collect();
+    directions.push(Vec3::X);
+    directions.push(Vec3::X);
+    let hits = Raycaster::new(&engine, 5)
+        .unwrap()
+        .cast_scene(&engine, &scene, &state, &origins, &directions, 20_000.0)
+        .unwrap();
+    for (i, x) in targets.iter().enumerate() {
+        let expected = [[0usize, 1, 2], [0, 2, 3]]
+            .into_iter()
+            .filter_map(|tri| oracle(origin, directions[i], tri.map(|v| strip.vertices[v])))
+            .fold(f64::INFINITY, f64::min);
+        assert!(expected.is_finite());
+        assert_eq!(hits[i].shape_id, Some(0), "target {x}: {:?}", hits[i]);
+        let magnitude = expected as f32;
+        let budget = 2.0 * f64::from(magnitude.next_up() - magnitude) + 2e-4;
+        assert!(
+            (hits[i].t - expected).abs() < budget,
+            "target {x}: got {} expected {expected} budget {budget}",
+            hits[i].t
+        );
+        assert!(hits[i].point.y.abs() < budget, "{:?}", hits[i].point);
+        assert!(
+            (hits[i].normal.y.abs() - 1.0).abs() < 2e-6,
+            "{:?}",
+            hits[i].normal
+        );
+    }
+    assert_eq!(hits[3].shape_id, None, "{:?}", hits[3]);
+    assert_eq!(hits[4].shape_id, None, "{:?}", hits[4]);
 }

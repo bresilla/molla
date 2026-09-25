@@ -1,23 +1,24 @@
 //! GPU closest-hit queries over analytical primitives and rigid mesh instances.
 //!
-//! Mesh candidates are merged on device. CPU inputs are normalized and uploaded
-//! once per batch; collection is optional. Local mesh BVHs are reused across poses.
-//! Owned scenes share immutable geometry; legacy model queries compare mesh content.
+//! Owned scenes traverse refitted instance bounds and shared mesh BVHs in one pass.
+//! CPU ray inputs upload once; collection is optional. Legacy model queries retain
+//! linear primitives, per-instance mesh reduction and exact mesh-content checks.
 
+use crate::SceneRebuildPolicy;
 use crate::device_results::{
     EncodedSensorFrame, SensorChannelSpec, SensorCommandBatch, SensorFramePool,
     SensorFramePoolConfig,
 };
-use crate::dispatch::BindingsCache;
 use crate::readback::{DeviceBuffer, ReadbackConfig, ReadbackRing, ReadbackStamp, ReadbackStats};
 use crate::scene::{SceneStamp, SensorScene};
+use crate::scene_trace::SceneTrace;
 use molla_compute::Engine;
 use molla_core::{BodyId, Error, Result};
 use molla_geometry::{MeshBvhGpu, MeshBvhRaycastBindings, MeshBvhRaycastKernel};
 use molla_kernels::{RaycastBindings, RaycastKernel, RaycastMergeBindings, RaycastMergeKernel};
 use molla_math::{Real, Transform, Vec3};
 use molla_sim::{Model, ShapeGeometry, State};
-use molla_storage::{Buffer, BufferUsage};
+use molla_storage::{Buffer, BufferElement, BufferUsage};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 /// Single closest-hit result.
@@ -38,6 +39,7 @@ pub struct RayHit {
 /// Borrowed device channels. Only `0..ray_count` contains this batch's results.
 /// Submit consumers or enqueue readback on the same engine before the next dispatch.
 /// Misses have distance -1, shape -1, point zero, normal +Y.
+/// Invalid owned scenes have distance/shape -2 and zero point/normal on every active ray.
 pub struct RayDeviceHits<'a> {
     pub ray_count: usize,
     pub scene_stamp: Option<SceneStamp>,
@@ -64,6 +66,241 @@ pub struct RayQueryStats {
     pub primitive_preparations: u64,
     pub mesh_preparations: u64,
     pub merge_preparations: u64,
+    pub scene_builds: u64,
+    pub scene_preparations: u64,
+    pub refit_preparations: u64,
+    /// Unconditional reorderings encoded, including work in subsequently cancelled batches.
+    pub scene_rebuilds: u64,
+    /// Encoded quality checks; actual conditional rebuild counts remain on the GPU.
+    pub scene_quality_checks: u64,
+}
+
+/// Combined host/device array-payload budget, excluding geometry, pipelines and output pools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RaycasterLimits {
+    pub max_ray_storage_bytes: u64,
+}
+
+impl Default for RaycasterLimits {
+    fn default() -> Self {
+        Self {
+            max_ray_storage_bytes: 1 << 30,
+        }
+    }
+}
+
+/// Fixed ray/input/hit/scratch array payloads and the static body-pose fallback.
+/// Excludes allocator overhead, temporary upload staging, query bindings and mesh caches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RayStorageUsage {
+    pub capacity: u32,
+    pub host_bytes: u64,
+    pub device_bytes: u64,
+    pub total_bytes: u64,
+}
+
+impl RayStorageUsage {
+    /// Compute storage without allocating; zero requested capacity retains one ray slot.
+    pub fn for_capacity(max_rays: u32) -> Result<Self> {
+        let capacity = max_rays.max(1);
+        let host_stride = 5 * size_of::<Vec3>()
+            + 2 * size_of::<Real>()
+            + 2 * size_of::<i32>()
+            + 2 * size_of::<<Vec3 as BufferElement>::Gpu>();
+        let device_stride = 5 * size_of::<<Vec3 as BufferElement>::Gpu>()
+            + 2 * size_of::<<Real as BufferElement>::Gpu>()
+            + 2 * size_of::<i32>();
+        let bytes = |stride: usize, extra: usize| {
+            (capacity as u64)
+                .checked_mul(stride as u64)
+                .and_then(|n| n.checked_add(extra as u64))
+                .ok_or_else(|| Error::Solver("raycaster: storage size overflow".into()))
+        };
+        let host_bytes = bytes(host_stride, size_of::<Transform>())?;
+        let device_bytes = bytes(
+            device_stride,
+            size_of::<<Transform as BufferElement>::Gpu>(),
+        )?;
+        let total_bytes = host_bytes
+            .checked_add(device_bytes)
+            .ok_or_else(|| Error::Solver("raycaster: storage size overflow".into()))?;
+        Ok(Self {
+            capacity,
+            host_bytes,
+            device_bytes,
+            total_bytes,
+        })
+    }
+}
+
+pub(crate) fn checked_storage(
+    max_rays: u32,
+    limits: RaycasterLimits,
+    device: &wgpu::Limits,
+) -> Result<RayStorageUsage> {
+    let usage = RayStorageUsage::for_capacity(max_rays)?;
+    let largest = (usage.capacity as u64 * 16).max(32);
+    if largest > device.max_storage_buffer_binding_size
+        || largest > device.max_buffer_size
+        || usage.capacity.div_ceil(64) > device.max_compute_workgroups_per_dimension
+    {
+        return Err(Error::Solver(
+            "raycaster: ray capacity exceeds GPU limits".into(),
+        ));
+    }
+    if usage.total_bytes > limits.max_ray_storage_bytes {
+        return Err(Error::Solver(format!(
+            "raycaster: ray storage requires {} bytes, budget is {}",
+            usage.total_bytes, limits.max_ray_storage_bytes
+        )));
+    }
+    Ok(usage)
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+
+    #[test]
+    fn storage_estimate_counts_all_array_payloads_without_allocating_them() {
+        for capacity in [0, 1, 64, 1_000_000, u32::MAX] {
+            let usage = RayStorageUsage::for_capacity(capacity).unwrap();
+            let n = capacity.max(1) as u64;
+            assert_eq!(usage.capacity, capacity.max(1));
+            assert_eq!(usage.device_bytes, 96 * n + 32);
+            assert_eq!(
+                usage.host_bytes,
+                n * (5 * size_of::<Vec3>() + 2 * size_of::<Real>() + 2 * size_of::<i32>() + 32)
+                    as u64
+                    + size_of::<Transform>() as u64
+            );
+            assert_eq!(usage.total_bytes, usage.host_bytes + usage.device_bytes);
+        }
+        assert_eq!(
+            RayStorageUsage::for_capacity(0).unwrap(),
+            RayStorageUsage::for_capacity(1).unwrap()
+        );
+    }
+
+    #[test]
+    fn aggregate_budget_rejects_per_buffer_legal_workloads_before_allocation() {
+        let device = wgpu::Limits::default();
+        for rays in [1_000, 10_000, 100_000, 1_000_000, 4 * 1280 * 720] {
+            assert!(checked_storage(rays, RaycasterLimits::default(), &device).is_ok());
+        }
+        let usage = RayStorageUsage::for_capacity(64).unwrap();
+        assert!(
+            checked_storage(
+                64,
+                RaycasterLimits {
+                    max_ray_storage_bytes: usage.total_bytes - 1
+                },
+                &device
+            )
+            .is_err()
+        );
+        assert_eq!(
+            checked_storage(
+                64,
+                RaycasterLimits {
+                    max_ray_storage_bytes: usage.total_bytes
+                },
+                &device
+            )
+            .unwrap(),
+            usage
+        );
+        let device = wgpu::Limits {
+            max_storage_buffer_binding_size: u64::from(u32::MAX),
+            max_buffer_size: u64::MAX,
+            ..device
+        };
+        assert!(checked_storage(4_000_000, RaycasterLimits::default(), &device).is_err());
+        assert!(
+            checked_storage(
+                4_000_000,
+                RaycasterLimits {
+                    max_ray_storage_bytes: u64::MAX
+                },
+                &device
+            )
+            .is_ok()
+        );
+        assert!(
+            checked_storage(
+                u32::MAX,
+                RaycasterLimits {
+                    max_ray_storage_bytes: u64::MAX
+                },
+                &device
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn device_binding_fallback_and_dispatch_limits_are_independent_of_byte_budget() {
+        let limits = RaycasterLimits {
+            max_ray_storage_bytes: u64::MAX,
+        };
+        let mut device = wgpu::Limits {
+            max_compute_workgroups_per_dimension: 1,
+            ..Default::default()
+        };
+        assert!(checked_storage(64, limits, &device).is_ok());
+        assert!(checked_storage(65, limits, &device).is_err());
+        device.max_storage_buffer_binding_size = 31;
+        assert!(checked_storage(1, limits, &device).is_err());
+        device.max_storage_buffer_binding_size = 32;
+        device.max_buffer_size = 31;
+        assert!(checked_storage(1, limits, &device).is_err());
+        device.max_buffer_size = 32;
+        assert!(checked_storage(1, limits, &device).is_ok());
+    }
+
+    #[test]
+    #[ignore = "requires GPU"]
+    fn planned_payload_matches_constructed_host_and_device_arrays() {
+        let engine = Engine::new_gpu().unwrap();
+        let usage = RayStorageUsage::for_capacity(3).unwrap();
+        let sensor = Raycaster::new_with_limits(
+            &engine,
+            3,
+            RaycasterLimits {
+                max_ray_storage_bytes: usage.total_bytes,
+            },
+        )
+        .unwrap();
+        let buffers = [
+            sensor.static_body_q.device_buffer().unwrap(),
+            sensor.ray_origin.device_buffer().unwrap(),
+            sensor.ray_direction.device_buffer().unwrap(),
+            sensor.hit_t.device_buffer().unwrap(),
+            sensor.hit_shape.device_buffer().unwrap(),
+            sensor.hit_point.device_buffer().unwrap(),
+            sensor.hit_normal.device_buffer().unwrap(),
+            sensor.mesh_hit_t.device_buffer().unwrap(),
+            sensor.mesh_hit_tri.device_buffer().unwrap(),
+            sensor.mesh_hit_normal.device_buffer().unwrap(),
+        ];
+        assert_eq!(
+            buffers.iter().map(|b| b.size()).sum::<u64>(),
+            usage.device_bytes
+        );
+        let host_bytes = size_of_val(sensor.static_body_q.host().unwrap())
+            + size_of_val(sensor.ray_origin.host().unwrap())
+            + size_of_val(sensor.ray_direction.host().unwrap())
+            + size_of_val(sensor.hit_t.host().unwrap())
+            + size_of_val(sensor.hit_shape.host().unwrap())
+            + size_of_val(sensor.hit_point.host().unwrap())
+            + size_of_val(sensor.hit_normal.host().unwrap())
+            + size_of_val(sensor.mesh_hit_t.host().unwrap())
+            + size_of_val(sensor.mesh_hit_tri.host().unwrap())
+            + size_of_val(sensor.mesh_hit_normal.host().unwrap())
+            + size_of_val(sensor.upload_origins.as_slice())
+            + size_of_val(sensor.upload_directions.as_slice());
+        assert_eq!(host_bytes as u64, usage.host_bytes);
+    }
 }
 
 /// Reusable fixed-capacity ray sensor with device-side closest-hit reduction.
@@ -82,10 +319,8 @@ pub struct Raycaster {
     mesh_kernel: MeshBvhRaycastKernel,
     mesh_cache: HashMap<u32, CachedMesh>,
     primitive_bindings: Vec<RaycastBindings>,
-    direct_primitives: BindingsCache<RaycastBindings>,
-    direct_initial: BindingsCache<RaycastMergeBindings>,
-    direct_meshes: HashMap<u32, BindingsCache<DirectMeshBindings>>,
-    direct_scene: Option<SceneStamp>,
+    scene_trace: Option<SceneTrace>,
+    rebuild_policy: SceneRebuildPolicy,
     upload_origins: Vec<[f32; 4]>,
     upload_directions: Vec<[f32; 4]>,
     mesh_bindings: HashMap<u32, CachedQuery>,
@@ -111,14 +346,18 @@ struct CachedQuery {
     checked_epoch: u64,
 }
 
-struct DirectMeshBindings {
-    query: MeshBvhRaycastBindings,
-    merge: RaycastMergeBindings,
-}
-
 impl Raycaster {
     /// Allocate reusable input, output and scratch storage for up to `max_rays`.
     pub fn new(engine: &Engine, max_rays: u32) -> Result<Self> {
+        Self::new_with_limits(engine, max_rays, RaycasterLimits::default())
+    }
+
+    /// Validate aggregate storage and device limits before allocating ray arrays or GPU resources.
+    pub fn new_with_limits(
+        engine: &Engine,
+        max_rays: u32,
+        limits: RaycasterLimits,
+    ) -> Result<Self> {
         engine.check_device()?;
         let device = engine
             .device()
@@ -128,37 +367,56 @@ impl Raycaster {
             .queue()
             .ok_or_else(|| Error::Gpu("raycaster: engine has no GPU queue".into()))?
             .clone();
-        let cap = max_rays.max(1) as usize;
-        let limits = device.limits();
-        let bytes = cap as u64 * 16;
-        if bytes > limits.max_storage_buffer_binding_size as u64
-            || bytes > limits.max_buffer_size
-            || max_rays.max(1).div_ceil(64) > limits.max_compute_workgroups_per_dimension
-        {
-            return Err(Error::Solver(
-                "raycaster: ray capacity exceeds GPU limits".into(),
-            ));
-        }
-        let mut static_body_q = Buffer::from_vec(vec![Transform::IDENTITY], BufferUsage::Storage);
+        let usage = checked_storage(max_rays, limits, &device.limits())?;
+        let cap = usage.capacity as usize;
+        let mut static_body_q = Buffer::from_vec(
+            crate::host_arrays::filled(1, Transform::IDENTITY)?,
+            BufferUsage::Storage,
+        );
         static_body_q.ensure_device(&device)?;
         static_body_q.upload(&queue)?;
-        let ray_origin =
-            DeviceBuffer::from_host(engine, vec![Vec3::ZERO; cap], BufferUsage::StorageReadWrite)?;
-        let ray_direction =
-            DeviceBuffer::from_host(engine, vec![Vec3::ZERO; cap], BufferUsage::StorageReadWrite)?;
-        let hit_t =
-            DeviceBuffer::from_host(engine, vec![-1.0; cap], BufferUsage::StorageReadWrite)?;
-        let hit_shape =
-            DeviceBuffer::from_host(engine, vec![-1; cap], BufferUsage::StorageReadWrite)?;
-        let hit_point =
-            DeviceBuffer::from_host(engine, vec![Vec3::ZERO; cap], BufferUsage::StorageReadWrite)?;
-        let hit_normal =
-            DeviceBuffer::from_host(engine, vec![Vec3::Y; cap], BufferUsage::StorageReadWrite)?;
-        let mut mesh_hit_t =
-            Buffer::from_vec(vec![Real::INFINITY; cap], BufferUsage::StorageReadWrite);
-        let mut mesh_hit_tri = Buffer::from_vec(vec![-1_i32; cap], BufferUsage::StorageReadWrite);
-        let mut mesh_hit_normal =
-            Buffer::from_vec(vec![Vec3::ZERO; cap], BufferUsage::StorageReadWrite);
+        let ray_origin = DeviceBuffer::from_host(
+            engine,
+            crate::host_arrays::filled(cap, Vec3::ZERO)?,
+            BufferUsage::StorageReadWrite,
+        )?;
+        let ray_direction = DeviceBuffer::from_host(
+            engine,
+            crate::host_arrays::filled(cap, Vec3::ZERO)?,
+            BufferUsage::StorageReadWrite,
+        )?;
+        let hit_t = DeviceBuffer::from_host(
+            engine,
+            crate::host_arrays::filled(cap, -1.0)?,
+            BufferUsage::StorageReadWrite,
+        )?;
+        let hit_shape = DeviceBuffer::from_host(
+            engine,
+            crate::host_arrays::filled(cap, -1)?,
+            BufferUsage::StorageReadWrite,
+        )?;
+        let hit_point = DeviceBuffer::from_host(
+            engine,
+            crate::host_arrays::filled(cap, Vec3::ZERO)?,
+            BufferUsage::StorageReadWrite,
+        )?;
+        let hit_normal = DeviceBuffer::from_host(
+            engine,
+            crate::host_arrays::filled(cap, Vec3::Y)?,
+            BufferUsage::StorageReadWrite,
+        )?;
+        let mut mesh_hit_t = Buffer::from_vec(
+            crate::host_arrays::filled(cap, Real::INFINITY)?,
+            BufferUsage::StorageReadWrite,
+        );
+        let mut mesh_hit_tri = Buffer::from_vec(
+            crate::host_arrays::filled(cap, -1_i32)?,
+            BufferUsage::StorageReadWrite,
+        );
+        let mut mesh_hit_normal = Buffer::from_vec(
+            crate::host_arrays::filled(cap, Vec3::ZERO)?,
+            BufferUsage::StorageReadWrite,
+        );
         mesh_hit_t.ensure_device(&device)?;
         mesh_hit_tri.ensure_device(&device)?;
         mesh_hit_normal.ensure_device(&device)?;
@@ -193,12 +451,10 @@ impl Raycaster {
             mesh_kernel: MeshBvhRaycastKernel::new(&device),
             mesh_cache: HashMap::new(),
             primitive_bindings: Vec::with_capacity(2),
-            direct_primitives: BindingsCache::with_capacity(128),
-            direct_initial: BindingsCache::with_capacity(64),
-            direct_meshes: HashMap::new(),
-            direct_scene: None,
-            upload_origins: vec![[0.0; 4]; cap],
-            upload_directions: vec![[0.0; 4]; cap],
+            scene_trace: None,
+            rebuild_policy: SceneRebuildPolicy::default(),
+            upload_origins: crate::host_arrays::filled(cap, [0.0; 4])?,
+            upload_directions: crate::host_arrays::filled(cap, [0.0; 4])?,
             mesh_bindings: HashMap::new(),
             query_stats: RayQueryStats::default(),
             mesh_epoch: 0,
@@ -215,7 +471,6 @@ impl Raycaster {
     pub fn clear_mesh_cache(&mut self) {
         self.mesh_cache.clear();
         self.mesh_bindings.clear();
-        self.direct_meshes.clear();
     }
 
     /// Number of unique local meshes cached by legacy model queries.
@@ -231,11 +486,32 @@ impl Raycaster {
             .unwrap_or_default()
     }
 
-    /// Each preparation allocates one uniform and four bind groups; merge uses one group.
-    /// Legacy queries retain two variants; direct queries retain 128 per primitive/mesh
-    /// and 64 miss initializers. Direct submissions are counted on their command batch.
+    /// Cumulative query preparations, scene maintenance and standalone submissions.
     pub fn query_stats(&self) -> RayQueryStats {
         self.query_stats
+    }
+
+    pub fn scene_rebuild_policy(&self) -> SceneRebuildPolicy {
+        self.rebuild_policy
+    }
+
+    pub(crate) fn preflight_rebuild(&self, scene: &SensorScene) -> Result<()> {
+        self.rebuild_policy
+            .check(scene.geometry.finite_count, &self.hit_t.device.limits())?;
+        Ok(())
+    }
+
+    /// Change the periodic or quality-triggered policy; a change discards the cached hierarchy.
+    pub fn set_scene_rebuild_policy(&mut self, policy: SceneRebuildPolicy) -> Result<()> {
+        policy.validate()?;
+        if let Some(trace) = &self.scene_trace {
+            trace.check_policy(policy, &self.hit_t.device.limits())?;
+        }
+        if self.rebuild_policy != policy {
+            self.scene_trace = None;
+            self.rebuild_policy = policy;
+        }
+        Ok(())
     }
 
     fn output_specs(&self) -> [SensorChannelSpec; 6] {
@@ -319,6 +595,9 @@ impl Raycaster {
             }
         }
         let n = origins.len();
+        if n != 0 {
+            self.preflight_rebuild(scene)?;
+        }
         if n != 0 && scene.model.body_count != 0 {
             if state.body_q.len() != scene.model.body_count {
                 return Err(Error::Solver(
@@ -335,7 +614,7 @@ impl Raycaster {
             &ranges,
             stamp,
             !3u64,
-            |device, queue, encoder, outputs| {
+            |_device, queue, encoder, outputs| {
                 if n == 0 {
                     return Ok(0);
                 }
@@ -361,8 +640,7 @@ impl Raycaster {
                     bytemuck::cast_slice(&self.upload_directions[..n]),
                 );
                 self.encode_owned_scene(
-                    device,
-                    queue,
+                    engine,
                     encoder,
                     scene,
                     state,
@@ -386,8 +664,7 @@ impl Raycaster {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_owned_scene(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        engine: &Engine,
         encoder: &mut wgpu::CommandEncoder,
         scene: &SensorScene,
         state: &State,
@@ -395,139 +672,60 @@ impl Raycaster {
         count: u32,
         max_distance: f32,
     ) -> Result<u64> {
-        if self.direct_scene != Some(scene.stamp()) {
-            self.direct_primitives.clear();
-            self.direct_meshes.clear();
-            self.direct_scene = Some(scene.stamp());
+        self.encode_owned_scene_refit(
+            engine,
+            encoder,
+            scene,
+            state,
+            outputs,
+            count,
+            max_distance,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_owned_scene_refit(
+        &mut self,
+        engine: &Engine,
+        encoder: &mut wgpu::CommandEncoder,
+        scene: &SensorScene,
+        state: &State,
+        outputs: &[wgpu::Buffer],
+        count: u32,
+        max_distance: f32,
+        mut refresh_bounds: bool,
+    ) -> Result<u64> {
+        if count == 0 {
+            return Ok(0);
         }
-        let model = &scene.model;
-        let scratch = [
-            self.mesh_hit_t.device_buffer_current()?,
-            self.mesh_hit_tri.device_buffer_current()?,
-            self.mesh_hit_normal.device_buffer_current()?,
-        ];
-        let merge_buffers = [
-            &outputs[0],
-            &outputs[1],
-            scratch[0],
-            scratch[1],
-            scratch[2],
-            &outputs[2],
-            &outputs[3],
-            &outputs[4],
-            &outputs[5],
-        ];
-        let has_primitives = model
-            .shape_geom_kind
-            .host()?
-            .iter()
-            .any(|&kind| kind != 0xff);
-        if has_primitives {
-            let poses = if model.body_count == 0 {
-                self.static_body_q.device_buffer_current()?
-            } else {
-                state.body_q.device_buffer_current()?
-            };
-            let buffers = [
-                model.shape_geom_kind.device_buffer_current()?,
-                model.shape_geom_data.device_buffer_current()?,
-                model.shape_body.device_buffer_current()?,
-                model.shape_transform.device_buffer_current()?,
-                poses,
-                &outputs[0],
-                &outputs[1],
-                &outputs[2],
-                &outputs[3],
-                &outputs[4],
-                &outputs[5],
-            ];
-            let (bindings, prepared) = self.direct_primitives.get_or_prepare(
-                |binding| binding.matches(buffers),
-                || self.kernel.prepare(device, buffers),
-            );
-            self.query_stats.primitive_preparations += u64::from(prepared);
-            self.kernel.encode_prepared(
-                queue,
-                encoder,
-                bindings,
-                count,
-                model.shape_count as u32,
-                max_distance,
-            );
-        } else {
-            let (bindings, prepared) = self.direct_initial.get_or_prepare(
-                |binding| binding.matches(merge_buffers),
-                || self.merge.prepare_with_buffers(device, merge_buffers),
-            );
-            self.query_stats.merge_preparations += u64::from(prepared);
-            self.merge
-                .encode_prepared(queue, encoder, bindings, count, None, max_distance);
+        if self
+            .scene_trace
+            .as_ref()
+            .is_none_or(|trace| trace.stamp != scene.stamp())
+        {
+            self.scene_trace = Some(SceneTrace::new(engine, scene, state, self.rebuild_policy)?);
+            self.query_stats.scene_builds += 1;
+            refresh_bounds = true;
         }
-        let mut dispatches = 1;
-        let bodies = model.shape_body.host()?;
-        for (shape, geometry) in model.shape_geometry.iter().enumerate() {
-            let ShapeGeometry::TriMesh { mesh_id } = *geometry else {
-                continue;
-            };
-            let mesh = scene.mesh(mesh_id)?;
-            if mesh.node_count == 0 {
-                continue;
-            }
-            let body = bodies[shape];
-            let poses = if body < 0 {
-                self.static_body_q.device_buffer_current()?
-            } else {
-                state.body_q.device_buffer_current()?
-            };
-            let buffers = [
-                &mesh.nodes,
-                &mesh.tri_order,
-                &mesh.indices,
-                &mesh.vertices,
-                &outputs[0],
-                &outputs[1],
-                scratch[0],
-                scratch[1],
-                scratch[2],
-                poses,
-                model.shape_transform.device_buffer_current()?,
-            ];
-            let cache = self
-                .direct_meshes
-                .entry(shape as u32)
-                .or_insert_with(|| BindingsCache::with_capacity(128));
-            let (bindings, prepared) = cache.get_or_prepare(
-                |binding| binding.query.matches(buffers) && binding.merge.matches(merge_buffers),
-                || DirectMeshBindings {
-                    query: self.mesh_kernel.prepare(device, buffers),
-                    merge: self.merge.prepare_with_buffers(device, merge_buffers),
-                },
-            );
-            self.query_stats.mesh_preparations += u64::from(prepared);
-            self.query_stats.merge_preparations += u64::from(prepared);
-            self.mesh_kernel.encode_prepared(
-                queue,
+        let (dispatches, prepared, refit_prepared, rebuilt, quality_checked) = self
+            .scene_trace
+            .as_mut()
+            .expect("initialized trace")
+            .encode(
+                engine,
                 encoder,
-                &bindings.query,
+                scene,
+                state,
+                outputs,
                 count,
-                mesh.node_count,
                 max_distance,
-                shape as u32,
-                body,
-            );
-            self.merge.encode_prepared(
-                queue,
-                encoder,
-                &bindings.merge,
-                count,
-                Some(shape as u32),
-                max_distance,
-            );
-            dispatches += 2;
-        }
-        self.mesh_hit_t.mark_device_dirty();
-        self.mesh_hit_tri.mark_device_dirty();
-        self.mesh_hit_normal.mark_device_dirty();
+                refresh_bounds,
+            )?;
+        self.query_stats.scene_preparations += prepared;
+        self.query_stats.refit_preparations += refit_prepared;
+        self.query_stats.scene_rebuilds += u64::from(rebuilt);
+        self.query_stats.scene_quality_checks += u64::from(quality_checked);
         self.query_stats.encoded_queries += 1;
         Ok(dispatches)
     }
@@ -567,6 +765,9 @@ impl Raycaster {
         max_distance: Real,
     ) -> Result<RayDeviceHits<'_>> {
         scene.check_engine(engine)?;
+        if !origins.is_empty() {
+            self.preflight_rebuild(scene)?;
+        }
         self.dispatch_for_model(
             engine,
             &scene.model,
@@ -661,9 +862,34 @@ impl Raycaster {
         max_distance: Real,
         scene: Option<&SensorScene>,
     ) -> Result<u64> {
+        self.encode_camera_sample(engine, encoder, model, state, n, max_distance, scene, 0)
+    }
+
+    /// Samples after zero reuse bounds within one uninterrupted camera frame encoding.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_camera_sample(
+        &mut self,
+        engine: &Engine,
+        encoder: &mut wgpu::CommandEncoder,
+        model: &Model,
+        state: &State,
+        n: usize,
+        max_distance: Real,
+        scene: Option<&SensorScene>,
+        sample: u32,
+    ) -> Result<u64> {
         self.ray_origin.mark_device_dirty();
         self.ray_direction.mark_device_dirty();
-        self.encode_uploaded(engine, encoder, model, state, n, max_distance, scene)
+        self.encode_uploaded(
+            engine,
+            encoder,
+            model,
+            state,
+            n,
+            max_distance,
+            scene,
+            sample == 0,
+        )
     }
 
     fn query_uploaded(
@@ -688,7 +914,16 @@ impl Raycaster {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::raycaster query"),
         });
-        self.encode_uploaded(engine, &mut encoder, model, state, n, max_distance, scene)?;
+        self.encode_uploaded(
+            engine,
+            &mut encoder,
+            model,
+            state,
+            n,
+            max_distance,
+            scene,
+            true,
+        )?;
         queue.submit([encoder.finish()]);
         self.query_stats.submissions += 1;
         Ok(self.device_hits(n))
@@ -704,6 +939,7 @@ impl Raycaster {
         n: usize,
         max_distance: Real,
         scene: Option<&SensorScene>,
+        refresh_bounds: bool,
     ) -> Result<u64> {
         let device = engine
             .device()
@@ -715,6 +951,31 @@ impl Raycaster {
             return Err(Error::Gpu("raycaster: invalid device or capacity".into()));
         }
         self.active_scene = scene.map(SensorScene::stamp);
+        if let Some(scene) = scene.filter(|_| n != 0) {
+            let outputs = [
+                self.ray_origin.device_buffer()?.clone(),
+                self.ray_direction.device_buffer()?.clone(),
+                self.hit_t.device_buffer()?.clone(),
+                self.hit_shape.device_buffer()?.clone(),
+                self.hit_point.device_buffer()?.clone(),
+                self.hit_normal.device_buffer()?.clone(),
+            ];
+            let dispatches = self.encode_owned_scene_refit(
+                engine,
+                encoder,
+                scene,
+                state,
+                &outputs,
+                n as u32,
+                max_distance as f32,
+                refresh_bounds,
+            )?;
+            self.hit_t.mark_device_dirty();
+            self.hit_shape.mark_device_dirty();
+            self.hit_point.mark_device_dirty();
+            self.hit_normal.mark_device_dirty();
+            return Ok(dispatches);
+        }
         let mut dispatches = 0;
         if n != 0 {
             let has_analytical_shape = model.shape_geom_kind.host()?.iter().any(|&k| k != 0xff);
@@ -780,7 +1041,6 @@ impl Raycaster {
                 encoder,
                 model,
                 state,
-                scene,
                 n as u32,
                 max_distance as f32,
             )?;
@@ -804,6 +1064,7 @@ impl Raycaster {
         self.collect_hits(engine, model, origins.len())
     }
 
+    /// Collect owned-scene hits; invalid included live poses or unsafe bounds return an error.
     pub fn cast_scene(
         &mut self,
         engine: &Engine,
@@ -849,6 +1110,14 @@ impl Raycaster {
                 return Err(error);
             }
         };
+        if frame
+            .channel_iter::<i32>(1)?
+            .any(|id| id == crate::INVALID_SCENE_INDEX)
+        {
+            return Err(Error::Solver(
+                "raycaster: invalid scene pose or unsafe geometry magnitude".into(),
+            ));
+        }
         let shape_body = model.shape_body.host()?;
         let hits = frame
             .channel_iter::<Real>(0)?
@@ -891,7 +1160,6 @@ impl Raycaster {
         encoder: &mut wgpu::CommandEncoder,
         model: &Model,
         state: &State,
-        scene: Option<&SensorScene>,
         ray_count: u32,
         max_distance: f32,
     ) -> Result<u64> {
@@ -922,9 +1190,7 @@ impl Raycaster {
                 state.body_q.device_buffer_current()?
             };
             let shape_poses = model.shape_transform.device_buffer_current()?;
-            let mesh = if let Some(scene) = scene {
-                scene.mesh(mesh_id)?
-            } else {
+            let mesh = {
                 let source = model
                     .meshes
                     .get(mesh_id as usize)
@@ -1019,10 +1285,8 @@ impl Raycaster {
         }
         self.mesh_bindings
             .retain(|_, entry| entry.checked_epoch == self.mesh_epoch);
-        if scene.is_none() {
-            self.mesh_cache
-                .retain(|_, entry| entry.checked_epoch == self.mesh_epoch);
-        }
+        self.mesh_cache
+            .retain(|_, entry| entry.checked_epoch == self.mesh_epoch);
         Ok(dispatches)
     }
 }

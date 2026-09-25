@@ -49,6 +49,36 @@ fn rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     let t = 2.0 * cross(q.xyz, v);
     return v + q.w * t + cross(q.xyz, t);
 }
+const MAX_FINITE: f32 = 0x1.fffffep127f;
+const SCALE_UP_124: f32 = 0x1p124f;
+const SCALE_DOWN_124: f32 = 0x1p-124f;
+struct CheckedVector { value: vec3<f32>, valid: bool };
+fn restore_scaled(v: vec3<f32>) -> CheckedVector {
+    if any(abs(v) > vec3<f32>(MAX_FINITE * SCALE_DOWN_124)) {
+        return CheckedVector(vec3<f32>(0.0), false);
+    }
+    return CheckedVector(v * SCALE_UP_124, true);
+}
+fn checked_rotate(q: vec4<f32>, v: vec3<f32>) -> CheckedVector {
+    let scale = max(max(abs(v.x), abs(v.y)), abs(v.z));
+    if all(q.xyz == vec3<f32>(0.0)) { return CheckedVector(v, true); }
+    if scale <= MAX_FINITE / 16.0 { return CheckedVector(rotate(q, v), true); }
+    return restore_scaled(rotate(q, v * SCALE_DOWN_124));
+}
+fn checked_add(a: vec3<f32>, b: vec3<f32>) -> CheckedVector {
+    let same_sign = (a > vec3<f32>(0.0)) == (b > vec3<f32>(0.0));
+    if any(same_sign & (abs(a) > vec3<f32>(MAX_FINITE) - abs(b))) {
+        return CheckedVector(vec3<f32>(0.0), false);
+    }
+    return CheckedVector(a + b, true);
+}
+fn checked_position(q: vec4<f32>, v: vec3<f32>, translation: vec3<f32>) -> CheckedVector {
+    if all(q.xyz == vec3<f32>(0.0)) { return checked_add(v, translation); }
+    if max(max(abs(v.x), abs(v.y)), abs(v.z)) <= MAX_FINITE / 16.0 {
+        return checked_add(rotate(q, v), translation);
+    }
+    return restore_scaled(rotate(q, v * SCALE_DOWN_124) + translation * SCALE_DOWN_124);
+}
 fn read3(i: u32) -> vec3<f32> { return vec3<f32>(bitcast<f32>(raw[i]), bitcast<f32>(raw[i+1u]), bitcast<f32>(raw[i+2u])); }
 fn axis(lo: f32, hi: f32, n: u32, i: u32) -> f32 {
     if n <= 1u { return lo; }
@@ -109,18 +139,27 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocat
             || ((point.extra.z & 4u) != 0u && !finite(point.direction.w))
             || ((point.extra.z & 8u) != 0u && (!finite(point.angles.x) || !finite(point.angles.y))) { reason = 3u; }
         else {
-            point.position = vec4<f32>(rotate(job.rotation, point.position.xyz) + job.translation.xyz, point.position.w);
-            point.normal = vec4<f32>(rotate(job.rotation, point.normal.xyz), point.normal.w);
-            point.direction = vec4<f32>(rotate(job.rotation, point.direction.xyz), point.direction.w);
-            if !finite3(point.position.xyz) || !finite3(point.normal.xyz) || !finite3(point.direction.xyz) { reason = 3u; }
+            let position = checked_position(job.rotation, point.position.xyz, job.translation.xyz);
+            let normal = checked_rotate(job.rotation, point.normal.xyz);
+            let direction = checked_rotate(job.rotation, point.direction.xyz);
+            point.position = vec4<f32>(position.value, point.position.w);
+            point.normal = vec4<f32>(normal.value, point.normal.w);
+            point.direction = vec4<f32>(direction.value, point.direction.w);
+            if !position.valid || !normal.valid || !direction.valid { reason = 3u; }
             else {
                 let flags = job.counts.w;
                 var accepted = true;
                 if (flags & 1u) != 0u {
-                    let delta = point.position.xyz - job.distance.xyz;
-                    let largest = max(max(abs(delta.x), abs(delta.y)), abs(delta.z));
-                    if largest > job.distance.w { accepted = false; }
-                    else if largest > 0.0 { accepted = length(delta / largest) <= job.distance.w / largest; }
+                    let delta = checked_add(point.position.xyz, -job.distance.xyz);
+                    let largest = max(max(abs(delta.value.x), abs(delta.value.y)), abs(delta.value.z));
+                    if !delta.valid || largest > job.distance.w { accepted = false; }
+                    else if largest > 0.0 && job.distance.w * 0.5 < largest {
+                        if largest > MAX_FINITE / 16.0 {
+                            accepted = length(delta.value * SCALE_DOWN_124) <= job.distance.w * SCALE_DOWN_124;
+                        } else {
+                            accepted = length(delta.value / largest) <= job.distance.w / largest;
+                        }
+                    }
                 }
                 if (flags & 2u) != 0u {
                     let inside = all(point.position.xyz >= job.bounds_min.xyz) && all(point.position.xyz <= job.bounds_max.xyz);
