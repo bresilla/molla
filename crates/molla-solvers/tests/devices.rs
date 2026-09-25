@@ -427,3 +427,42 @@ fn a_free_body_is_blown_along_by_quadratic_drag() {
     let after = w.scene.body_velocity(puff).unwrap().linear.x;
     assert!(after < before, "its own still air slows it: {before} -> {after}");
 }
+
+/// A tipper body, its tailgate and a gate on the tailgate, each held by a
+/// strong ram exactly at a joint stop under gravity, as a parked trailer
+/// is: the stops and the motors share the load step after step.
+#[test]
+fn strong_motors_holding_a_chain_at_its_stops_keep_stepping() {
+    use molla_sim::joint_control::JointAxis;
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::new(0.0, 0.0, -9.81)).unwrap();
+    let chassis = body(&mut w, Vec3::ZERO, 2500.0);
+    w.scene.set_body_kind(chassis, BodyKind::Fixed).unwrap();
+    let (tipper, gate, slide) =
+        (body(&mut w, Vec3::new(0.0, 2.0, 1.5), 2000.0), body(&mut w, Vec3::new(0.0, 4.0, 1.5), 450.0), body(&mut w, Vec3::new(0.0, 4.2, 1.0), 40.0));
+    let hinge = |w: &mut RigidWorld, parent, child, at: Vec3, kind, limits: [f64; 2]| {
+        let joint = w
+            .scene
+            .insert_joint(JointDesc {
+                parent: Some(parent),
+                child,
+                kind,
+                axis: Vec3::X,
+                frame_parent: Transform::from_translation(at),
+                frame_child: Transform::IDENTITY,
+            })
+            .unwrap();
+        let axis = if kind == JointType::Prismatic { JointAxis::LinX } else { JointAxis::AngX };
+        w.scene.set_joint_limits(joint, axis, Some(limits)).unwrap();
+        w.devices.motors.insert(&w.scene, joint, MotorSpec { max_force: 1.0e6, ..Default::default() }).unwrap();
+        w.devices.motors.command(joint, MotorCommand::Position(limits[if limits[0] == 0.0 { 0 } else { 1 }])).unwrap();
+        joint
+    };
+    hinge(&mut w, chassis, tipper, Vec3::new(0.0, 2.0, 1.5), JointType::Revolute, [-0.87, 0.0]);
+    hinge(&mut w, tipper, gate, Vec3::new(0.0, 2.0, 0.0), JointType::Revolute, [0.0, 0.87]);
+    hinge(&mut w, gate, slide, Vec3::new(0.0, 0.2, -0.5), JointType::Prismatic, [0.0, 0.34]);
+    run(&mut w, 60.0);
+    for body in [tipper, gate, slide] {
+        assert!(w.scene.body_velocity(body).unwrap().linear.length() < 1e-3);
+    }
+}
