@@ -1,0 +1,57 @@
+Gnuplot not found, using plotters backend
+Benchmarking sensor_camera_gpu/completed/256x256
+Benchmarking sensor_camera_gpu/completed/256x256: Warming up for 3.0000 s
+Benchmarking sensor_camera_gpu/completed/256x256: Collecting 10 samples in estimated 20.001 s (227k iterations)
+Benchmarking sensor_camera_gpu/completed/256x256: Analyzing
+sensor_camera_gpu/completed/256x256
+                        time:   [85.459 µs 86.826 µs 88.075 µs]
+                        change: [-11.474% -8.9387% -6.2012%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+Benchmarking sensor_camera_gpu/host_channels/256x256
+Benchmarking sensor_camera_gpu/host_channels/256x256: Warming up for 3.0000 s
+Benchmarking sensor_camera_gpu/host_channels/256x256: Collecting 10 samples in estimated 20.271 s (3740 iterations)
+Benchmarking sensor_camera_gpu/host_channels/256x256: Analyzing
+sensor_camera_gpu/host_channels/256x256
+                        time:   [5.9348 ms 5.9394 ms 5.9474 ms]
+                        change: [+20.644% +21.006% +21.395%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking sensor_camera_gpu/completed/512x512
+Benchmarking sensor_camera_gpu/completed/512x512: Warming up for 3.0000 s
+Benchmarking sensor_camera_gpu/completed/512x512: Collecting 10 samples in estimated 20.007 s (99k iterations)
+Benchmarking sensor_camera_gpu/completed/512x512: Analyzing
+sensor_camera_gpu/completed/512x512
+                        time:   [187.36 µs 193.36 µs 198.47 µs]
+                        change: [-7.6237% -3.0746% +1.2018%] (p = 0.20 > 0.05)
+                        No change in performance detected.
+Benchmarking sensor_camera_gpu/host_channels/512x512
+Benchmarking sensor_camera_gpu/host_channels/512x512: Warming up for 3.0000 s
+Benchmarking sensor_camera_gpu/host_channels/512x512: Collecting 10 samples in estimated 20.162 s (3355 iterations)
+Benchmarking sensor_camera_gpu/host_channels/512x512: Analyzing
+sensor_camera_gpu/host_channels/512x512
+                        time:   [6.9679 ms 8.3660 ms 9.0241 ms]
+                        change: [+1.5283% +18.816% +35.851%] (p = 0.05 > 0.05)
+                        No change in performance detected.
+Benchmarking sensor_camera_gpu/completed/720p
+Benchmarking sensor_camera_gpu/completed/720p: Warming up for 3.0000 s
+Benchmarking sensor_camera_gpu/completed/720p: Collecting 10 samples in estimated 20.008 s (45k iterations)
+Benchmarking sensor_camera_gpu/completed/720p: Analyzing
+sensor_camera_gpu/completed/720p
+                        time:   [386.77 µs 410.78 µs 422.48 µs]
+                        change: [-20.169% -15.324% -11.014%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Benchmarking sensor_camera_gpu/host_channels/720p
+Benchmarking sensor_camera_gpu/host_channels/720p: Warming up for 3.0000 s
+Benchmarking sensor_camera_gpu/host_channels/720p: Collecting 10 samples in estimated 20.426 s (1100 iterations)
+Benchmarking sensor_camera_gpu/host_channels/720p: Analyzing
+sensor_camera_gpu/host_channels/720p
+                        time:   [19.450 ms 26.053 ms 30.977 ms]
+                        change: [-1.1472% +14.086% +32.250%] (p = 0.14 > 0.05)
+                        No change in performance detected.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+

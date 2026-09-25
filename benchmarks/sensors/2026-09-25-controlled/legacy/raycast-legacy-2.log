@@ -1,0 +1,20 @@
+Gnuplot not found, using plotters backend
+Benchmarking sensor_raycast_gpu/rays=1000_shapes=100
+Benchmarking sensor_raycast_gpu/rays=1000_shapes=100: Warming up for 3.0000 s
+Benchmarking sensor_raycast_gpu/rays=1000_shapes=100: Collecting 10 samples in estimated 15.032 s (4235 iterations)
+Benchmarking sensor_raycast_gpu/rays=1000_shapes=100: Analyzing
+sensor_raycast_gpu/rays=1000_shapes=100
+                        time:   [3.9144 ms 3.9883 ms 4.0415 ms]
+                        change: [+1.2786% +5.2228% +9.4012%] (p = 0.02 < 0.05)
+                        Performance has regressed.
+Benchmarking sensor_raycast_gpu/rays=10000_shapes=1000
+Benchmarking sensor_raycast_gpu/rays=10000_shapes=1000: Warming up for 3.0000 s
+Benchmarking sensor_raycast_gpu/rays=10000_shapes=1000: Collecting 10 samples in estimated 15.192 s (3960 iterations)
+Benchmarking sensor_raycast_gpu/rays=10000_shapes=1000: Analyzing
+sensor_raycast_gpu/rays=10000_shapes=1000
+                        time:   [3.8370 ms 4.2948 ms 4.8018 ms]
+                        change: [-22.038% -18.232% -12.272%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+

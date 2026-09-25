@@ -78,7 +78,41 @@ frame. Host cases download only the selected outputs. The largest are:
 - 116,314,460 B: one million cloud-cropped rays (`mesh100_r1000000_m16_s1_pose_cloud_crop_host`);
 - 52,023,296 B: one million LiDAR rays (`mesh10_r1000000_m16_s1_pose_host`).
 
-## Legacy comparison and memory
+## Legacy comparison
 
-See `legacy/` and `memory/`. The results are in `SENSORS_PROGRESS.md` and
-`book/src/sensors/latency_benchmarks.md`.
+The pre-plan source (`git archive d2369a9`) and the current tree ran the same
+criterion groups, interleaved over three rounds. Clocks were not locked.
+Interleaving exposes both trees to the same drift, and `legacy/gpu.csv.gz` and
+`legacy/pmon.log.gz` record board and per-process load.
+`sensor_raycast_gpu` is unchanged between the trees. `sensor_camera_gpu`
+in the legacy copy was given the current loop (GPU completion, or completion
+plus all five host downloads), because the original timed CPU submission only.
+Medians of the three rounds' criterion estimates:
+
+| Benchmark | Legacy | Current | Current / legacy |
+|---|---|---|---|
+| `Raycaster::cast`, 1,000 rays / 100 shapes | 3.99 ms | 0.29 ms | 0.07 |
+| `Raycaster::cast`, 10,000 rays / 1,000 shapes | 4.92 ms | 1.07 ms | 0.22 |
+| Camera + five host channels, 256² | 5.98 ms | 0.47 ms | 0.08 |
+| Camera + five host channels, 512² | 8.56 ms | 1.24 ms | 0.15 |
+| Camera + five host channels, 720p | 29.3 ms | 4.30 ms | 0.15 |
+| Camera dispatch to GPU completion, 256² | 86.8 µs | 145 µs | **1.67** |
+| Camera dispatch to GPU completion, 512² | 193 µs | 262 µs | **1.35** |
+| Camera dispatch to GPU completion, 720p | 424 µs | 590 µs | **1.39** |
+
+The synchronous paths with host results are 4.6–14× faster. The bare camera
+dispatch to completion is a **regression of 1.35–1.67×**: the current default
+camera always traces all channels through the separate ray/trace/shade
+kernels. It is recorded, not waived.
+
+## Peak memory
+
+One instrumentation-off repeat per matrix. The benchmark process's VRAM was
+sampled every 200 ms (`memory/vram.csv.gz`), and peak RSS comes from
+`/usr/bin/time -v` (`memory/*.log`).
+
+| Matrix | Peak process VRAM | Peak RSS |
+|---|---|---|
+| LiDAR (120 cases) | 491 MiB | 541 MiB |
+| Camera/image/annotation (56) | 1,067 MiB | 1,660 MiB |
+| LiDAR/cloud/grid (96) | 1,323 MiB | 1,195 MiB |
