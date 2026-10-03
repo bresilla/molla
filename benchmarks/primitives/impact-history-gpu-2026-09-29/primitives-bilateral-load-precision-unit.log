@@ -1,0 +1,45 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0425]: cannot find function `dense_chol_solve` in crate `molla_math`
+  --> crates/molla-solvers/src/coupled_constraints.rs:86:43
+   |
+86 |         if let Ok(impulses) = molla_math::dense_chol_solve(&mut gram.to_vec(), &rhs, n) {
+   |                                           ^^^^^^^^^^^^^^^^ not found in `molla_math`
+   |
+help: consider importing one of these functions
+   |
+ 3 + use crate::math::dense_solve::dense_chol_solve;
+   |
+ 3 + use molla_math::dense_solve::dense_chol_solve;
+   |
+help: if you import `dense_chol_solve`, refer to it directly
+   |
+86 -         if let Ok(impulses) = molla_math::dense_chol_solve(&mut gram.to_vec(), &rhs, n) {
+86 +         if let Ok(impulses) = dense_chol_solve(&mut gram.to_vec(), &rhs, n) {
+   |
+
+error[E0282]: type annotations needed
+  --> crates/molla-solvers/src/coupled_constraints.rs:87:28
+   |
+87 |             let accurate = impulses.iter().all(|value| value.is_finite())
+   |                            ^^^^^^^^ cannot infer type
+
+error[E0282]: type annotations needed
+  --> crates/molla-solvers/src/coupled_constraints.rs:87:49
+   |
+87 |             let accurate = impulses.iter().all(|value| value.is_finite())
+   |                                                 ^^^^^  ----- type must be known at this point
+   |
+help: consider giving this closure parameter an explicit type
+   |
+87 |             let accurate = impulses.iter().all(|value: /* Type */| value.is_finite())
+   |                                                      ++++++++++++
+
+Some errors have detailed explanations: E0282, E0425.
+For more information about an error, try `rustc --explain E0282`.
+error: could not compile `molla-solvers` (lib test) due to 3 previous errors
+make: *** [Makefile:132: test] Error 101

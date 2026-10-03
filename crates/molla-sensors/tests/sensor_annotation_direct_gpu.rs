@@ -300,7 +300,7 @@ fn full_1024_image_capacity_uses_deduplicated_pending_receipts_and_relative_offs
             &[&first.frame],
             &mut shifted_pool,
             &specs,
-            &[3..1027],
+            std::slice::from_ref(&(3..1027)),
             stamp(2),
             |encoder, inputs, outputs| {
                 let view = inputs.channel::<u32>(0, 0)?;

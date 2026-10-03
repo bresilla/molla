@@ -88,12 +88,15 @@ impl AdamGpuKernel {
             cache: None,
         });
 
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::optim_adam uniforms buf"),
-            size: std::mem::size_of::<AdamUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::optim_adam uniforms buf"),
+                size: std::mem::size_of::<AdamUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let bg_u = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::optim_adam uniforms bg"),
             layout: &layout_u,
@@ -172,8 +175,12 @@ impl AdamGpuKernel {
             _pad3: 0.0,
             _pad4: 0.0,
         };
-        self.queue
-            .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        molla_core::gpu_write_buffer!(
+            self.queue,
+            &self.uniform_buf,
+            0,
+            bytemuck::bytes_of(&uniforms)
+        );
 
         let bg_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::optim_adam io bg"),
@@ -234,12 +241,15 @@ pub(crate) fn read_storage_buffer(
     n: u32,
 ) -> Result<Vec<f32>> {
     let bytes = (n as u64).max(4) * 4;
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("molla::optim readback staging"),
-        size: bytes,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let staging = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("molla::optim readback staging"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("molla::optim readback encoder"),
     });
@@ -256,7 +266,7 @@ pub(crate) fn read_storage_buffer(
     rx.recv()
         .map_err(|e| Error::Gpu(format!("optim readback recv: {e}")))?
         .map_err(|e| Error::Gpu(format!("optim readback map: {e:?}")))?;
-    let mapped = slice.get_mapped_range();
+    let mapped = molla_core::gpu_readback!(slice);
     let mut out: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&mapped).to_vec();
     drop(mapped);
     staging.unmap();

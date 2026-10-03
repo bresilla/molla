@@ -1,0 +1,54 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.46s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 1 test
+test contact_response_gpu::tests::device_contact_friction_breakaway_time_refinement ... CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=1763 regimes=[3, 3, 3, 3] vx=4.040426366076164e-3
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=1762 regimes=[3, 3, 3, 3] vx=4.03708266094327e-3, CPU vx=9.504154173717132e-5
+GPU contact trajectory: case=Breakaway substeps=1, peak drift=1.1907169818878174e0, settled creep=1.1906968665316526e0, CPU position error=2.912030229036027e-3, orientation error=1.3669425722406933e-5, velocity error=4.7142219055700115e-3
+integrated published-impulse host KKT peak=9.982738142575496e-8
+GPU breakaway: first sliding step=1762, force=11.81 N
+CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=3526 regimes=[3, 3, 3, 3] vx=2.0676601740347474e-3
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=3523 regimes=[3, 3, 3, 3] vx=2.0556701347231865e-3, CPU vx=7.643468549106865e-5
+GPU contact trajectory: case=Breakaway substeps=2, peak drift=1.1913373470306396e0, settled creep=1.1913172715921974e0, CPU position error=4.350978521707656e-3, orientation error=1.995244895895518e-5, velocity error=6.906040182989522e-3
+integrated published-impulse host KKT peak=9.999136334999812e-8
+GPU breakaway: first sliding step=3523, force=11.805 N
+CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=7052 regimes=[3, 3, 3, 3] vx=1.0815358649088566e-3
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=7049 regimes=[3, 3, 3, 3] vx=1.0815130081027746e-3, CPU vx=8.591651764954336e-5
+GPU contact trajectory: case=Breakaway substeps=4, peak drift=1.1887426376342773e0, settled creep=1.1887225837308506e0, CPU position error=2.1653726079657425e-3, orientation error=1.011278477760548e-5, velocity error=3.478452915415056e-3
+integrated published-impulse host KKT peak=9.996946587154787e-8
+GPU breakaway: first sliding step=7049, force=11.81 N
+CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=14105 regimes=[3, 3, 3, 3] vx=5.91553554025177e-4
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=14102 regimes=[3, 3, 3, 3] vx=5.95689401961863e-4, CPU vx=9.342953599500458e-5
+GPU contact trajectory: case=Breakaway substeps=8, peak drift=1.187103033065796e0, settled creep=1.187083051991067e0, CPU position error=1.0915397717286873e-3, orientation error=5.072439318543566e-6, velocity error=1.7504539162175223e-3
+integrated published-impulse host KKT peak=9.99719988216278e-8
+GPU breakaway: first sliding step=14102, force=11.81 N
+GPU breakaway refinement [position, orientation, velocity]: [[0.002912030229036027, 1.3669425722406933e-5, 0.0047142219055700115], [0.004350978521707656, 1.995244895895518e-5, 0.006906040182989522], [0.0021653726079657425, 1.011278477760548e-5, 0.003478452915415056], [0.0010915397717286873, 5.072439318543566e-6, 0.0017504539162175223]]
+
+thread 'contact_response_gpu::tests::device_contact_friction_breakaway_time_refinement' (3982454) panicked at crates/molla-solvers/src/contact_response_gpu_tests.rs:447:5:
+position=1.0915397717286873e-3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    contact_response_gpu::tests::device_contact_friction_breakaway_time_refinement
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 107 filtered out; finished in 182.57s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:70: test] Error 101

@@ -1,0 +1,22 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0599]: no method named `is_finite` found for struct `SpatialVector` in the current scope
+   --> crates/molla-solvers/tests/runtime_capsule_manifold.rs:100:34
+    |
+100 |                 assert!(velocity.is_finite());
+    |                                  ^^^^^^^^^ method not found in `SpatialVector`
+    |
+help: some of the expressions' fields have a method of the same name
+    |
+100 |                 assert!(velocity.angular.is_finite());
+    |                                  ++++++++
+100 |                 assert!(velocity.linear.is_finite());
+    |                                  +++++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `molla-solvers` (test "runtime_capsule_manifold") due to 1 previous error
+make: *** [Makefile:87: test] Error 101

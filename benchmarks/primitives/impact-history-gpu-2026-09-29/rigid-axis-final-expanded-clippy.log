@@ -1,0 +1,7 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.26s

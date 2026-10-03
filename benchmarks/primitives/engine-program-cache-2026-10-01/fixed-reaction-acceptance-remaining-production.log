@@ -1,0 +1,45 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.90s
+     Running tests/runtime_contact_breakage_gpu.rs (target/debug/deps/runtime_contact_breakage_gpu-7255456fbf074124)
+
+running 5 tests
+test contact_load_breaks_support_and_continues_with_cpu_event_and_state_agreement ... ok
+test detachment_refreshes_contacts_without_removing_explicit_pair_exclusions ... ok
+test post_break_capacity_failure_restores_original_topology_and_precision ... ok
+test sequential_contact_breaks_preserve_global_sample_times_and_frame_means ... ok
+test successful_detachment_transfers_translation_residues_to_new_free_roots ... 
+thread 'successful_detachment_transfers_translation_residues_to_new_free_roots' (488919) panicked at crates/molla-solvers/tests/runtime_contact_breakage_gpu.rs:312:13:
+assertion `left == right` failed: frame=10 body=BodyHandle(2)
+  left: Transform { position: DVec3(2.0000004400000293, 3.0, 2.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }
+ right: Transform { position: DVec3(2.0000004400000257, 3.0, 2.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    successful_detachment_transfers_translation_residues_to_new_free_roots
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 932.58s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_contact_breakage_gpu`
+make[2]: *** [Makefile:172: test-gpu] Error 101
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: *** [Makefile:370: test-primitives-contact-breakage-gpu] Error 2
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:149: test-primitives-gpu] Error 2

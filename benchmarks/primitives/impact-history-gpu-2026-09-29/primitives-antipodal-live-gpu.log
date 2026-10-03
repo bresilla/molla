@@ -1,0 +1,31 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.42s
+     Running tests/runtime_cone_capability.rs (target/debug/deps/runtime_cone_capability-5329726821b4edc9)
+
+running 2 tests
+test gpu_admissible_antipode_preserves_twist_and_free_swing_without_energy_spikes ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+
+thread 'gpu_admissible_antipode_preserves_twist_and_free_swing_without_energy_spikes' (2216157) panicked at crates/molla-solvers/tests/runtime_cone_capability.rs:166:31:
+called `Result::unwrap()` on an `Err` value: Solver("GPU rigid runtime solver fault 1024")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test gpu_antipodal_cones_recover_through_tree_rigid_and_compliant_routes ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+antipodal_cone route=0 frames=32 residual=0.000000000e0
+antipodal_cone route=1 frames=32 residual=0.000000000e0
+antipodal_cone route=2 frames=32 residual=0.000000000e0
+ok
+
+failures:
+
+failures:
+    gpu_admissible_antipode_preserves_twist_and_free_swing_without_energy_spikes
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 50.92s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_cone_capability`
+make: *** [Makefile:131: test-gpu] Error 101

@@ -1,0 +1,27 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.24s
+     Running tests/rigid_singular_forces.rs (target/debug/deps/rigid_singular_forces-38d7b334ca477410)
+
+running 3 tests
+
+thread 'singular_body_keeps_unlocked_spin_and_com_acceleration' (1512302) panicked at crates/molla-solvers/tests/rigid_singular_forces.rs:89:37:
+called `Result::unwrap()` on an `Err` value: Solver("floating momentum lies outside inertia range: residual=3.664896535393466e-12, scale=1.2958204553420609e-2, angular=DVec3(5.243743807226142e-12, -2.415157483726116e-12, 2.344800175093439e-9), inertia=DMat3 { x_axis: DVec3(0.030329330704291026, -0.07173560851545231, 1.762968297682503e-5), y_axis: DVec3(-0.07173560851545231, 0.16967067112752665, 7.453710423413987e-6), z_axis: DVec3(1.762968297682503e-5, 7.453710423413987e-6, 0.19999999816818237) }")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test singular_body_keeps_unlocked_spin_and_com_acceleration ... FAILED
+test raw_free_root_with_offset_frames_skips_zero_inertia_rotation ... ok
+test continuous_force_respects_singular_angular_modes_at_offset_com ... ok
+
+failures:
+
+failures:
+    singular_body_keeps_unlocked_spin_and_com_acceleration
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.37s
+
+error: test failed, to rerun pass `-p molla-solvers --test rigid_singular_forces`
+make: *** [Makefile:87: test] Error 101

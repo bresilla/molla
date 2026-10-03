@@ -1,0 +1,41 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/broadphase_lbvh_gpu.rs (target/debug/deps/broadphase_lbvh_gpu-e555a9cd78c20249)
+
+running 8 tests
+test collision_pipeline_gpu_broad_phase_yields_same_contacts_as_sap ... ok
+test lbvh_100k_shape_stress_build_under_30ms ... 100k stress: 103823 shapes
+lbvh 100k: 0 pairs, 22.34 ms
+lbvh 100k: 0 pairs, 22.02 ms
+lbvh 100k: 0 pairs, 23.27 ms
+lbvh 100k best: 22.02 ms (0 pairs)
+ok
+test lbvh_complete_topology_and_level_bounds_match_brute_force ... ok
+test lbvh_pair_set_matches_cpu_sap_on_1k_scene ... ok
+test lbvh_perf_beats_cpu_sap_on_10k_scene ... lbvh 10k: 0 pairs, 4.00 ms
+lbvh 10k: 0 pairs, 3.59 ms
+lbvh 10k: 0 pairs, 3.65 ms
+lbvh 10k: 0 pairs, 3.58 ms
+lbvh 10k: 0 pairs, 3.60 ms
+lbvh 10k: 0 pairs, 3.59 ms
+lbvh 10k: 0 pairs, 3.58 ms
+lbvh 10k: 0 pairs, 3.50 ms
+lbvh 10k: 0 pairs, 3.60 ms
+lbvh 10k: 0 pairs, 3.43 ms
+lbvh 10k best: gpu=3.43 ms, cpu=109.45 ms, pairs=0
+lbvh 10k speedup: 31.87x (gpu 3.43 ms vs cpu 109.45 ms)
+ok
+test lbvh_refit_accepts_unbounded_plane_and_updates_pairs ... ok
+test lbvh_refit_only_after_particle_update_matches_full_rebuild ... ok
+test lbvh_refit_still_rejects_nan_bounds - should panic ... 
+thread 'lbvh_refit_still_rejects_nan_bounds' (2708273) panicked at crates/molla-geometry/src/lbvh.rs:569:25:
+lbvh::redispatch: NaN primitive AABB (Vec3(NaN, 0.0, 0.0), Vec3(1.0, 1.0, 1.0))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.52s
+

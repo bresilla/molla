@@ -1,0 +1,37 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.35s
+     Running tests/runtime_contacts_gpu.rs (target/debug/deps/runtime_contacts_gpu-142757d5d2edccea)
+
+running 2 tests
+test contact_capacity_fault_rolls_back_and_topology_recovery_preserves_handles ... 
+thread 'contact_capacity_fault_rolls_back_and_topology_recovery_preserves_handles' (4075324) panicked at crates/molla-solvers/tests/runtime_contacts_gpu.rs:138:21:
+called `Result::unwrap()` on an `Err` value: Solver("GPU rigid runtime solver fault 8")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test public_runtime_contacts_hold_and_publish_substep_forces ... 
+thread 'public_runtime_contacts_hold_and_publish_substep_forces' (4075491) panicked at crates/molla-solvers/tests/runtime_contacts_gpu.rs:68:25:
+called `Result::unwrap()` on an `Err` value: Solver("GPU rigid runtime solver fault 8")
+FAILED
+
+failures:
+
+failures:
+    contact_capacity_fault_rolls_back_and_topology_recovery_preserves_handles
+    public_runtime_contacts_hold_and_publish_substep_forces
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 63.31s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_contacts_gpu`
+make[1]: *** [Makefile:83: test-gpu] Error 101
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:142: test-primitives-runtime-contacts-gpu] Error 2

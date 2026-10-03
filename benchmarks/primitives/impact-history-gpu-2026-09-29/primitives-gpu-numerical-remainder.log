@@ -1,0 +1,126 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 2 tests
+test contact_response_gpu::partition_tests::chained_impact_and_friction_partition_contacts_scalars_and_physical_rates ... ok
+test contact_response_gpu::partition_tests::partition_masks_preserve_joint_only_islands_and_reject_split_graphs ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 212 filtered out; finished in 2.86s
+
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.02s
+     Running tests/runtime_restitution_gpu.rs (target/debug/deps/runtime_restitution_gpu-229ebd8fcc10f27b)
+
+running 6 tests
+test failed_impact_frame_restores_history_and_recovers_after_compaction ... ok
+test impact_reactions_break_a_joint_and_continue_without_repeating_the_episode ... ok
+test live_normal_impacts_publish_one_impulse_and_match_cpu_rebound ... ok
+test live_zero_depth_contact_retains_penalty_support_without_repeated_impacts ... ok
+test oblique_impact_reports_final_slip_and_matches_cpu_energy_and_impulse ... ok
+test reaction_capture_does_not_change_contact_momentum_transport ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 74.77s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.87s
+     Running tests/runtime_dispatch_metrics_gpu.rs (target/debug/deps/runtime_dispatch_metrics_gpu-de23d00c1a73a4fd)
+
+running 1 test
+test dispatch_counts_follow_substeps_and_batched_reaction_stages_not_body_count ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.50s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
+     Running tests/runtime_multidof_feedback_gpu.rs (target/debug/deps/runtime_multidof_feedback_gpu-e820f67bdd4b35d0)
+
+running 1 test
+test multidof_drives_use_nonzero_coordinates_and_match_cpu_with_stable_feedback ... multidof kind=D6 stable=false phase=0 peak_pose=1.4334880055109339e-8 peak_velocity=5.1598937581966795e-9 peak_reaction=1.8371237424166524e-6
+multidof kind=D6 stable=false phase=1 peak_pose=8.935616455325909e-4 peak_velocity=2.9712562010934367e-6 peak_reaction=1.980096282858443e-5
+multidof kind=D6 stable=false phase=2 peak_pose=9.04493111282669e-4 peak_velocity=1.7326134933779968e-7 peak_reaction=9.109655685129206e-7
+multidof kind=D6 stable=false phase=3 peak_pose=8.924728209340832e-4 peak_velocity=2.568614393247982e-6 peak_reaction=1.8840901864284586e-5
+multidof kind=D6 stable=true phase=0 peak_pose=1.4334879827300385e-8 peak_velocity=5.574992013474433e-9 peak_reaction=2.0458240646570502e-6
+multidof kind=D6 stable=true phase=1 peak_pose=9.120003282510608e-4 peak_velocity=2.5281029038201973e-6 peak_reaction=1.4682105785685243e-5
+multidof kind=D6 stable=true phase=2 peak_pose=8.894147866620788e-4 peak_velocity=1.807015487235739e-7 peak_reaction=9.057746646765619e-7
+multidof kind=D6 stable=true phase=3 peak_pose=9.078563576372621e-4 peak_velocity=2.3818518978137533e-6 peak_reaction=1.836189966351006e-5
+multidof kind=Free stable=false phase=0 peak_pose=1.4334880055109339e-8 peak_velocity=5.1598937581966795e-9 peak_reaction=1.8371237424166524e-6
+multidof kind=Free stable=false phase=1 peak_pose=8.935616455325909e-4 peak_velocity=2.9712562010934367e-6 peak_reaction=1.980096282858443e-5
+multidof kind=Free stable=false phase=2 peak_pose=9.04493111282669e-4 peak_velocity=1.7326134933779968e-7 peak_reaction=9.109655685129206e-7
+multidof kind=Free stable=false phase=3 peak_pose=8.924728209340832e-4 peak_velocity=2.568614393247982e-6 peak_reaction=1.8840901864284586e-5
+multidof kind=Free stable=true phase=0 peak_pose=1.4334879827300385e-8 peak_velocity=5.574992013474433e-9 peak_reaction=2.0458240646570502e-6
+multidof kind=Free stable=true phase=1 peak_pose=9.120003282510608e-4 peak_velocity=2.5281029038201973e-6 peak_reaction=1.4682105785685243e-5
+multidof kind=Free stable=true phase=2 peak_pose=8.894147866620788e-4 peak_velocity=1.807015487235739e-7 peak_reaction=9.057746646765619e-7
+multidof kind=Free stable=true phase=3 peak_pose=9.078563576372621e-4 peak_velocity=2.3818518978137533e-6 peak_reaction=1.836189966351006e-5
+multidof kind=Ball stable=false phase=0 peak_pose=2.6337564208732378e-8 peak_velocity=5.4550273803200484e-9 peak_reaction=1.9908698723952097e-6
+multidof kind=Ball stable=false phase=1 peak_pose=8.917396049123588e-4 peak_velocity=1.9070317713882452e-6 peak_reaction=1.2092385106179333e-5
+multidof kind=Ball stable=false phase=2 peak_pose=9.045110795476948e-4 peak_velocity=3.784451357421267e-8 peak_reaction=1.7602941775876227e-7
+multidof kind=Ball stable=false phase=3 peak_pose=9.096937632151616e-4 peak_velocity=2.7389014577875495e-6 peak_reaction=2.0342803480194947e-5
+multidof kind=Ball stable=true phase=0 peak_pose=2.6337564208732378e-8 peak_velocity=5.417343029238316e-9 peak_reaction=1.9771149092759653e-6
+multidof kind=Ball stable=true phase=1 peak_pose=9.127740969155652e-4 peak_velocity=1.6732291097277448e-6 peak_reaction=1.0970811364199073e-5
+multidof kind=Ball stable=true phase=2 peak_pose=8.788278261045861e-4 peak_velocity=5.3672498853826203e-8 peak_reaction=2.062766784047572e-7
+multidof kind=Ball stable=true phase=3 peak_pose=9.112229920598123e-4 peak_velocity=1.937131408743887e-6 peak_reaction=1.314533926885771e-5
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.88s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.91s
+     Running tests/runtime_multidof_limits.rs (target/debug/deps/runtime_multidof_limits-8ec0e51fa3061dce)
+
+running 2 tests
+test gpu_d6_angular_projection_preserves_other_xyz_axes_and_authored_frames ... ok
+test gpu_d6_near_gimbal_projection_preserves_resolvable_xyz_axes ... near_gimbal sign=-1 axis=0 error=0.000004197792258658944
+near_gimbal sign=-1 axis=1 error=0.000003876250033998287
+near_gimbal sign=-1 axis=2 error=0.0000004878850443287176
+near_gimbal sign=1 axis=0 error=0.000005475198445877313
+near_gimbal sign=1 axis=1 error=0.0000057596409589333435
+near_gimbal sign=1 axis=2 error=0.0000009248328595866584
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 35.45s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.85s
+     Running tests/runtime_d6_axis_certification.rs (target/debug/deps/runtime_d6_axis_certification-52ffe430d7c385f5)
+
+running 1 test
+test gpu_d6_each_axis_free_bounded_locked_matches_analytic_motion ... d6_axis_cases=36 peak_pose=0.000001736658284289374 peak_rate=0.000006223128200321472
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 4.72s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

@@ -1,0 +1,98 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.92s
+     Running unittests src/lib.rs (target/debug/deps/molla_compute-763de6d897da2e61)
+
+running 11 tests
+test engine::loss_tests::external_backend_is_not_selectable ... ok
+test engine::loss_tests::cpu_engine_has_no_device_loss_signal ... ok
+test engine::tests::gpu_program_cache_retains_valid_objects_without_crossing_engines ... ignored, requires GPU; run via make test-primitives-program-cache-gpu
+test engine::tests::gpu_program_cache_surfaces_validation_and_retries_failed_variants ... ignored, requires GPU; run via make test-primitives-program-cache-gpu
+test engine::tests::cpu_engine_reports_no_adapter ... ok
+test engine::tests::cpu_engine_does_not_initialize_cached_gpu_programs ... ok
+test program_cache::tests::cache_retains_programs_and_separates_type_and_variant ... ok
+test program_cache::tests::eviction_is_bounded_lru_without_invalidating_live_programs ... ok
+test program_cache::tests::failed_initialization_can_be_retried ... ok
+test engine::loss_tests::loss_is_sticky_and_keeps_the_first_diagnostic ... ok
+test program_cache::tests::simultaneous_initialization_compiles_once ... ok
+
+test result: ok. 9 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.03s
+     Running unittests src/lib.rs (target/debug/deps/molla_kernels-93f9a39b7db425e5)
+
+running 2 tests
+test featherstone::scratch_tests::scratch_capacity_tracks_largest_articulation_not_total_scene ... ok
+test featherstone::scratch_tests::program_configuration_tracks_mixed_row_mutations ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/molla_compute-763de6d897da2e61)
+
+running 2 tests
+test engine::tests::gpu_program_cache_retains_valid_objects_without_crossing_engines ... ok
+test engine::tests::gpu_program_cache_surfaces_validation_and_retries_failed_variants ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.47s
+
+    Checking molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+    Checking molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0425]: cannot find value `engine` in this scope
+   --> crates/molla-solvers/src/distance_gpu.rs:103:23
+    |
+103 |         let program = engine.cached_gpu_program(&variant, |device| {
+    |                       ^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `engine` in this scope
+   --> crates/molla-solvers/src/distance_gpu.rs:103:23
+    |
+103 |         let program = engine.cached_gpu_program(&variant, |device| {
+    |                       ^^^^^^ not found in this scope
+    |
+note: function `crate::rigid_contact_activation_gpu::tests::engine` exists but is inaccessible
+   --> crates/molla-solvers/src/rigid_contact_activation_gpu_tests.rs:5:1
+    |
+  5 | fn engine() -> Arc<Engine> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0308]: mismatched types
+    --> crates/molla-solvers/src/distance_gpu.rs:1246:17
+     |
+1246 |                 layout,
+     |                 ^^^^^^ expected `&BindGroupLayout`, found `BindGroupLayout`
+     |
+help: consider borrowing here
+     |
+1246 |                 layout: &layout,
+     |                 +++++++++
+
+Some errors have detailed explanations: E0308, E0425.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `molla-solvers` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `molla-solvers` (lib test) due to 2 previous errors
+make: *** [Makefile:457: clippy-check] Error 101

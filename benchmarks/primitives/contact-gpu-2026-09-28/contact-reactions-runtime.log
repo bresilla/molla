@@ -1,0 +1,27 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.07s
+     Running tests/runtime_contacts_gpu.rs (target/debug/deps/runtime_contacts_gpu-142757d5d2edccea)
+
+running 6 tests
+test contact_capacity_fault_rolls_back_and_topology_recovery_preserves_handles ... ok
+test contact_material_permissions_and_topology_mutations_recompile_without_stale_readouts ... ok
+test public_runtime_contacts_hold_and_publish_substep_forces ... public GPU contact hold CPU position error=3.473708512759624e-7
+ok
+test public_runtime_kinetic_contact_matches_cpu_and_analytic_acceleration ... public GPU kinetic contact CPU position error=5.896698880711748e-6, acceleration=3.999994173645973e0
+ok
+test static_only_contact_scene_and_capacity_validation_are_transactional ... ok
+test warm_contact_fault_keeps_scene_and_recovers_without_recompilation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 235.08s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

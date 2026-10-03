@@ -1,0 +1,35 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: unused import: `crate::normal_contact_gpu::NormalContactRow`
+ --> crates/molla-solvers/src/impact_position_gpu_tests.rs:4:5
+  |
+4 | use crate::normal_contact_gpu::NormalContactRow;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `scalar_position_buffers` is never used
+   --> crates/molla-solvers/src/distance_gpu.rs:722:19
+    |
+ 95 | impl DistanceGpu {
+    | ---------------- method in this implementation
+...
+722 |     pub(crate) fn scalar_position_buffers(
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (lib test) generated 2 warnings (run `cargo fix --lib -p molla-solvers --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.93s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 1 test
+test contact_response_gpu::position_tests::onset_position_displacements_match_cpu_articulated_scalar_oracle ... articulated position displacement peak error=4.869755827969016e-9
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 191 filtered out; finished in 0.93s
+

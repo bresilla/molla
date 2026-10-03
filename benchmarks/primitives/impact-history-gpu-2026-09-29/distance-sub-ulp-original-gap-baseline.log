@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.75s
+     Running tests/runtime_distance_gpu.rs (target/debug/deps/runtime_distance_gpu-5313068753ba1220)
+
+running 1 test
+test runtime_distance_gpu_resolves_sub_ulp_bound_gaps ... 
+thread 'runtime_distance_gpu_resolves_sub_ulp_bound_gaps' (1546892) panicked at crates/molla-solvers/tests/runtime_distance_gpu.rs:312:21:
+GPU length=0.015625 axis=DVec3(1.0, 0.5, 0.25) sign=-1: force=DVec3(4.4396538734436035, 2.2198269367218018, 1.1099134683609009), expected=DVec3(-0.853333333655835, -0.4266666668279175, -0.21333333341395874)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    runtime_distance_gpu_resolves_sub_ulp_bound_gaps
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 4.70s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_distance_gpu`
+make: *** [Makefile:110: test-gpu] Error 101

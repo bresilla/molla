@@ -267,18 +267,24 @@ impl ClothDiffGpu {
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC;
         let mk_init_u32 = |label: &str, data: &[u32]| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(data),
-                usage: wgpu::BufferUsages::STORAGE,
-            })
+            molla_core::gpu_buffer_init!(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(data),
+                    usage: wgpu::BufferUsages::STORAGE,
+                }
+            )
         };
         let mk_init_f32 = |label: &str, data: &[f32], usage: wgpu::BufferUsages| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(data),
-                usage,
-            })
+            molla_core::gpu_buffer_init!(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(data),
+                    usage,
+                }
+            )
         };
         let a_ids: Vec<u32> = springs.iter().map(|s| s.a).collect();
         let b_ids: Vec<u32> = springs.iter().map(|s| s.b).collect();
@@ -293,18 +299,24 @@ impl ClothDiffGpu {
         let csr_off = mk_init_u32("cloth_diff.csr_offsets", &offsets);
         let csr_ent = mk_init_u32("cloth_diff.csr_entries", &entries);
         let tet_ids_buf = if nt > 0 {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("cloth_diff.tet_ids"),
-                contents: bytemuck::cast_slice(&tet_id_rows),
-                usage: wgpu::BufferUsages::STORAGE,
-            })
+            molla_core::gpu_buffer_init!(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("cloth_diff.tet_ids"),
+                    contents: bytemuck::cast_slice(&tet_id_rows),
+                    usage: wgpu::BufferUsages::STORAGE,
+                }
+            )
         } else {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("cloth_diff.tet_ids dummy"),
-                size: 16,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("cloth_diff.tet_ids dummy"),
+                    size: 16,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let tet_v0_buf = mk_init_f32(
             "cloth_diff.tet_v0",
@@ -337,20 +349,23 @@ impl ClothDiffGpu {
         let slab = (n.max(1) * 16) as u64;
         let traj_bytes = slab * (max_steps as u64 + 1);
         let mk_buf = |label: &str, bytes: u64| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(16),
-                usage: usage_rw,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(16),
+                    usage: usage_rw,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let traj_p = mk_buf("cloth_diff.traj_p", traj_bytes);
         let traj_v = mk_buf("cloth_diff.traj_v", traj_bytes);
         // Seed slab 0.
         let p0: Vec<[f32; 4]> = positions.iter().map(|p| [p[0], p[1], p[2], 0.0]).collect();
         let v0: Vec<[f32; 4]> = velocities.iter().map(|v| [v[0], v[1], v[2], 0.0]).collect();
-        queue.write_buffer(&traj_p, 0, bytemuck::cast_slice(&p0));
-        queue.write_buffer(&traj_v, 0, bytemuck::cast_slice(&v0));
+        molla_core::gpu_write_buffer!(queue, &traj_p, 0, bytemuck::cast_slice(&p0));
+        molla_core::gpu_write_buffer!(queue, &traj_v, 0, bytemuck::cast_slice(&v0));
 
         let adj_p = mk_buf("cloth_diff.adj_p", slab);
         let adj_v = mk_buf("cloth_diff.adj_v", slab);
@@ -358,12 +373,15 @@ impl ClothDiffGpu {
         let adj_k = mk_buf("cloth_diff.adj_k", (ns.max(1) * 4) as u64);
         let adj_kv = mk_buf("cloth_diff.adj_kv", (nt.max(1) * 4) as u64);
 
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cloth_diff.uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("cloth_diff.uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         fn entry(binding: u32, buf: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
             wgpu::BindGroupEntry {
@@ -451,8 +469,7 @@ impl ClothDiffGpu {
             gravity_y: self.gravity[1],
             gravity_z: self.gravity[2],
         };
-        self.queue
-            .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&u));
+        molla_core::gpu_write_buffer!(self.queue, &self.uniform_buf, 0, bytemuck::bytes_of(&u));
     }
 
     fn dispatch(&self, pipe: &wgpu::ComputePipeline, groups: u32, label: &str) {
@@ -512,16 +529,16 @@ impl ClothDiffGpu {
             .iter()
             .map(|v| [v[0], v[1], v[2], 0.0])
             .collect();
-        self.queue
-            .write_buffer(&self.adj_p, 0, bytemuck::cast_slice(&ap));
-        self.queue
-            .write_buffer(&self.adj_v, 0, bytemuck::cast_slice(&av));
-        self.queue.write_buffer(
+        molla_core::gpu_write_buffer!(self.queue, &self.adj_p, 0, bytemuck::cast_slice(&ap));
+        molla_core::gpu_write_buffer!(self.queue, &self.adj_v, 0, bytemuck::cast_slice(&av));
+        molla_core::gpu_write_buffer!(
+            self.queue,
             &self.adj_k,
             0,
             bytemuck::cast_slice(&vec![0.0_f32; self.spring_count.max(1) as usize]),
         );
-        self.queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            self.queue,
             &self.adj_kv,
             0,
             bytemuck::cast_slice(&vec![0.0_f32; self.tet_count.max(1) as usize]),
@@ -546,19 +563,21 @@ impl ClothDiffGpu {
         if k.len() != self.spring_count as usize {
             return Err(Error::Solver("cloth_diff: k length".into()));
         }
-        self.queue
-            .write_buffer(&self.spring_k, 0, bytemuck::cast_slice(k));
+        molla_core::gpu_write_buffer!(self.queue, &self.spring_k, 0, bytemuck::cast_slice(k));
         Ok(())
     }
 
     fn read_vec4(&self, buf: &wgpu::Buffer, count: usize) -> Result<Vec<[f32; 3]>> {
         let bytes = (count.max(1) * 16) as u64;
-        let stage = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cloth_diff.stage"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("cloth_diff.stage"),
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -575,7 +594,7 @@ impl ClothDiffGpu {
             .map_err(|e| Error::Gpu(format!("cloth_diff poll: {e:?}")))?;
         rx.recv()
             .map_err(|e| Error::Gpu(format!("cloth_diff recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = molla_core::gpu_readback!(slice);
         let v: Vec<[f32; 4]> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         stage.unmap();
@@ -590,14 +609,17 @@ impl ClothDiffGpu {
         let n = self.particle_count as usize;
         let offset = (step as u64) * (n as u64) * 16;
         // Copy the slab into a fresh staging read via a sub-slice copy.
-        let stage_src = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cloth_diff.slab"),
-            size: (n.max(1) * 16) as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
+        let stage_src = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("cloth_diff.slab"),
+                size: (n.max(1) * 16) as u64,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -628,12 +650,15 @@ impl ClothDiffGpu {
 
     fn read_scalars(&self, src: &wgpu::Buffer, ns: usize) -> Result<Vec<f32>> {
         let bytes = (ns.max(1) * 4) as u64;
-        let stage = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cloth_diff.stage_k"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("cloth_diff.stage_k"),
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -650,7 +675,7 @@ impl ClothDiffGpu {
             .map_err(|e| Error::Gpu(format!("cloth_diff poll k: {e:?}")))?;
         rx.recv()
             .map_err(|e| Error::Gpu(format!("cloth_diff recv k: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = molla_core::gpu_readback!(slice);
         let v: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         stage.unmap();

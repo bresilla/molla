@@ -1,0 +1,80 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.86s
+     Running tests/runtime.rs (target/debug/deps/runtime-7d3b780811629722)
+
+running 6 tests
+test free_root_coordinates_preserve_offset_com_twist ... ok
+test rejected_edits_are_atomic ... ok
+test fixed_mass_is_retained_but_inverse_mass_is_zero ... ok
+test collider_edits_and_cascading_removal_preserve_body_state ... ok
+test removal_compacts_indices_without_reusing_handles_or_losing_state ... ok
+test merging_and_splitting_preserves_unaffected_joint_state_and_controls ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_break_configuration.rs (target/debug/deps/runtime_break_configuration-6fc0b1535722230b)
+
+running 9 tests
+test break_thresholds_are_inclusive_independent_and_validate_zero_and_infinity ... ok
+test threshold_edits_invalidate_dynamics_without_recompiling_or_changing_state ... ok
+test step_checkpoint_restores_solver_state_and_forks_do_not_share_mutable_dynamics ... ok
+test invalid_break_batch_is_atomic_and_loops_do_not_detach_tree_edges ... ok
+test broken_edges_do_not_propagate_later_structural_or_state_edits ... ok
+test broken_tree_edges_release_authored_topology_and_conflicting_repair_is_atomic ... ok
+test explicit_filters_expand_compound_colliders_and_future_body_shapes ... ok
+test batched_breaks_detach_trees_preserve_state_and_require_explicit_repair ... ok
+test break_removes_only_joint_collision_policy_and_explicit_pairs_survive_compaction ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_kind_wake.rs (target/debug/deps/runtime_kind_wake-d3bc86e694ee6aba)
+
+running 4 tests
+test same_body_kind_is_a_true_noop ... ok
+test unknown_body_kind_edit_is_atomic ... ok
+test body_kind_edit_does_not_activate_unrelated_bodies ... ok
+test kind_transition_activation_and_fixed_velocity_follow_wake_policy ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_mass.rs (target/debug/deps/runtime_mass-e88f467100a7d988)
+
+running 7 tests
+test parallel_axis_and_rotated_full_tensor ... ok
+test eigendecomposition_is_scale_relative ... ok
+test rejects_invalid_mass_tensors_without_editing_scene ... ok
+test com_rebase_overflow_leaves_the_scene_unchanged ... ok
+test changing_com_preserves_velocity_field_and_applied_wrench ... ok
+test singular_inertia_is_finite_and_fixed_mass_retains_properties ... ok
+test articulated_com_edits_keep_joint_rates_and_fk_consistent ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_pose_batch.rs (target/debug/deps/runtime_pose_batch-0799e7aa706c51e0)
+
+running 5 tests
+test single_body_teleport_preserves_revolute_winding_for_equivalent_quaternions ... ok
+test root_only_batch_moves_descendants_and_resets_only_its_tree ... ok
+test fixed_root_batch_moves_its_dynamic_descendants ... ok
+test invalid_pose_batches_are_atomic ... ok
+test group_teleport_is_order_independent_and_preserves_joint_rates_and_winding ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_readout.rs (target/debug/deps/runtime_readout-da081b79498f56d9)
+
+running 6 tests
+test state_edit_identity_distinguishes_edits_from_solver_commits ... ok
+test structure_stamps_follow_old_and_new_joint_components ... ok
+test collider_reparenting_invalidates_both_components_atomically ... ok
+test insertion_identities_survive_edits_and_forks_but_not_independent_insertions ... ok
+test joint_insertion_identity_survives_repair_and_clears_on_cascade_removal ... ok
+test body_state_edits_follow_only_the_edited_joint_component ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

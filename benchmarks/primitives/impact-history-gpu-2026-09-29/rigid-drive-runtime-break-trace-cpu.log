@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.63s
+     Running tests/runtime_rigid_loop_drives.rs (target/debug/deps/runtime_rigid_loop_drives-bd8716cd0497e2f6)
+
+running 1 test
+
+thread 'cpu_rigid_loop_motor_brake_breaking_and_repair_retire_and_restore_controls' (609846) panicked at crates/molla-solvers/tests/runtime_rigid_loop_drives.rs:663:13:
+broken control remains applied axis=AngX mass=0.01 DVec3(0.00832971865148565, 0.020987291540934525, -0.06632477755352538) != DVec3(0.008371763360999464, 0.021093226040232997, -0.06665955548822318)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_rigid_loop_motor_brake_breaking_and_repair_retire_and_restore_controls ... FAILED
+
+failures:
+
+failures:
+    cpu_rigid_loop_motor_brake_breaking_and_repair_retire_and_restore_controls
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_rigid_loop_drives`
+make: *** [Makefile:93: test] Error 101

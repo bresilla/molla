@@ -1,0 +1,20 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.71s
+     Running tests/runtime_loop_articulated_contacts.rs (target/debug/deps/runtime_loop_articulated_contacts-feb21b03d836e85b)
+
+running 1 test
+test cpu_rotated_loops_and_articulated_contacts_match_motion_and_anchor_wrench_oracle ... articulated rotated loop/contact oracle hz=60 substeps=1: 9 assemblies passed
+articulated rotated loop/contact oracle hz=60 substeps=4: 9 assemblies passed
+articulated rotated loop/contact oracle hz=120 substeps=1: 9 assemblies passed
+articulated rotated loop/contact oracle hz=120 substeps=4: 9 assemblies passed
+articulated rotated loop/contact oracle hz=240 substeps=1: 9 assemblies passed
+articulated rotated loop/contact oracle hz=240 substeps=4: 9 assemblies passed
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+

@@ -1,0 +1,17 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.10s
+     Running tests/rigid_singular_forces.rs (target/debug/deps/rigid_singular_forces-37a574e93abd27be)
+
+running 1 test
+test gpu_locked_singular_d6_roots_keep_supported_spin_under_null_axis_loads ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 15.06s
+

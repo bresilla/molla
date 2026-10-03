@@ -270,16 +270,15 @@ impl<T: BufferElement> Buffer<T> {
     pub fn ensure_device<D: BufferDevice + ?Sized>(&mut self, device: &D) -> Result<()> {
         let owner = device.owner();
         if self.device.is_some() {
-            if let Some(requested) = &owner {
-                if self
+            if let Some(requested) = &owner
+                && self
                     .device_owner
                     .as_ref()
                     .is_some_and(|existing| !std::sync::Arc::ptr_eq(existing, requested))
-                {
-                    return Err(Error::Storage(
-                        "buffer belongs to a different owned device".into(),
-                    ));
-                }
+            {
+                return Err(Error::Storage(
+                    "buffer belongs to a different owned device".into(),
+                ));
             }
             return Ok(());
         }
@@ -307,12 +306,15 @@ impl<T: BufferElement> Buffer<T> {
         };
 
         let size = (self.host.len() * core::mem::size_of::<T::Gpu>()) as u64;
-        let buf = device.device().create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::Buffer"),
-            size,
-            usage,
-            mapped_at_creation: false,
-        });
+        let buf = molla_core::gpu_create_buffer!(
+            device.device(),
+            &wgpu::BufferDescriptor {
+                label: Some("molla::Buffer"),
+                size,
+                usage,
+                mapped_at_creation: false,
+            }
+        );
         self.device = Some(buf);
         self.device_owner = owner;
         // Host is the authoritative copy until we upload.
@@ -351,7 +353,7 @@ impl<T: BufferElement> Buffer<T> {
             .try_reserve_exact(self.host.len())
             .map_err(|_| Error::Storage("buffer upload packing allocation failed".into()))?;
         scratch.extend(self.host.iter().map(BufferElement::to_gpu));
-        queue.write_buffer(buf, 0, bytemuck::cast_slice(scratch));
+        molla_core::gpu_write_buffer!(queue, buf, 0, bytemuck::cast_slice(scratch));
         self.state = SyncState::InSync;
         Ok(())
     }
@@ -378,12 +380,15 @@ impl<T: BufferElement> Buffer<T> {
         let byte_size = (self.host.len() * elem_size) as u64;
 
         // Staging buffer that supports MAP_READ.
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::Buffer staging"),
-            size: byte_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let staging = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::Buffer staging"),
+                size: byte_size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -403,7 +408,7 @@ impl<T: BufferElement> Buffer<T> {
             .map_err(|e| Error::Gpu(format!("download recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("buffer map: {e:?}")))?;
 
-        let mapped = slice.get_mapped_range();
+        let mapped = molla_core::gpu_readback!(slice);
         let gpu_slice: &[T::Gpu] = bytemuck::cast_slice(&mapped);
         for (host, gpu) in self.host.iter_mut().zip(gpu_slice.iter()) {
             *host = T::from_gpu(gpu);

@@ -105,11 +105,14 @@ impl BindingCache {
             self.uniforms.push_back(entry);
             return group;
         }
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::vbd_cloth cached uniforms"),
-            contents: bytes,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let buffer = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::vbd_cloth cached uniforms"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::vbd_cloth cached uniforms bg"),
             layout,

@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-core v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-core)
+    Checking molla-math v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-math)
+    Checking molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+    Checking molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+    Checking molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+    Checking molla-autograd v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-autograd)
+    Checking molla-optim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-optim)
+    Checking molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Checking molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.64s

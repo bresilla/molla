@@ -604,13 +604,17 @@ impl TireMpmGpuKernel {
         fallback_surface_velocity: [f32; 3],
     ) -> Result<()> {
         let cell_count = params.validate()?;
-        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_mpm raster uniforms"),
-            size: core::mem::size_of::<TireMpmRasterUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(
+        let uniforms = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_mpm raster uniforms"),
+                size: core::mem::size_of::<TireMpmRasterUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireMpmRasterUniforms {
@@ -693,12 +697,15 @@ impl TireMpmGpuKernel {
         let vec4_bytes = |len: usize| (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64;
         let f32_bytes = |len: usize| (len.max(1) * core::mem::size_of::<f32>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let positions = mk_buf(
             "tire_mpm raster positions",
@@ -745,9 +752,19 @@ impl TireMpmGpuKernel {
             vec4_bytes(cell_count),
             wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         );
-        queue.write_buffer(&positions, 0, bytemuck::cast_slice(positions_input));
-        queue.write_buffer(&velocities, 0, bytemuck::cast_slice(velocities_input));
-        queue.write_buffer(&compaction, 0, bytemuck::cast_slice(compaction_input));
+        molla_core::gpu_write_buffer!(queue, &positions, 0, bytemuck::cast_slice(positions_input));
+        molla_core::gpu_write_buffer!(
+            queue,
+            &velocities,
+            0,
+            bytemuck::cast_slice(velocities_input)
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &compaction,
+            0,
+            bytemuck::cast_slice(compaction_input)
+        );
         self.dispatch_raster_to_buffers(
             device,
             queue,
@@ -800,12 +817,15 @@ impl TireMpmGpuKernel {
         let contact_bytes =
             |len: usize| (len.max(1) * core::mem::size_of::<TireMpmContactCell>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let contacts = mk_buf(
             "tire_mpm in-place contacts",
@@ -818,15 +838,22 @@ impl TireMpmGpuKernel {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
         if contacts_input.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &contacts,
                 0,
                 bytemuck::cast_slice(&[TireMpmContactCell::default()]),
             );
         } else {
-            queue.write_buffer(&contacts, 0, bytemuck::cast_slice(contacts_input));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &contacts,
+                0,
+                bytemuck::cast_slice(contacts_input)
+            );
         }
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireMpmUniforms {
@@ -892,12 +919,15 @@ impl TireMpmGpuKernel {
         let contact_bytes =
             |len: usize| (len.max(1) * core::mem::size_of::<TireMpmContactCell>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let usage_ro = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let usage_rw = wgpu::BufferUsages::STORAGE
@@ -919,19 +949,31 @@ impl TireMpmGpuKernel {
         let stage_vel = stage_vec4(device, "tire_mpm stage vel", n);
         let stage_compact = stage_vec4(device, "tire_mpm stage compact", n);
 
-        queue.write_buffer(&pos_in, 0, bytemuck::cast_slice(&input.positions));
-        queue.write_buffer(&vel_in, 0, bytemuck::cast_slice(&input.velocities));
-        queue.write_buffer(&compact_in, 0, bytemuck::cast_slice(&input.compaction));
+        molla_core::gpu_write_buffer!(queue, &pos_in, 0, bytemuck::cast_slice(&input.positions));
+        molla_core::gpu_write_buffer!(queue, &vel_in, 0, bytemuck::cast_slice(&input.velocities));
+        molla_core::gpu_write_buffer!(
+            queue,
+            &compact_in,
+            0,
+            bytemuck::cast_slice(&input.compaction)
+        );
         if input.contacts.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &contacts,
                 0,
                 bytemuck::cast_slice(&[TireMpmContactCell::default()]),
             );
         } else {
-            queue.write_buffer(&contacts, 0, bytemuck::cast_slice(&input.contacts));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &contacts,
+                0,
+                bytemuck::cast_slice(&input.contacts)
+            );
         }
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireMpmUniforms {
@@ -1013,12 +1055,15 @@ fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
 }
 
 fn stage_vec4(device: &wgpu::Device, label: &str, len: usize) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    })
+    molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }
+    )
 }
 
 fn read_vec4(device: &wgpu::Device, buf: &wgpu::Buffer, label: &str) -> Result<Vec<[f32; 4]>> {
@@ -1031,7 +1076,7 @@ fn read_vec4(device: &wgpu::Device, buf: &wgpu::Buffer, label: &str) -> Result<V
     rx.recv()
         .map_err(|_| Error::Solver(format!("{label}: map callback dropped")))?
         .map_err(|e| Error::Solver(format!("{label}: map failed: {e:?}")))?;
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let out = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     buf.unmap();
@@ -1048,7 +1093,7 @@ fn read_f32(device: &wgpu::Device, buf: &wgpu::Buffer, label: &str) -> Result<Ve
     rx.recv()
         .map_err(|_| Error::Solver(format!("{label}: map callback dropped")))?
         .map_err(|e| Error::Solver(format!("{label}: map failed: {e:?}")))?;
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let out = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     buf.unmap();

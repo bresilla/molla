@@ -1,0 +1,45 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/radix_sort_gpu.rs (target/debug/deps/radix_sort_gpu-04d0e3ea97727d3c)
+
+running 8 tests
+test radix_sort_all_equal_keys_preserves_order ... ok
+test radix_sort_already_sorted_input_is_idempotent ... ok
+test radix_sort_high_byte_only_keys ... ok
+test radix_sort_paired_duplicates_are_stable ... ok
+test radix_sort_random_100k_matches_reference ... ok
+test radix_sort_random_1k_matches_reference ... ok
+test radix_sort_reverse_sorted_input_works ... ok
+test retained_sorts_keep_independent_uniforms_and_scratch_across_queued_updates ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.61s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.98s
+     Running tests/contact_islands_gpu.rs (target/debug/deps/contact_islands_gpu-26ebfd66d59f4e30)
+
+running 5 tests
+test contact_island_faults_retire_outputs_and_reset_at_explicit_boundary ... ok
+test deterministic_contact_islands_match_cpu_across_100_queued_graph_changes ... ok
+test mixed_graph_validation_capacity_and_sticky_recovery ... ok
+test mixed_joint_contact_graphs_preserve_joint_only_and_boundary_only_islands ... ok
+test reversed_cross_workgroup_chains_keep_one_whole_articulation_component ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.62s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

@@ -303,7 +303,6 @@ fn annotation_relabel_snapshot_reuse_and_empty_labels_preserve_queued_versions()
     let mut ring = ring(&engine, 6, 2, 3);
     let first = enqueue(&frame, 0, &mut ring);
     drop(jobs);
-    drop(channel);
     drop(snapshot);
     pool.reset().unwrap();
     let second_labels = [

@@ -1,0 +1,14 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.89s
+     Running tests/featherstone_motor_caps_gpu.rs (target/debug/deps/featherstone_motor_caps_gpu-295722ab9c707e37)
+
+running 2 tests
+test fem_island_accepts_caps_and_applies_them_on_gpu ... ok
+test gpu_motor_caps_preserve_feedforward_and_total_limits ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.25s
+

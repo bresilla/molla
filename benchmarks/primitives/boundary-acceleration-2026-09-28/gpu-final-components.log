@@ -1,0 +1,42 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running tests/reaction_wrenches_gpu.rs (target/debug/deps/reaction_wrenches_gpu-93c0ee512f6ae3ab)
+
+running 4 tests
+test accelerating_boundaries_match_cpu_for_all_joint_kinds_and_reversals ... general GPU reactions: accelerating=true arts=144 joints=432 dofs=738 peak scaled wrench error=2.41202148723776e-6
+ok
+test empty_and_maximum_fixed_trees_keep_wrenches_without_dofs ... ok
+test general_gpu_wrenches_match_cpu_for_all_joint_kinds_and_boundaries ... general GPU reactions: accelerating=false arts=144 joints=432 dofs=738 peak scaled wrench error=2.41202148723776e-6
+ok
+test prepared_reaction_dispatch_retains_resources ... retained GPU reaction resources=[60, 787504, 4, 3, 3]
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.39s
+
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.83s
+     Running tests/reaction_boundary_acceleration.rs (target/debug/deps/reaction_boundary_acceleration-aba7e7eaac6239c8)
+
+running 2 tests
+test gpu::prescribed_derivatives_match_analytic_and_cpu_reactions ... prescribed boundary reactions: 12 fixtures, peak scaled error=4.1627122306952556e-5
+ok
+test gpu::retained_boundary_updates_fault_retirement_and_recovery ... retained nonzero boundary reaction resources=[60, 526240, 4, 3, 3]
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.82s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

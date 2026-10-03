@@ -1,0 +1,42 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.76s
+     Running tests/runtime_mixed_contacts_cpu.rs (target/debug/deps/runtime_mixed_contacts_cpu-8c046ec7274fc43a)
+
+running 3 tests
+
+thread 'distance_and_contact_share_one_cpu_impulse_solution' (252693) panicked at crates/molla-solvers/tests/runtime_mixed_contacts_cpu.rs:101:9:
+v=DVec3(0.003999999999999, 0.003999999999999, 2.000177801164682e-14) expected=0.003585786437625491
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test distance_and_contact_share_one_cpu_impulse_solution ... FAILED
+
+thread 'distance_between_two_contacts_transfers_friction_and_preserves_endpoint_exchange' (252694) panicked at crates/molla-solvers/tests/runtime_mixed_contacts_cpu.rs:138:13:
+reverse=false v=SpatialVector { linear: DVec3(0.003999999999999, 0.0, 2.000177801164682e-14), angular: DVec3(0.0, 0.000999940000001, 0.0) }
+
+thread 'mixed_cpu_distance_break_uses_common_reaction_and_continues' (252695) panicked at crates/molla-solvers/tests/runtime_mixed_contacts_cpu.rs:177:5:
+assertion failed: world.scene.joint_broken(j).unwrap()
+test distance_between_two_contacts_transfers_friction_and_preserves_endpoint_exchange ... FAILED
+test mixed_cpu_distance_break_uses_common_reaction_and_continues ... FAILED
+
+failures:
+
+failures:
+    distance_and_contact_share_one_cpu_impulse_solution
+    distance_between_two_contacts_transfers_friction_and_preserves_endpoint_exchange
+    mixed_cpu_distance_break_uses_common_reaction_and_continues
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_mixed_contacts_cpu`
+make[1]: *** [Makefile:74: test] Error 101
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:147: test-primitives-mixed-contacts-cpu] Error 2

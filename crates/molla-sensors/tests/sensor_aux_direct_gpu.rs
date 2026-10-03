@@ -920,7 +920,13 @@ fn contact_backpressure_foreign_pools_and_device_loss_are_explicit() {
         let mut blocked = SensorCommandBatch::new(&engine).unwrap();
         assert!(
             sensor
-                .encode(&mut blocked, &engine, &inputs, &mut pool, Default::default())
+                .encode(
+                    &mut blocked,
+                    &engine,
+                    &inputs,
+                    &mut pool,
+                    Default::default()
+                )
                 .unwrap()
                 .is_none()
         );
@@ -929,7 +935,10 @@ fn contact_backpressure_foreign_pools_and_device_loss_are_explicit() {
     }
     assert_eq!(pool.stats().backpressure, 1);
     assert_eq!(sensor.dispatch_stats().binding_preparations, preparations);
-    assert_eq!(contact_values(&engine, &held).channel::<u32>(0).unwrap()[1], 2);
+    assert_eq!(
+        contact_values(&engine, &held).channel::<u32>(0).unwrap()[1],
+        2
+    );
     drop(held);
     assert_eq!(pool.available_slots().unwrap(), 1);
     let mut batch = SensorCommandBatch::new(&engine).unwrap();
@@ -951,7 +960,13 @@ fn contact_backpressure_foreign_pools_and_device_loss_are_explicit() {
         let mut batch = SensorCommandBatch::new(&engine).unwrap();
         assert!(
             sensor
-                .encode(&mut batch, &engine, &inputs, &mut foreign_pool, Default::default())
+                .encode(
+                    &mut batch,
+                    &engine,
+                    &inputs,
+                    &mut foreign_pool,
+                    Default::default()
+                )
                 .is_err()
         );
         assert_eq!(batch.stats().encoded_frames, 0);
@@ -970,7 +985,13 @@ fn contact_backpressure_foreign_pools_and_device_loss_are_explicit() {
     // Known device loss fails the pending batch and every later use.
     let mut pending = SensorCommandBatch::new(&engine).unwrap();
     sensor
-        .encode(&mut pending, &engine, &inputs, &mut pool, Default::default())
+        .encode(
+            &mut pending,
+            &engine,
+            &inputs,
+            &mut pool,
+            Default::default(),
+        )
         .unwrap()
         .unwrap();
     engine.destroy_device().unwrap();

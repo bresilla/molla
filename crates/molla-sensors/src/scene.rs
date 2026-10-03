@@ -120,7 +120,7 @@ impl SensorScene {
         let n = source.shape_count;
         if [n, source.body_count].into_iter().any(|count| {
             (count as u64).checked_mul(32).is_none_or(|bytes| {
-                bytes > device.limits().max_storage_buffer_binding_size as u64
+                bytes > device.limits().max_storage_buffer_binding_size
                     || bytes > device.limits().max_buffer_size
             })
         }) {

@@ -1,0 +1,52 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.10s
+     Running tests/runtime_kinematic_constraints.rs (target/debug/deps/runtime_kinematic_constraints-e8c47a47ffcd2137)
+
+running 6 tests
+prescribed contact common=false inherited=true angular=false
+prescribed contact common=false inherited=false angular=false
+prescribed distance sleep=false
+test builder_rejects_nonkinematic_driven_flags_and_invalid_acceleration_atomically ... ok
+prescribed distance sleep=true
+test angular_boundary_acceleration_transmits_through_locked_swing ... ok
+prescribed contact common=true inherited=false angular=false
+test accelerating_boundary_captures_above_dynamic_but_below_static_capacity ... ok
+test accelerating_distance_boundary_uses_free_velocity_and_reports_support ... ok
+prescribed contact common=false inherited=true angular=false
+prescribed contact common=true inherited=true angular=false
+prescribed contact common=false inherited=true angular=true
+test accelerating_contact_boundary_captures_from_rest_in_contact_only_and_common_paths ... ok
+test sustained_accelerating_distance_has_bounded_step_refining_error ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/runtime_kinematic_reactions.rs (target/debug/deps/runtime_kinematic_reactions-ccdc49ef4f5f524d)
+
+running 12 tests
+test moving_kinematic_fixed_joint_reports_full_inertia_gyro_and_external_loads ... ok
+test reversed_kinematic_joint_reports_load_on_the_authored_child ... ok
+test translating_rotating_kinematic_root_does_not_add_spurious_hinge_acceleration ... ok
+test driven_acceleration_wakes_initially_stationary_dependents ... ok
+test driven_isolated_body_and_held_mode_have_distinct_motion ... ok
+test driven_post_break_failure_restores_motion_and_configuration ... ok
+test driven_com_motion_advances_once_per_substep_and_redrift ... ok
+test driven_motion_edits_are_atomic_and_survive_fork_and_disable ... ok
+test driven_fixed_hinge_ball_reactions_include_boundary_acceleration ... ok
+test driven_break_continues_parent_motion_and_preserves_detached_velocity ... ok
+test moving_kinematic_tree_reactions_match_centripetal_support_loads ... ok
+prescribed noncollinear orientation errors=[0.00041720486832807157, 0.0001042902356363985, 2.6071592993724533e-5]
+test noncollinear_angular_acceleration_has_second_order_orientation_convergence ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

@@ -1,0 +1,24 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0599]: no method named `with_rotation` found for struct `molla_sim::BodyParams` in the current scope
+  --> crates/molla-solvers/tests/runtime_d6_singular_bounds.rs:24:18
+   |
+22 |               params: BodyParams::new()
+   |  _____________________-
+23 | |                 .with_position(Vec3::Y)
+24 | |                 .with_rotation(rotation),
+   | |_________________-^^^^^^^^^^^^^
+   |
+help: there is a method `with_position` with a similar name
+   |
+24 -                 .with_rotation(rotation),
+24 +                 .with_position(rotation),
+   |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `molla-solvers` (test "runtime_d6_singular_bounds") due to 1 previous error
+make: *** [Makefile:380: clippy-check] Error 101

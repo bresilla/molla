@@ -1,0 +1,29 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking wgpu-naga-bridge v29.0.4
+    Checking parry3d-f64 v0.26.1
+    Checking wgpu-hal v29.0.4
+    Checking wgpu-core-deps-windows-linux-android v29.0.4
+    Checking wgpu-core v29.0.4
+    Checking wgpu v29.0.4
+    Checking molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+    Checking molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+    Checking molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+    Checking molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Checking molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: function `body_poses` is never used
+  --> crates/molla-solvers/tests/common/gpu_readback.rs:27:8
+   |
+27 | pub fn body_poses(engine: &Engine, system: &FemRigidGpuSystem, count: usize) -> Vec<Transform> {
+   |        ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (test "featherstone_stop_momentum") generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.34s

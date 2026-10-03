@@ -5,6 +5,17 @@ use molla_sim::{
 };
 use molla_solvers::{FeatherstoneSolver, SemiImplicitSolver, Solver, XpbdSolver};
 
+#[path = "support/world_isolation.rs"]
+mod world_isolation;
+
+#[test]
+fn independently_created_worlds_isolate_gravity_state_and_mutations() {
+    world_isolation::verify(
+        |scene| molla_solvers::rigid_world::RigidWorld::from_scene(scene).unwrap(),
+        1e-10,
+    );
+}
+
 fn step(scene: &mut RigidScene, solver: &mut FeatherstoneSolver) {
     let mut next = scene.model().state().unwrap();
     solver

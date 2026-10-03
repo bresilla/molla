@@ -115,12 +115,52 @@ fn gpu_motor_caps_preserve_feedforward_and_total_limits() {
     }
     control.joint_motor_max_force.host_mut().unwrap()[0] = 10.0;
     control.joint_motor_model.host_mut().unwrap()[0] = 1;
+    control.joint_target_pos.host_mut().unwrap()[0] = 1.0;
+    control.joint_target_vel.host_mut().unwrap()[0] = 1.0;
+    control.joint_target_kp.host_mut().unwrap()[0] = 100.0;
+    control.joint_target_kd.host_mut().unwrap()[0] = 100.0;
+    for mode in [
+        JointTargetMode::Position,
+        JointTargetMode::Velocity,
+        JointTargetMode::PositionVelocity,
+    ] {
+        control.joint_target_mode.host_mut().unwrap()[0] = mode as u32;
+        control.upload_to_device(device, queue).unwrap();
+        gpu.set_rigorous_d_solve(false);
+        assert!(
+            gpu.step(&model, &input, &control, &contacts, dt, &mut output)
+                .unwrap_err()
+                .to_string()
+                .contains("acceleration motors require rigorous dynamics")
+        );
+        gpu.set_rigorous_d_solve(true);
+        gpu.step(&model, &input, &control, &contacts, dt, &mut output)
+            .unwrap();
+        let velocity =
+            gpu_readback::read::<f32>(&engine, output.joint_qd.device_buffer().unwrap(), 1)[0];
+        assert!(
+            (velocity as f64 - 10.0 * dt).abs() < 2e-6,
+            "{mode:?}: {velocity}"
+        );
+    }
+    for rigorous in [false, true] {
+        gpu.set_rigorous_d_solve(rigorous);
+        control.joint_target_mode.host_mut().unwrap()[0] = JointTargetMode::Effort as u32;
+        control.joint_target_pos.host_mut().unwrap()[0] = 100.0;
+        control.upload_to_device(device, queue).unwrap();
+        gpu.step(&model, &input, &control, &contacts, dt, &mut output)
+            .unwrap();
+        let velocity =
+            gpu_readback::read::<f32>(&engine, output.joint_qd.device_buffer().unwrap(), 1)[0];
+        assert!((velocity as f64 - 10.0 * dt).abs() < 2e-6);
+    }
+    control.joint_motor_model.host_mut().unwrap()[0] = 2;
     control.upload_to_device(device, queue).unwrap();
     assert!(
         gpu.step(&model, &input, &control, &contacts, dt, &mut output)
             .unwrap_err()
             .to_string()
-            .contains("acceleration")
+            .contains("motor model")
     );
 }
 

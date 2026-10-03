@@ -140,6 +140,7 @@ fn capsule_stack_two() {
     let v0 = qd[0].linear.length();
     let v1 = qd[1].linear.length();
     eprintln!("capsule stack: y0={y0:.4} y1={y1:.4} v0={v0:.4} v1={v1:.4}");
+    eprintln!("capsule stack poses={q:?} velocities={qd:?}");
     // Bottom capsule resting on plane → y ≈ radius.
     assert!(
         (y0 - radius).abs() < 0.05,

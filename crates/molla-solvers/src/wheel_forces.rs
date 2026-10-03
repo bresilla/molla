@@ -163,6 +163,10 @@ impl WheelForces {
         self.wheels.get(&body)
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.wheels.is_empty()
+    }
+
     pub fn insert(&mut self, scene: &RigidScene, desc: WheelDesc) -> Result<()> {
         let joint = scene
             .joint(desc.spin_joint)
@@ -308,10 +312,16 @@ impl WheelForces {
         if let Some(grid) = &friction {
             grid.validate()?;
         }
-        let max_friction = friction.as_ref().map_or(0.0, |grid| {
-            grid.values.iter().copied().fold(0.0, Real::max)
-        });
-        self.grounds.insert(id, GroundMaterial { grid: friction, max_friction });
+        let max_friction = friction
+            .as_ref()
+            .map_or(0.0, |grid| grid.values.iter().copied().fold(0.0, Real::max));
+        self.grounds.insert(
+            id,
+            GroundMaterial {
+                grid: friction,
+                max_friction,
+            },
+        );
         self.activation_revision = self.activation_revision.wrapping_add(1);
         self.shear.retain(|_, shear| shear.ground != id);
         self.prepared_stamp = None;
@@ -336,7 +346,11 @@ impl WheelForces {
         WheelSamples::new(
             if valid { &self.samples } else { &[] },
             scene,
-            if unchanged { None } else { Some(&self.sample_dependencies) },
+            if unchanged {
+                None
+            } else {
+                Some(&self.sample_dependencies)
+            },
         )
     }
 
@@ -476,7 +490,8 @@ impl WheelForces {
         let state = response.state();
         let _span = tracing::debug_span!("wheel_forces").entered();
         for (body, state) in pressure_states.iter_mut() {
-            if selected.is_none_or(|mask| scene.body_index(*body).is_some_and(|i| mask[i.index()])) {
+            if selected.is_none_or(|mask| scene.body_index(*body).is_some_and(|i| mask[i.index()]))
+            {
                 state.advance(dt);
             }
         }
@@ -516,14 +531,10 @@ impl WheelForces {
                 .index();
             let pose = poses[body];
             let hub = pose.transform_point(w.local_hub);
-            let Some(hit) = query_ground(
-                &mut self.queries,
-                scene,
-                &self.grounds,
-                range,
-                hub,
-                |id| !excluded(Some(w.body), scene.collider(id).and_then(|c| c.parent)),
-            )?
+            let Some(hit) =
+                query_ground(&mut self.queries, scene, &self.grounds, range, hub, |id| {
+                    !excluded(Some(w.body), scene.collider(id).and_then(|c| c.parent))
+                })?
             else {
                 shear.remove(&w.body);
                 continue;
@@ -545,7 +556,8 @@ impl WheelForces {
             } else {
                 model.joint_axis.host()?[joint]
             };
-            let axle = (pose.rotation * (model.joint_x_c.host()?[joint].rotation * local_axle)).normalize_or_zero();
+            let axle = (pose.rotation * (model.joint_x_c.host()?[joint].rotation * local_axle))
+                .normalize_or_zero();
             let contact = WheelContact {
                 hub_pos: hub.to_array(),
                 hub_vel: velocity.to_array(),
@@ -574,7 +586,9 @@ impl WheelForces {
                     distance,
                     hit.surface.reference,
                     Some((&mut history.state, dt)),
-                    hit.surface.grid.map(|_| &friction_at as &dyn Fn(Vec3) -> Real),
+                    hit.surface
+                        .grid
+                        .map(|_| &friction_at as &dyn Fn(Vec3) -> Real),
                 )?;
                 if !output.in_contact {
                     shear.remove(&w.body);

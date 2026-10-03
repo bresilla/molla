@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.86s
+     Running tests/runtime_loop_controls.rs (target/debug/deps/runtime_loop_controls-1433d6030d0172c3)
+
+running 1 test
+
+thread 'cpu_compliant_loop_controls_match_coupled_linear_angular_oracle' (3746455) panicked at crates/molla-solvers/tests/runtime_loop_controls.rs:251:25:
+position hz=60 substeps=1 frame=0 case=Case { body: BodyHandle(61), joint: JointHandle(63), kind: Prismatic, origin: DVec3(160.0, 2.0, -3.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0), inertia: 0.01, motor: JointMotor { mode: Effort, target_position: 0.4, target_velocity: 0.7, stiffness: 0.0, damping: 0.0, max_force: 0.25, model: Force }, position: 0.0010570697384206947, velocity: 0.06342418430524169 } actual=Transform { position: DVec3(159.99691882731412, 2.0, -3.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_compliant_loop_controls_match_coupled_linear_angular_oracle ... FAILED
+
+failures:
+
+failures:
+    cpu_compliant_loop_controls_match_coupled_linear_angular_oracle
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.39s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_loop_controls`
+make: *** [Makefile:89: test] Error 101

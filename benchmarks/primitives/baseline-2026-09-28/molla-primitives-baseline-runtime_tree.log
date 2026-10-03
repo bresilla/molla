@@ -1,0 +1,21 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/runtime_tree.rs (target/debug/deps/runtime_tree-fff3d18e1f1c33b9)
+
+running 10 tests
+test rerooted_teleport_moves_solver_descendants_not_authored_children ... ok
+test constraint_loops_remain_atomic_errors ... ok
+test reversed_free_joint_matches_unconstrained_body_motion ... ok
+test reversed_d6_jacobian_and_inverse_dynamics_match_finite_differences ... ok
+test world_anchor_can_pin_a_nonroot_and_detach_with_current_velocity ... ok
+test reversed_frame_edits_and_suspension_keep_authored_endpoints ... ok
+test reversed_prismatic_limits_and_impulses_keep_logical_signs ... ok
+test fixing_a_hinge_child_reroots_without_reversing_motor_semantics ... ok
+test merging_at_two_existing_children_reverses_only_the_needed_branch ... ok
+test reversed_ball_motor_targets_authored_relative_orientation ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

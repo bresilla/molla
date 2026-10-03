@@ -1,0 +1,19 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.65s
+     Running tests/runtime_ball_drives.rs (target/debug/deps/runtime_ball_drives-e554f937c436dae3)
+
+running 3 tests
+18 floating two-body full-inertia Ball pairs, simultaneous three-axis Force/Acceleration PD and brakes, mixed zero/finite/unbounded caps: independent box active-set enumeration, angular momentum and both-anchor reactions
+test cpu_floating_ball_drives_match_independent_multiaxis_box_response ... ok
+32 live Ball cone/control frames, six rotated closures: blocked swing cancels effort, free twist follows independent implicit brake/Force/Acceleration law, setters retain layout and separate cone/total reactions
+test cpu_ball_drives_and_brakes_share_cone_constraints_and_reactions ... ok
+540 full-tensor off-centre Ball closures: three authored-frame axes, all modes, Force/Acceleration, three masses/caps, brakes, independent inverse pivot tensor and anchor reactions
+test cpu_ball_drives_use_full_pivot_response_and_physical_caps ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.13s
+

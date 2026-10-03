@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.88s
+     Running tests/narrow_resident_gpu.rs (target/debug/deps/narrow_resident_gpu-c0617498070c6087)
+
+running 5 tests
+test resident_batch_crosses_workgroups_and_clears_retired_slots ... ok
+test resident_epa_nonconvergence_is_a_device_fault ... ok
+test resident_faults_are_explicit_sticky_and_clearable ... ok
+test resident_lbvh_gjk_epa_chain_has_no_substep_host_roundtrip ... ok
+test resident_preparation_rejects_invalid_capacities_and_buffers ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.44s
+

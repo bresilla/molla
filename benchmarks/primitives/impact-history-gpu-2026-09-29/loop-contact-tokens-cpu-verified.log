@@ -1,0 +1,27 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.95s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 10 tests
+test impact_episodes_gpu::tests::frame_rollback_sticky_fault_and_capacity_failure_preserve_history ... ignored, requires GPU
+test impact_episodes_gpu::tests::history_rehash_and_dense_shape_remapping_retain_pair_identity ... ignored, requires GPU
+test impact_episodes_gpu::tests::invalid_episode_configuration_and_failed_history_shrink_are_fail_closed ... ignored, requires GPU
+test impact_episodes_gpu::tests::normal_preparation_episode_suppression_and_force_gather_share_one_encoder ... ignored, requires GPU
+test impact_episodes_gpu::tests::one_hundred_queued_manifold_changes_match_pair_reference_across_workgroups ... ignored, requires GPU
+test impact_episodes_gpu::tests::onset_suppression_does_not_hide_invalid_force_or_material_inputs ... ignored, requires GPU
+test impact_episodes_gpu::tests::onset_suppression_pair_reordering_separation_and_normal_changes ... ignored, requires GPU
+test impact_episodes_gpu::tests::automatic_detachment_retains_tokens_but_not_explicit_state_edits ... ok
+test impact_episodes_gpu::tests::restoring_published_state_reuses_tokens_without_aliasing_genuine_edits ... ok
+test impact_episodes_gpu::tests::identities_survive_compaction_and_steps_but_not_authored_edits_or_unrelated_scenes ... ok
+
+test result: ok. 3 passed; 0 failed; 7 ignored; 0 measured; 205 filtered out; finished in 0.00s
+

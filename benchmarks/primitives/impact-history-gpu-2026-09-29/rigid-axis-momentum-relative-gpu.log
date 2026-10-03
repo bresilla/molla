@@ -1,0 +1,33 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.87s
+     Running tests/runtime_rigid_axis_loops.rs (target/debug/deps/runtime_rigid_axis_loops-39fcc59d278367ac)
+
+running 1 test
+test gpu_rigid_axis_loops_match_independent_hard_bound_motion_and_wrenches ... rigid-axis loops hz=60 substeps=1: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=60 substeps=4: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=1: 24 world closures, both bounds and live limit edits passed
+axis trace frame=55 expected q=-0.004750000000000004 v=-0.16000000000000011 actual q=-0.004750041591182889 v=-0.16000047511708468 pose=Transform { position: DVec3(14.999435424804688, 0.4985771179199219, -0.1955033838748932), rotation: DQuat(-0.1897960603237152, -0.05871080234646797, 0.2896294891834259, 0.936293363571167) }
+axis trace frame=56 expected q=-0.0017578124999999872 v=0.716250000000004 actual q=-0.0017576098735663478 v=0.7163082137934847 pose=Transform { position: DVec3(14.999791145324707, 0.499473512172699, -0.1983361542224884), rotation: DQuat(-0.1897960603237152, -0.05871080234646797, 0.2896294891834259, 0.936293363571167) }
+axis trace frame=57 expected q=0.0012135416666666965 v=0.7112500000000042 actual q=0.0012139304968291173 v=0.711308218769486 pose=Transform { position: DVec3(15.000144004821777, 0.5003636479377747, -0.20114919543266296), rotation: DQuat(-0.1897960603237152, -0.05871080234646797, 0.2896294891834259, 0.936293363571167) }
+axis trace frame=58 expected q=0.004164062500000047 v=0.7062500000000043 actual q=0.004164707007442302 v=0.7063082389772767 pose=Transform { position: DVec3(15.000494956970215, 0.5012475252151489, -0.20394252240657806), rotation: DQuat(-0.1897960603237152, -0.05871080234646797, 0.2896294891834259, 0.936293363571167) }
+axis trace frame=59 expected q=0.006 v=0 actual q=0.006000005926356816 v=-0.000000033765166496765135 pose=Transform { position: DVec3(15.000713348388672, 0.5017973184585571, -0.20567986369132996), rotation: DQuat(-0.1897960603237152, -0.05871080234646797, 0.2896294891834259, 0.936293363571167) }
+
+thread 'gpu_rigid_axis_loops_match_independent_hard_bound_motion_and_wrenches' (464668) panicked at crates/molla-solvers/tests/runtime_rigid_axis_loops.rs:136:5:
+hz=240 substeps=4 frame=59 axis=LinX mass=100 origin=DVec3(15.0, 0.5, -0.2) sample=2: DVec3(-3962.16357421875, -10064.2119140625, 31767.400390625) != DVec3(-3952.8518135606055, -10040.763119419735, 31693.364266358654)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_rigid_axis_loops_match_independent_hard_bound_motion_and_wrenches
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 45.05s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_rigid_axis_loops`
+make: *** [Makefile:112: test-gpu] Error 101

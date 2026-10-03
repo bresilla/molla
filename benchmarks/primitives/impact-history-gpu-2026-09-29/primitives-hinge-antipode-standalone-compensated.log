@@ -1,0 +1,30 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.54s
+     Running tests/runtime_d6_hinge_antipodes.rs (target/debug/deps/runtime_d6_hinge_antipodes-6ce71de5399d1a47)
+
+running 1 test
+test gpu_standalone_finite_hinge_antipodes_use_the_mass_response ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+
+thread 'gpu_standalone_finite_hinge_antipodes_use_the_mass_response' (3108967) panicked at crates/molla-solvers/tests/runtime_d6_hinge_antipodes.rs:335:5:
+assertion `left == right` failed
+  left: 3145760
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_standalone_finite_hinge_antipodes_use_the_mass_response
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 11.24s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_d6_hinge_antipodes`
+make: *** [Makefile:477: test-primitives-hinge-antipode-standalone-gpu] Error 101

@@ -4,6 +4,8 @@ use molla_compute::Engine;
 use molla_solvers::fem_rigid_gpu::FemRigidGpuSystem;
 use std::sync::Arc;
 
+#[path = "common/fem_readback.rs"]
+mod fem_readback;
 #[path = "common/gpu_readback.rs"]
 mod gpu_readback;
 
@@ -65,7 +67,7 @@ fn submission_windows_preserve_state_across_step_calls() {
                 system.rigid_state().joint_qd.device_buffer().unwrap(),
                 1,
             ),
-            gpu_readback::body_poses(&engine, system, 1),
+            fem_readback::body_poses(&engine, system, 1),
         )
     };
     let a = snapshot(&one_call);
@@ -136,8 +138,8 @@ fn asynchronous_substeps_match_blocking_without_host_state() {
     assert_eq!(velocity(&blocking), velocity(&asynchronous));
     assert!((velocity(&asynchronous)[0] as f64 - 2.0 * 65.0 * h).abs() < 1e-6);
     assert_eq!(
-        gpu_readback::body_poses(&engine, &blocking, 1),
-        gpu_readback::body_poses(&engine, &asynchronous, 1),
+        fem_readback::body_poses(&engine, &blocking, 1),
+        fem_readback::body_poses(&engine, &asynchronous, 1),
     );
 }
 
@@ -166,8 +168,8 @@ fn asynchronous_and_blocking_submission_modes_can_alternate() {
         );
     }
     assert_eq!(
-        gpu_readback::body_poses(&engine, &mixed, 1),
-        gpu_readback::body_poses(&engine, &reference, 1),
+        fem_readback::body_poses(&engine, &mixed, 1),
+        fem_readback::body_poses(&engine, &reference, 1),
     );
     assert_eq!(
         gpu_readback::read::<f32>(

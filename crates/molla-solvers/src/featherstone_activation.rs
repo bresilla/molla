@@ -205,7 +205,7 @@ impl FeatherstoneSolver {
         contacts: &mut Contacts,
         dt: Real,
         output: &mut State,
-        mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+        excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
         mut forces: impl FnMut(
             &State,
             &Contacts,
@@ -213,6 +213,42 @@ impl FeatherstoneSolver {
             &mut [molla_math::SpatialVector],
         ) -> Result<Vec<bool>>,
         bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
+    ) -> Result<()> {
+        self.step_with_active_constraints(
+            model,
+            input,
+            control,
+            pipeline,
+            contacts,
+            dt,
+            output,
+            excluded,
+            |state, contacts, dt, wrenches| forces(state, contacts, dt, wrenches),
+            bounds,
+            false,
+            |_, _, _, _, _| Ok(()),
+        )
+    }
+
+    pub(crate) fn step_with_active_constraints(
+        &mut self,
+        model: &Model,
+        input: &State,
+        control: &Control,
+        pipeline: &mut molla_geometry::CollisionPipeline,
+        contacts: &mut Contacts,
+        dt: Real,
+        output: &mut State,
+        mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+        mut forces: impl FnMut(
+            &State,
+            &mut Contacts,
+            Real,
+            &mut [molla_math::SpatialVector],
+        ) -> Result<Vec<bool>>,
+        bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
+        defer_constraints: bool,
+        mut constraints: impl FnMut(&mut Self, &State, &mut State, Real, &[bool]) -> Result<()>,
     ) -> Result<()> {
         self.contact_forces.clear();
         if self.is_gpu() || !dt.is_finite() || dt <= 0.0 {
@@ -269,7 +305,9 @@ impl FeatherstoneSolver {
                 &mut self.substep_efforts,
                 Some(&active),
                 None,
+                defer_constraints,
             )?;
+            constraints(self, &scratch, output, sub_dt, &mask)?;
             for reading in &mut self.contact_forces {
                 reading.sample_dt = sub_dt;
                 reading.normal_impulse = reading.normal_force * sub_dt;
@@ -333,6 +371,7 @@ impl FeatherstoneSolver {
                 &mut self.substep_efforts,
                 Some(&active),
                 None,
+                false,
             )?;
             for reading in &mut self.contact_forces {
                 reading.sample_dt = sub_dt;

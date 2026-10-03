@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.23s
+     Running tests/runtime_restitution.rs (target/debug/deps/runtime_restitution-daf7ed01298d6c08)
+
+running 1 test
+
+thread 'breaking_a_support_preserves_an_existing_contact_episode' (723879) panicked at crates/molla-solvers/tests/runtime_restitution.rs:367:9:
+persistent contact was projected as a new impact: e=0, y=0.499882
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test breaking_a_support_preserves_an_existing_contact_episode ... FAILED
+
+failures:
+
+failures:
+    breaking_a_support_preserves_an_existing_contact_episode
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_restitution`
+make: *** [Makefile:74: test] Error 101

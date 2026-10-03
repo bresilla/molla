@@ -52,12 +52,15 @@ impl RaycastMergeKernel {
             label: Some("molla::raycast_merge layout"),
             entries: &entries,
         });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::raycast_merge uniform"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::raycast_merge uniform"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let mut entries: Vec<_> = buffers
             .iter()
             .enumerate()
@@ -120,12 +123,15 @@ impl RaycastMergeKernel {
         device: &wgpu::Device,
         buffers: [&wgpu::Buffer; 9],
     ) -> RaycastMergeBindings {
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::raycast merge instance uniform"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::raycast merge instance uniform"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let mut entries: Vec<_> = buffers
             .iter()
             .enumerate()
@@ -179,7 +185,7 @@ impl RaycastMergeKernel {
             max_distance.to_bits(),
             u32::from(shape_id.is_none()),
         ];
-        queue.write_buffer(&bindings.uniform, 0, bytemuck::cast_slice(&params));
+        molla_core::gpu_write_buffer!(queue, &bindings.uniform, 0, bytemuck::cast_slice(&params));
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("molla::raycast merge prepared"),
             timestamp_writes: None,

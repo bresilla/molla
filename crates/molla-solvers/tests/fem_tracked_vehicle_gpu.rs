@@ -9,11 +9,14 @@ use molla_solvers::fem_rigid::FemRigidConfig;
 use molla_solvers::fem_rigid_gpu::{FemRigidGpuScene, FemRigidGpuSystem};
 use std::sync::Arc;
 
+#[path = "common/fem_readback.rs"]
+mod fem_readback;
 #[path = "common/gpu_readback.rs"]
 mod gpu_readback;
 #[path = "common/reinforced_track.rs"]
 mod reinforced_track;
-use gpu_readback::{body_poses, read};
+use fem_readback::body_poses;
+use gpu_readback::read;
 use reinforced_track::{TrackRig, build_track, primitive_gap};
 
 fn vehicle_scene(

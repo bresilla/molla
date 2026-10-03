@@ -1,0 +1,95 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.38s
+     Running tests/runtime_d6_angular_mass.rs (target/debug/deps/runtime_d6_angular_mass-130d77b786e52dba)
+
+running 1 test
+test gpu_regular_points_use_full_inertia_and_authored_reactions ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } dt=0.0001
+angular_mass case=0 reversed=false rate_error=4.768323411e-11 linear_error=5.227617052e-11 pose_error=5.708419194e-8 rotation_error=3.893900872e-8
+angular_mass case=1 reversed=false rate_error=3.637978807e-11 linear_error=4.466502308e-11 pose_error=5.435259408e-8 rotation_error=4.202816984e-8
+angular_mass case=2 reversed=false rate_error=3.633423467e-11 linear_error=6.410631013e-11 pose_error=5.748548767e-8 rotation_error=5.509544531e-8
+angular_mass case=3 reversed=false rate_error=2.182787284e-11 linear_error=2.030911882e-11 pose_error=5.435259408e-8 rotation_error=4.202816984e-8
+angular_mass case=4 reversed=false rate_error=4.157061769e-5 linear_error=3.604080274e-5 pose_error=4.546506864e-8 rotation_error=5.745680113e-8
+angular_mass case=5 reversed=false rate_error=4.157061208e-5 linear_error=3.604087917e-5 pose_error=5.435259408e-8 rotation_error=4.202816984e-8
+angular_mass case=6 reversed=false rate_error=1.079712922e-11 linear_error=2.666847760e-11 pose_error=4.496634280e-8 rotation_error=5.273251860e-8
+angular_mass case=7 reversed=false rate_error=2.648488543e-11 linear_error=1.170465550e-11 pose_error=5.435259408e-8 rotation_error=4.202816984e-8
+angular_mass case=8 reversed=false rate_error=5.573661601e-11 linear_error=5.009213661e-11 pose_error=1.266773086e-7 rotation_error=7.453015054e-8
+angular_mass case=9 reversed=false rate_error=1.455191523e-11 linear_error=1.777377526e-11 pose_error=1.269194170e-7 rotation_error=6.661747384e-8
+angular_mass case=10 reversed=false rate_error=8.115393696e-11 linear_error=4.307671896e-11 pose_error=1.270993145e-7 rotation_error=4.011471272e-8
+angular_mass case=11 reversed=false rate_error=9.196696001e-12 linear_error=1.373969362e-11 pose_error=1.269194170e-7 rotation_error=6.661747384e-8
+angular_mass case=12 reversed=false rate_error=4.157054476e-5 linear_error=3.604088809e-5 pose_error=1.325867083e-7 rotation_error=8.049053944e-8
+angular_mass case=13 reversed=false rate_error=4.157060275e-5 linear_error=3.604083509e-5 pose_error=1.269194170e-7 rotation_error=6.661747384e-8
+angular_mass case=14 reversed=false rate_error=1.104906911e-11 linear_error=9.191724568e-12 pose_error=1.313391972e-7 rotation_error=6.780446018e-8
+angular_mass case=15 reversed=false rate_error=1.165608920e-11 linear_error=1.618412336e-11 pose_error=1.269194170e-7 rotation_error=6.661747384e-8
+angular_mass case=16 reversed=true rate_error=4.629240151e-11 linear_error=8.327160004e-11 pose_error=1.173525488e-7 rotation_error=5.449941086e-8
+angular_mass case=17 reversed=true rate_error=3.086927320e-11 linear_error=3.155446741e-11 pose_error=1.175512153e-7 rotation_error=4.771433069e-8
+angular_mass case=18 reversed=true rate_error=1.708574511e-11 linear_error=4.871487885e-11 pose_error=1.355746978e-7 rotation_error=5.177185608e-8
+angular_mass case=19 reversed=true rate_error=3.637978867e-12 linear_error=4.885671331e-12 pose_error=1.175512153e-7 rotation_error=4.771433069e-8
+angular_mass case=20 reversed=true rate_error=4.275882889e-5 linear_error=4.511001513e-5 pose_error=1.171940230e-7 rotation_error=5.850065361e-8
+angular_mass case=21 reversed=true rate_error=4.275883036e-5 linear_error=4.510991773e-5 pose_error=1.175512153e-7 rotation_error=4.771433069e-8
+angular_mass case=22 reversed=true rate_error=1.818256432e-11 linear_error=4.436059240e-11 pose_error=1.235070185e-7 rotation_error=4.196734972e-8
+angular_mass case=23 reversed=true rate_error=3.086927342e-11 linear_error=3.665907841e-11 pose_error=1.175512153e-7 rotation_error=4.771433069e-8
+angular_mass case=24 reversed=true rate_error=1.499625413e-11 linear_error=2.708490529e-11 pose_error=1.459110921e-7 rotation_error=7.151484600e-8
+angular_mass case=25 reversed=true rate_error=1.150429854e-11 linear_error=1.066263418e-11 pose_error=1.438680132e-7 rotation_error=7.283319641e-8
+angular_mass case=26 reversed=true rate_error=2.867530965e-11 linear_error=3.603444701e-11 pose_error=1.626983317e-7 rotation_error=6.372073302e-8
+angular_mass case=27 reversed=true rate_error=2.722414057e-11 linear_error=1.931594118e-11 pose_error=1.438680132e-7 rotation_error=7.283319641e-8
+angular_mass case=28 reversed=true rate_error=4.275880274e-5 linear_error=4.510987888e-5 pose_error=1.586252826e-7 rotation_error=6.754881223e-8
+angular_mass case=29 reversed=true rate_error=4.275880751e-5 linear_error=4.510990360e-5 pose_error=1.438680132e-7 rotation_error=7.283319641e-8
+angular_mass case=30 reversed=true rate_error=4.238584096e-12 linear_error=2.431659809e-11 pose_error=1.332049489e-7 rotation_error=8.275897672e-8
+angular_mass case=31 reversed=true rate_error=2.057951552e-11 linear_error=1.509143669e-11 pose_error=1.438680132e-7 rotation_error=7.283319641e-8
+angular_mass case=32 reversed=false rate_error=1.516149828e-11 linear_error=9.926235556e-12 pose_error=7.392750166e-8 rotation_error=1.308903194e-7
+angular_mass case=33 reversed=false rate_error=2.413162119e-11 linear_error=3.472711446e-11 pose_error=7.395705263e-8 rotation_error=1.344239746e-7
+angular_mass case=34 reversed=false rate_error=3.045038746e-11 linear_error=4.988402382e-11 pose_error=4.584577278e-8 rotation_error=1.248543628e-7
+angular_mass case=35 reversed=false rate_error=3.334262697e-11 linear_error=5.053601561e-11 pose_error=7.395705263e-8 rotation_error=1.344239746e-7
+angular_mass case=36 reversed=false rate_error=4.157062338e-5 linear_error=3.604080902e-5 pose_error=5.346744954e-8 rotation_error=1.203884848e-7
+angular_mass case=37 reversed=false rate_error=4.157061357e-5 linear_error=3.604086095e-5 pose_error=7.395705263e-8 rotation_error=1.344239746e-7
+angular_mass case=38 reversed=false rate_error=1.341979602e-11 linear_error=3.044822426e-11 pose_error=7.536712652e-8 rotation_error=1.412628126e-7
+angular_mass case=39 reversed=false rate_error=2.999954051e-11 linear_error=3.642610748e-11 pose_error=7.395705263e-8 rotation_error=1.344239746e-7
+angular_mass case=40 reversed=false rate_error=4.801712362e-11 linear_error=3.569621922e-11 pose_error=5.671963961e-8 rotation_error=7.000060403e-8
+angular_mass case=41 reversed=false rate_error=1.677025393e-11 linear_error=2.254876288e-11 pose_error=5.965755502e-8 rotation_error=5.810849734e-8
+angular_mass case=42 reversed=false rate_error=4.955146040e-11 linear_error=9.047298982e-11 pose_error=1.082854082e-7 rotation_error=6.427578519e-8
+angular_mass case=43 reversed=false rate_error=9.668061026e-12 linear_error=3.050429462e-12 pose_error=5.965755502e-8 rotation_error=5.810849734e-8
+angular_mass case=44 reversed=false rate_error=4.157058190e-5 linear_error=3.604085129e-5 pose_error=6.487195988e-8 rotation_error=7.067240187e-8
+angular_mass case=45 reversed=false rate_error=4.157060152e-5 linear_error=3.604084716e-5 pose_error=5.965755502e-8 rotation_error=5.810849734e-8
+angular_mass case=46 reversed=false rate_error=1.374376465e-11 linear_error=2.276795332e-11 pose_error=6.334664822e-8 rotation_error=5.527631778e-8
+angular_mass case=47 reversed=false rate_error=5.752149687e-12 linear_error=8.339846510e-12 pose_error=5.965755502e-8 rotation_error=5.810849734e-8
+angular_mass case=48 reversed=true rate_error=5.787898009e-11 linear_error=7.123789608e-11 pose_error=9.949829544e-8 rotation_error=7.186237539e-8
+angular_mass case=49 reversed=true rate_error=2.722414110e-11 linear_error=1.931594446e-11 pose_error=1.052106373e-7 rotation_error=6.467381044e-8
+angular_mass case=50 reversed=true rate_error=4.173090561e-11 linear_error=6.661763951e-11 pose_error=9.203583777e-8 rotation_error=7.367799805e-8
+angular_mass case=51 reversed=true rate_error=2.182787261e-11 linear_error=5.363857303e-12 pose_error=1.052106373e-7 rotation_error=6.467381044e-8
+angular_mass case=52 reversed=true rate_error=4.275881877e-5 linear_error=4.510995361e-5 pose_error=4.884267488e-8 rotation_error=8.023636864e-8
+angular_mass case=53 reversed=true rate_error=4.275882331e-5 linear_error=4.510992363e-5 pose_error=1.052106373e-7 rotation_error=6.467381044e-8
+angular_mass case=54 reversed=true rate_error=1.334617020e-11 linear_error=1.620306259e-11 pose_error=1.142790486e-7 rotation_error=5.440670141e-8
+angular_mass case=55 reversed=true rate_error=2.182787195e-11 linear_error=3.177843472e-11 pose_error=1.052106373e-7 rotation_error=6.467381044e-8
+angular_mass case=56 reversed=true rate_error=5.261558036e-11 linear_error=5.137720380e-11 pose_error=7.971167144e-8 rotation_error=3.490617679e-8
+angular_mass case=57 reversed=true rate_error=1.909938842e-11 linear_error=1.538617345e-11 pose_error=7.780536894e-8 rotation_error=3.572673596e-8
+angular_mass case=58 reversed=true rate_error=3.561045544e-11 linear_error=6.231855955e-11 pose_error=9.021332964e-8 rotation_error=4.351743833e-8
+angular_mass case=59 reversed=true rate_error=2.841352341e-11 linear_error=9.815269662e-12 pose_error=7.780536894e-8 rotation_error=3.572673596e-8
+angular_mass case=60 reversed=true rate_error=4.275880990e-5 linear_error=4.510990765e-5 pose_error=9.397868771e-8 rotation_error=5.024361878e-8
+angular_mass case=61 reversed=true rate_error=4.275880048e-5 linear_error=4.510990538e-5 pose_error=7.780536894e-8 rotation_error=3.572673596e-8
+angular_mass case=62 reversed=true rate_error=1.823592292e-11 linear_error=2.579696412e-11 pose_error=7.439716583e-8 rotation_error=4.392429356e-8
+angular_mass case=63 reversed=true rate_error=7.275957616e-12 linear_error=8.872108578e-12 pose_error=7.780536894e-8 rotation_error=3.572673596e-8
+angular_mass_reaction case=0 force_error=9.284841705e-7 torque_error=2.691342076e-6
+angular_mass_reaction case=1 force_error=8.933004260e-7 torque_error=2.810825716e-6
+angular_mass_reaction case=2 force_error=8.023802171e-7 torque_error=2.181547516e-6
+angular_mass_reaction case=3 force_error=4.061823810e-7 torque_error=1.375646392e-6
+angular_mass_reaction case=4 force_error=7.208168573e-1 torque_error=2.420216451e0
+
+thread 'gpu_regular_points_use_full_inertia_and_authored_reactions' (2838219) panicked at crates/molla-solvers/tests/runtime_d6_angular_mass.rs:301:9:
+case=4: JointReaction { child: SpatialVector { linear: DVec3(0.40437769889831543, 0.21023356914520264, -3.696202039718628), angular: DVec3(9.5367431640625e-7, 3.6087684631347656, 1.1163231134414673) }, parent: SpatialVector { linear: DVec3(-0.40437769889831543, -0.21023356914520264, 3.696202039718628), angular: DVec3(-1.1865159876833786e-6, -3.6087684631347656, -1.1163231134414673) }, sample_dt: 0.0001, peak_force: 3.7241952419281006, peak_torque: 3.777484178543091 } expected=SpatialVector { linear: DVec3(1.1160740021690954, 0.27518237467951767, -3.7902603535503268), angular: DVec3(-2.6645352591003757e-15, 5.920889610036164, 1.8315457863211717) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_regular_points_use_full_inertia_and_authored_reactions
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 36.16s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_d6_angular_mass`
+make: *** [Makefile:446: test-primitives-angular-regular-wiring-gpu] Error 101

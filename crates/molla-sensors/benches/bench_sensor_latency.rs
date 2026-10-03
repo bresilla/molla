@@ -4,6 +4,8 @@
 mod cloud_chain;
 #[path = "support/metrics.rs"]
 mod metrics;
+#[path = "support/run_mode.rs"]
+mod run_mode;
 #[path = "support/timing.rs"]
 mod timing;
 
@@ -301,7 +303,7 @@ fn frame(
         scene
             .replace_model(
                 engine,
-                if index % 2 == 0 {
+                if index.is_multiple_of(2) {
                     alternate.unwrap()
                 } else {
                     model
@@ -486,7 +488,7 @@ fn run(
         ReadbackConfig {
             slots: 1,
             bytes_per_slot: bytes,
-            max_total_bytes: (bytes + 7) / 8 * 8,
+            max_total_bytes: bytes.div_ceil(8) * 8,
         },
     )
     .unwrap();
@@ -594,9 +596,7 @@ fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mut full = false;
     let mut cloud_matrix = false;
-    let mut samples = 64usize;
-    let mut warmup = 8usize;
-    let mut repeats = 3usize;
+    let (mut samples, mut warmup, mut repeats) = run_mode::defaults(&args);
     let mut timestamps = true;
     let mut filter = String::new();
     let mut destination = None;
@@ -618,10 +618,10 @@ fn main() {
                     _ => destination = Some(value.clone()),
                 }
             }
-            "--bench" => {}
+            "--bench" | "--smoke" | "--test" => {}
             "--help" => {
                 println!(
-                    "--lidar-matrix | --cloud-matrix --samples N --warmup N --repeats N --filter SUBSTRING --output NEW.tsv --no-timestamps"
+                    "--bench selects 64 samples, 8 warmup and 3 repeats; otherwise smoke defaults are 2/1/1. --smoke | --test --lidar-matrix | --cloud-matrix --samples N --warmup N --repeats N --filter SUBSTRING --output NEW.tsv --no-timestamps"
                 );
                 return;
             }
@@ -655,7 +655,7 @@ fn main() {
     writeln!(output, "case\trepeat\tphase\tindex\trays\tencode_us\tsubmit_elapsed_us\tcomplete_us\tgpu_us\tdescriptor_pose_upload_bytes\tresult_download_bytes\tsubmissions\twaits\tallocations\treallocations\trequested_bytes\tdispatches").unwrap();
     let engine = timing::engine(timestamps);
     eprintln!(
-        "adapter={:?} profile={} cases={} samples={samples} warmup={warmup} repeats={repeats} pid={}",
+        "adapter={:?} profile={} cases={} samples={samples} warmup={warmup} repeats={repeats} pid={} smoke={}",
         engine.adapter_info(),
         if cfg!(debug_assertions) {
             "debug"
@@ -663,7 +663,8 @@ fn main() {
             "release"
         },
         selected.len(),
-        std::process::id()
+        std::process::id(),
+        run_mode::is_smoke(&args)
     );
     for repeat in 0..repeats {
         for (case, host) in selected

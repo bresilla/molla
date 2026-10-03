@@ -1,0 +1,99 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running benches/runtime_primitives.rs (target/debug/deps/runtime_primitives-d0f671e015455fb0)
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_process_start	primitive=distance	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=distance	instances=1	backend=cpu
+case_setup_complete	primitive=distance	instances=1	backend=cpu	seconds=0.000692606
+case_warmup_complete	primitive=distance	instances=1	backend=cpu	steps=1
+case_ok	primitive=distance	instances=1	backend=cpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000692606	wall_seconds=0.001325995	max_step_seconds=0.000666760	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=0	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=distance	instances=1	backend=gpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=distance	instances=1	backend=gpu
+case_setup_complete	primitive=distance	instances=1	backend=gpu	seconds=4.068608876
+case_warmup_complete	primitive=distance	instances=1	backend=gpu	steps=1
+case_ok	primitive=distance	instances=1	backend=gpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=4.068608876	wall_seconds=0.011841585	max_step_seconds=0.005959488	device_timeline_seconds=Some(0.01196544)	state_upload_bytes=296	state_readout_bytes=1360	boundary_buffer_bytes=529984	boundary_buffers=Some(128)	boundary_allocations=None	model_compilations=Some(2)	break_events=0	encoded_dispatches=72	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=cone	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=cone	instances=1	backend=cpu
+case_setup_complete	primitive=cone	instances=1	backend=cpu	seconds=0.000456252
+case_warmup_complete	primitive=cone	instances=1	backend=cpu	steps=1
+case_ok	primitive=cone	instances=1	backend=cpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000456252	wall_seconds=0.000568791	max_step_seconds=0.000294820	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=0	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=cone	instances=1	backend=gpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=cone	instances=1	backend=gpu
+case_setup_complete	primitive=cone	instances=1	backend=gpu	seconds=4.092071009
+case_warmup_complete	primitive=cone	instances=1	backend=gpu	steps=1
+case_ok	primitive=cone	instances=1	backend=gpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=4.092071009	wall_seconds=0.011741525	max_step_seconds=0.005906033	device_timeline_seconds=Some(0.01186304)	state_upload_bytes=248	state_readout_bytes=1312	boundary_buffer_bytes=529168	boundary_buffers=Some(128)	boundary_allocations=None	model_compilations=Some(2)	break_events=0	encoded_dispatches=72	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=d6	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=d6	instances=1	backend=cpu
+case_setup_complete	primitive=d6	instances=1	backend=cpu	seconds=0.002255897
+case_warmup_complete	primitive=d6	instances=1	backend=cpu	steps=1
+case_ok	primitive=d6	instances=1	backend=cpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.002255897	wall_seconds=0.001607352	max_step_seconds=0.000845779	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=0	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=d6	instances=1	backend=gpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=d6	instances=1	backend=gpu
+case_setup_complete	primitive=d6	instances=1	backend=gpu	seconds=3.603072432
+case_warmup_complete	primitive=d6	instances=1	backend=gpu	steps=1
+case_ok	primitive=d6	instances=1	backend=gpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=3.603072432	wall_seconds=0.007398728	max_step_seconds=0.003721568	device_timeline_seconds=Some(0.007523328)	state_upload_bytes=296	state_readout_bytes=1296	boundary_buffer_bytes=528640	boundary_buffers=Some(106)	boundary_allocations=None	model_compilations=Some(2)	break_events=0	encoded_dispatches=40	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=reaction	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=reaction	instances=1	backend=cpu
+case_setup_complete	primitive=reaction	instances=1	backend=cpu	seconds=0.001604144
+case_warmup_complete	primitive=reaction	instances=1	backend=cpu	steps=1
+case_ok	primitive=reaction	instances=1	backend=cpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.001604144	wall_seconds=0.000141700	max_step_seconds=0.000077904	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=0	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=reaction	instances=1	backend=gpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=reaction	instances=1	backend=gpu
+case_setup_complete	primitive=reaction	instances=1	backend=gpu	seconds=3.665938913
+case_warmup_complete	primitive=reaction	instances=1	backend=gpu	steps=1
+case_ok	primitive=reaction	instances=1	backend=gpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=3.665938913	wall_seconds=0.006323485	max_step_seconds=0.003178703	device_timeline_seconds=Some(0.006440960000000001)	state_upload_bytes=192	state_readout_bytes=1192	boundary_buffer_bytes=527744	boundary_buffers=Some(86)	boundary_allocations=None	model_compilations=Some(2)	break_events=0	encoded_dispatches=40	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=break	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=break	instances=1	backend=cpu
+case_setup_complete	primitive=break	instances=1	backend=cpu	seconds=0.000371232
+case_warmup_complete	primitive=break	instances=1	backend=cpu	steps=1
+case_ok	primitive=break	instances=1	backend=cpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000371232	wall_seconds=0.000542229	max_step_seconds=0.000462494	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=1	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=break	instances=1	backend=gpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=break	instances=1	backend=gpu
+case_setup_complete	primitive=break	instances=1	backend=gpu	seconds=3.614561018
+case_warmup_complete	primitive=break	instances=1	backend=gpu	steps=1
+case_ok	primitive=break	instances=1	backend=gpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=3.614561018	wall_seconds=0.274097879	max_step_seconds=0.270808485	device_timeline_seconds=Some(0.274249728)	state_upload_bytes=340	state_readout_bytes=1436	boundary_buffer_bytes=527776	boundary_buffers=Some(106)	boundary_allocations=None	model_compilations=Some(3)	break_events=1	encoded_dispatches=57	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=friction	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=friction	instances=1	backend=cpu
+case_setup_complete	primitive=friction	instances=1	backend=cpu	seconds=0.001653941
+case_warmup_complete	primitive=friction	instances=1	backend=cpu	steps=1
+case_ok	primitive=friction	instances=1	backend=cpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.001653941	wall_seconds=0.000667837	max_step_seconds=0.000360742	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=0	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=friction	instances=1	backend=gpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=friction	instances=1	backend=gpu
+case_setup_complete	primitive=friction	instances=1	backend=gpu	seconds=6.950315129
+case_warmup_complete	primitive=friction	instances=1	backend=gpu	steps=1
+case_ok	primitive=friction	instances=1	backend=gpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=6.950315129	wall_seconds=0.065346541	max_step_seconds=0.033391430	device_timeline_seconds=Some(0.065511424)	state_upload_bytes=296	state_readout_bytes=116528	boundary_buffer_bytes=671328	boundary_buffers=Some(332)	boundary_allocations=None	model_compilations=Some(2)	break_events=0	encoded_dispatches=840	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=mixed	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=mixed	instances=1	backend=cpu
+case_setup_complete	primitive=mixed	instances=1	backend=cpu	seconds=0.004294554
+case_warmup_complete	primitive=mixed	instances=1	backend=cpu	steps=1
+case_ok	primitive=mixed	instances=1	backend=cpu	bodies=6	articulations=6	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.004294554	wall_seconds=0.006795726	max_step_seconds=0.004008901	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=1	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=mixed	instances=1	backend=gpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=mixed	instances=1	backend=gpu
+case_setup_complete	primitive=mixed	instances=1	backend=gpu	seconds=7.103774751
+case_warmup_complete	primitive=mixed	instances=1	backend=gpu	steps=1
+case_ok	primitive=mixed	instances=1	backend=gpu	bodies=6	articulations=6	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=7.103774751	wall_seconds=0.914744463	max_step_seconds=0.879173519	device_timeline_seconds=Some(0.915003392)	state_upload_bytes=2332	state_readout_bytes=176452	boundary_buffer_bytes=909904	boundary_buffers=Some(351)	boundary_allocations=None	model_compilations=Some(3)	break_events=1	encoded_dispatches=1221	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable

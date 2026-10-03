@@ -1,0 +1,19 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.96s
+     Running tests/runtime_loop_controls.rs (target/debug/deps/runtime_loop_controls-6d091bb7df08fa1c)
+
+running 1 test
+test gpu_rotated_high_inertia_compliant_loop_matches_near_rest_oracle ... angular predictor frame=10 expected_q=-0.010297585267053795 actual_q=-0.01029758807271719 expected_rate=-0.3474078576667667 actual_rate=-0.3474079668521881 pose=Transform { position: DVec3(0.0, 2.0, -3.0), rotation: DQuat(0.06338217109441757, -0.18835237622261047, 0.3350973427295685, 0.9209863543510437) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24473720788955688, -0.20613929629325867, -0.13528703153133392) }
+angular predictor frame=11 expected_q=-0.011757732685865848 actual_q=-0.011757736094295979 expected_rate=-0.3504353805148927 actual_rate=-0.3504354953765869 pose=Transform { position: DVec3(0.0, 2.0, -3.0), rotation: DQuat(0.06270977109670639, -0.18859697878360748, 0.3349597156047821, 0.9210323691368103) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.2468700110912323, -0.20793572068214417, -0.13646599650382996) }
+loop controls hz=240 substeps=1: 1 cases passed
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 9.90s
+

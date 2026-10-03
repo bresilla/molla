@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.70s
+     Running tests/runtime_loop_articulated_contacts.rs (target/debug/deps/runtime_loop_articulated_contacts-feb21b03d836e85b)
+
+running 1 test
+test cpu_articulated_contact_break_channels_preserve_boundary_state_and_explicit_repair ... 
+thread 'cpu_articulated_contact_break_channels_preserve_boundary_state_and_explicit_repair' (365241) panicked at crates/molla-solvers/tests/runtime_loop_articulated_contacts.rs:489:13:
+repair first frame hz=60 capture=false break boundary expected=DVec3(-0.0001483220581180272, 0.1990712584564115, 0.0) actual=Transform { position: DVec3(0.001089999999999996, 0.2, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    cpu_articulated_contact_break_channels_preserve_boundary_state_and_explicit_repair
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_loop_articulated_contacts`
+make: *** [Makefile:89: test] Error 101

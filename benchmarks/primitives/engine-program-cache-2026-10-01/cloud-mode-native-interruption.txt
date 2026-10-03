@@ -1,0 +1,13 @@
+The cloud-smoke-final native all-target run selected full cloud sizes despite
+Criterion's implicit test mode and failed bench_sensor_cloud with GPU OOM.
+Raw provenance: cloud-smoke-final-test-all.log line3532, failure lines3571–3575.
+Frozen source verification before stopping: cloud-mode-native-stop-source.log.
+Verified timeout1572401, start_ticks44610783, parent runner1572222, PGID1572401.
+Sent SIGTERM only to that owned GNU timeout at2026-10-02T05:40:16+02:00.
+Native and runner exits124 record manual interruption, not their10800s deadline.
+No external desktop or simulator application was stopped.
+
+Criterion0.5.1 configure_from_args selects test mode when --bench is absent,
+or when --test is present. The prior size helper only handled explicit --test.
+Correction mirrors Criterion's contract without reducing performance-mode sizes.
+No primitive physics fixture, solver tolerance, or performance ledger row changed.

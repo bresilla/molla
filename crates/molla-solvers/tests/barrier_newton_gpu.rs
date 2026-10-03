@@ -20,6 +20,34 @@ use molla_solvers::barrier_contact::{BarrierObstacle, BarrierParams, BarrierShel
 
 use molla_kernels::{BarrierGpuObstacle, BarrierGpuParams, BarrierGpuSpring, BarrierNewtonGpu};
 
+#[test]
+#[ignore = "requires GPU; run via make test-gpu"]
+fn lbvh_candidate_overflow_fails_closed() {
+    let engine = Engine::new_gpu().unwrap();
+    let positions = [[0.0, 0.0, 0.0], [0.001, 0.0, 0.0], [0.0, 0.0, 0.001]];
+    let triangles = vec![[0, 1, 2]; 100];
+    let mut gpu = BarrierNewtonGpu::new_with_mesh(
+        engine.device().unwrap(),
+        engine.queue().unwrap(),
+        &positions,
+        &vec![1.0; positions.len()],
+        &[],
+        &[],
+        &triangles,
+        &[],
+        BarrierGpuParams {
+            use_lbvh: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let error = gpu.step(1.0 / 240.0).unwrap_err();
+    assert!(
+        error.to_string().contains("self-pair buffer overflow"),
+        "{error}"
+    );
+}
+
 fn cloth_patch(n: usize, y: f64, spacing: f64) -> (Vec<[f64; 3]>, Vec<f64>, Vec<(u32, u32)>) {
     let mut pos = Vec::new();
     let mut mass = Vec::new();

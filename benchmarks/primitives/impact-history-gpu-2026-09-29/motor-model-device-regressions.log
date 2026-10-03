@@ -1,0 +1,26 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.22s
+     Running tests/featherstone_motor_caps_gpu.rs (target/debug/deps/featherstone_motor_caps_gpu-a392b7640828055b)
+
+running 2 tests
+test fem_island_accepts_caps_and_applies_them_on_gpu ... ok
+test gpu_motor_caps_preserve_feedforward_and_total_limits ... 
+thread 'gpu_motor_caps_preserve_feedforward_and_total_limits' (1924393) panicked at crates/molla-solvers/tests/featherstone_motor_caps_gpu.rs:121:14:
+called `Result::unwrap_err()` on an `Ok` value: ()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_motor_caps_preserve_feedforward_and_total_limits
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.91s
+
+error: test failed, to rerun pass `-p molla-solvers --test featherstone_motor_caps_gpu`
+make: *** [Makefile:110: test-gpu] Error 101

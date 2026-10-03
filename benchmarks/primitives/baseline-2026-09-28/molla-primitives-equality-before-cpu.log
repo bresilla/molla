@@ -1,0 +1,34 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.61s
+     Running tests/joint_control.rs (target/debug/deps/joint_control-292ca5e34a625b35)
+
+running 2 tests
+test scalar_equality_lock_clears_existing_motion_and_can_be_released ... FAILED
+test scalar_equality_limits_resist_effort_and_preserve_authored_motor ... FAILED
+
+failures:
+
+---- scalar_equality_lock_clears_existing_motion_and_can_be_released stdout ----
+
+thread 'scalar_equality_lock_clears_existing_motion_and_can_be_released' (2756199) panicked at crates/molla-solvers/tests/joint_control.rs:539:34:
+called `Result::unwrap()` on an `Err` value: Solver("scalar stop reaction left an infeasible velocity")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- scalar_equality_limits_resist_effort_and_preserve_authored_motor stdout ----
+
+thread 'scalar_equality_limits_resist_effort_and_preserve_authored_motor' (2756198) panicked at crates/molla-solvers/tests/joint_control.rs:512:22:
+called `Result::unwrap()` on an `Err` value: Solver("scalar stop reaction left an infeasible velocity")
+
+
+failures:
+    scalar_equality_limits_resist_effort_and_preserve_authored_motor
+    scalar_equality_lock_clears_existing_motion_and_can_be_released
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p molla-solvers --test joint_control`
+make: *** [Makefile:60: test] Error 101

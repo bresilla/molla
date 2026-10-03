@@ -1,0 +1,10 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.68s
+     Running `target/debug/examples/runtime_primitives --case all`
+Error: "unknown or duplicate example argument: --case"
+make: *** [Makefile:765: example-primitives] Error 1

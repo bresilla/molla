@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.67s
+     Running tests/runtime_locked_drive_chains.rs (target/debug/deps/runtime_locked_drive_chains-e3c4363f885d3f62)
+
+running 1 test
+
+thread 'cpu_partial_angular_locks_preserve_coupled_force_acceleration_feedback' (893421) panicked at crates/molla-solvers/tests/runtime_locked_drive_chains.rs:54:64:
+called `Result::unwrap()` on an `Err` value: Build("explicit axis locking requires a D6 joint and six-bit mask")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_partial_angular_locks_preserve_coupled_force_acceleration_feedback ... FAILED
+
+failures:
+
+failures:
+    cpu_partial_angular_locks_preserve_coupled_force_acceleration_feedback
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_locked_drive_chains`
+make: *** [Makefile:128: test] Error 101

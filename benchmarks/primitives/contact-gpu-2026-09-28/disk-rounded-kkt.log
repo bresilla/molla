@@ -1,0 +1,92 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.43s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 4 tests
+test coulomb_disk_gpu::tests::coupled_disk_gpu_device_sequence_regimes_and_contact_retirement ... 
+thread 'coulomb_disk_gpu::tests::coupled_disk_gpu_device_sequence_regimes_and_contact_retirement' (3891370) panicked at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-29.0.4/src/backend/wgpu_core.rs:1081:30:
+wgpu error: Validation Error
+
+Caused by:
+  In Device::create_shader_module, label = 'coupled Coulomb disks'
+    
+Shader 'coupled Coulomb disks' parsing error: expected expression, found "="
+    ┌─ wgsl:268:35
+    │
+268 │             if (swrite(modes + c, = 0.0 && norm2(slip) > CAPTURE) { sread(modes + c) = 1.0); changed = true; }
+    │                                   ^ expected expression
+
+
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test coulomb_disk_gpu::tests::coupled_disk_gpu_matches_cpu_and_retires_batched_island_slots ... 
+thread 'coulomb_disk_gpu::tests::coupled_disk_gpu_matches_cpu_and_retires_batched_island_slots' (3891380) panicked at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-29.0.4/src/backend/wgpu_core.rs:1081:30:
+wgpu error: Validation Error
+
+Caused by:
+  In Device::create_shader_module, label = 'coupled Coulomb disks'
+    
+Shader 'coupled Coulomb disks' parsing error: expected expression, found "="
+    ┌─ wgsl:268:35
+    │
+268 │             if (swrite(modes + c, = 0.0 && norm2(slip) > CAPTURE) { sread(modes + c) = 1.0); changed = true; }
+    │                                   ^ expected expression
+
+
+
+
+FAILED
+test coulomb_disk_gpu::tests::coupled_disk_gpu_rotations_permutations_and_reciprocal_scales ... 
+thread 'coulomb_disk_gpu::tests::coupled_disk_gpu_rotations_permutations_and_reciprocal_scales' (3891390) panicked at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-29.0.4/src/backend/wgpu_core.rs:1081:30:
+wgpu error: Validation Error
+
+Caused by:
+  In Device::create_shader_module, label = 'coupled Coulomb disks'
+    
+Shader 'coupled Coulomb disks' parsing error: expected expression, found "="
+    ┌─ wgsl:268:35
+    │
+268 │             if (swrite(modes + c, = 0.0 && norm2(slip) > CAPTURE) { sread(modes + c) = 1.0); changed = true; }
+    │                                   ^ expected expression
+
+
+
+
+FAILED
+test coulomb_disk_gpu::tests::coupled_disk_gpu_validation_sticky_faults_and_reset ... 
+thread 'coulomb_disk_gpu::tests::coupled_disk_gpu_validation_sticky_faults_and_reset' (3891400) panicked at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-29.0.4/src/backend/wgpu_core.rs:1081:30:
+wgpu error: Validation Error
+
+Caused by:
+  In Device::create_shader_module, label = 'coupled Coulomb disks'
+    
+Shader 'coupled Coulomb disks' parsing error: expected expression, found "="
+    ┌─ wgsl:268:35
+    │
+268 │             if (swrite(modes + c, = 0.0 && norm2(slip) > CAPTURE) { sread(modes + c) = 1.0); changed = true; }
+    │                                   ^ expected expression
+
+
+
+
+FAILED
+
+failures:
+
+failures:
+    coulomb_disk_gpu::tests::coupled_disk_gpu_device_sequence_regimes_and_contact_retirement
+    coulomb_disk_gpu::tests::coupled_disk_gpu_matches_cpu_and_retires_batched_island_slots
+    coulomb_disk_gpu::tests::coupled_disk_gpu_rotations_permutations_and_reciprocal_scales
+    coulomb_disk_gpu::tests::coupled_disk_gpu_validation_sticky_faults_and_reset
+
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 95 filtered out; finished in 0.70s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:127: test-primitives-friction-gpu] Error 101

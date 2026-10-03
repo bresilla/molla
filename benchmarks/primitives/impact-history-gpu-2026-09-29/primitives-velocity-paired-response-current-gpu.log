@@ -1,0 +1,15 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.52s
+     Running `target/debug/examples/check_primitives_shaders`
+shader_wiring_ok	module=mass_response	entry_points=1
+shader_wiring_ok	module=jacobian_response	entry_points=1
+shader_wiring_ok	module=reaction_response	entry_points=1
+Error: "featherstone: error: name `active` is a reserved keyword\n     ┌─ wgsl:1196:29\n     │\n1196 │                         let active=dof_active_arr[k][r]!=0u && dof_active_arr[k][c]!=0u;\n     │                             ^^^^^^ definition of `active`\n\n"
+make: *** [Makefile:432: check-primitives-shader-wiring] Error 1

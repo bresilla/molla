@@ -1451,35 +1451,48 @@ pub fn tire_dem_build_sparse_lbvh_morton_order_gpu_radix(
     let vec4_bytes = |len: usize| (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64;
     let storage =
         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
-    let pos_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh morton positions"),
-        size: vec4_bytes(n),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let keys_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh morton keys"),
-        size: u32_bytes(n),
-        usage: storage,
-        mapped_at_creation: false,
-    });
-    let values_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh morton grain ids"),
-        size: u32_bytes(n),
-        usage: storage,
-        mapped_at_creation: false,
-    });
-    let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh morton uniforms"),
-        size: core::mem::size_of::<TireDemStepUniforms>() as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let pos_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh morton positions"),
+            size: vec4_bytes(n),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
+    let keys_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh morton keys"),
+            size: u32_bytes(n),
+            usage: storage,
+            mapped_at_creation: false,
+        }
+    );
+    let values_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh morton grain ids"),
+            size: u32_bytes(n),
+            usage: storage,
+            mapped_at_creation: false,
+        }
+    );
+    let uniforms = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh morton uniforms"),
+            size: core::mem::size_of::<TireDemStepUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
     let stage_keys = stage_u32(&device, "tire_dem gpu sparse lbvh stage morton keys", n);
     let stage_values = stage_u32(&device, "tire_dem gpu sparse lbvh stage grain ids", n);
 
-    queue.write_buffer(&pos_buf, 0, bytemuck::cast_slice(&positions));
-    queue.write_buffer(
+    molla_core::gpu_write_buffer!(queue, &pos_buf, 0, bytemuck::cast_slice(&positions));
+    molla_core::gpu_write_buffer!(
+        queue,
         &uniforms,
         0,
         bytemuck::bytes_of(&TireDemStepUniforms {
@@ -1638,36 +1651,51 @@ pub fn tire_dem_build_sparse_lbvh_leaf_rows_gpu_radix(
     let vec4_bytes = |len: usize| (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64;
     let storage =
         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
-    let pos_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh leaf positions"),
-        size: vec4_bytes(n),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let keys_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh leaf morton keys"),
-        size: u32_bytes(n),
-        usage: storage,
-        mapped_at_creation: false,
-    });
-    let values_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh leaf grain ids"),
-        size: u32_bytes(n),
-        usage: storage,
-        mapped_at_creation: false,
-    });
-    let leaf_rows_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh leaf rows"),
-        size: vec4_bytes(leaf_count * 3),
-        usage: storage,
-        mapped_at_creation: false,
-    });
-    let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh leaf uniforms"),
-        size: core::mem::size_of::<TireDemStepUniforms>() as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let pos_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh leaf positions"),
+            size: vec4_bytes(n),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
+    let keys_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh leaf morton keys"),
+            size: u32_bytes(n),
+            usage: storage,
+            mapped_at_creation: false,
+        }
+    );
+    let values_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh leaf grain ids"),
+            size: u32_bytes(n),
+            usage: storage,
+            mapped_at_creation: false,
+        }
+    );
+    let leaf_rows_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh leaf rows"),
+            size: vec4_bytes(leaf_count * 3),
+            usage: storage,
+            mapped_at_creation: false,
+        }
+    );
+    let uniforms = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh leaf uniforms"),
+            size: core::mem::size_of::<TireDemStepUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
     let stage_keys = stage_u32(
         &device,
         "tire_dem gpu sparse lbvh leaf stage morton keys",
@@ -1680,8 +1708,9 @@ pub fn tire_dem_build_sparse_lbvh_leaf_rows_gpu_radix(
         leaf_count * 3,
     );
 
-    queue.write_buffer(&pos_buf, 0, bytemuck::cast_slice(&positions));
-    queue.write_buffer(
+    molla_core::gpu_write_buffer!(queue, &pos_buf, 0, bytemuck::cast_slice(&positions));
+    molla_core::gpu_write_buffer!(
+        queue,
         &uniforms,
         0,
         bytemuck::bytes_of(&TireDemStepUniforms {
@@ -1876,36 +1905,51 @@ pub fn tire_dem_build_sparse_lbvh_tree_rows_gpu_radix(
     let vec4_bytes = |len: usize| (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64;
     let storage =
         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
-    let pos_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh tree positions"),
-        size: vec4_bytes(n),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let keys_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh tree morton keys"),
-        size: u32_bytes(n),
-        usage: storage,
-        mapped_at_creation: false,
-    });
-    let values_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh tree grain ids"),
-        size: u32_bytes(n),
-        usage: storage,
-        mapped_at_creation: false,
-    });
-    let node_rows_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh tree rows"),
-        size: vec4_bytes(node_count * 3),
-        usage: storage,
-        mapped_at_creation: false,
-    });
-    let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu sparse lbvh tree uniforms"),
-        size: core::mem::size_of::<TireDemStepUniforms>() as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let pos_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh tree positions"),
+            size: vec4_bytes(n),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
+    let keys_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh tree morton keys"),
+            size: u32_bytes(n),
+            usage: storage,
+            mapped_at_creation: false,
+        }
+    );
+    let values_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh tree grain ids"),
+            size: u32_bytes(n),
+            usage: storage,
+            mapped_at_creation: false,
+        }
+    );
+    let node_rows_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh tree rows"),
+            size: vec4_bytes(node_count * 3),
+            usage: storage,
+            mapped_at_creation: false,
+        }
+    );
+    let uniforms = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu sparse lbvh tree uniforms"),
+            size: core::mem::size_of::<TireDemStepUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
     let stage_keys = stage_u32(
         &device,
         "tire_dem gpu sparse lbvh tree stage morton keys",
@@ -1918,8 +1962,9 @@ pub fn tire_dem_build_sparse_lbvh_tree_rows_gpu_radix(
         node_count * 3,
     );
 
-    queue.write_buffer(&pos_buf, 0, bytemuck::cast_slice(&positions));
-    queue.write_buffer(
+    molla_core::gpu_write_buffer!(queue, &pos_buf, 0, bytemuck::cast_slice(&positions));
+    molla_core::gpu_write_buffer!(
+        queue,
         &uniforms,
         0,
         bytemuck::bytes_of(&TireDemStepUniforms {
@@ -2031,7 +2076,8 @@ pub fn tire_dem_build_sparse_lbvh_tree_rows_gpu_radix(
         n,
     )?;
 
-    queue.write_buffer(
+    molla_core::gpu_write_buffer!(
+        queue,
         &uniforms,
         0,
         bytemuck::bytes_of(&TireDemStepUniforms {
@@ -2068,7 +2114,8 @@ pub fn tire_dem_build_sparse_lbvh_tree_rows_gpu_radix(
     while child_count > 1 {
         let parent_count = child_count / 2;
         let parent_start = child_start - parent_count;
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireDemStepUniforms {
@@ -2735,42 +2782,58 @@ pub fn tire_dem_build_unbounded_sorted_grid_step_input_gpu_radix(
     let vec4_bytes = |len: usize| (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64;
     let storage =
         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
-    let pos_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu radix pos in"),
-        size: vec4_bytes(n),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let keys_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu radix cell keys"),
-        size: u32_bytes(n),
-        usage: storage,
-        mapped_at_creation: false,
-    });
-    let values_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu radix grain ids"),
-        size: u32_bytes(n),
-        usage: storage,
-        mapped_at_creation: false,
-    });
-    let ranges_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu radix cell ranges"),
-        size: uvec4_bytes(cell_count),
-        usage: storage,
-        mapped_at_creation: false,
-    });
-    let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("tire_dem gpu radix uniforms"),
-        size: core::mem::size_of::<TireDemStepUniforms>() as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let pos_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu radix pos in"),
+            size: vec4_bytes(n),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
+    let keys_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu radix cell keys"),
+            size: u32_bytes(n),
+            usage: storage,
+            mapped_at_creation: false,
+        }
+    );
+    let values_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu radix grain ids"),
+            size: u32_bytes(n),
+            usage: storage,
+            mapped_at_creation: false,
+        }
+    );
+    let ranges_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu radix cell ranges"),
+            size: uvec4_bytes(cell_count),
+            usage: storage,
+            mapped_at_creation: false,
+        }
+    );
+    let uniforms = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("tire_dem gpu radix uniforms"),
+            size: core::mem::size_of::<TireDemStepUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
     let stage_keys = stage_u32(&device, "tire_dem gpu radix stage keys", n);
     let stage_values = stage_u32(&device, "tire_dem gpu radix stage grain ids", n);
     let stage_ranges = stage_uvec4(&device, "tire_dem gpu radix stage ranges", cell_count);
 
-    queue.write_buffer(&pos_buf, 0, bytemuck::cast_slice(&positions));
-    queue.write_buffer(
+    molla_core::gpu_write_buffer!(queue, &pos_buf, 0, bytemuck::cast_slice(&positions));
+    molla_core::gpu_write_buffer!(
+        queue,
         &uniforms,
         0,
         bytemuck::bytes_of(&TireDemStepUniforms {
@@ -3560,12 +3623,15 @@ impl TireDemGpuKernel {
         let contact_bytes =
             |len: usize| (len.max(1) * core::mem::size_of::<TireDemContactCell>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let usage_ro = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let usage_rw = wgpu::BufferUsages::STORAGE
@@ -3584,18 +3650,25 @@ impl TireDemGpuKernel {
         let stage_pos = stage_vec4(device, "tire_dem stage pos", n);
         let stage_vel = stage_vec4(device, "tire_dem stage vel", n);
 
-        queue.write_buffer(&pos_in, 0, bytemuck::cast_slice(&input.positions));
-        queue.write_buffer(&vel_in, 0, bytemuck::cast_slice(&input.velocities));
+        molla_core::gpu_write_buffer!(queue, &pos_in, 0, bytemuck::cast_slice(&input.positions));
+        molla_core::gpu_write_buffer!(queue, &vel_in, 0, bytemuck::cast_slice(&input.velocities));
         if input.contacts.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &contacts,
                 0,
                 bytemuck::cast_slice(&[TireDemContactCell::default()]),
             );
         } else {
-            queue.write_buffer(&contacts, 0, bytemuck::cast_slice(&input.contacts));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &contacts,
+                0,
+                bytemuck::cast_slice(&input.contacts)
+            );
         }
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireDemStepUniforms {
@@ -3666,12 +3739,15 @@ impl TireDemGpuKernel {
         let contact_bytes =
             |len: usize| (len.max(1) * core::mem::size_of::<TireDemContactCell>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let usage_ro = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let usage_rw = wgpu::BufferUsages::STORAGE
@@ -3694,19 +3770,26 @@ impl TireDemGpuKernel {
         let stage_pos = stage_vec4(device, "tire_dem step stage pos", n);
         let stage_vel = stage_vec4(device, "tire_dem step stage vel", n);
 
-        queue.write_buffer(&pos_in, 0, bytemuck::cast_slice(&input.positions));
-        queue.write_buffer(&vel_in, 0, bytemuck::cast_slice(&input.velocities));
+        molla_core::gpu_write_buffer!(queue, &pos_in, 0, bytemuck::cast_slice(&input.positions));
+        molla_core::gpu_write_buffer!(queue, &vel_in, 0, bytemuck::cast_slice(&input.velocities));
         if input.contacts.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &contacts,
                 0,
                 bytemuck::cast_slice(&[TireDemContactCell::default()]),
             );
         } else {
-            queue.write_buffer(&contacts, 0, bytemuck::cast_slice(&input.contacts));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &contacts,
+                0,
+                bytemuck::cast_slice(&input.contacts)
+            );
         }
         let p = input.params;
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireDemStepUniforms {
@@ -3779,12 +3862,15 @@ impl TireDemGpuKernel {
         let u32_bytes = |len: usize| (len.max(1) * core::mem::size_of::<u32>()) as u64;
         let uvec4_bytes = |len: usize| (len.max(1) * core::mem::size_of::<[u32; 4]>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let usage_ro = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let usage_rw = wgpu::BufferUsages::STORAGE
@@ -3817,25 +3903,38 @@ impl TireDemGpuKernel {
         let stage_pos = stage_vec4(device, "tire_dem grid step stage pos", n);
         let stage_vel = stage_vec4(device, "tire_dem grid step stage vel", n);
 
-        queue.write_buffer(&pos_in, 0, bytemuck::cast_slice(&input.positions));
-        queue.write_buffer(&vel_in, 0, bytemuck::cast_slice(&input.velocities));
+        molla_core::gpu_write_buffer!(queue, &pos_in, 0, bytemuck::cast_slice(&input.positions));
+        molla_core::gpu_write_buffer!(queue, &vel_in, 0, bytemuck::cast_slice(&input.velocities));
         if input.contacts.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &contacts,
                 0,
                 bytemuck::cast_slice(&[TireDemContactCell::default()]),
             );
         } else {
-            queue.write_buffer(&contacts, 0, bytemuck::cast_slice(&input.contacts));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &contacts,
+                0,
+                bytemuck::cast_slice(&input.contacts)
+            );
         }
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &sorted_indices,
             0,
             bytemuck::cast_slice(&input.sorted_indices),
         );
-        queue.write_buffer(&cell_ranges, 0, bytemuck::cast_slice(&input.cell_ranges));
+        molla_core::gpu_write_buffer!(
+            queue,
+            &cell_ranges,
+            0,
+            bytemuck::cast_slice(&input.cell_ranges)
+        );
         let p = input.params;
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireDemStepUniforms {
@@ -3927,12 +4026,15 @@ impl TireDemGpuKernel {
             |len: usize| (len.max(1) * core::mem::size_of::<TireDemContactCell>()) as u64;
         let u32_bytes = |len: usize| (len.max(1) * core::mem::size_of::<u32>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let usage_ro = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let usage_rw = wgpu::BufferUsages::STORAGE
@@ -3965,25 +4067,33 @@ impl TireDemGpuKernel {
         let stage_pos = stage_vec4(device, "tire_dem lbvh step stage pos", n);
         let stage_vel = stage_vec4(device, "tire_dem lbvh step stage vel", n);
 
-        queue.write_buffer(&pos_in, 0, bytemuck::cast_slice(&input.positions));
-        queue.write_buffer(&vel_in, 0, bytemuck::cast_slice(&input.velocities));
+        molla_core::gpu_write_buffer!(queue, &pos_in, 0, bytemuck::cast_slice(&input.positions));
+        molla_core::gpu_write_buffer!(queue, &vel_in, 0, bytemuck::cast_slice(&input.velocities));
         if input.contacts.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &contacts,
                 0,
                 bytemuck::cast_slice(&[TireDemContactCell::default()]),
             );
         } else {
-            queue.write_buffer(&contacts, 0, bytemuck::cast_slice(&input.contacts));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &contacts,
+                0,
+                bytemuck::cast_slice(&input.contacts)
+            );
         }
-        queue.write_buffer(&lbvh_nodes, 0, bytemuck::cast_slice(&lbvh_rows));
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(queue, &lbvh_nodes, 0, bytemuck::cast_slice(&lbvh_rows));
+        molla_core::gpu_write_buffer!(
+            queue,
             &lbvh_indices,
             0,
             bytemuck::cast_slice(&input.lbvh.sorted_indices),
         );
         let p = input.params;
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireDemStepUniforms {
@@ -4095,20 +4205,26 @@ impl TireDemGpuKernel {
         let usage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC;
-        let pos = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_dem resident state positions"),
-            size: bytes.max(4),
-            usage,
-            mapped_at_creation: false,
-        });
-        let vel = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_dem resident state velocities"),
-            size: bytes.max(4),
-            usage,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&pos, 0, bytemuck::cast_slice(positions));
-        queue.write_buffer(&vel, 0, bytemuck::cast_slice(velocities));
+        let pos = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_dem resident state positions"),
+                size: bytes.max(4),
+                usage,
+                mapped_at_creation: false,
+            }
+        );
+        let vel = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_dem resident state velocities"),
+                size: bytes.max(4),
+                usage,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &pos, 0, bytemuck::cast_slice(positions));
+        molla_core::gpu_write_buffer!(queue, &vel, 0, bytemuck::cast_slice(velocities));
         Ok(TireDemResidentState {
             positions: pos,
             velocities: vel,
@@ -4140,8 +4256,13 @@ impl TireDemGpuKernel {
                 "tire_dem_resident_state_update: rows must be finite".into(),
             ));
         }
-        queue.write_buffer(&state.positions, 0, bytemuck::cast_slice(positions));
-        queue.write_buffer(&state.velocities, 0, bytemuck::cast_slice(velocities));
+        molla_core::gpu_write_buffer!(queue, &state.positions, 0, bytemuck::cast_slice(positions));
+        molla_core::gpu_write_buffer!(
+            queue,
+            &state.velocities,
+            0,
+            bytemuck::cast_slice(velocities)
+        );
         Ok(())
     }
 
@@ -4178,12 +4299,15 @@ impl TireDemGpuKernel {
         let vec4_bytes = |len: usize| (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64;
         let u32_bytes = |len: usize| (len.max(1) * core::mem::size_of::<u32>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let usage_ro = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let lbvh_nodes = mk_buf(
@@ -4196,8 +4320,13 @@ impl TireDemGpuKernel {
             u32_bytes(lbvh.sorted_indices.len()),
             usage_ro,
         );
-        queue.write_buffer(&lbvh_nodes, 0, bytemuck::cast_slice(&lbvh_rows));
-        queue.write_buffer(&lbvh_indices, 0, bytemuck::cast_slice(&lbvh.sorted_indices));
+        molla_core::gpu_write_buffer!(queue, &lbvh_nodes, 0, bytemuck::cast_slice(&lbvh_rows));
+        molla_core::gpu_write_buffer!(
+            queue,
+            &lbvh_indices,
+            0,
+            bytemuck::cast_slice(&lbvh.sorted_indices)
+        );
         Ok(TireDemResidentLbvh {
             node_rows: lbvh_nodes,
             sorted_indices: lbvh_indices,
@@ -4248,20 +4377,31 @@ impl TireDemGpuKernel {
         let vec4_bytes = |len: usize| (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64;
         let u32_bytes = |len: usize| (len.max(1) * core::mem::size_of::<u32>()) as u64;
         let usage_ro = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
-        let lbvh_nodes = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_dem resident gpu-built lbvh node rows"),
-            size: vec4_bytes(tree.node_rows.len()),
-            usage: usage_ro,
-            mapped_at_creation: false,
-        });
-        let lbvh_indices = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_dem resident gpu-built lbvh sorted indices"),
-            size: u32_bytes(tree.sorted_indices.len()),
-            usage: usage_ro,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&lbvh_nodes, 0, bytemuck::cast_slice(&tree.node_rows));
-        queue.write_buffer(&lbvh_indices, 0, bytemuck::cast_slice(&tree.sorted_indices));
+        let lbvh_nodes = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_dem resident gpu-built lbvh node rows"),
+                size: vec4_bytes(tree.node_rows.len()),
+                usage: usage_ro,
+                mapped_at_creation: false,
+            }
+        );
+        let lbvh_indices = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_dem resident gpu-built lbvh sorted indices"),
+                size: u32_bytes(tree.sorted_indices.len()),
+                usage: usage_ro,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &lbvh_nodes, 0, bytemuck::cast_slice(&tree.node_rows));
+        molla_core::gpu_write_buffer!(
+            queue,
+            &lbvh_indices,
+            0,
+            bytemuck::cast_slice(&tree.sorted_indices)
+        );
         Ok(TireDemResidentLbvh {
             node_rows: lbvh_nodes,
             sorted_indices: lbvh_indices,
@@ -4324,30 +4464,42 @@ impl TireDemGpuKernel {
         let storage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_SRC
             | wgpu::BufferUsages::COPY_DST;
-        let keys_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_dem resident sparse lbvh gpu keys"),
-            size: u32_bytes(n),
-            usage: storage,
-            mapped_at_creation: false,
-        });
-        let sorted_indices = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_dem resident sparse lbvh gpu sorted indices"),
-            size: u32_bytes(n),
-            usage: storage,
-            mapped_at_creation: false,
-        });
-        let node_rows = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_dem resident sparse lbvh gpu tree rows"),
-            size: vec4_bytes(node_count * 3),
-            usage: storage,
-            mapped_at_creation: false,
-        });
-        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_dem resident sparse lbvh gpu build uniforms"),
-            size: core::mem::size_of::<TireDemStepUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let keys_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_dem resident sparse lbvh gpu keys"),
+                size: u32_bytes(n),
+                usage: storage,
+                mapped_at_creation: false,
+            }
+        );
+        let sorted_indices = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_dem resident sparse lbvh gpu sorted indices"),
+                size: u32_bytes(n),
+                usage: storage,
+                mapped_at_creation: false,
+            }
+        );
+        let node_rows = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_dem resident sparse lbvh gpu tree rows"),
+                size: vec4_bytes(node_count * 3),
+                usage: storage,
+                mapped_at_creation: false,
+            }
+        );
+        let uniforms = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_dem resident sparse lbvh gpu build uniforms"),
+                size: core::mem::size_of::<TireDemStepUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let bg_data = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_dem resident sparse lbvh build bg"),
             layout: &self.layout_sparse_lbvh_build_io,
@@ -4364,7 +4516,8 @@ impl TireDemGpuKernel {
             entries: &[entry(0, &uniforms)],
         });
 
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireDemStepUniforms {
@@ -4404,7 +4557,8 @@ impl TireDemGpuKernel {
             n,
         )?;
 
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireDemStepUniforms {
@@ -4441,7 +4595,8 @@ impl TireDemGpuKernel {
         while child_count > 1 {
             let parent_count = child_count / 2;
             let parent_start = child_start - parent_count;
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &uniforms,
                 0,
                 bytemuck::bytes_of(&TireDemStepUniforms {
@@ -4523,8 +4678,14 @@ impl TireDemGpuKernel {
         {
             return Ok(ResidentLbvhUpdate::CapacityExceeded);
         }
-        queue.write_buffer(&resident.node_rows, 0, bytemuck::cast_slice(&lbvh_rows));
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
+            &resident.node_rows,
+            0,
+            bytemuck::cast_slice(&lbvh_rows)
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
             &resident.sorted_indices,
             0,
             bytemuck::cast_slice(&lbvh.sorted_indices),
@@ -4563,12 +4724,15 @@ impl TireDemGpuKernel {
         let contact_bytes =
             |len: usize| (len.max(1) * core::mem::size_of::<TireDemContactCell>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let usage_rw = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_DST
@@ -4588,16 +4752,18 @@ impl TireDemGpuKernel {
         );
 
         if contacts_in.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &contacts,
                 0,
                 bytemuck::cast_slice(&[TireDemContactCell::default()]),
             );
         } else {
-            queue.write_buffer(&contacts, 0, bytemuck::cast_slice(contacts_in));
+            molla_core::gpu_write_buffer!(queue, &contacts, 0, bytemuck::cast_slice(contacts_in));
         }
         let p = params;
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireDemStepUniforms {
@@ -4725,12 +4891,15 @@ impl TireDemGpuKernel {
         let f32_bytes = |len: usize| (len.max(1) * core::mem::size_of::<f32>()) as u64;
         let vec4_bytes = |len: usize| (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let reference = mk_buf(
             "tire_dem resident terrain reference heights",
@@ -4757,8 +4926,14 @@ impl TireDemGpuKernel {
             core::mem::size_of::<TireDemStepUniforms>() as u64,
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
-        queue.write_buffer(&reference, 0, bytemuck::cast_slice(reference_heights));
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
+            &reference,
+            0,
+            bytemuck::cast_slice(reference_heights)
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireDemStepUniforms {
@@ -4914,12 +5089,15 @@ impl TireDemGpuKernel {
         let u32_bytes = |len: usize| (len.max(1) * core::mem::size_of::<u32>()) as u64;
         let uvec4_bytes = |len: usize| (len.max(1) * core::mem::size_of::<[u32; 4]>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let usage_ro = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let usage_rw = wgpu::BufferUsages::STORAGE
@@ -4957,19 +5135,26 @@ impl TireDemGpuKernel {
         let stage_pos = stage_vec4(device.as_ref(), "tire_dem unbounded radix stage pos", n);
         let stage_vel = stage_vec4(device.as_ref(), "tire_dem unbounded radix stage vel", n);
 
-        queue.write_buffer(&pos_in, 0, bytemuck::cast_slice(&input.positions));
-        queue.write_buffer(&vel_in, 0, bytemuck::cast_slice(&input.velocities));
+        molla_core::gpu_write_buffer!(queue, &pos_in, 0, bytemuck::cast_slice(&input.positions));
+        molla_core::gpu_write_buffer!(queue, &vel_in, 0, bytemuck::cast_slice(&input.velocities));
         if input.contacts.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &contacts,
                 0,
                 bytemuck::cast_slice(&[TireDemContactCell::default()]),
             );
         } else {
-            queue.write_buffer(&contacts, 0, bytemuck::cast_slice(&input.contacts));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &contacts,
+                0,
+                bytemuck::cast_slice(&input.contacts)
+            );
         }
         let p = input.params;
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &uniforms,
             0,
             bytemuck::bytes_of(&TireDemStepUniforms {
@@ -5136,39 +5321,51 @@ fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
 }
 
 fn stage_vec4(device: &wgpu::Device, label: &str, len: usize) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    })
+    molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (len.max(1) * core::mem::size_of::<[f32; 4]>()) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }
+    )
 }
 
 fn stage_f32(device: &wgpu::Device, label: &str, len: usize) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: (len.max(1) * core::mem::size_of::<f32>()) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    })
+    molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (len.max(1) * core::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }
+    )
 }
 
 fn stage_u32(device: &wgpu::Device, label: &str, len: usize) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: (len.max(1) * core::mem::size_of::<u32>()) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    })
+    molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (len.max(1) * core::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }
+    )
 }
 
 fn stage_uvec4(device: &wgpu::Device, label: &str, len: usize) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: (len.max(1) * core::mem::size_of::<[u32; 4]>()) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    })
+    molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (len.max(1) * core::mem::size_of::<[u32; 4]>()) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }
+    )
 }
 
 fn read_vec4(device: &wgpu::Device, buf: &wgpu::Buffer, label: &str) -> Result<Vec<[f32; 4]>> {
@@ -5181,7 +5378,7 @@ fn read_vec4(device: &wgpu::Device, buf: &wgpu::Buffer, label: &str) -> Result<V
     rx.recv()
         .map_err(|_| Error::Solver(format!("{label}: map callback dropped")))?
         .map_err(|e| Error::Solver(format!("{label}: map failed: {e:?}")))?;
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let out = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     buf.unmap();
@@ -5198,7 +5395,7 @@ fn read_f32(device: &wgpu::Device, buf: &wgpu::Buffer, label: &str) -> Result<Ve
     rx.recv()
         .map_err(|_| Error::Solver(format!("{label}: map callback dropped")))?
         .map_err(|e| Error::Solver(format!("{label}: map failed: {e:?}")))?;
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let out = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     buf.unmap();
@@ -5215,7 +5412,7 @@ fn read_u32(device: &wgpu::Device, buf: &wgpu::Buffer, label: &str) -> Result<Ve
     rx.recv()
         .map_err(|_| Error::Solver(format!("{label}: map callback dropped")))?
         .map_err(|e| Error::Solver(format!("{label}: map failed: {e:?}")))?;
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let out = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     buf.unmap();
@@ -5232,7 +5429,7 @@ fn read_uvec4(device: &wgpu::Device, buf: &wgpu::Buffer, label: &str) -> Result<
     rx.recv()
         .map_err(|_| Error::Solver(format!("{label}: map callback dropped")))?
         .map_err(|e| Error::Solver(format!("{label}: map failed: {e:?}")))?;
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let out = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     buf.unmap();

@@ -78,7 +78,11 @@ impl FemElasticityGpuKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::fem::elasticity asm layout"),
-            bind_group_layouts: &[Some(&layout_mesh), Some(&layout_csr), Some(&layout_uniforms)],
+            bind_group_layouts: &[
+                Some(&layout_mesh),
+                Some(&layout_csr),
+                Some(&layout_uniforms),
+            ],
             immediate_size: 0,
         });
         let pipe_assemble_tet = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

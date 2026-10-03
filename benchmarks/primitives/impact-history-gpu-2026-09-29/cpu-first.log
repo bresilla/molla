@@ -1,0 +1,27 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.83s
+     Running tests/runtime_restitution.rs (target/debug/deps/runtime_restitution-daf7ed01298d6c08)
+
+running 1 test
+
+thread 'restoring_published_state_after_a_failed_edit_preserves_contact_history' (755769) panicked at crates/molla-solvers/tests/runtime_restitution.rs:332:5:
+assertion `left == right` failed
+  left: Transform { position: DVec3(0.0, 0.500009, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }
+ right: Transform { position: DVec3(0.0, 0.49977608, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test restoring_published_state_after_a_failed_edit_preserves_contact_history ... FAILED
+
+failures:
+
+failures:
+    restoring_published_state_after_a_failed_edit_preserves_contact_history
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_restitution`
+make: *** [Makefile:74: test] Error 101

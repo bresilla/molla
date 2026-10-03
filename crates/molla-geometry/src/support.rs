@@ -119,15 +119,17 @@ pub fn support_cylinder(half_height: Real, radius: Real, dir: Vec3) -> Vec3 {
     } else {
         -half_height
     };
-    let xz = Vec3::new(dir.x, 0.0, dir.z);
-    let xz_len = xz.length();
-    let edge = if xz_len > 1e-12 {
-        xz * (radius / xz_len)
-    } else {
-        // dir is along ±Y; any disk-edge point works. Pick +X.
-        Vec3::new(radius, 0.0, 0.0)
-    };
+    let edge = support_disk_edge(radius, dir);
     Vec3::new(edge.x, cap_y, edge.z)
+}
+
+fn support_disk_edge(radius: Real, dir: Vec3) -> Vec3 {
+    let scale = dir.x.abs().max(dir.z.abs());
+    if scale == 0.0 {
+        return Vec3::new(radius, 0.0, 0.0);
+    }
+    let scaled = Vec3::new(dir.x / scale, 0.0, dir.z / scale);
+    (scaled / scaled.length()) * radius
 }
 
 /// Cone support along the local +Y axis: apex at `(0, +half_h, 0)`,
@@ -135,15 +137,15 @@ pub fn support_cylinder(half_height: Real, radius: Real, dir: Vec3) -> Vec3 {
 /// the larger dot with `dir`.
 #[inline]
 pub fn support_cone(half_height: Real, radius: Real, dir: Vec3) -> Vec3 {
-    let apex_dot = half_height * dir.y;
-    let xz = Vec3::new(dir.x, 0.0, dir.z);
-    let xz_len = xz.length();
-    let base_edge = if xz_len > 1e-12 {
-        xz * (radius / xz_len)
-    } else {
-        Vec3::new(radius, 0.0, 0.0)
-    };
-    let base_dot = base_edge.dot(dir) - half_height * dir.y;
+    let direction_scale = dir.abs().max_element();
+    let shape_scale = half_height.max(radius);
+    if direction_scale == 0.0 || shape_scale == 0.0 {
+        return Vec3::new(0.0, half_height, 0.0);
+    }
+    let unit = dir / direction_scale;
+    let apex_dot = (half_height / shape_scale) * unit.y;
+    let base_edge = support_disk_edge(radius, dir);
+    let base_dot = (base_edge / shape_scale).dot(unit) - apex_dot;
     if apex_dot >= base_dot {
         Vec3::new(0.0, half_height, 0.0)
     } else {
@@ -227,6 +229,24 @@ pub fn support_minkowski(
 mod tests {
     use super::*;
     use molla_math::Quat;
+
+    #[test]
+    fn curved_support_is_direction_scale_invariant() {
+        for direction_scale in [1e-300, 1.0, 1e300, 1.7e308] {
+            for size in [1e-30, 1.0, 1e30] {
+                let direction = Vec3::new(0.3, -0.7, -0.4) * direction_scale;
+                let expected = Vec3::new(0.18, -0.7, -0.24);
+                for result in [
+                    support_cylinder(0.7 * size, 0.3 * size, direction),
+                    support_cone(0.7 * size, 0.3 * size, direction),
+                ] {
+                    assert!((result / size - expected).length() < 1e-14);
+                }
+                let apex = support_cone(0.7 * size, 0.3 * size, -direction);
+                assert!((apex / size - Vec3::Y * 0.7).length() < 1e-14);
+            }
+        }
+    }
 
     #[test]
     fn sphere_support_unit_directions() {

@@ -152,7 +152,7 @@ impl MeshBvhGpu {
             "molla::mesh_bvh nodes",
             bytemuck::cast_slice(&nodes_gpu),
         )?;
-        queue.write_buffer(&nodes, 0, bytemuck::cast_slice(&nodes_gpu));
+        molla_core::gpu_write_buffer!(queue, &nodes, 0, bytemuck::cast_slice(&nodes_gpu));
 
         let tri_order_data: Vec<u32> = bvh.triangle_order.clone();
         let tri_order = make_storage(
@@ -160,7 +160,7 @@ impl MeshBvhGpu {
             "molla::mesh_bvh tri_order",
             bytemuck::cast_slice(&tri_order_data),
         )?;
-        queue.write_buffer(&tri_order, 0, bytemuck::cast_slice(&tri_order_data));
+        molla_core::gpu_write_buffer!(queue, &tri_order, 0, bytemuck::cast_slice(&tri_order_data));
 
         let mut idx_flat: Vec<u32> = Vec::with_capacity(indices.len() * 3);
         for tri in indices {
@@ -171,7 +171,7 @@ impl MeshBvhGpu {
             "molla::mesh_bvh indices",
             bytemuck::cast_slice(&idx_flat),
         )?;
-        queue.write_buffer(&indices_buf, 0, bytemuck::cast_slice(&idx_flat));
+        molla_core::gpu_write_buffer!(queue, &indices_buf, 0, bytemuck::cast_slice(&idx_flat));
 
         let mut vert_pad: Vec<[f32; 4]> = Vec::with_capacity(vertices.len());
         for v in vertices {
@@ -183,7 +183,7 @@ impl MeshBvhGpu {
             "molla::mesh_bvh vertices",
             bytemuck::cast_slice(&vert_pad),
         )?;
-        queue.write_buffer(&vertices_buf, 0, bytemuck::cast_slice(&vert_pad));
+        molla_core::gpu_write_buffer!(queue, &vertices_buf, 0, bytemuck::cast_slice(&vert_pad));
 
         Ok(Self {
             nodes,
@@ -200,7 +200,7 @@ fn check_bytes(device: &wgpu::Device, count: usize, stride: usize) -> Result<()>
         .checked_mul(stride)
         .ok_or_else(|| Error::Gpu("mesh BVH size overflow".into()))? as u64;
     if bytes > device.limits().max_buffer_size
-        || bytes > device.limits().max_storage_buffer_binding_size as u64
+        || bytes > device.limits().max_storage_buffer_binding_size
     {
         return Err(Error::Gpu("mesh BVH exceeds GPU buffer limits".into()));
     }
@@ -300,19 +300,25 @@ fn make_storage(device: &wgpu::Device, label: &str, data: &[u8]) -> Result<wgpu:
         // wgpu refuses zero-sized buffers; allocate a 16-byte stub so
         // the binding is valid (the kernel's `node_count == 0` early-out
         // means we never read it).
-        return Ok(device.create_buffer(&wgpu::BufferDescriptor {
+        return Ok(molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some(label),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        ));
+    }
+    Ok(molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
             label: Some(label),
-            size: 16,
+            size: data.len() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
-        }));
-    }
-    Ok(device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: data.len() as u64,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    }))
+        }
+    ))
 }
 
 pub struct MeshBvhRaycastKernel {
@@ -346,12 +352,15 @@ impl MeshBvhRaycastKernel {
         device: &wgpu::Device,
         buffers: [&wgpu::Buffer; 11],
     ) -> MeshBvhRaycastBindings {
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::mesh retained uniform"),
-            size: 32,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::mesh retained uniform"),
+                size: 32,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let make_group = |layout, buffers: &[&wgpu::Buffer]| {
             let entries: Vec<_> = buffers
                 .iter()
@@ -396,7 +405,8 @@ impl MeshBvhRaycastKernel {
         if ray_count == 0 {
             return;
         }
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &bindings.uniform,
             0,
             bytemuck::bytes_of(&Uniforms {
@@ -480,11 +490,14 @@ impl MeshBvhRaycastKernel {
         });
         use wgpu::util::DeviceExt;
         let identity_data: molla_math::GpuTransform = Transform::IDENTITY.into();
-        let identity = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::mesh identity"),
-            contents: bytemuck::bytes_of(&identity_data),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let identity = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::mesh identity"),
+                contents: bytemuck::bytes_of(&identity_data),
+                usage: wgpu::BufferUsages::STORAGE,
+            }
+        );
         Self {
             identity,
             pipeline,
@@ -597,13 +610,16 @@ impl MeshBvhRaycastKernel {
             body_id,
             _pad: [0; 3],
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::mesh_bvh_raycast uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::mesh_bvh_raycast uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::mesh_bvh_raycast uniforms bg"),
             layout: &self.layout_uniforms,

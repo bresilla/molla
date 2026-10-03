@@ -1,0 +1,295 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on artifact directory
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.15s
+     Running tests/runtime_break_configuration.rs (target/debug/deps/runtime_break_configuration-6fc0b1535722230b)
+
+running 9 tests
+test break_thresholds_are_inclusive_independent_and_validate_zero_and_infinity ... ok
+test threshold_edits_invalidate_dynamics_without_recompiling_or_changing_state ... ok
+test step_checkpoint_restores_solver_state_and_forks_do_not_share_mutable_dynamics ... ok
+test explicit_filters_expand_compound_colliders_and_future_body_shapes ... ok
+test broken_edges_do_not_propagate_later_structural_or_state_edits ... ok
+test broken_tree_edges_release_authored_topology_and_conflicting_repair_is_atomic ... ok
+test invalid_break_batch_is_atomic_and_loops_do_not_detach_tree_edges ... ok
+test batched_breaks_detach_trees_preserve_state_and_require_explicit_repair ... ok
+test break_removes_only_joint_collision_policy_and_explicit_pairs_survive_compaction ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_cone_configuration.rs (target/debug/deps/runtime_cone_configuration-2a7e7905c39a54cb)
+
+running 5 tests
+test rigid_fixed_loop_insertion_and_failed_controls_preserve_authored_state ... ok
+test invalid_cone_mutations_are_atomic ... ok
+test rigid_ball_loop_configuration_is_transactional ... ok
+test rigid_axis_loops_author_limits_and_both_motor_models_atomically ... ok
+test cone_edits_preserve_tree_and_loop_handles_through_compaction ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.87s
+     Running tests/runtime_acceleration_drives.rs (target/debug/deps/runtime_acceleration_drives-604923b906406ebe)
+
+running 2 tests
+zero conditional mobility: locked D6 and redundant Fixed/D6 rows, masses .01/1/100, controls retire while hard support remains physical
+test cpu_zero_acceleration_mobility_retires_drives_and_preserves_redundant_hard_support ... ok
+144 rotated off-centre/full-inertia hinge/slider/D6 closures: Force/Acceleration, masses .01/1/100, uncapped/capped/zero, independent pivot inertia and both-anchor reactions
+test cpu_acceleration_drives_use_locked_pivot_inertia_and_physical_force_caps ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+     Running tests/runtime_friction.rs (target/debug/deps/runtime_friction-d8df9b84cfa06ff9)
+
+running 8 tests
+test a_sleeping_contact_does_not_leak_impulses_and_surface_edits_wake_it ... ok
+test conveyor_relative_slip_material_edits_and_separation_refresh_friction ... ok
+kinetic acceleration=3.039090262261311 expected=3.0390902622612845
+test supercritical_slope_slides_at_the_dynamic_coefficient_acceleration ... ok
+test collider_endpoint_exchange_and_dense_compaction_preserve_motion ... ok
+test equal_legacy_coefficients_and_zero_friction_keep_their_authored_meaning ... ok
+loaded static block tangent displacement=3.687368316848738e-5, post-settle creep=1.049898680567692e-15
+cuboid incline displacement=2.3598192082744055e-5
+test cuboid_manifold_holds_a_loaded_incline_without_sleeping ... ok
+test sliding_block_stops_resticks_and_reverses_under_a_new_load ... ok
+loaded static block tangent displacement=3.687372746672494e-5, post-settle creep=1.0630802571354057e-7
+test inclined_loaded_block_holds_without_tangential_creep_for_five_seconds ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+     Running tests/runtime_mixed_contacts_cpu.rs (target/debug/deps/runtime_mixed_contacts_cpu-8c046ec7274fc43a)
+
+running 7 tests
+test locked_cone_contact_has_complete_cpu_torque_balance ... ok
+test unrelated_sleeping_island_does_not_change_mixed_cpu_response ... ok
+test mixed_cpu_distance_break_uses_common_reaction_and_continues ... ok
+test distance_and_contact_share_one_cpu_impulse_solution ... ok
+test distance_between_two_contacts_transfers_friction_and_preserves_endpoint_exchange ... ok
+test incompatible_immovable_mixed_row_rolls_back_and_recovers ... ok
+test loaded_scalar_contact_stops_release_and_survive_limit_edits ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/runtime_restitution.rs (target/debug/deps/runtime_restitution-daf7ed01298d6c08)
+
+running 13 tests
+test resting_exact_touch_retains_the_episode_for_penalty_support ... ok
+test restoring_published_state_after_a_failed_edit_preserves_contact_history ... ok
+test failed_frame_after_impact_restores_the_episode_and_physical_state ... ok
+test breaking_a_support_preserves_an_existing_contact_episode ... ok
+test explicit_velocity_and_material_edits_start_a_fresh_impact_episode ... ok
+test restitution_runs_in_the_sleeping_selection_path ... ok
+test impact_impulse_is_published_once_and_matches_the_velocity_jump ... ok
+test impact_joint_reactions_include_the_impulse_and_can_trigger_breakage ... ok
+test a_remote_impact_does_not_change_an_unconnected_contact_trajectory ... ok
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=0, measured=0e0
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=0.5, measured=5e-1
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=1, measured=1e0
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=0, measured=0e0
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=0.5, measured=5e-1
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=1, measured=1e0
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=0, measured=0e0
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=0.5, measured=5e-1
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=1, measured=1e0
+test cpu_normal_rebound_consumes_restitution_across_step_sizes ... ok
+test passive_oblique_runtime_impacts_do_not_increase_kinetic_energy ... ok
+test rebound_is_independent_of_onset_penalty_stiffness_damping_and_substeps ... ok
+test tilted_box_impacts_keep_kinetic_energy_below_the_initial_budget ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s
+
+     Running tests/runtime_rigid_axis_loops.rs (target/debug/deps/runtime_rigid_axis_loops-f2adca86e62fec78)
+
+running 4 tests
+24 rigid axis closures: force/torque/both breaks, capture=false, exact repair state and follow-up step passed
+24 rigid axis closures: force/torque/both breaks, capture=true, exact repair state and follow-up step passed
+test cpu_rigid_axis_loop_break_channels_and_explicit_repair_preserve_state ... ok
+rigid-axis loops hz=60 substeps=1 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=60 substeps=1 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+48 floating hinge/slider/D6 pairs: independent five/six-row impulse, COM, full inertia and both-anchor wrenches passed
+test cpu_rigid_axis_loops_match_independent_floating_impulse_projection ... ok
+rigid-axis loops hz=60 substeps=4 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=60 substeps=4 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=1 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=1 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=4 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+test cpu_rigid_axis_loops_match_nonzero_equal_bound_motion_and_wrenches ... ok
+rigid-axis loops hz=240 substeps=4 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+test cpu_rigid_axis_loops_match_independent_hard_bound_motion_and_wrenches ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.40s
+
+     Running tests/runtime_rigid_fixed_loops.rs (target/debug/deps/runtime_rigid_fixed_loops-71b7f9c92463de14)
+
+running 3 tests
+test cpu_rigid_fixed_loop_projection_matches_independent_six_dimensional_impulse ... ok
+test cpu_rigid_fixed_loop_break_channels_and_explicit_repair_preserve_state ... ok
+test cpu_rigid_fixed_loops_preserve_rotated_frames_and_balance_anchor_wrenches ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/runtime_rigid_loop_drives.rs (target/debug/deps/runtime_rigid_loop_drives-bd8716cd0497e2f6)
+
+running 7 tests
+test cpu_rigid_loop_acceleration_feedback_is_applied_once_during_mass_scaled_impacts ... ok
+test cpu_rigid_loop_controls_are_applied_once_during_live_oblique_impacts ... ok
+D6 Force controls with live friction: 96 frames, masses .01/1/100, static hold/capped slide/brake/reversal, independent impulse/rate/reaction oracle
+test cpu_rigid_loop_force_drives_share_live_friction_response ... ok
+Force motor + brake breaking/repair: 24 rotated axis closures, capture=false, event oracle, broken-row retirement and live-control repair verified
+D6 Force controls with live friction: 96 frames, masses .01/1/100, static hold/capped slide/brake/reversal, independent impulse/rate/reaction oracle
+test cpu_rigid_loop_acceleration_drives_share_live_friction_response ... ok
+Force motor + brake breaking/repair: 24 rotated axis closures, capture=true, event oracle, broken-row retirement and live-control repair verified
+test cpu_rigid_loop_motor_brake_breaking_and_repair_retire_and_restore_controls ... ok
+rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 60Hz/1 steps
+rigid-loop Acceleration controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 60Hz/1 steps
+rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 240Hz/4 steps
+test cpu_rigid_loop_force_drives_match_independent_implicit_oracle ... ok
+rigid-loop Acceleration controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 240Hz/4 steps
+test cpu_rigid_loop_acceleration_drives_match_independent_implicit_oracle ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.60s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 2 tests
+test drive_response::tests::empty_and_invalid_mobility_matrices_are_explicit ... ok
+test drive_response::tests::redundant_locks_preserve_conditional_mobility_across_scales ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 132 filtered out; finished in 0.00s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 5 tests
+test coupled_constraints::tests::bounded_null_response_effort_and_invalid_domains_are_explicit ... ok
+test coupled_constraints::tests::unilateral_joint_activation_and_static_promotion_use_global_solution ... ok
+test coupled_constraints::tests::bounded_feedback_and_friction_match_independent_active_set_oracle ... ok
+test coupled_constraints::tests::mixed_disk_scalar_solution_and_infeasible_rows ... ok
+test coupled_constraints::tests::satisfied_zero_response_rows_coexist_with_contact_and_faults_are_explicit ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 129 filtered out; finished in 0.01s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 5 tests
+test constraint_allocation::tests::tangent_affine_disk_intersection_retains_its_unique_impulse ... ok
+test constraint_allocation::tests::redundant_bilateral_rows_leave_strictly_inactive_stop_at_exact_zero ... ok
+test constraint_allocation::tests::objective_linear_part_and_unilateral_feasibility_are_preserved ... ok
+test constraint_allocation::tests::redundant_allocation_has_analytic_interior_and_capped_solutions ... ok
+test constraint_allocation::tests::redundant_interval_rows_preserve_caps_points_and_minimum_norm ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 129 filtered out; finished in 0.00s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 26 tests
+test impact_constraints::tests::bounded_scalars_handle_prescribed_null_effort_and_reject_invalid_domains ... ok
+test impact_constraints::tests::invalid_indefinite_and_nonfinite_inputs_are_rejected ... ok
+test impact_constraints::tests::active_set_checks_inactive_rows_and_preserves_bilateral_equalities ... ok
+test impact_constraints::tests::joint_coupling_is_solved_before_friction_mode_promotion ... ok
+test impact_constraints::tests::midpoint_normal_bounce_matches_authored_coefficient_and_preserves_momentum ... ok
+test impact_constraints::tests::midpoint_rejects_stale_event_speed_and_separating_active_contacts ... ok
+test impact_constraints::tests::midpoint_friction_removes_the_oblique_energy_counterexample ... ok
+test impact_constraints::tests::coupled_contacts_preserve_response_under_block_permutation ... ok
+test impact_constraints::tests::newton_normal_restitution_alone_is_not_an_oblique_energy_certificate ... ok
+test impact_constraints::tests::bounded_scalars_match_independent_box_oracle_with_bilateral_coupling ... ok
+test impact_constraints::tests::separated_and_zero_load_contacts_cannot_generate_friction ... ok
+test impact_constraints::tests::rank_deficient_tangent_response_remains_bounded ... ok
+test impact_constraints::tests::static_capture_promotion_and_initial_dynamic_mode ... ok
+test impact_constraints::tests::target_and_capacity_overflow_fail_closed ... ok
+test impact_constraints::tests::nonnegative_joint_couples_to_restitution_normal ... ok
+test impact_constraints::tests::sliding_cap_includes_base_and_solved_normal_impulse ... ok
+test impact_constraints::tests::midpoint_capture_reports_average_zero_not_final_zero ... ok
+test impact_constraints::tests::two_body_impact_conserves_momentum_and_measures_energy_loss ... ok
+test impact_constraints::tests::newton_rebound_mass_speed_sweep_and_energy ... ok
+test impact_constraints::tests::normal_tangent_coupling_has_no_associated_cone_dilatancy ... ok
+test impact_constraints::tests::tangent_basis_rotation_preserves_world_impulse ... ok
+test impact_constraints::tests::midpoint_coupled_contacts_and_homogeneous_joints_have_nonpositive_work ... ok
+test impact_constraints::tests::infeasible_immovable_rows_fail_closed_and_empty_problem_succeeds ... ok
+test impact_constraints::tests::nearly_parallel_scalar_rows_release_inactive_impulses_with_bilateral_rows ... ok
+test impact_constraints::tests::midpoint_passive_oblique_impacts_dissipate_across_mass_friction_and_restitution ... ok
+test impact_constraints::tests::nearly_parallel_contact_normals_release_inactive_impulses ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 108 filtered out; finished in 0.11s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running tests/articulated_impact.rs (target/debug/deps/articulated_impact-36a1276feece47f0)
+
+running 13 tests
+test moving_surface_transfers_work_and_ignores_normal_belt_velocity ... ok
+test moving_support_work_explains_dynamic_energy_gain ... ok
+test off_center_two_body_friction_conserves_linear_and_angular_momentum ... ok
+test world_hinge_uses_pivot_inertia_and_preserves_the_locked_motion ... ok
+test simultaneous_manifold_contacts_are_order_independent_in_body_response ... ok
+test inherited_kinematic_velocity_uses_physical_not_relative_joint_energy ... ok
+test fixed_tree_impact_transfers_through_the_articulation ... ok
+test off_center_rotated_com_and_tensor_match_analytic_impulse ... ok
+test oblique_friction_impacts_dissipate_with_world_frame_covariance ... ok
+test scalar_joint_row_couples_to_contact_and_failures_leave_state_unchanged ... ok
+test two_body_rebound_momentum_endpoint_exchange_and_force_preservation ... ok
+test bounded_feedback_keeps_physical_rates_and_work_and_rejects_invalid_edits ... ok
+test nonnegative_scalar_response_and_late_failure_are_transactional ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s

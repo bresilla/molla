@@ -1,0 +1,168 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.40s
+     Running unittests src/lib.rs (target/debug/deps/molla_sim-0ea3f5e440833e76)
+
+running 1 test
+test joint_control::coupled_stop_tests::distance_activation_uses_radial_bounds_and_independent_caps ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.00s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.23s
+     Running tests/featherstone_mixed_distance.rs (target/debug/deps/featherstone_mixed_distance-87aebe180fa0741c)
+
+running 4 tests
+test cpu_mixed_stops_keep_slack_distance_free_and_react_at_maximum ... ok
+distance_semantics case=0 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=1 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=2 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=3 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=4 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=5 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=6 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=7 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=8 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=9 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=10 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=11 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=12 position_error=2.719479911e-16 rotation_error=4.731694792e-17 velocity_error=2.220441750e-11
+distance_semantics case=13 position_error=2.719479911e-16 rotation_error=4.731694792e-17 velocity_error=2.220451948e-11
+distance_semantics case=14 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=15 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=16 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=17 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=18 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=19 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=20 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=21 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=22 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=23 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=24 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=5.003707553e-17
+distance_semantics case=25 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=26 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=27 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=5.003707553e-17
+distance_semantics case=28 position_error=2.719479911e-16 rotation_error=4.731694792e-17 velocity_error=2.220445149e-11
+distance_semantics case=29 position_error=2.719479911e-16 rotation_error=4.731694792e-17 velocity_error=2.220451381e-11
+distance_semantics case=30 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+distance_semantics case=31 position_error=0.000000000e0 rotation_error=4.731694792e-17 velocity_error=0.000000000e0
+test cpu_standalone_distance_slack_unilateral_and_zero_bounds_preserve_rotation ... ok
+mixed_radial_precision case=0 acceleration_error=2.830524434e-16 angular_error=1.176914341e-16 position_error=3.037468031e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=1 acceleration_error=2.193356470e-11 angular_error=3.188872858e-16 position_error=1.658222581e-26 rotation_error=4.238551081e-17 violation=0.000000000e0
+mixed_radial_precision case=2 acceleration_error=2.830524434e-16 angular_error=1.176914341e-16 position_error=3.037468031e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=3 acceleration_error=2.830524434e-16 angular_error=1.176914341e-16 position_error=3.037468031e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=4 acceleration_error=2.830524434e-16 angular_error=1.176914341e-16 position_error=3.037468031e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=5 acceleration_error=2.193384643e-11 angular_error=3.188872858e-16 position_error=1.658222581e-26 rotation_error=5.900610331e-17 violation=0.000000000e0
+mixed_radial_precision case=6 acceleration_error=2.830524434e-16 angular_error=1.176914341e-16 position_error=3.037468031e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=7 acceleration_error=2.830524434e-16 angular_error=1.176914341e-16 position_error=3.037468031e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=8 acceleration_error=2.193384643e-11 angular_error=3.188872858e-16 position_error=1.658222581e-26 rotation_error=5.900610331e-17 violation=0.000000000e0
+mixed_radial_precision case=9 acceleration_error=2.193356470e-11 angular_error=3.188872858e-16 position_error=1.658222581e-26 rotation_error=4.238551081e-17 violation=0.000000000e0
+mixed_radial_precision case=10 acceleration_error=2.193356470e-11 angular_error=3.188872858e-16 position_error=1.658222581e-26 rotation_error=4.238551081e-17 violation=0.000000000e0
+mixed_radial_precision case=11 acceleration_error=2.193384643e-11 angular_error=3.188872858e-16 position_error=1.658222581e-26 rotation_error=5.900610331e-17 violation=0.000000000e0
+mixed_radial_precision case=12 acceleration_error=3.239987948e-16 angular_error=7.585164958e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=13 acceleration_error=1.617500688e-6 angular_error=7.154013119e-7 position_error=1.110223025e-16 rotation_error=5.703521760e-17 violation=0.000000000e0
+mixed_radial_precision case=14 acceleration_error=3.392437932e-16 angular_error=5.044314093e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=15 acceleration_error=3.392437932e-16 angular_error=5.044314093e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=16 acceleration_error=3.239987948e-16 angular_error=7.585164958e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=17 acceleration_error=1.617500688e-6 angular_error=7.154013121e-7 position_error=3.330669074e-16 rotation_error=1.695775383e-16 violation=0.000000000e0
+mixed_radial_precision case=18 acceleration_error=3.392437932e-16 angular_error=5.044314093e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=19 acceleration_error=3.392437932e-16 angular_error=5.044314093e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=20 acceleration_error=1.617500688e-6 angular_error=7.154013121e-7 position_error=3.330669074e-16 rotation_error=1.695775383e-16 violation=2.220446049e-16
+mixed_radial_precision case=21 acceleration_error=1.617500688e-6 angular_error=7.154013119e-7 position_error=1.110223025e-16 rotation_error=5.703521760e-17 violation=0.000000000e0
+mixed_radial_precision case=22 acceleration_error=1.617500688e-6 angular_error=7.154013119e-7 position_error=1.110223025e-16 rotation_error=5.703521760e-17 violation=0.000000000e0
+mixed_radial_precision case=23 acceleration_error=1.617500688e-6 angular_error=7.154013121e-7 position_error=3.330669074e-16 rotation_error=1.695775383e-16 violation=2.220446049e-16
+mixed_radial_precision case=24 acceleration_error=2.775557562e-17 angular_error=1.427712514e-16 position_error=6.462291758e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=25 acceleration_error=2.193352418e-11 angular_error=2.618455767e-16 position_error=1.967131797e-26 rotation_error=4.238551081e-17 violation=0.000000000e0
+mixed_radial_precision case=26 acceleration_error=2.775557562e-17 angular_error=1.427712514e-16 position_error=6.462291758e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=27 acceleration_error=2.775557562e-17 angular_error=1.427712514e-16 position_error=6.462291758e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=28 acceleration_error=2.775557562e-17 angular_error=1.427712514e-16 position_error=6.462291758e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=29 acceleration_error=2.193374321e-11 angular_error=2.618455767e-16 position_error=1.967131797e-26 rotation_error=5.900610331e-17 violation=0.000000000e0
+mixed_radial_precision case=30 acceleration_error=2.775557562e-17 angular_error=1.427712514e-16 position_error=6.462291758e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=31 acceleration_error=2.775557562e-17 angular_error=1.427712514e-16 position_error=6.462291758e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=32 acceleration_error=2.193374321e-11 angular_error=2.618455767e-16 position_error=1.967131797e-26 rotation_error=5.900610331e-17 violation=0.000000000e0
+mixed_radial_precision case=33 acceleration_error=2.193352418e-11 angular_error=2.618455767e-16 position_error=1.967131797e-26 rotation_error=4.238551081e-17 violation=0.000000000e0
+mixed_radial_precision case=34 acceleration_error=2.193352418e-11 angular_error=2.618455767e-16 position_error=1.967131797e-26 rotation_error=4.238551081e-17 violation=0.000000000e0
+mixed_radial_precision case=35 acceleration_error=2.193374321e-11 angular_error=2.618455767e-16 position_error=1.967131797e-26 rotation_error=5.900610331e-17 violation=0.000000000e0
+mixed_radial_precision case=36 acceleration_error=1.211825723e-16 angular_error=3.667624275e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=37 acceleration_error=1.617500688e-6 angular_error=7.154013121e-7 position_error=1.110223025e-16 rotation_error=5.703521760e-17 violation=0.000000000e0
+mixed_radial_precision case=38 acceleration_error=1.144391700e-16 angular_error=1.456964196e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=39 acceleration_error=1.144391700e-16 angular_error=1.456964196e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=40 acceleration_error=1.211825723e-16 angular_error=3.667624275e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=41 acceleration_error=1.617500688e-6 angular_error=7.154013120e-7 position_error=3.330669074e-16 rotation_error=1.695775383e-16 violation=0.000000000e0
+mixed_radial_precision case=42 acceleration_error=1.144391700e-16 angular_error=1.456964196e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=43 acceleration_error=1.144391700e-16 angular_error=1.456964196e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=44 acceleration_error=1.617500688e-6 angular_error=7.154013120e-7 position_error=3.330669074e-16 rotation_error=1.695775383e-16 violation=2.220446049e-16
+mixed_radial_precision case=45 acceleration_error=1.617500688e-6 angular_error=7.154013121e-7 position_error=1.110223025e-16 rotation_error=5.703521760e-17 violation=0.000000000e0
+mixed_radial_precision case=46 acceleration_error=1.617500688e-6 angular_error=7.154013121e-7 position_error=1.110223025e-16 rotation_error=5.703521760e-17 violation=0.000000000e0
+mixed_radial_precision case=47 acceleration_error=1.617500688e-6 angular_error=7.154013120e-7 position_error=3.330669074e-16 rotation_error=1.695775383e-16 violation=2.220446049e-16
+test cpu_standalone_radial_intervals_use_coupled_anchor_mass ... ok
+mixed_radial_precision case=0 acceleration_error=1.665334537e-16 angular_error=2.216471923e-16 position_error=4.918366305e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=1 acceleration_error=4.174839996e-8 angular_error=3.621753344e-8 position_error=5.909267158e-17 rotation_error=6.130719906e-17 violation=0.000000000e0
+mixed_radial_precision case=2 acceleration_error=2.830524434e-16 angular_error=1.155133875e-16 position_error=6.879199225e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=3 acceleration_error=2.830524434e-16 angular_error=1.155133875e-16 position_error=6.879199225e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=4 acceleration_error=1.665334537e-16 angular_error=2.216471923e-16 position_error=4.918366305e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=5 acceleration_error=4.174205531e-8 angular_error=3.621753344e-8 position_error=5.909267158e-17 rotation_error=6.693875101e-17 violation=0.000000000e0
+mixed_radial_precision case=6 acceleration_error=1.241267077e-16 angular_error=7.366566249e-17 position_error=3.135172492e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=7 acceleration_error=1.241267077e-16 angular_error=7.366566249e-17 position_error=3.135172492e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=8 acceleration_error=4.174205531e-8 angular_error=3.621753344e-8 position_error=5.909267158e-17 rotation_error=6.693875101e-17 violation=0.000000000e0
+mixed_radial_precision case=9 acceleration_error=4.174839996e-8 angular_error=3.621753344e-8 position_error=5.909267158e-17 rotation_error=6.130719906e-17 violation=0.000000000e0
+mixed_radial_precision case=10 acceleration_error=4.174839996e-8 angular_error=3.621753344e-8 position_error=5.909267158e-17 rotation_error=6.130719906e-17 violation=0.000000000e0
+mixed_radial_precision case=11 acceleration_error=4.174205531e-8 angular_error=3.621753344e-8 position_error=5.909267158e-17 rotation_error=6.693875101e-17 violation=0.000000000e0
+mixed_radial_precision case=12 acceleration_error=2.482776576e-16 angular_error=9.799375836e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=13 acceleration_error=1.619590341e-6 angular_error=7.163255298e-7 position_error=1.110223025e-16 rotation_error=5.703521760e-17 violation=0.000000000e0
+mixed_radial_precision case=14 acceleration_error=3.267180239e-16 angular_error=9.024584688e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=15 acceleration_error=3.267180239e-16 angular_error=9.024584688e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=16 acceleration_error=2.482776576e-16 angular_error=9.799375836e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=17 acceleration_error=1.615411026e-6 angular_error=7.144770901e-7 position_error=3.330669074e-16 rotation_error=1.695775383e-16 violation=0.000000000e0
+mixed_radial_precision case=18 acceleration_error=2.705501339e-16 angular_error=2.019632401e-16 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=19 acceleration_error=2.705501339e-16 angular_error=2.019632401e-16 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=20 acceleration_error=1.615411026e-6 angular_error=7.144770901e-7 position_error=3.330669074e-16 rotation_error=1.695775383e-16 violation=2.220446049e-16
+mixed_radial_precision case=21 acceleration_error=1.619590341e-6 angular_error=7.163255298e-7 position_error=1.110223025e-16 rotation_error=5.703521760e-17 violation=0.000000000e0
+mixed_radial_precision case=22 acceleration_error=1.619590341e-6 angular_error=7.163255298e-7 position_error=1.110223025e-16 rotation_error=5.703521760e-17 violation=0.000000000e0
+mixed_radial_precision case=23 acceleration_error=1.615411026e-6 angular_error=7.144770901e-7 position_error=3.330669074e-16 rotation_error=1.695775383e-16 violation=2.220446049e-16
+mixed_radial_precision case=24 acceleration_error=2.498001805e-16 angular_error=1.985805273e-17 position_error=2.028793406e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=25 acceleration_error=4.174840037e-8 angular_error=3.621753319e-8 position_error=5.909267154e-17 rotation_error=6.130719906e-17 violation=0.000000000e0
+mixed_radial_precision case=26 acceleration_error=2.498001805e-16 angular_error=1.985805265e-17 position_error=2.028793403e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=27 acceleration_error=2.498001805e-16 angular_error=1.985805265e-17 position_error=2.028793403e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=28 acceleration_error=2.498001805e-16 angular_error=1.985805273e-17 position_error=2.028793406e-27 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=29 acceleration_error=4.174205544e-8 angular_error=3.621753319e-8 position_error=5.909267154e-17 rotation_error=6.693875101e-17 violation=0.000000000e0
+mixed_radial_precision case=30 acceleration_error=1.110223025e-16 angular_error=4.097023049e-17 position_error=9.711411219e-28 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=31 acceleration_error=1.110223025e-16 angular_error=4.097023049e-17 position_error=9.711411219e-28 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=32 acceleration_error=4.174205544e-8 angular_error=3.621753319e-8 position_error=5.909267154e-17 rotation_error=6.693875101e-17 violation=0.000000000e0
+mixed_radial_precision case=33 acceleration_error=4.174840037e-8 angular_error=3.621753319e-8 position_error=5.909267154e-17 rotation_error=6.130719906e-17 violation=0.000000000e0
+mixed_radial_precision case=34 acceleration_error=4.174840037e-8 angular_error=3.621753319e-8 position_error=5.909267154e-17 rotation_error=6.130719906e-17 violation=0.000000000e0
+mixed_radial_precision case=35 acceleration_error=4.174205544e-8 angular_error=3.621753319e-8 position_error=5.909267154e-17 rotation_error=6.693875101e-17 violation=0.000000000e0
+mixed_radial_precision case=36 acceleration_error=7.632783294e-17 angular_error=1.161638100e-16 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=37 acceleration_error=1.619590341e-6 angular_error=7.163255298e-7 position_error=1.110223025e-16 rotation_error=5.703521760e-17 violation=0.000000000e0
+mixed_radial_precision case=38 acceleration_error=1.273811594e-16 angular_error=7.904902048e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=39 acceleration_error=1.273811594e-16 angular_error=7.904902048e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=40 acceleration_error=7.632783294e-17 angular_error=1.161638100e-16 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=41 acceleration_error=1.615411025e-6 angular_error=7.144770901e-7 position_error=3.330669074e-16 rotation_error=1.695775383e-16 violation=0.000000000e0
+mixed_radial_precision case=42 acceleration_error=1.110223025e-16 angular_error=8.358273849e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=43 acceleration_error=1.110223025e-16 angular_error=8.358273849e-17 position_error=0.000000000e0 rotation_error=4.857225733e-17 violation=0.000000000e0
+mixed_radial_precision case=44 acceleration_error=1.615411025e-6 angular_error=7.144770901e-7 position_error=3.330669074e-16 rotation_error=1.695775383e-16 violation=2.220446049e-16
+mixed_radial_precision case=45 acceleration_error=1.619590341e-6 angular_error=7.163255298e-7 position_error=1.110223025e-16 rotation_error=5.703521760e-17 violation=0.000000000e0
+mixed_radial_precision case=46 acceleration_error=1.619590341e-6 angular_error=7.163255298e-7 position_error=1.110223025e-16 rotation_error=5.703521760e-17 violation=0.000000000e0
+mixed_radial_precision case=47 acceleration_error=1.615411025e-6 angular_error=7.144770901e-7 position_error=3.330669074e-16 rotation_error=1.695775383e-16 violation=2.220446049e-16
+test cpu_mixed_radial_intervals_preserve_authored_bounds_and_physical_response ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.15s
+     Running tests/featherstone_polish_cpu.rs (target/debug/deps/featherstone_polish_cpu-63cf282917cc9cec)
+
+running 2 tests
+Distance Lagrange (CPU): worst |p|−L = 0.000e0
+test distance_joint_length_holds_within_eps_cpu ... ok
+Distance v1 hard-clamp worst: 0.000e0, rigorous: 0.000e0
+test distance_joint_lagrange_beats_v1_clamp_cpu ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s
+
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.35s

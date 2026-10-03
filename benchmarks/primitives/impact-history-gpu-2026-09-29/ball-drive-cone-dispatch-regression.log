@@ -1,0 +1,74 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.92s
+     Running tests/runtime_ball_drives.rs (target/debug/deps/runtime_ball_drives-4bf32a6b87444375)
+
+running 3 tests
+test gpu_ball_drives_and_brakes_share_cone_constraints_and_reactions ... 32 live Ball cone/control frames, six rotated closures: blocked swing cancels effort, free twist follows independent implicit brake/Force/Acceleration law, setters retain layout and separate cone/total reactions
+ok
+test gpu_ball_drives_use_full_pivot_response_and_physical_caps ... 540 full-tensor off-centre Ball closures: three authored-frame axes, all modes, Force/Acceleration, three masses/caps, brakes, independent inverse pivot tensor and anchor reactions
+ok
+test gpu_floating_ball_drives_match_independent_multiaxis_box_response ... 18 floating two-body full-inertia Ball pairs, simultaneous three-axis Force/Acceleration PD and brakes, mixed zero/finite/unbounded caps: independent box active-set enumeration, angular momentum and both-anchor reactions
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 38.77s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.95s
+     Running tests/runtime_cone_limits.rs (target/debug/deps/runtime_cone_limits-8bde061030475a43)
+
+running 7 tests
+test gpu_cone_and_radial_rows_share_offset_articulated_response ... 
+thread 'gpu_cone_and_radial_rows_share_offset_articulated_response' (725535) panicked at crates/molla-solvers/tests/runtime_cone_limits.rs:566:26:
+called `Result::unwrap()` on an `Err` value: Solver("GPU rigid runtime solver fault 512")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test gpu_cone_impacts_preserve_two_body_angular_momentum ... 
+thread 'gpu_cone_impacts_preserve_two_body_angular_momentum' (725701) panicked at crates/molla-solvers/tests/runtime_cone_limits.rs:176:33:
+called `Result::unwrap()` on an `Err` value: Solver("GPU rigid runtime solver fault 512")
+FAILED
+test gpu_cone_mutation_sleep_and_compaction ... ok
+test gpu_cone_pendulum_is_bounded_for_ten_seconds ... cone pendulum duration=10s dt=0.016666666666666666 peak=0e0 initial_energy=5.595546871377419 peak_energy=5.600632804209653 final_energy=0.7750326825238799
+cone pendulum duration=10s dt=0.008333333333333333 peak=0e0 initial_energy=5.595546871377419 peak_energy=5.598090004682412 final_energy=0.7747332007104658
+cone pendulum duration=10s dt=0.004166666666666667 peak=0e0 initial_energy=5.595546871377419 peak_energy=5.596824721379001 final_energy=0.7745691272541357
+ok
+test gpu_diagonal_ellipse_retains_loaded_free_twist ... diagonal loaded twist: peak_velocity=1.4702822321753018e-4 peak_boundary=4.744066568473926e-7 mean_torque_error=1.1853808110538122e-5
+ok
+test gpu_loaded_cones_hold_boundary_and_react_torque ... loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0.4,0.4 peak=2.1738638526268205e-7 torque_error=4.76837158203125e-7
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0.4,0.9 peak=2.1738638526268205e-7 torque_error=4.76837158203125e-7
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0,0.9 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0,0 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0.4,0.4 peak=2.5087641493768924e-7 torque_error=4.76837158203125e-7
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0.4,0.9 peak=2.5087641493768924e-7 torque_error=4.76837158203125e-7
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0,0.9 peak=4.331856834989682e-9 torque_error=0e0
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0,0 peak=4.331856834989682e-9 torque_error=0e0
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0.4,0.4 peak=2.1528290048810694e-7 torque_error=4.768371577590358e-7
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0.4,0.9 peak=2.1528290048810694e-7 torque_error=4.768371577590358e-7
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0,0.9 peak=5.2675408333276235e-9 torque_error=2.384185795456517e-7
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0,0 peak=5.2675408333276235e-9 torque_error=2.384185795456517e-7
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0.4,0.4 peak=1.2906440341976968e-7 torque_error=1.3599739078564492e-6
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0.4,0.9 peak=1.2906438832073165e-7 torque_error=1.683172220916283e-6
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0,0.9 peak=7.225093306992473e-8 torque_error=1.4940959301089279e-6
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0,0 peak=6.257577334356278e-8 torque_error=1.7148107010268844e-7
+ok
+test gpu_zero_cone_preserves_free_twist ... ok
+
+failures:
+
+failures:
+    gpu_cone_and_radial_rows_share_offset_articulated_response
+    gpu_cone_impacts_preserve_two_body_angular_momentum
+
+test result: FAILED. 5 passed; 2 failed; 0 ignored; 0 measured; 9 filtered out; finished in 290.36s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_cone_limits`
+make: *** [Makefile:120: test-gpu] Error 101

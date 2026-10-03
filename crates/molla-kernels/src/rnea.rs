@@ -9,7 +9,7 @@
 use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_math::Real;
-use molla_sim::{Model, State};
+use molla_sim::{BodyFlags, JointType, Model, State};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,8 +22,71 @@ struct Uniforms {
 
 const WORKGROUP_SIZE: u32 = 64;
 
-/// GPU RNEA kernel. Holds the pipeline and cached articulation+DOF
-/// CSR offsets so dispatch is the only per-call cost.
+fn validate_model(model: &Model) -> Result<()> {
+    let kinds = model.joint_type.host()?;
+    if kinds.iter().any(|&kind| {
+        ![
+            JointType::Fixed as u32,
+            JointType::Revolute as u32,
+            JointType::Prismatic as u32,
+        ]
+        .contains(&kind)
+    }) {
+        return Err(Error::Gpu(
+            "GPU RNEA currently supports only fixed, revolute and prismatic joints".into(),
+        ));
+    }
+    if model.joint_reversed.host()?.iter().any(|&value| value != 0) {
+        return Err(Error::Gpu(
+            "GPU RNEA does not yet support reversed joints".into(),
+        ));
+    }
+    let flags = model.body_flags.host()?;
+    if model
+        .joint_child
+        .host()?
+        .iter()
+        .zip(kinds)
+        .any(|(&child, &kind)| {
+            flags[child as usize] & BodyFlags::KINEMATIC != 0
+                || (flags[child as usize] & BodyFlags::FIXED != 0
+                    && kind != JointType::Fixed as u32)
+        })
+    {
+        return Err(Error::Gpu(
+            "GPU RNEA does not yet support prescribed body motion".into(),
+        ));
+    }
+    let lower = model.joint_limit_lower.host()?;
+    let upper = model.joint_limit_upper.host()?;
+    if lower
+        .iter()
+        .zip(upper)
+        .any(|(&lo, &hi)| lo.abs() < 1e30 && hi.abs() < 1e30 && (hi - lo).abs() < 1e-12)
+    {
+        return Err(Error::Gpu(
+            "GPU RNEA does not yet support scalar equality locks".into(),
+        ));
+    }
+    let too_large = if model.articulation_count == 0 {
+        model.joint_count > 64
+    } else {
+        model
+            .articulation_start
+            .host()?
+            .windows(2)
+            .any(|range| range[1] - range[0] > 64)
+    };
+    if too_large {
+        return Err(Error::Gpu(
+            "GPU RNEA supports at most 64 joints per articulation".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// GPU RNEA for fixed/hinge/slider chains of at most 64 joints per articulation.
+/// Dispatch creates transient bindings; reversed joints and equality locks are unsupported.
 pub struct InverseDynamicsKernel {
     pipeline: wgpu::ComputePipeline,
     layout_model: wgpu::BindGroupLayout,
@@ -38,6 +101,7 @@ pub struct InverseDynamicsKernel {
 
 impl InverseDynamicsKernel {
     pub fn new(engine: &Engine, model: &Model) -> Result<Self> {
+        validate_model(model)?;
         let device = engine
             .device()
             .ok_or_else(|| Error::Gpu("InverseDynamicsKernel: no GPU device".into()))?
@@ -130,21 +194,37 @@ impl InverseDynamicsKernel {
         }
         dof_offsets_host.push(acc);
 
-        let art_offsets_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::rnea art_offsets"),
-            size: (art_offsets.len() * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&art_offsets_buf, 0, bytemuck::cast_slice(&art_offsets));
+        let art_offsets_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::rnea art_offsets"),
+                size: (art_offsets.len() * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &art_offsets_buf,
+            0,
+            bytemuck::cast_slice(&art_offsets)
+        );
 
-        let dof_offsets_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::rnea dof_offsets"),
-            size: (dof_offsets_host.len() * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&dof_offsets_buf, 0, bytemuck::cast_slice(&dof_offsets_host));
+        let dof_offsets_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::rnea dof_offsets"),
+                size: (dof_offsets_host.len() * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &dof_offsets_buf,
+            0,
+            bytemuck::cast_slice(&dof_offsets_host)
+        );
 
         Ok(Self {
             pipeline,
@@ -177,14 +257,17 @@ impl InverseDynamicsKernel {
     /// Allocate a `qdd` / `tau`-shaped scratch buffer.
     pub fn create_dof_buffer(&self, device: &wgpu::Device, label: &str) -> wgpu::Buffer {
         let len = self.dof_total().max(1);
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: (len * core::mem::size_of::<f32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
+        molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some(label),
+                size: (len * core::mem::size_of::<f32>()) as u64,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        )
     }
 
     /// Dispatch RNEA over every articulation.
@@ -196,6 +279,7 @@ impl InverseDynamicsKernel {
         qdd_in: &wgpu::Buffer,
         tau_out: &wgpu::Buffer,
     ) -> Result<()> {
+        validate_model(model)?;
         let device = engine
             .device()
             .ok_or_else(|| Error::Gpu("InverseDynamicsKernel::dispatch: no device".into()))?
@@ -265,13 +349,16 @@ impl InverseDynamicsKernel {
             _pad1: 0,
             _pad2: 0,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::rnea uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::rnea uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::rnea uniforms bg"),
             layout: &self.layout_uniforms,
@@ -296,6 +383,7 @@ impl InverseDynamicsKernel {
             pass.set_bind_group(3, &bg_uniforms, &[]);
             let groups = self.articulation_count.div_ceil(WORKGROUP_SIZE).max(1);
             pass.dispatch_workgroups(groups, 1, 1);
+            molla_core::gpu_metrics::record_dispatch();
         }
         queue.submit(std::iter::once(encoder.finish()));
         Ok(())
@@ -313,12 +401,15 @@ impl InverseDynamicsKernel {
             .clone();
         let len = self.dof_total().max(1);
         let byte_size = (len * 4) as u64;
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::rnea staging"),
-            size: byte_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let staging = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::rnea staging"),
+                size: byte_size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::rnea readback encoder"),
         });
@@ -335,7 +426,7 @@ impl InverseDynamicsKernel {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("rnea recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("rnea map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = molla_core::gpu_readback!(slice);
         let out: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&mapped).to_vec();
         drop(mapped);
         staging.unmap();
@@ -380,7 +471,7 @@ pub fn inverse_dynamics_gpu(
     }
     let qdd_buf = kernel.create_dof_buffer(&device, "molla::rnea qdd");
     let tau_buf = kernel.create_dof_buffer(&device, "molla::rnea tau");
-    queue.write_buffer(&qdd_buf, 0, bytemuck::cast_slice(&qdd_full));
+    molla_core::gpu_write_buffer!(queue, &qdd_buf, 0, bytemuck::cast_slice(&qdd_full));
     kernel.dispatch(engine, model, state, &qdd_buf, &tau_buf)?;
     let tau_full = kernel.read_back(engine, &tau_buf)?;
     for (i, v) in tau_out.iter_mut().enumerate() {
@@ -418,5 +509,143 @@ fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
             min_binding_size: None,
         },
         count: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use molla_core::BodyId;
+    use molla_math::{Transform, Vec3};
+    use molla_sim::{BodyParams, ModelBuilder};
+
+    #[test]
+    fn rejects_unimplemented_multidof_rnea_instead_of_zeroing_its_width() {
+        for kind in [
+            JointType::Ball,
+            JointType::Free,
+            JointType::Distance,
+            JointType::D6,
+        ] {
+            let mut builder = ModelBuilder::new();
+            let body = builder.add_body(BodyParams::new());
+            match kind {
+                JointType::Ball => builder.add_joint_ball(
+                    BodyId::NONE,
+                    body,
+                    Transform::IDENTITY,
+                    Transform::IDENTITY,
+                ),
+                JointType::Free => builder.add_joint_free(
+                    BodyId::NONE,
+                    body,
+                    Transform::IDENTITY,
+                    Transform::IDENTITY,
+                ),
+                JointType::Distance => builder.add_joint_distance(
+                    BodyId::NONE,
+                    body,
+                    Transform::IDENTITY,
+                    Transform::IDENTITY,
+                ),
+                _ => builder.add_joint_d6(
+                    BodyId::NONE,
+                    body,
+                    Transform::IDENTITY,
+                    Transform::IDENTITY,
+                ),
+            }
+            .unwrap();
+            assert!(
+                validate_model(&builder.build().unwrap())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("only fixed")
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unimplemented_scalar_modes_and_preserves_supported_modes() {
+        for reversed in [false, true] {
+            for locked in [false, true] {
+                let mut builder = ModelBuilder::new();
+                let body = builder.add_body(BodyParams::new());
+                let joint = builder
+                    .add_joint_revolute(
+                        BodyId::NONE,
+                        body,
+                        Transform::IDENTITY,
+                        Transform::IDENTITY,
+                        Vec3::X,
+                    )
+                    .unwrap();
+                builder.set_joint_reversed(joint, reversed).unwrap();
+                if locked {
+                    builder.set_joint_limits(joint, &[0.0], &[0.0]).unwrap();
+                }
+                assert_eq!(
+                    validate_model(&builder.build().unwrap()).is_ok(),
+                    !reversed && !locked
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_articulations_larger_than_shader_scratch() {
+        for count in [64, 65] {
+            let mut builder = ModelBuilder::new();
+            builder.begin_articulation();
+            let mut parent = BodyId::NONE;
+            for _ in 0..count {
+                let child = builder.add_body(BodyParams::new());
+                builder
+                    .add_joint_fixed(parent, child, Transform::IDENTITY, Transform::IDENTITY)
+                    .unwrap();
+                parent = child;
+            }
+            assert_eq!(
+                validate_model(&builder.build().unwrap()).is_ok(),
+                count == 64
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_prescribed_motion_not_represented_by_generalized_rates() {
+        for flags in [BodyFlags::KINEMATIC, BodyFlags::FIXED] {
+            for scalar in [false, true] {
+                let mut builder = ModelBuilder::new();
+                let body = builder.add_body(BodyParams {
+                    flags,
+                    ..Default::default()
+                });
+                if scalar {
+                    builder
+                        .add_joint_revolute(
+                            BodyId::NONE,
+                            body,
+                            Transform::IDENTITY,
+                            Transform::IDENTITY,
+                            Vec3::X,
+                        )
+                        .unwrap();
+                } else {
+                    builder
+                        .add_joint_fixed(
+                            BodyId::NONE,
+                            body,
+                            Transform::IDENTITY,
+                            Transform::IDENTITY,
+                        )
+                        .unwrap();
+                }
+                assert_eq!(
+                    validate_model(&builder.build().unwrap()).is_ok(),
+                    flags == BodyFlags::FIXED && !scalar
+                );
+            }
+        }
     }
 }

@@ -1,0 +1,17 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running tests/runtime_density_mass.rs (target/debug/deps/runtime_density_mass-7a79c632b63ab792)
+
+running 1 test
+density mass edits: max linear=3.903127820947816e-18, angular=6.684333246658077e-10
+test density_aggregation_and_edits_drive_cpu_force_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.34s

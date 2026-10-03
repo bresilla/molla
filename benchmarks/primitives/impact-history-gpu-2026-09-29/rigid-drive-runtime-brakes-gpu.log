@@ -1,0 +1,31 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on artifact directory
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.56s
+     Running tests/runtime_rigid_loop_drives.rs (target/debug/deps/runtime_rigid_loop_drives-ded95ec92747fef1)
+
+running 1 test
+test gpu_rigid_loop_force_drives_match_independent_implicit_oracle ... rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 60Hz/1 steps
+
+thread 'gpu_rigid_loop_force_drives_match_independent_implicit_oracle' (572430) panicked at crates/molla-solvers/tests/runtime_rigid_loop_drives.rs:267:21:
+torque hz=240 steps=4 frame=63 axis=AngX mass=1: SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24515803158283234, -0.6176921129226685, 1.9520519971847534) } != SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.26231370876262644, -0.6609171943581267, 2.0886537842245434) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_rigid_loop_force_drives_match_independent_implicit_oracle
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 25.16s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_rigid_loop_drives`
+make: *** [Makefile:116: test-gpu] Error 101

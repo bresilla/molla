@@ -1,0 +1,21 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-core v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-core)
+   Compiling molla-math v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-math)
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+   Compiling molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+   Compiling molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+   Compiling molla-optim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-optim)
+   Compiling molla-autograd v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-autograd)
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.00s
+     Running `target/debug/examples/check_primitives_shaders`
+Error: "featherstone: error: name `target` is a reserved keyword\n     ┌─ wgsl:1902:17\n     │\n1902 │             let target = clamp(position,c.lower,c.upper);\n     │                 ^^^^^^ definition of `target`\n\n"
+make: *** [Makefile:379: check-primitives-shader-wiring] Error 1

@@ -51,8 +51,7 @@ impl ImageProcessKernel {
             ]
             .into_iter()
             .any(|size| {
-                size > limits.max_storage_buffer_binding_size as u64
-                    || size > limits.max_buffer_size
+                size > limits.max_storage_buffer_binding_size || size > limits.max_buffer_size
             })
             || bytes > limits.max_buffer_size
             || bytes > u32::MAX as u64
@@ -64,18 +63,24 @@ impl ImageProcessKernel {
                 "image processing: capacity exceeds device limits".into(),
             ));
         }
-        let scratch = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::image reduction partials"),
-            size: capacity.div_ceil(256) as u64 * 16,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::image processing parameters"),
-            size: bytes,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let scratch = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::image reduction partials"),
+                size: capacity.div_ceil(256) as u64 * 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }
+        );
+        let uniform = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::image processing parameters"),
+                size: bytes,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::image processing layout"),
             entries: &std::array::from_fn::<_, 4, _>(|i| wgpu::BindGroupLayoutEntry {
@@ -279,7 +284,8 @@ impl ImageProcessKernel {
             count.div_ceil(256),
             0,
         ];
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.uniform,
             slot as u64 * self.stride,
             bytemuck::cast_slice(&params),

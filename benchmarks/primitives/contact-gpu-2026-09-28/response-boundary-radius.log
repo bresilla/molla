@@ -1,0 +1,33 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.11s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 5 tests
+test contact_response_gpu::tests::articulated_response_matches_cpu_gram_and_generalized_friction ... articulated contact response: peak gram error=5.680281103259688e-7, peak rate error=2.741845624036404e-7
+ok
+test contact_response_gpu::tests::contact_response_faults_preserve_status_and_retire_rates_and_impulses ... ok
+test contact_response_gpu::tests::coordinate_null_mass_is_supported_and_oblique_rank_deficiency_fails_closed ... ok
+test contact_response_gpu::tests::device_contact_friction_holds_loaded_box_and_matches_cpu_trajectory ... GPU loaded hold: peak drift=2.277730345667806e-5, settled creep=5.60324225181013e-7, CPU position error=5.646042575191266e-7, velocity error=1.3601685864168703e-5
+ok
+test contact_response_gpu::tests::device_contact_friction_slide_matches_analytic_acceleration_and_cpu ... 
+thread 'contact_response_gpu::tests::device_contact_friction_slide_matches_analytic_acceleration_and_cpu' (3917989) panicked at crates/molla-solvers/src/contact_response_gpu_tests.rs:624:9:
+assertion `left == right` failed: step=248 diagnostic=[524288, 8192, 866237362, 1]
+  left: 524288
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    contact_response_gpu::tests::device_contact_friction_slide_matches_analytic_acceleration_and_cpu
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 99 filtered out; finished in 44.39s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:134: test-primitives-contact-response-gpu] Error 101

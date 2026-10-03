@@ -45,12 +45,15 @@ impl GpuBackend {
         let kernel = molla_kernels::IntegrateBodiesKernel::new(&device);
         // 1-element dummy storage buffer so the control bind group has
         // something to bind when the user-supplied Control is empty.
-        let external_f_dummy = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::semi_implicit dummy external_f"),
-            size: 32, // matches GpuSpatialVector
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let external_f_dummy = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::semi_implicit dummy external_f"),
+                size: 32, // matches GpuSpatialVector
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         Self {
             device,
             queue,

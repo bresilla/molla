@@ -1,0 +1,24 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.72s
+     Running tests/runtime_distance_sleep.rs (target/debug/deps/runtime_distance_sleep-7f54b115e6421721)
+
+running 1 test
+test gpu_distance_kinematic_boundary_matches_cpu_without_model_recompilation ... 
+thread 'gpu_distance_kinematic_boundary_matches_cpu_without_model_recompilation' (2976293) panicked at crates/molla-solvers/tests/runtime_distance_sleep.rs:269:9:
+frame=4 CPU=DistanceReading { separation: 1.0309406188237444, violation: 0.00016421241932929043, active: Equality, force: DVec3(1.5307030627028707e-11, -3.8623066874215326e-12, 0.0), sample_dt: 0.008333333333333333 } GPU=DistanceReading { separation: 1.0309406719583865, violation: 0.00016426555397131004, active: Equality, force: DVec3(0.013224659487605095, -0.0033237787429243326, 0.0), sample_dt: 0.008333333333333333 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_distance_kinematic_boundary_matches_cpu_without_model_recompilation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 5.26s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_distance_sleep`
+make: *** [Makefile:75: test-gpu] Error 101

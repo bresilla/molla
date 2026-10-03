@@ -1,0 +1,48 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
+     Running tests/runtime_break_configuration.rs (target/debug/deps/runtime_break_configuration-6fc0b1535722230b)
+
+running 9 tests
+test break_thresholds_are_inclusive_independent_and_validate_zero_and_infinity ... ok
+test threshold_edits_invalidate_dynamics_without_recompiling_or_changing_state ... ok
+test step_checkpoint_restores_solver_state_and_forks_do_not_share_mutable_dynamics ... ok
+test invalid_break_batch_is_atomic_and_loops_do_not_detach_tree_edges ... ok
+test explicit_filters_expand_compound_colliders_and_future_body_shapes ... ok
+test broken_edges_do_not_propagate_later_structural_or_state_edits ... ok
+test broken_tree_edges_release_authored_topology_and_conflicting_repair_is_atomic ... ok
+test batched_breaks_detach_trees_preserve_state_and_require_explicit_repair ... ok
+test break_removes_only_joint_collision_policy_and_explicit_pairs_survive_compaction ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/runtime_cone_configuration.rs (target/debug/deps/runtime_cone_configuration-2a7e7905c39a54cb)
+
+running 5 tests
+test rigid_fixed_loop_insertion_and_failed_controls_preserve_authored_state ... ok
+test invalid_cone_mutations_are_atomic ... ok
+test rigid_ball_loop_configuration_is_transactional ... ok
+test cone_edits_preserve_tree_and_loop_handles_through_compaction ... ok
+test rigid_axis_loops_author_limits_and_reject_unsolved_controls_atomically ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/runtime_readout.rs (target/debug/deps/runtime_readout-da081b79498f56d9)
+
+running 9 tests
+test state_edit_identity_distinguishes_edits_from_solver_commits ... ok
+test joint_insertion_identity_survives_repair_and_clears_on_cascade_removal ... ok
+test rigid_compliance_transitions_invalidate_contact_response_identity ... ok
+test structure_stamps_follow_old_and_new_joint_components ... ok
+test collider_reparenting_invalidates_both_components_atomically ... ok
+test insertion_identities_survive_edits_and_forks_but_not_independent_insertions ... ok
+test body_state_edits_follow_only_the_edited_joint_component ... ok
+test contact_stamps_distinguish_loop_forces_from_contact_response_edits ... ok
+test joint_response_edits_retain_episode_stamps_while_physical_configuration_invalidates_them ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

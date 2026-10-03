@@ -1,0 +1,202 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.88s
+     Running tests/featherstone_polish_gpu.rs (target/debug/deps/featherstone_polish_gpu-813e4806259947b4)
+
+running 2 tests
+test d6_angular_limit_holds_under_gravity_gpu ... D6 angular limit: max excess = 0.00000 rad
+ok
+test distance_joint_length_holds_within_eps_gpu ... Distance Lagrange (GPU): worst |p|−L = 0.000e0
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.36s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.06s
+     Running tests/featherstone_multidof_gpu.rs (target/debug/deps/featherstone_multidof_gpu-c7ccf5a4d707be4b)
+
+running 4 tests
+test ball_spherical_pendulum_falls_under_gravity_gpu ... BALL pendulum after 2000 steps: max_y=-0.4777, max |dist-0.5|=0.0000
+ok
+test d6_pretensioned_holds_under_gravity_gpu ... D6 locked body after 0.5s under gravity: pos=DVec3(0.0, 0.0, 0.0)
+ok
+test free_joint_body_falls_at_g_gpu ... FREE body fall after 0.200s: joint_q.y=-0.1971 body.y=-0.1971 expected=-0.1961
+ok
+test free_joint_cpu_gpu_match ... FREE parity: cpu y=-1.238090 gpu y=-1.238089
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.87s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.42s
+     Running tests/featherstone_motor_caps_gpu.rs (target/debug/deps/featherstone_motor_caps_gpu-295722ab9c707e37)
+
+running 2 tests
+test fem_island_accepts_caps_and_applies_them_on_gpu ... ok
+test gpu_motor_caps_preserve_feedforward_and_total_limits ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.65s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.84s
+     Running tests/contact_friction_modes_gpu.rs (target/debug/deps/contact_friction_modes_gpu-c06d9ec1a96c1936)
+
+running 2 tests
+test rolling_friction_damps_horizontal_axis_spin_gpu ... GPU horizontal spin |ω| after 0.3 s: roll=0 → 13.7689, roll=0.5 → 0.0000
+ok
+test torsional_friction_damps_normal_axis_spin_gpu ... GPU normal-axis spin |ω.y| after 0.3 s: tors=0 → 9.8175, tors=2.0 → 0.0000
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.52s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.94s
+     Running tests/featherstone_scalar_equality_gpu.rs (target/debug/deps/featherstone_scalar_equality_gpu-2d94fda0198ae390)
+
+running 3 tests
+test predictor_retains_small_increments_and_velocity_overrides_gpu ... ok
+test scalar_equality_clears_velocity_and_holds_nonzero_coordinate_gpu ... ok
+test scalar_equality_transmits_child_load_to_floating_parent_gpu ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.63s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/rigid_singular_forces.rs (target/debug/deps/rigid_singular_forces-3e1b3f9e31520d24)
+
+running 2 tests
+test gpu_singular_and_weak_roots_preserve_supported_spin ... ok
+test gpu_zero_inertia_roots_keep_com_acceleration_without_artificial_spin ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 38.92s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.95s
+     Running tests/runtime_primitives_contract_gpu.rs (target/debug/deps/runtime_primitives_contract_gpu-17b111111ba5223d)
+
+running 10 tests
+test runtime_gpu_distance_mutation_is_solved_and_can_be_removed ... ok
+test runtime_gpu_empty_reaction_readout_stays_on_device ... ok
+test runtime_gpu_empty_scene_and_invalid_step_are_safe ... ok
+test runtime_gpu_fault_is_atomic_and_corrected_inputs_can_resume ... ok
+test runtime_gpu_free_body_matches_cpu_and_publishes_velocity ... ok
+test runtime_gpu_mutations_rebuild_and_preserve_handles ... ok
+test runtime_gpu_rejects_unsupported_mutation_without_advancing ... ok
+test runtime_gpu_rotated_frames_com_inertia_and_motor_parity ... Ball initial corrected CPU=Transform { position: DVec3(1.4556717229510796e-5, 1.9996536584861737, 4.6270310653753755e-5), rotation: DQuat(9.145946822791489e-6, 2.7015441916329058e-6, 0.14943460461713154, 0.9887716110669718) } GPU=Transform { position: DVec3(1.4567210200766567e-5, 1.9996534585952759, 4.626287045539357e-5), rotation: DQuat(9.1459469331312e-6, 2.701544644878595e-6, 0.14943459630012512, 0.9887715578079224) }
+Ball initial corrected CPU=Transform { position: DVec3(-0.14773567552225875, 2.4773249563404263, 6.791368316477335e-5), rotation: DQuat(-2.2811818695817054e-6, -3.3049327144030888e-6, 0.1494412932575955, 0.9887706002169416) } GPU=Transform { position: DVec3(-0.14773567020893097, 2.4773247241973877, 6.788929749745876e-5), rotation: DQuat(-2.2879864900460234e-6, -3.2866373658180237e-6, 0.14944128692150116, 0.9887705445289612) }
+Ball: max position=7.484685408585388e-6 rotation=9.32484140823016e-7 velocity=2.8108688564142277e-5
+Revolute initial corrected CPU=Transform { position: DVec3(1.535690633937964e-5, 1.9996540102678337, 5.874544961763373e-5), rotation: DQuat(1.4666239186180228e-6, -2.4215932833075273e-6, 0.14943489913601343, 0.988771566597763) } GPU=Transform { position: DVec3(1.5364734281320125e-5, 1.9996540546417236, 5.875290298718028e-5), rotation: DQuat(1.466625008106348e-6, -2.4215933080995455e-6, 0.1494349092245102, 0.9887715578079224) }
+Revolute initial corrected CPU=Transform { position: DVec3(-0.2700277326912218, 2.4561353945734754, -0.022140225153922617), rotation: DQuat(0.01925857762774892, 0.11054738051005215, 0.02778614146082332, 0.9932956831643038) } GPU=Transform { position: DVec3(-0.27002769708633423, 2.4561355113983154, -0.02214025892317295), rotation: DQuat(0.01925859972834587, 0.11054744571447372, 0.027786217629909515, 0.9932956695556641) }
+Revolute: max position=1.954181463395926e-6 rotation=6.982907363092924e-7 velocity=1.0733455371713331e-5
+Prismatic initial corrected CPU=Transform { position: DVec3(-2.043210501036924e-5, 1.999582876447949, -9.805651467229004e-6), rotation: DQuat(-1.4717731160928347e-6, -5.7498886877149e-7, 0.14944025712486225, 0.9887707568228131) } GPU=Transform { position: DVec3(-2.0402943846420385e-5, 1.9995827674865723, -9.80563709163107e-6), rotation: DQuat(-1.4717747944814619e-6, -5.749894285145274e-7, 0.14944025874137878, 0.9887707829475403) }
+Prismatic initial corrected CPU=Transform { position: DVec3(-0.2879536323052181, 2.294908329625199, -0.2609197458461301), rotation: DQuat(0.06720239034499334, 0.21007820287038995, 0.1261183506757062, 0.9671841339856161) } GPU=Transform { position: DVec3(-0.28795361518859863, 2.294908285140991, -0.2609197497367859), rotation: DQuat(0.0672023817896843, 0.210078164935112, 0.12611834704875946, 0.9671840667724609) }
+Prismatic: max position=8.131992221620808e-6 rotation=9.485382117533504e-7 velocity=1.7922388793464805e-5
+ok
+test runtime_gpu_warm_resources_are_retained ... warm runtime GPU [buffers, bytes, groups, pipelines, shaders]=[87, 527072, 14, 4, 4]
+ok
+test runtime_gpu_world_anchor_uses_authored_frames ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 51.38s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.11s
+     Running tests/runtime_distance_gpu.rs (target/debug/deps/runtime_distance_gpu-5313068753ba1220)
+
+running 6 tests
+test runtime_distance_gpu_offset_rotated_frames_full_inertia_and_loop ... 
+thread 'runtime_distance_gpu_offset_rotated_frames_full_inertia_and_loop' (1542729) panicked at crates/molla-solvers/tests/runtime_distance_gpu.rs:267:9:
+redundant row reactions: CPU DVec3(-0.05612985242154954, 0.01576716488057516, 0.009698752022468206), GPU DVec3(-0.06859417259693146, 0.019269878044724464, 0.011850740760564804)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test runtime_distance_gpu_retains_warm_resources_and_tracks_mutation ... distance GPU warm [buffers, bytes, groups, pipelines, shaders]=[110, 530784, 30, 7, 7]
+ok
+test runtime_distance_gpu_scalar_stop_couples_to_other_articulation ... ok
+test runtime_distance_gpu_shared_response_and_independent_bounds ... ok
+test runtime_distance_gpu_world_pendulum_ten_seconds_and_short_parity ... GPU distance pendulum dt=0.016666666666666666 substeps=8 duration=10s peak=0.000043775489793063116 one-second-parity=0.0000004565847501214688
+GPU distance pendulum dt=0.008333333333333333 substeps=8 duration=10s peak=0.000011035798397118768 one-second-parity=0.0000005837819668624407
+GPU distance pendulum dt=0.004166666666666667 substeps=8 duration=10s peak=0.0000028541586427621723 one-second-parity=0.0000017190734451363862
+ok
+test runtime_distance_gpu_zero_equality_failure_and_resume_are_atomic ... ok
+
+failures:
+
+failures:
+    runtime_distance_gpu_offset_rotated_frames_full_inertia_and_loop
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 153.53s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_distance_gpu`
+make[2]: *** [Makefile:110: test-gpu] Error 101
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: *** [Makefile:131: test-primitives-distance-gpu] Error 2
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:95: test-primitives-gpu] Error 2

@@ -6,6 +6,14 @@ use molla_sim::joint_control::{JointAxis, JointMotor, JointSoftness, MotorModel}
 use molla_sim::runtime::{JointHandle, RigidScene};
 use molla_sim::{JointTargetMode, JointType, State};
 
+pub(crate) fn brake_motor(damping: Real) -> JointMotor {
+    JointMotor {
+        mode: JointTargetMode::Velocity,
+        damping,
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 #[path = "loop_forces/selection.rs"]
 mod selection;
@@ -43,6 +51,9 @@ fn rows(scene: &RigidScene, state: &State, selected: Option<&[bool]>) -> Result<
     let centers = scene.model().body_com.host()?;
     let mut rows = Vec::new();
     for (id, joint) in scene.loop_joints() {
+        if joint.kind == JointType::Distance || scene.joint_softness(id)?.is_none() {
+            continue;
+        }
         if !scene.joint_settings(id).unwrap().enabled
             || !scene.body(joint.child).unwrap().enabled
             || joint
@@ -64,7 +75,9 @@ fn rows(scene: &RigidScene, state: &State, selected: Option<&[bool]>) -> Result<
                 }
             }
             if awake && asleep {
-                return Err(Error::Solver("loop body selection splits a dependency".into()));
+                return Err(Error::Solver(
+                    "loop body selection splits a dependency".into(),
+                ));
             }
             if !awake {
                 continue;
@@ -84,7 +97,14 @@ fn rows(scene: &RigidScene, state: &State, selected: Option<&[bool]>) -> Result<
         if relative.w < 0.0 {
             relative = -relative;
         }
-        let rotation = relative.to_scaled_axis();
+        relative = relative.normalize();
+        let vector = Vec3::new(relative.x, relative.y, relative.z);
+        let sine = vector.length();
+        let rotation = if sine > 1e-12 {
+            vector * (2.0 * sine.atan2(relative.w) / sine)
+        } else {
+            vector * 2.0
+        };
         let locked = scene.joint_locked_axes(id)?;
         let softness = scene
             .joint_softness(id)?
@@ -119,7 +139,9 @@ fn rows(scene: &RigidScene, state: &State, selected: Option<&[bool]>) -> Result<
             }
             if let Some(motor) = setting.motor
                 && motor.mode != JointTargetMode::None
-                && (motor.stiffness > 0.0 || motor.damping > 0.0)
+                && (motor.mode == JointTargetMode::Effort
+                    || motor.stiffness > 0.0
+                    || motor.damping > 0.0)
             {
                 let target = match motor.mode {
                     JointTargetMode::Position | JointTargetMode::PositionVelocity => {
@@ -127,10 +149,21 @@ fn rows(scene: &RigidScene, state: &State, selected: Option<&[bool]>) -> Result<
                     }
                     _ => position,
                 };
+                let bounds = if motor.mode == JointTargetMode::Effort {
+                    let effort = motor
+                        .target_position
+                        .clamp(-motor.max_force, motor.max_force);
+                    [effort; 2]
+                } else {
+                    [-motor.max_force, motor.max_force]
+                };
+                terms.push((position - target, Some(motor), bounds));
+            }
+            if setting.brake > 0.0 {
                 terms.push((
-                    position - target,
-                    Some(motor),
-                    [-motor.max_force, motor.max_force],
+                    0.0,
+                    Some(brake_motor(setting.brake)),
+                    [Real::NEG_INFINITY, Real::INFINITY],
                 ));
             }
             if terms.is_empty() {
@@ -216,15 +249,57 @@ pub(crate) fn apply_selected(
     if count == 0 {
         return Ok(Vec::new());
     }
+    let mut reactions = if scene.model().articulation_count == 1 {
+        apply_rows(scene, cache, dt, forces, &rows, &[0])?
+    } else {
+        let islands = crate::rigid_islands::RigidIslands::build(scene, [])?;
+        let mut groups =
+            std::collections::BTreeMap::<(Vec<usize>, Option<JointHandle>), Vec<Row>>::new();
+        for row in rows {
+            let joint = scene.joint(row.joint).unwrap();
+            let group = islands
+                .body_island(joint.child)
+                .or_else(|| joint.parent.and_then(|body| islands.body_island(body)));
+            let arts = group
+                .map(|group| group.articulations.clone())
+                .unwrap_or_default();
+            let separate = arts.is_empty().then_some(row.joint);
+            groups.entry((arts, separate)).or_default().push(row);
+        }
+        let mut reactions = Vec::new();
+        for ((arts, _), rows) in groups {
+            reactions.extend(apply_rows(scene, cache, dt, forces, &rows, &arts)?);
+        }
+        reactions
+    };
+    reactions.sort_unstable_by_key(|(joint, _)| *joint);
+    if forces
+        .iter()
+        .any(|f| !f.linear.is_finite() || !f.angular.is_finite())
+    {
+        return Err(Error::Solver("non-finite loop joint wrench".into()));
+    }
+    Ok(reactions)
+}
+
+fn apply_rows(
+    scene: &RigidScene,
+    cache: &mut crate::articulated_response::ArticulatedResponse<'_>,
+    dt: Real,
+    forces: &mut [SpatialVector],
+    rows: &[Row],
+    arts: &[usize],
+) -> Result<Vec<(JointHandle, LoopReaction)>> {
+    let count = rows.len();
     let model = scene.model();
     let starts = model.articulation_start.host()?;
     let offsets = model.joint_dof_offset.host()?;
     let children = model.joint_child.host()?;
     let mut response = vec![0.0; count * count];
     let mut response_articulations = 0;
-    for (art, range) in starts.windows(2).enumerate() {
-        let begin = range[0] as usize;
-        let end = range[1] as usize;
+    for &art in arts {
+        let begin = starts[art] as usize;
+        let end = starts[art + 1] as usize;
         let n = (offsets[end] - offsets[begin]) as usize;
         if n == 0
             || !rows.iter().any(|r| {
@@ -259,6 +334,14 @@ pub(crate) fn apply_selected(
     let mut rhs = vec![0.0; count];
     let mut bounds = vec![[0.0; 2]; count];
     for (i, row) in rows.iter().enumerate() {
+        if row
+            .motor
+            .is_some_and(|motor| motor.mode == JointTargetMode::Effort)
+        {
+            response[i * count + i] += 1.0;
+            bounds[i] = row.bounds.map(|effort| effort * dt);
+            continue;
+        }
         let inverse_mass = response[i * count + i].max(0.0);
         let mass = if inverse_mass > 1e-14 {
             1.0 / inverse_mass
@@ -301,9 +384,9 @@ pub(crate) fn apply_selected(
         }
     }
     let impulses = if response_articulations > 1 {
-        bounded_solve_inner::<true>(&response, &rhs, &bounds)?
+        bounded_solve_inner::<true, true>(&response, &rhs, &bounds)?
     } else {
-        bounded_solve(&response, &rhs, &bounds)?
+        bounded_solve_inner::<false, true>(&response, &rhs, &bounds)?
     };
     let mut reactions: Vec<(JointHandle, LoopReaction)> = Vec::new();
     for (row, impulse) in rows.iter().zip(impulses) {
@@ -312,19 +395,19 @@ pub(crate) fn apply_selected(
             forces[body].angular += wrench.angular * (impulse / dt);
         }
         // The child is always the first end.
-        let (force, torque) = (row.ends[0].1.linear * (impulse / dt), row.ends[0].1.angular * (impulse / dt));
-        if reactions.last().is_none_or(|(joint, _)| *joint != row.joint) {
+        let (force, torque) = (
+            row.ends[0].1.linear * (impulse / dt),
+            row.ends[0].1.angular * (impulse / dt),
+        );
+        if reactions
+            .last()
+            .is_none_or(|(joint, _)| *joint != row.joint)
+        {
             reactions.push((row.joint, LoopReaction::default()));
         }
         let reaction = &mut reactions.last_mut().expect("pushed above").1;
         reaction.force += force;
         reaction.torque += torque - row.arm.cross(force);
-    }
-    if forces
-        .iter()
-        .any(|f| !f.linear.is_finite() || !f.angular.is_finite())
-    {
-        return Err(Error::Solver("non-finite loop joint wrench".into()));
     }
     Ok(reactions)
 }
@@ -358,16 +441,59 @@ fn add_mass_response(
     crate::rigid_impulse::MassFactor::new(mass, n)?.add_gram(projected, response)
 }
 
-fn bounded_solve(matrix: &[Real], rhs: &[Real], bounds: &[[Real; 2]]) -> Result<Vec<Real>> {
-    bounded_solve_inner::<false>(matrix, rhs, bounds)
+pub(crate) fn bounded_solve(
+    matrix: &[Real],
+    rhs: &[Real],
+    bounds: &[[Real; 2]],
+) -> Result<Vec<Real>> {
+    bounded_solve_inner::<false, false>(matrix, rhs, bounds)
 }
 
-fn bounded_solve_inner<const BLOCKS: bool>(
-    matrix: &[Real], rhs: &[Real], bounds: &[[Real; 2]],
+pub(crate) fn bounded_feedback_solve(
+    matrix: &[Real],
+    rhs: &[Real],
+    bounds: &[[Real; 2]],
+) -> Result<Vec<Real>> {
+    bounded_solve_inner::<false, true>(matrix, rhs, bounds)
+}
+
+fn feedback_solve<const BLOCKS: bool>(
+    matrix: &[Real],
+    rhs: &[Real],
+    n: usize,
+) -> Result<Vec<Real>> {
+    let scales: Vec<_> = (0..n).map(|i| matrix[i * n + i].sqrt()).collect();
+    let normalized: Vec<_> = (0..n)
+        .flat_map(|i| {
+            let scales = &scales;
+            (0..n).map(move |j| matrix[i * n + j] / scales[i] / scales[j])
+        })
+        .collect();
+    let rhs: Vec<_> = rhs
+        .iter()
+        .zip(&scales)
+        .map(|(value, scale)| value / scale)
+        .collect();
+    let result = if BLOCKS {
+        crate::rigid_impulse::blocks::solve(&normalized, &rhs, n)?
+    } else {
+        crate::rigid_impulse::solve_mass(&normalized, &rhs, n)?
+    };
+    Ok(result
+        .into_iter()
+        .zip(scales)
+        .map(|(value, scale)| value / scale)
+        .collect())
+}
+
+fn bounded_solve_inner<const BLOCKS: bool, const FEEDBACK: bool>(
+    matrix: &[Real],
+    rhs: &[Real],
+    bounds: &[[Real; 2]],
 ) -> Result<Vec<Real>> {
     let n = rhs.len();
     let _span = tracing::debug_span!("loop_bounded_solve", rows = n).entered();
-    let mut x = vec![0.0; n];
+    let mut x: Vec<_> = bounds.iter().map(|b| 0.0_f64.clamp(b[0], b[1])).collect();
     let mut fixed: Vec<bool> = bounds.iter().map(|b| b[0] == b[1]).collect();
     for _ in 0..(4 * n + 32) {
         let free: Vec<_> = (0..n).filter(|&i| !fixed[i]).collect();
@@ -386,7 +512,9 @@ fn bounded_solve_inner<const BLOCKS: bool>(
                         .sum::<Real>()
             })
             .collect();
-        let candidate = if BLOCKS {
+        let candidate = if FEEDBACK {
+            feedback_solve::<BLOCKS>(&a, &b, size)?
+        } else if BLOCKS {
             crate::rigid_impulse::blocks::solve(&a, &b, size)?
         } else {
             crate::rigid_impulse::solve_mass(&a, &b, size)?
@@ -667,6 +795,14 @@ mod tests {
             }
             assert!(force.length() < 1e-12 && torque.length() < 1e-12);
         }
+    }
+
+    #[test]
+    fn fixed_nonzero_impulses_contribute_to_other_rows() {
+        let response = [2.0, 1.0, 1.0, 3.0];
+        let result = bounded_solve(&response, &[0.0, 2.0], &[[0.5; 2], [-10.0, 10.0]]).unwrap();
+        assert_eq!(result[0], 0.5);
+        assert!((result[1] - 0.5).abs() < 1e-12);
     }
 
     #[test]

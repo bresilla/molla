@@ -57,12 +57,15 @@ impl SceneRebuildKernel {
     ) -> Self {
         let n = slots.len() as u32;
         let alloc = |label, size| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let alternate = alloc("molla::scene reordered instances", u64::from(n) * 80);
         let keys = alloc("molla::scene Morton keys", u64::from(n) * 4);
@@ -71,11 +74,14 @@ impl SceneRebuildKernel {
         let scratch_keys = alloc("molla::scene radix keys", capacity * 4);
         let scratch_values = alloc("molla::scene radix values", capacity * 4);
         let bins = alloc("molla::scene radix bins", capacity.div_ceil(256) * 1024);
-        let leaf_slots = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::scene leaf destinations"),
-            contents: bytemuck::cast_slice(slots),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let leaf_slots = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::scene leaf destinations"),
+                contents: bytemuck::cast_slice(slots),
+                usage: wgpu::BufferUsages::STORAGE,
+            }
+        );
         let payload_bytes = [
             &alternate,
             &keys,
@@ -111,11 +117,14 @@ impl SceneRebuildKernel {
             }],
         });
         let parameters = |words: [u32; 4]| {
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("molla::scene reorder immutable parameters"),
-                contents: bytemuck::cast_slice(&words),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
+            let buffer = molla_core::gpu_buffer_init!(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("molla::scene reorder immutable parameters"),
+                    contents: bytemuck::cast_slice(&words),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                }
+            );
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("molla::scene reorder parameters"),
                 layout: &params_layout,

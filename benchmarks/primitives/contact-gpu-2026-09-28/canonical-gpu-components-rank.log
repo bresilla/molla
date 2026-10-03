@@ -1,0 +1,82 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.69s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 9 tests
+test coupled_constraint_gpu::tests::bilateral_coupling_prevents_premature_sliding ... island=0 diagnostic=[524288, 5, 885226862, 4] residual=0.00000036412843
+
+thread 'coupled_constraint_gpu::tests::bilateral_coupling_prevents_premature_sliding' (293327) panicked at crates/molla-solvers/src/coupled_constraint_gpu_tests.rs:365:5:
+assertion `left == right` failed
+  left: 524288
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test coupled_constraint_gpu::tests::contradictory_bilateral_rows_fail_closed ... island=0 diagnostic=[524288, 4096, 1065353216, 1] residual=1
+ok
+test coupled_constraint_gpu::tests::manufactured_mixed_kkt_permutations_cross_workgroups ... ok
+test coupled_constraint_gpu::tests::mixed_constraints_match_analytic_impulses_across_scales ... ok
+test coupled_constraint_gpu::tests::mixed_constructor_rejects_invalid_domain_buffers_and_capacity ... ok
+test coupled_constraint_gpu::tests::redundant_allocation_matches_minimum_norm_across_scales_rotations_and_order ... island=0 diagnostic=[524288, 5, 881828874, 4] residual=0.0000002675518
+island=1 diagnostic=[524288, 5, 881828874, 4] residual=0.0000002675518
+island=2 diagnostic=[524288, 1, 878298526, 4] residual=0.00000020281593
+island=3 diagnostic=[524288, 1, 878298526, 4] residual=0.00000020281593
+island=12 diagnostic=[524288, 5, 881828874, 4] residual=0.0000002675518
+island=13 diagnostic=[524288, 5, 881828874, 4] residual=0.0000002675518
+island=14 diagnostic=[524288, 1, 878298526, 4] residual=0.00000020281593
+island=15 diagnostic=[524288, 1, 878298526, 4] residual=0.00000020281593
+island=24 diagnostic=[524288, 5, 883566211, 4] residual=0.00000031692989
+island=25 diagnostic=[524288, 5, 881469059, 4] residual=0.00000025732524
+island=26 diagnostic=[524288, 1, 878298526, 4] residual=0.00000020281593
+island=27 diagnostic=[524288, 1, 878298526, 4] residual=0.00000020281593
+island=36 diagnostic=[524288, 5, 882697542, 4] residual=0.00000029224083
+island=37 diagnostic=[524288, 5, 878659604, 4] residual=0.00000020794715
+island=38 diagnostic=[524288, 1, 878298526, 4] residual=0.00000020281593
+island=39 diagnostic=[524288, 1, 878298526, 4] residual=0.00000020281593
+island=45 diagnostic=[524288, 8, 881556164, 4] residual=0.0000002598009
+island=48 diagnostic=[524288, 5, 881828874, 4] residual=0.0000002675518
+island=49 diagnostic=[524288, 5, 881828874, 4] residual=0.0000002675518
+island=50 diagnostic=[524288, 1, 878298526, 4] residual=0.00000020281593
+island=51 diagnostic=[524288, 1, 878298526, 4] residual=0.00000020281593
+island=56 diagnostic=[524288, 8, 881767874, 4] residual=0.00000026581807
+island=57 diagnostic=[524288, 8, 881196350, 4] residual=0.00000024957438
+
+thread 'coupled_constraint_gpu::tests::redundant_allocation_matches_minimum_norm_across_scales_rotations_and_order' (293381) panicked at crates/molla-solvers/src/coupled_constraint_gpu_tests.rs:291:9:
+assertion `left == right` failed: repeat=0
+  left: 524288
+ right: 0
+FAILED
+test coupled_constraint_gpu::tests::retained_device_sequence_changes_domains_counts_and_status ... ok
+test coupled_constraint_gpu::tests::sticky_faults_retire_and_recover_mixed_outputs ... island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[131072, 0, 0, 0] residual=0
+island=0 diagnostic=[131072, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[262144, 0, 0, 0] residual=0
+island=0 diagnostic=[262144, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+ok
+test coupled_constraint_gpu::tests::zero_response_scalar_domains_fail_only_when_unbounded ... island=0 diagnostic=[524288, 0, 0, 0] residual=0
+island=0 diagnostic=[524288, 0, 0, 0] residual=0
+ok
+
+failures:
+
+failures:
+    coupled_constraint_gpu::tests::bilateral_coupling_prevents_premature_sliding
+    coupled_constraint_gpu::tests::redundant_allocation_matches_minimum_norm_across_scales_rotations_and_order
+
+test result: FAILED. 7 passed; 2 failed; 0 ignored; 0 measured; 125 filtered out; finished in 8.35s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:135: test-primitives-coupled-constraints-gpu] Error 101

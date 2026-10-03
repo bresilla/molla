@@ -1,0 +1,28 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.03s
+     Running tests/runtime_loop_articulated_contacts.rs (target/debug/deps/runtime_loop_articulated_contacts-feb21b03d836e85b)
+
+running 2 tests
+test cpu_articulated_contact_break_channels_preserve_boundary_state_and_explicit_repair ... articulated contact torque/force/both break hz=60 capture=false: 9 assemblies passed
+articulated contact torque/force/both break hz=60 capture=true: 9 assemblies passed
+articulated contact torque/force/both break hz=240 capture=false: 9 assemblies passed
+articulated contact torque/force/both break hz=240 capture=true: 9 assemblies passed
+ok
+test cpu_rotated_loops_and_articulated_contacts_match_motion_and_anchor_wrench_oracle ... articulated rotated loop/contact oracle hz=60 substeps=1: 9 assemblies passed
+articulated rotated loop/contact oracle hz=60 substeps=4: 9 assemblies passed
+articulated rotated loop/contact oracle hz=120 substeps=1: 9 assemblies passed
+articulated rotated loop/contact oracle hz=120 substeps=4: 9 assemblies passed
+articulated rotated loop/contact oracle hz=240 substeps=1: 9 assemblies passed
+articulated rotated loop/contact oracle hz=240 substeps=4: 9 assemblies passed
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+

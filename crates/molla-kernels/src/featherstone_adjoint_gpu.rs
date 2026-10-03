@@ -236,35 +236,50 @@ impl FeatherstoneAdjointGpuKernel {
         let usage_storage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC;
-        let chains_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::adj_jac chains"),
-            contents: bytemuck::cast_slice(&headers),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        let links_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::adj_jac links"),
-            contents: bytemuck::cast_slice(&links_packed),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        let qstate_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::adj_jac qstate"),
-            contents: bytemuck::cast_slice(&qstate_packed),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        let out_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::adj_jac out"),
-            contents: bytemuck::cast_slice(&out_zero),
-            usage: usage_storage,
-        });
+        let chains_buf = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::adj_jac chains"),
+                contents: bytemuck::cast_slice(&headers),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+        let links_buf = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::adj_jac links"),
+                contents: bytemuck::cast_slice(&links_packed),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+        let qstate_buf = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::adj_jac qstate"),
+                contents: bytemuck::cast_slice(&qstate_packed),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+        let out_buf = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::adj_jac out"),
+                contents: bytemuck::cast_slice(&out_zero),
+                usage: usage_storage,
+            }
+        );
         let uniforms = Uniforms {
             chain_count: chain_count as u32,
             ..Default::default()
         };
-        let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::adj_jac uniforms"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let uniform_buf = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::adj_jac uniforms"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
 
         let bg_storage = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::adj_jac storage bg"),
@@ -313,12 +328,15 @@ impl FeatherstoneAdjointGpuKernel {
 
         // Stage out → mappable buffer.
         let bytes = (out_len * 4) as u64;
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::adj_jac stage"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::adj_jac stage"),
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         encoder.copy_buffer_to_buffer(&out_buf, 0, &stage, 0, bytes);
         queue.submit(std::iter::once(encoder.finish()));
 
@@ -335,7 +353,7 @@ impl FeatherstoneAdjointGpuKernel {
         if let Ok(e) = rx.try_recv() {
             return Err(Error::Gpu(format!("adj_jac map: {e:?}")));
         }
-        let mapped = slice.get_mapped_range();
+        let mapped = molla_core::gpu_readback!(slice);
         let out_floats: Vec<f32> = bytemuck::cast_slice(&mapped).to_vec();
         drop(mapped);
         stage.unmap();

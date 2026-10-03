@@ -1,0 +1,40 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.61s
+     Running tests/runtime_cone_limits.rs (target/debug/deps/runtime_cone_limits-7faab4c43142700e)
+
+running 2 tests
+test gpu_loaded_cones_hold_boundary_and_react_torque ... loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0.4,0.4 peak=2.1738638526268205e-7 torque_error=0e0
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0.4,0.9 peak=2.1738638526268205e-7 torque_error=0e0
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0,0.9 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0,0 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0.4,0.4 peak=2.5087641493768924e-7 torque_error=0e0
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0.4,0.9 peak=2.5087641493768924e-7 torque_error=0e0
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0,0.9 peak=5.056765688060603e-8 torque_error=2.384185791015625e-7
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0,0 peak=5.056765688060603e-8 torque_error=2.384185791015625e-7
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0.4,0.4 peak=2.1528290048810694e-7 torque_error=4.768371577590358e-7
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0.4,0.9 peak=2.1528290048810694e-7 torque_error=4.768371577590358e-7
+
+thread 'gpu_loaded_cones_hold_boundary_and_react_torque' (3320534) panicked at crates/molla-solvers/tests/runtime_cone_limits.rs:40:13:
+ConeReading { swing: [-5.2675408333276235e-9, 0.0], violation: 5.2675408333276235e-9, active: true, torque: DVec3(0.0, -2.9934394359588623, 0.0), sample_dt: 0.008333333333333333 }, applied=DVec3(0.0, 2.9999999999999996, 0.0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test gpu_zero_cone_preserves_free_twist ... ok
+
+failures:
+
+failures:
+    gpu_loaded_cones_hold_boundary_and_react_torque
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 81.40s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_cone_limits`
+make: *** [Makefile:76: test-gpu] Error 101

@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.60s
+     Running tests/runtime_loop_controls.rs (target/debug/deps/runtime_loop_controls-1433d6030d0172c3)
+
+running 1 test
+
+thread 'cpu_compliant_loops_preserve_weak_modes_beside_null_modes' (3773325) panicked at crates/molla-solvers/tests/runtime_loop_controls.rs:342:18:
+called `Result::unwrap()` on an `Err` value: Build("invalid rigid mass properties")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_compliant_loops_preserve_weak_modes_beside_null_modes ... FAILED
+
+failures:
+
+failures:
+    cpu_compliant_loops_preserve_weak_modes_beside_null_modes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_loop_controls`
+make: *** [Makefile:89: test] Error 101

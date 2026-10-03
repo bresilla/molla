@@ -1,0 +1,20 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.70s
+     Running tests/featherstone_articulation_cpu.rs (target/debug/deps/featherstone_articulation_cpu-4c481f7631ceadd6)
+
+running 5 tests
+test procedural_quadruped_tree_pd_targets_stay_finite_and_converge ... ok
+contact quadruped: max_contacts=4, ground_frames=3, peak_ground_force=9.999999999996124, min_body_y=0.3113, q=[0.17025440789577836, -0.5430084379026642, -0.17025440789577836, -0.5430084379026642, -0.15123730491674514, 0.4441677634382855, 0.15123730491674514, 0.4441677634382855]
+test procedural_quadruped_tree_survives_floor_contacts_while_controlled ... ok
+test procedural_humanoid_like_tree_pd_targets_stay_finite_and_branch_separated ... ok
+test many_procedural_chains_pd_drive_stays_finite_and_moves_to_targets ... ok
+connected self-contact: hip displacement=0.00000000000000035275948828683603, q=[3.4917901903241976e-16, -0.5429070605407977, -3.5250968810629536e-16, -0.5429070605407977, -3.11542458497627e-16, 0.4441012469264422, 3.1287472612717725e-16, 0.4441012469264422]
+test connected_overlap_quadruped_holds_hips_inside_static_friction_budget ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+

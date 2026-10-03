@@ -1,0 +1,20 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/runtime_loop_compliance.rs (target/debug/deps/runtime_loop_compliance-2817011fbcfa4c19)
+
+running 1 test
+test gpu_compliant_loop_numeric_edits_keep_device_resources_retained ... GPU compliant loop standing resources=[130, 642784, 37, 13, 9]; state transfer diagnostics=GpuRuntimeDiagnostics { model_compilations: 2, current_model_bind_groups_created: 18, completed_frames: 1, last_substeps: 4, last_state_upload_bytes: 1248, last_state_readback_bytes: 13540 }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 7.04s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

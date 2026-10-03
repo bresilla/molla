@@ -1,0 +1,34 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.45s
+     Running tests/compliant_loop_rows_gpu.rs (target/debug/deps/compliant_loop_rows_gpu-1d470e05e078ca3c)
+
+running 1 test
+test compliant_loop_rows_match_coordinate_derivatives_and_feedback_in_retained_batches ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/featherstone_mass_inverse_gpu.rs (target/debug/deps/featherstone_mass_inverse_gpu-475c5131121bf9c9)
+
+running 1 test
+test joint_psd_inverse_preserves_scaled_weak_modes_and_rejects_indefinite_blocks ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

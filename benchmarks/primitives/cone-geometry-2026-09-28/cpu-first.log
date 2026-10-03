@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.73s
+     Running tests/spherical_cone.rs (target/debug/deps/spherical_cone-33a1f1f6155cfccf)
+
+running 5 tests
+test antipodal_and_invalid_inputs_fail_explicitly_without_nan_rows ... ok
+test asymmetric_diagonal_swing_is_elliptical_not_rectangular ... ok
+test zero_and_disabled_extents_have_distinct_rows ... ok
+test circular_cones_equal_primary_direction_angle_for_all_axes ... ok
+test cone_rows_match_angular_derivatives_and_do_not_oppose_twist ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

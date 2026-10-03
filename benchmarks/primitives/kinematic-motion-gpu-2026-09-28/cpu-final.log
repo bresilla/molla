@@ -1,0 +1,162 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.14s
+     Running tests/runtime_kinematic_constraints.rs (target/debug/deps/runtime_kinematic_constraints-e8c47a47ffcd2137)
+
+running 5 tests
+prescribed contact common=false inherited=false
+prescribed distance sleep=false
+test builder_rejects_nonkinematic_driven_flags_and_invalid_acceleration_atomically ... ok
+prescribed distance sleep=true
+prescribed contact common=true inherited=falsetest angular_boundary_acceleration_transmits_through_locked_swing ... 
+ok
+test accelerating_distance_boundary_uses_free_velocity_and_reports_support ... ok
+prescribed contact common=false inherited=true
+prescribed contact common=true inherited=true
+test accelerating_contact_boundary_captures_from_rest_in_contact_only_and_common_paths ... ok
+test sustained_accelerating_distance_has_bounded_step_refining_error ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/runtime_kinematic_reactions.rs (target/debug/deps/runtime_kinematic_reactions-ccdc49ef4f5f524d)
+
+running 12 tests
+test driven_isolated_body_and_held_mode_have_distinct_motion ... ok
+test reversed_kinematic_joint_reports_load_on_the_authored_child ... ok
+test driven_com_motion_advances_once_per_substep_and_redrift ... ok
+test driven_motion_edits_are_atomic_and_survive_fork_and_disable ... ok
+test driven_acceleration_wakes_initially_stationary_dependents ... ok
+test moving_kinematic_fixed_joint_reports_full_inertia_gyro_and_external_loads ... ok
+test driven_fixed_hinge_ball_reactions_include_boundary_acceleration ... ok
+test translating_rotating_kinematic_root_does_not_add_spurious_hinge_acceleration ... ok
+test driven_post_break_failure_restores_motion_and_configuration ... ok
+test driven_break_continues_parent_motion_and_preserves_detached_velocity ... ok
+test moving_kinematic_tree_reactions_match_centripetal_support_loads ... ok
+prescribed noncollinear orientation errors=[0.00041720486832807157, 0.0001042902356363985, 2.6071592993724533e-5]
+test noncollinear_angular_acceleration_has_second_order_orientation_convergence ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.81s
+     Running tests/reaction_boundary_acceleration.rs (target/debug/deps/reaction_boundary_acceleration-a77d5fbd8cb6b603)
+
+running 2 tests
+test zero_boundary_acceleration_preserves_legacy_result_and_invalid_inputs_fail ... ok
+test prescribed_com_and_angular_acceleration_match_newton_euler ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/reaction_wrenches.rs (target/debug/deps/reaction_wrenches-4016a88d12324db2)
+
+running 6 tests
+test disabled_motion_subspace_ignores_latent_rates_and_accelerations ... ok
+test joint_wrench_indices_are_local_to_the_requested_articulation ... ok
+test free_body_requires_no_joint_wrench_at_its_applied_acceleration ... ok
+test ball_wrench_matches_offset_com_full_inertia_newton_euler_oracle ... ok
+test fixed_chain_reports_anchor_wrenches_including_external_com_loads ... ok
+test solved_scalar_stop_reports_transmission_without_a_motor_command ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/rnea_inverse_dynamics.rs (target/debug/deps/rnea_inverse_dynamics-0791f8b84d84374f)
+
+running 3 tests
+pendulum: τ_RNEA=-3.467174test rnea_empty_returns_empty ... , expected=ok-
+3.467174
+i=0: τ_full=-1.test pendulum_gravity_torque_matches_rnea ... 950141ok, M·q̈+bias=
+-1.950141, |Δ|=8.88e-16
+i=1: τ_full=0.549058, M·q̈+bias=0.549058, |Δ|=1.11e-15
+test rnea_decomposes_into_mass_matrix_plus_bias ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_joint_reactions.rs (target/debug/deps/runtime_joint_reactions-a7ef83dcafe23760)
+
+running 11 tests
+test fixed_support_reports_gravity_loads_and_transient_substep_peaks ... ok
+test reversed_joint_preserves_authored_child_sign_and_anchor_moments ... ok
+test kinematic_only_scene_preserves_empty_reaction_readout ... ok
+test contact_load_is_subtracted_from_support_reconstruction ... ok
+test stale_failed_disabled_and_sleeping_frames_do_not_leak_samples ... ok
+test scalar_stops_report_actual_load_with_no_commanded_drive ... ok
+test radial_loop_samples_sleep_without_affecting_an_awake_group ... ok
+test ball_and_free_d6_report_only_transmitted_components ... ok
+test external_ball_and_compliant_loop_loads_are_not_double_counted ... ok
+test input_edits_and_dense_compaction_invalidate_reactions_without_requiring_wake ... ok
+test cone_only_soft_loop_and_rigid_loop_report_the_same_angular_load ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_kinematic_reactions.rs (target/debug/deps/runtime_kinematic_reactions-ccdc49ef4f5f524d)
+
+running 12 tests
+test moving_kinematic_fixed_joint_reports_full_inertia_gyro_and_external_loads ... ok
+test driven_isolated_body_and_held_mode_have_distinct_motion ... ok
+test reversed_kinematic_joint_reports_load_on_the_authored_child ... ok
+test driven_motion_edits_are_atomic_and_survive_fork_and_disable ... ok
+test driven_acceleration_wakes_initially_stationary_dependents ... ok
+test driven_post_break_failure_restores_motion_and_configuration ... ok
+test translating_rotating_kinematic_root_does_not_add_spurious_hinge_acceleration ... ok
+test driven_com_motion_advances_once_per_substep_and_redrift ... ok
+test driven_fixed_hinge_ball_reactions_include_boundary_acceleration ... ok
+test driven_break_continues_parent_motion_and_preserves_detached_velocity ... ok
+test moving_kinematic_tree_reactions_match_centripetal_support_loads ... ok
+prescribed noncollinear orientation errors=[0.00041720486832807157, 0.0001042902356363985, 2.6071592993724533e-5]
+test noncollinear_angular_acceleration_has_second_order_orientation_convergence ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/runtime_tree.rs (target/debug/deps/runtime_tree-fff3d18e1f1c33b9)
+
+running 10 tests
+test rerooted_teleport_moves_solver_descendants_not_authored_children ... ok
+test constraint_loops_remain_atomic_errors ... ok
+test reversed_free_joint_matches_unconstrained_body_motion ... ok
+test fixing_a_hinge_child_reroots_without_reversing_motor_semantics ... ok
+test reversed_frame_edits_and_suspension_keep_authored_endpoints ... ok
+test reversed_prismatic_limits_and_impulses_keep_logical_signs ... ok
+test reversed_d6_jacobian_and_inverse_dynamics_match_finite_differences ... ok
+test world_anchor_can_pin_a_nonroot_and_detach_with_current_velocity ... ok
+test merging_at_two_existing_children_reverses_only_the_needed_branch ... ok
+test reversed_ball_motor_targets_authored_relative_orientation ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.53s
+     Running tests/runtime_mixed_contacts_cpu.rs (target/debug/deps/runtime_mixed_contacts_cpu-8c046ec7274fc43a)
+
+running 7 tests
+test locked_cone_contact_has_complete_cpu_torque_balance ... ok
+test unrelated_sleeping_island_does_not_change_mixed_cpu_response ... ok
+test mixed_cpu_distance_break_uses_common_reaction_and_continues ... ok
+test distance_and_contact_share_one_cpu_impulse_solution ... ok
+test distance_between_two_contacts_transfers_friction_and_preserves_endpoint_exchange ... ok
+test incompatible_immovable_mixed_row_rolls_back_and_recovers ... ok
+test loaded_scalar_contact_stops_release_and_survive_limit_edits ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

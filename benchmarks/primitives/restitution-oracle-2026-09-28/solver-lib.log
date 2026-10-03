@@ -1,0 +1,135 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 113 tests
+test constraint_allocation::tests::objective_linear_part_and_unilateral_feasibility_are_preserved ... ok
+test devices::tests::soft_limits_clip_the_target_and_velocity_the_speed ... ok
+test featherstone::scratch::tests::global_indices_reuse_reset_storage_for_different_articulation_sizes ... ok
+test constraint_allocation::tests::redundant_bilateral_rows_leave_strictly_inactive_stop_at_exact_zero ... ok
+test constraint_allocation::tests::redundant_allocation_has_analytic_interior_and_capped_solutions ... ok
+test devices::tests::position_control_follows_webots_p_controller ... ok
+test contact_friction::tests::disk_solver_respects_circular_limits_and_dissipates_predicted_slip_energy ... ok
+test constraint_allocation::tests::tangent_affine_disk_intersection_retains_its_unique_impulse ... ok
+test featherstone::scratch::tests::flat_storage_retains_global_indices ... ok
+test articulated_response::tests::shared_responses_reuse_each_articulation_and_refresh_with_state ... ok
+
+thread 'featherstone::scratch::tests::spare_capacity_is_not_another_articulations_state' (550230) panicked at crates/molla-solvers/src/featherstone_scratch.rs:74:24:
+index out of bounds: the len is 2 but the index is 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test featherstone::tests::drive_inertias_preserve_singular_response_fallback ... ok
+test featherstone::scratch::tests::spare_capacity_is_not_another_articulations_state - should panic ... ok
+test featherstone::tests::joint_blocks_match_allocated_substitutions_exactly ... ok
+test featherstone::tests::drive_inertias_match_full_inverse_diagonals ... ok
+test impact_constraints::tests::coupled_contacts_preserve_response_under_block_permutation ... ok
+test featherstone::tests::free_joint_body_falls_at_g ... ok
+test featherstone::tests::d6_all_locked_behaves_like_fixed ... ok
+test featherstone::tests::pendulum_at_rest_stays_at_rest ... ok
+test impact_constraints::tests::invalid_indefinite_and_nonfinite_inputs_are_rejected ... ok
+test impact_constraints::tests::joint_coupling_is_solved_before_friction_mode_promotion ... ok
+test impact_constraints::tests::newton_normal_restitution_alone_is_not_an_oblique_energy_certificate ... ok
+test impact_constraints::tests::nonnegative_joint_couples_to_restitution_normal ... ok
+test impact_constraints::tests::normal_tangent_coupling_has_no_associated_cone_dilatancy ... ok
+test impact_constraints::tests::rank_deficient_tangent_response_remains_bounded ... ok
+test impact_constraints::tests::separated_and_zero_load_contacts_cannot_generate_friction ... ok
+test impact_constraints::tests::sliding_cap_includes_base_and_solved_normal_impulse ... ok
+test impact_constraints::tests::static_capture_promotion_and_initial_dynamic_mode ... ok
+test impact_constraints::tests::target_and_capacity_overflow_fail_closed ... ok
+test implicit_mpm::tests::bingham_projects_above_yield_keeps_some ... ok
+test impact_constraints::tests::two_body_impact_conserves_momentum_and_measures_energy_loss ... ok
+test implicit_mpm::tests::bingham_projects_below_yield_to_zero ... ok
+test implicit_mpm::tests::quad_weights_partition_of_unity ... ok
+test impact_constraints::tests::tangent_basis_rotation_preserves_world_impulse ... ok
+test joint_limits::tests::active_set_releases_a_stop_coupled_to_a_stiffer_stop ... ok
+test impact_constraints::tests::newton_rebound_mass_speed_sweep_and_energy ... ok
+test joint_compliance::tests::offset_rotated_and_reversed_wrenches_conserve_momentum_and_virtual_work ... ok
+test contact_friction::tests::nearly_loaded_static_disks_cancel_slip_across_scales_and_directions ... ok
+test coupled_constraints::tests::unilateral_joint_activation_and_static_promotion_use_global_solution ... ok
+test featherstone::tests::mimic_constraint_couples_two_joints ... ok
+test joint_mass::seed::tests::seed_reuses_allocation_only_for_exact_model_and_configuration ... ok
+test joint_mass::tests::lazy_matrices_and_factors_are_scoped_to_one_state ... ok
+test loop_forces::selection::invalid_or_split_loop_selection_leaves_force_buffer_unchanged ... ok
+test featherstone::tests::body_f_external_wrench_cancels_gravity ... ok
+test implicit_mpm::tests::color_grid_is_proper_coloring ... ok
+test loop_forces::tests::full_rank_loop_response_timings ... ignored, wall-clock CPU benchmark; run in release without concurrent builds
+test loop_forces::tests::coupled_bounded_solve_satisfies_complementarity ... ok
+test loop_forces::tests::contiguous_wrench_projection_matches_indexed_arithmetic ... ok
+test loop_forces::tests::closure_rows_match_pose_derivatives_and_conserve_momentum ... ok
+test loop_forces::selection::selected_loop_rows_preserve_active_response_and_skip_sleeping_boundaries ... ok
+test rigid_impulse::blocks::tests::arbitrarily_small_cross_block_entries_are_not_discarded ... ok
+test featherstone::tests::disabled_joint_stays_frozen ... ok
+test pressure_tire::tests::planar_contact_rotates_with_the_slope ... ok
+test coupled_constraints::tests::mixed_disk_scalar_solution_and_infeasible_rows ... ok
+test rigid_impulse::blocks::tests::global_rank_cutoff_singular_and_indefinite_systems_fall_back ... ok
+test rigid_impulse::gram_batch_tests::gram_batch_timings ... ignored, release CPU Gram benchmark; run without concurrent builds
+test rigid_impulse::compact::tests::invalid_rows_fail_before_modifying_response ... ok
+test rigid_impulse::gram_batch_tests::invalid_batches_do_not_modify_response ... ok
+test coupled_constraints::tests::satisfied_zero_response_rows_coexist_with_contact_and_faults_are_explicit ... ok
+test loop_forces::tests::mass_response_matches_inverse_products_and_accumulates ... ok
+test loop_forces::selection::sleeping_mass_scale_and_singular_inertia_do_not_change_active_forces ... ok
+test rigid_impulse::response_batch::tests::diagonal_zero_and_subnormal_responses_match_bitwise ... ok
+test rigid_impulse::tests::factors_preserve_nullspace_cutoff_and_reject_invalid_systems ... ok
+test rigid_impulse::tests::gram_response_checks_dimensions_and_zero_mass ... ok
+test rigid_impulse::tests::quadratic_response_timings ... ignored, wall-clock CPU benchmark; run in release without concurrent builds
+test rigid_impulse::tests::quadratic_response_scales_before_squaring ... ok
+test rigid_impulse::tests::retained_cholesky_matches_fresh_factors_and_preserves_cutoff ... ok
+test rigid_impulse::tests::reusable_factors_match_analytic_full_and_reduced_rank_solutions ... ok
+test rigid_impulse::response_batch::tests::invalid_batches_are_rejected_in_every_lane_and_tail ... ok
+test featherstone::factor_seed_tests::cached_factors_match_fresh_drive_inertias_and_preserve_fallbacks ... ok
+test featherstone::tests::two_independent_pendulums ... ok
+test semi_implicit::tests::kinematic_body_passes_through ... ok
+test soft_rigid_contact::primitive::tests::primitive_distances_have_unit_normals_and_correct_surfaces ... ok
+test semi_implicit::tests::free_fall_matches_closed_form ... ok
+test semi_implicit::tests::zero_mass_body_does_not_fall ... ok
+test featherstone::tests::unit_inverse_diagonals_match_full_forward_substitution ... ok
+test pressure_tire::tests::matched_load_pressure_changes_footprint_grip_and_hysteresis ... ok
+test sph_oracle::tests::kernel_peaks_at_origin_and_vanishes_past_support ... ok
+test sph_oracle::tests::granular_stress_obeys_drucker_prager_yield ... ok
+test sph_oracle::tests::kernel_gradient_points_inward_and_is_zero_at_origin ... ok
+test rigid_impulse::blocks::tests::disconnected_full_rank_blocks_match_global_cholesky ... ok
+test sph_oracle::tests::tait_pressure_is_zero_at_rest_and_rises_under_compression ... ok
+test pressure_tire::tests::loaded_radius_has_zero_slip_and_separate_resisting_moment ... ok
+test vbd::tests::cofactor_matches_determinant_gradient ... ok
+test sph_oracle::tests::packed_lattice_density_is_near_rest_density ... ok
+‖F_p - I‖ after stretch: 0.3422
+ε_p = 0.1671
+‖F_p_post - I‖: 0.0143, ε_p_post: 0.3271
+test vbd::tests::cpu_single_tet_yields_and_retains_set ... ok
+test featherstone::tests::pendulum_with_limits_stays_inside_cone ... ok
+test vbd::viscosity::green_viscosity_conserves_internal_force_and_torque ... ok
+test vbd::viscosity::green_viscosity_force_and_tangent_match_incremental_potential ... ok
+test vbd::viscosity::green_viscosity_is_frame_indifferent_and_has_no_rigid_spin_drag ... ok
+test vbd::viscosity::green_viscosity_uniform_dilation_matches_scalar_oracle ... ok
+test loop_forces::block_tests::bounded_active_set_matches_dense_path_through_clamps_and_releases ... ok
+test featherstone::tests::ball_joint_spherical_pendulum_energy_bounded ... ok
+test featherstone::tests::pd_drive_holds_pendulum_at_target ... ok
+test impact_constraints::tests::infeasible_immovable_rows_fail_closed_and_empty_problem_succeeds ... ok
+test featherstone::tests::pendulum_oscillates_with_correct_period ... ok
+test rigid_impulse::compact::tests::compact_response_matches_dense_for_zero_sparse_and_dense_rows ... ok
+test vbd::tests::cpu_smoke_cloth_falls ... ok
+test sph_diff::tests::centroid_gradient_matches_finite_difference ... ok
+test featherstone::tests::joint_friction_damps_swing_to_rest ... ok
+test sph_diff::tests::centroid_optimization_decreases_loss ... ok
+test vbd::tests::cpu_pinned_corners_stay_put ... ok
+substeps=1: q=-0.473537, substeps=4: q=-0.474118, |Δ|=0.000581
+test featherstone::tests::substeps_reduce_integration_error ... ok
+test featherstone::tests::double_pendulum_energy_bounded ... ok
+test featherstone::mass_seed_tests::seeded_steps_match_fresh_mass_after_mimic_fk_and_singular_changes ... ok
+test sph_oracle::tests::step_keeps_particles_finite_and_in_domain ... ok
+post-compress max ε_p = 0.0258
+test rigid_world::bounds_tests::retained_bounds_match_rebuilt_bounds_through_edits_sleep_and_failure ... ok
+post-release max ε_p = 0.0466
+test vbd::tests::cpu_jelly_cube_plastic_compress_release ... ok
+test sph_oracle::tests::fluid_rests_on_a_boundary_floor ... ok
+test rigid_impulse::response_batch::tests::batches_match_scalar_responses_bitwise ... ok
+test pressure_tire::tests::persistent_patch_holds_shear_rotates_frames_and_clears_airborne ... ok
+test sph_oracle::tests::submerged_body_feels_upward_fluid_force ... ok
+test rigid_impulse::gram_batch_tests::gram_batches_match_scalar_solves_bitwise ... ok
+test implicit_mpm::tests::single_particle_falls_under_gravity ... ok
+
+test result: ok. 110 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 11.21s
+

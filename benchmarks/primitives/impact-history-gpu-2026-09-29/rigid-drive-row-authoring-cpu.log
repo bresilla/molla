@@ -1,0 +1,141 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.67s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 5 tests
+test coupled_constraints::tests::bounded_null_response_effort_and_invalid_domains_are_explicit ... ok
+test coupled_constraints::tests::unilateral_joint_activation_and_static_promotion_use_global_solution ... ok
+test coupled_constraints::tests::bounded_feedback_and_friction_match_independent_active_set_oracle ... ok
+test coupled_constraints::tests::mixed_disk_scalar_solution_and_infeasible_rows ... ok
+test coupled_constraints::tests::satisfied_zero_response_rows_coexist_with_contact_and_faults_are_explicit ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 127 filtered out; finished in 0.01s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 5 tests
+test constraint_allocation::tests::tangent_affine_disk_intersection_retains_its_unique_impulse ... ok
+test constraint_allocation::tests::redundant_bilateral_rows_leave_strictly_inactive_stop_at_exact_zero ... ok
+test constraint_allocation::tests::objective_linear_part_and_unilateral_feasibility_are_preserved ... ok
+test constraint_allocation::tests::redundant_interval_rows_preserve_caps_points_and_minimum_norm ... ok
+test constraint_allocation::tests::redundant_allocation_has_analytic_interior_and_capped_solutions ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 127 filtered out; finished in 0.00s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: function `bounded_solve` is never used
+   --> crates/molla-solvers/src/loop_forces.rs:393:15
+    |
+393 | pub(crate) fn bounded_solve(
+    |               ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.67s
+     Running tests/runtime_com_roots.rs (target/debug/deps/runtime_com_roots-00add1c400d4889b)
+
+running 4 tests
+authored root Free frames=60 substeps=4 relative momentum errors=[5.1805244691089075e-15, 5.550671244593046e-15]
+moving tree Free frames=60 substeps=4 relative P/L and absolute centroid errors=[3.357229650465965e-14, 1.2972784923912364e-14, 2.598586028726365e-14]
+loaded root Free frames=60 substeps=4 absolute P/L/centroid errors=[3.1441076983065966e-15, 2.5949919529106173e-14, 1.457101633618084e-15]
+authored root Free frames=120 substeps=4 relative momentum errors=[5.542807015016343e-15, 8.754453747854246e-15]
+loaded root Free frames=120 substeps=4 absolute P/L/centroid errors=[3.080743865682491e-15, 1.908813915835955e-14, 3.806563611657082e-15]
+moving tree Free frames=120 substeps=4 relative P/L and absolute centroid errors=[7.732689182371246e-14, 3.3709348460131856e-14, 2.081068564383056e-14]
+test cpu_com_edits_reseed_implicit_roots_and_preserve_physical_state ... ok
+authored root Free frames=240 substeps=4 relative momentum errors=[1.4169573777574373e-14, 1.3193045078492483e-14]
+loaded root Free frames=240 substeps=4 absolute P/L/centroid errors=[4.082240392577815e-15, 1.9208001404580118e-14, 3.2354001968432753e-15]
+authored root D6 frames=60 substeps=4 relative momentum errors=[5.1805244691089075e-15, 5.550671244593046e-15]
+loaded root D6 frames=60 substeps=4 absolute P/L/centroid errors=[3.1441076983065966e-15, 2.5949919529106173e-14, 1.457101633618084e-15]
+authored root D6 frames=120 substeps=4 relative momentum errors=[5.542807015016343e-15, 8.754453747854246e-15]
+loaded root D6 frames=120 substeps=4 absolute P/L/centroid errors=[3.080743865682491e-15, 1.908813915835955e-14, 3.806563611657082e-15]
+moving tree Free frames=240 substeps=4 relative P/L and absolute centroid errors=[7.993311989699837e-14, 2.1643642034659216e-14, 6.224857240488018e-14]
+authored root D6 frames=240 substeps=4 relative momentum errors=[1.4169573777574373e-14, 1.3193045078492483e-14]
+test cpu_authored_free_and_d6_frames_preserve_free_system_momentum ... ok
+loaded root D6 frames=240 substeps=4 absolute P/L/centroid errors=[4.082240392577815e-15, 1.9208001404580118e-14, 3.2354001968432753e-15]
+test cpu_floating_roots_integrate_applied_wrenches_and_gravity ... ok
+moving tree D6 frames=60 substeps=4 relative P/L and absolute centroid errors=[3.357229650465965e-14, 1.2972784923912364e-14, 2.598586028726365e-14]
+moving tree D6 frames=120 substeps=4 relative P/L and absolute centroid errors=[7.732689182371246e-14, 3.3709348460131856e-14, 2.081068564383056e-14]
+moving tree D6 frames=240 substeps=4 relative P/L and absolute centroid errors=[7.993311989699837e-14, 2.1643642034659216e-14, 6.224857240488018e-14]
+test cpu_floating_branched_trees_preserve_momentum_under_internal_efforts ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running tests/runtime_distance.rs (target/debug/deps/runtime_distance-fc9eb91b71251f3a)
+
+running 11 tests
+test offset_anchor_uses_full_inertia_and_com_moment_arm ... ok
+test zero_minimum_without_maximum_is_free_at_coincident_anchors ... ok
+test coincident_equality_blocks_translation_but_not_rotation ... ok
+test zero_maximum_alone_locks_all_translation ... ok
+test distance_and_scalar_stop_share_the_articulated_response ... ok
+test independent_bounds_remain_slack_and_stop_only_at_their_bound ... ok
+test invalid_bounds_are_atomic_and_mutation_invalidates_readings ... ok
+test infeasible_fixed_constraint_fails_atomically_and_invalidates_readout ... ok
+test equality_transfers_load_between_unequal_masses ... ok
+test closed_triangle_and_redundant_link_preserve_linear_momentum ... ok
+distance pendulum: dt=0.016666666666666666, substeps=8, duration=10s, peak=0.00004367498082613608
+distance pendulum: dt=0.008333333333333333, substeps=8, duration=10s, peak=0.000010919132098718975
+distance pendulum: dt=0.004166666666666667, substeps=8, duration=10s, peak=0.000002729806060086659
+test world_pendulum_holds_length_for_ten_seconds ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.60s
+
+     Running tests/runtime_distance_contract.rs (target/debug/deps/runtime_distance_contract-2ac2510fe3e9089e)
+
+running 4 tests
+test cpu_distance_runtime_mutation_and_unrelated_compaction ... ok
+unconstrained rotating offset COM: one-second peak momentum error=0.00000000000000020014830212433605
+test cpu_rotating_offset_com_free_body_preserves_linear_momentum ... ok
+distance endpoint exchange case=0 duration=1s peak position=0
+distance endpoint exchange case=1 duration=1s peak position=0
+distance endpoint exchange case=2 duration=1s peak position=0
+distance endpoint exchange case=3 duration=1s peak position=0
+distance endpoint exchange case=4 duration=1s peak position=0
+distance endpoint exchange case=5 duration=1s peak position=0
+distance endpoint exchange case=6 duration=1s peak position=0
+distance endpoint exchange case=7 duration=1s peak position=0
+distance endpoint exchange case=8 duration=1s peak position=0
+distance endpoint exchange case=9 duration=1s peak position=0
+test cpu_distance_endpoint_exchange_including_coincident_positive_bounds ... ok
+distance scale sweep: cases=40 dt=0.016666666666666666 substeps=8 duration=10s peak relative length=0.000000000000004683753385137379, 1s analytic position=0.000000000000019539925233402755, quasi-static relative reaction=0.0000000000000004440892098500626
+distance scale sweep: cases=40 dt=0.008333333333333333 substeps=8 duration=10s peak relative length=0.000000000000003642919299551295, 1s analytic position=0.000000000000031530333899354446, quasi-static relative reaction=0.0000000000000004440892098500626
+test cpu_distance_length_mass_scales_and_analytic_reactions has been running for over 60 seconds
+distance scale sweep: cases=40 dt=0.004166666666666667 substeps=8 duration=10s peak relative length=0.000000000000004683753385137379, 1s analytic position=0.00000000000007283063041541027, quasi-static relative reaction=0.0000000000000004440892098500626
+test cpu_distance_length_mass_scales_and_analytic_reactions ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 85.86s
+
+     Running tests/runtime_distance_sleep.rs (target/debug/deps/runtime_distance_sleep-99a709d6ded6c240)
+
+running 3 tests
+test cpu_distance_automatic_sleep_and_fixed_boundary_wake ... ok
+test cpu_distance_sleep_keeps_other_islands_active_and_preserves_nonwaking_edits ... ok
+test cpu_distance_kinematic_boundary_preserves_prescribed_state_and_prevents_sleep ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

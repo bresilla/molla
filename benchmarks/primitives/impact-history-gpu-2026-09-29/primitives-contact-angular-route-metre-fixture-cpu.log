@@ -1,0 +1,71 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.59s
+     Running tests/runtime_multidof_limits.rs (target/debug/deps/runtime_multidof_limits-6170a08f61f0cbf7)
+
+running 1 test
+bounded_xyz axis=0 angles=[0.09999999980882673, -0.31313355659827774, 0.1088405535696852] violation=0e0
+bounded_xyz axis=1 angles=[0.40000000000000013, -0.10000000000000003, 0.20000000000000004] violation=2.7755575615628914e-17
+bounded_xyz axis=2 angles=[0.37035776288935945, -0.30141687491756053, 0.09999999999999892] violation=0e0
+bounded_xyz axis=0 angles=[0.1000000000000136, -1.5679303165763012, -0.09999872955404375] violation=1.3600232051658168e-14
+bounded_xyz axis=1 angles=[0.3999999999999924, -0.09999999999999999, 0.1999999999999919] violation=0e0
+bounded_xyz axis=2 angles=[0.30000044700568596, -1.5678113142098105, 0.09999999999998724] violation=0e0
+bounded_xyz axis=0 angles=[0.10000000000002995, 1.567930316576301, 0.499998729554089] violation=2.99482660892636e-14
+bounded_xyz axis=1 angles=[0.40000000000004626, 0.09999999999999991, 0.19999999999995452] violation=0e0
+bounded_xyz axis=2 angles=[0.4999995529944705, 1.5678113142098116, 0.10000000000000124] violation=1.2351231148954867e-15
+free_response axis=0 rate=5.000000000000003e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=0 angles=[0.09999999980882661, -0.31313355184708974, 0.10884060334343537] violation=0e0
+free_response axis=0 rate=5.000000000000004e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=0 angles=[0.09999999980882684, -0.31313360637202803, 0.10884055832087314] violation=0e0
+free_response axis=1 rate=5.0000000000000024e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=1 angles=[0.39999999498326655, -0.09999999999999992, 0.19999994974895413] violation=0e0
+free_response axis=1 rate=5.000000000000002e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=1 angles=[0.3999999500000002, -0.09999999999999998, 0.20000000000000012] violation=0e0
+free_response axis=2 rate=5.0000000000000024e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=2 angles=[0.3703577628893594, -0.30141682491756056, 0.09999999999999892] violation=0e0
+free_response axis=2 rate=5.000000000000002e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=2 angles=[0.37035771288935954, -0.3014168749175606, 0.09999999999999895] violation=0e0
+free_response axis=0 rate=5.0000000000000024e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=0 angles=[0.10000000000002306, -1.5679302665763013, -0.09999872955402753] violation=2.3051005548779813e-14
+free_response axis=0 rate=5.0000000000000024e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=0 angles=[0.09999999999999522, -1.5679303165763006, -0.09999867955402868] violation=0e0
+free_response axis=1 rate=5.000000000000003e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=1 angles=[0.3999999949832588, -0.0999999999999999, 0.19999994974894597] violation=0e0
+free_response axis=1 rate=5.000000000000002e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=1 angles=[0.3999999499999923, -0.10000000000000005, 0.19999999999999185] violation=4.163336342344337e-17
+free_response axis=2 rate=5.0000000000000024e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=2 angles=[0.30000044700564066, -1.56781126420981, 0.09999999999996026] violation=0e0
+free_response axis=2 rate=5.000000000000002e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=2 angles=[0.3000003970056786, -1.5678113142098105, 0.09999999999999278] violation=0e0
+free_response axis=0 rate=5.0000000000000024e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=0 angles=[0.09999999999998349, 1.5679302665763009, 0.4999987295541284] violation=0e0
+free_response axis=0 rate=5.000000000000004e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=0 angles=[0.1000000000000569, 1.5679303165763006, 0.499998679554039] violation=5.689893001203927e-14
+free_response axis=1 rate=5.000000000000003e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=1 angles=[0.4000000050167796, 0.09999999999999985, 0.19999994974890856] violation=0e0
+free_response axis=1 rate=5.000000000000002e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=1 angles=[0.39999995000004623, 0.09999999999999998, 0.1999999999999545] violation=0e0
+free_response axis=2 rate=5.0000000000000024e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=2 angles=[0.4999995529943742, 1.567811364209811, 0.09999999999996242] violation=0e0
+free_response axis=2 rate=5.000000000000002e-2 linear_error=9.965227682168975e-18
+bounded_xyz axis=2 angles=[0.49999950299436485, 1.567811314209811, 0.10000000000001226] violation=1.2254086634300165e-14
+
+thread 'd6_contact_rows_satisfy_xyz_bounds_and_keep_free_response' (1245086) panicked at crates/molla-solvers/tests/runtime_multidof_limits.rs:288:5:
+assertion failed: world.contact_pairs().iter().any(|pair|
+        pair.points.iter().any(|point| point.normal_force > 0.))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test d6_contact_rows_satisfy_xyz_bounds_and_keep_free_response ... FAILED
+
+failures:
+
+failures:
+    d6_contact_rows_satisfy_xyz_bounds_and_keep_free_response
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_multidof_limits`
+make: *** [Makefile:132: test] Error 101

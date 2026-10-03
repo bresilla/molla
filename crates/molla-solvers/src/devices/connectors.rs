@@ -138,30 +138,44 @@ fn nearest_docking(angle: Real, rotations: u32) -> Real {
 }
 
 impl Connectors {
+    pub(super) fn is_empty(&self) -> bool {
+        self.connectors.is_empty() && self.links.is_empty()
+    }
+
     pub fn insert(&mut self, scene: &RigidScene, spec: ConnectorSpec) -> Result<ConnectorId> {
         if spec.body.is_some_and(|b| scene.body(b).is_none()) {
             return Err(Error::Build("connector body is missing".into()));
         }
-        let tolerances = [spec.distance_tolerance, spec.axis_tolerance, spec.rotation_tolerance];
-        if tolerances.iter().any(|t| !(*t >= 0.0))
-            || !(spec.stiffness > 0.0)
+        let tolerances = [
+            spec.distance_tolerance,
+            spec.axis_tolerance,
+            spec.rotation_tolerance,
+        ];
+        if tolerances.iter().any(|t| t.is_nan() || *t < 0.0)
+            || spec.stiffness.is_nan()
+            || spec.stiffness <= 0.0
             || [spec.tensile_strength, spec.shear_strength]
                 .iter()
                 .flatten()
-                .any(|s| !(*s >= 0.0))
+                .any(|s| s.is_nan() || *s < 0.0)
         {
-            return Err(Error::Build("connector tolerances, strengths and stiffness must be nonnegative".into()));
+            return Err(Error::Build(
+                "connector tolerances, strengths and stiffness must be nonnegative".into(),
+            ));
         }
         self.next += 1;
         let id = ConnectorId(self.next);
-        self.connectors.insert(id, Connector {
-            spec,
-            locked: false,
-            just_locked: false,
-            just_unlocked: false,
-            broke_with: None,
-            reading: ConnectorReading::default(),
-        });
+        self.connectors.insert(
+            id,
+            Connector {
+                spec,
+                locked: false,
+                just_locked: false,
+                just_unlocked: false,
+                broke_with: None,
+                reading: ConnectorReading::default(),
+            },
+        );
         Ok(id)
     }
 
@@ -223,7 +237,9 @@ impl Connectors {
     fn world_frame(scene: &RigidScene, spec: &ConnectorSpec) -> Result<Option<Transform>> {
         match spec.body {
             None => Ok(Some(spec.frame)),
-            Some(body) if scene.body(body).is_some() => Ok(Some(scene.body_pose(body)?.compose(&spec.frame))),
+            Some(body) if scene.body(body).is_some() => {
+                Ok(Some(scene.body_pose(body)?.compose(&spec.frame)))
+            }
             Some(_) => Ok(None),
         }
     }
@@ -247,7 +263,10 @@ impl Connectors {
     fn compatible(a: &ConnectorSpec, b: &ConnectorSpec) -> bool {
         use ConnectorKind::*;
         a.model == b.model
-            && matches!((a.kind, b.kind), (Symmetric, Symmetric) | (Active, Passive) | (Passive, Active))
+            && matches!(
+                (a.kind, b.kind),
+                (Symmetric, Symmetric) | (Active, Passive) | (Passive, Active)
+            )
             && (a.body != b.body || a.body.is_none() && b.body.is_none())
             && (a.body.is_some() || b.body.is_some())
     }
@@ -303,7 +322,8 @@ impl Connectors {
                 .filter(|&&b| b != a && linked.get(&b).is_none_or(|&peer| peer == a))
                 .filter(|&&b| {
                     let spec_b = &self.connectors[&b].spec;
-                    Self::compatible(spec_a, spec_b) && Self::aligned(spec_a, &frames[&a], &frames[&b])
+                    Self::compatible(spec_a, spec_b)
+                        && Self::aligned(spec_a, &frames[&a], &frames[&b])
                 })
                 .min_by(|&&b, &&c| {
                     frames[&a]
@@ -342,18 +362,23 @@ impl Connectors {
     ) -> Result<()> {
         let mut broken = Vec::new();
         for (&joint, link) in &self.links {
-            let (parent, child) = (&self.connectors[&link.parent], &self.connectors[&link.child]);
+            let (parent, child) = (
+                &self.connectors[&link.parent],
+                &self.connectors[&link.child],
+            );
             let latched = |c: &Connector| c.spec.kind != ConnectorKind::Passive && c.locked;
             let released = |me: &Connector, other: &Connector| {
                 me.just_unlocked && (me.spec.unilateral_unlock || !latched(other))
             };
             let mut breaks = released(parent, child) || released(child, parent);
-            if let (Some(reaction), Some(frame)) = (reactions.get(&joint), frames.get(&link.parent)) {
+            if let (Some(reaction), Some(frame)) = (reactions.get(&joint), frames.get(&link.parent))
+            {
                 let axis = frame.rotation * Vec3::X;
                 let tensile = -reaction.force.dot(axis);
                 let shear = (reaction.force - axis * reaction.force.dot(axis)).length();
                 let strength = |pick: fn(&ConnectorSpec) -> Option<Real>| -> Real {
-                    let sides: Vec<&Connector> = [parent, child].into_iter().filter(|c| latched(c)).collect();
+                    let sides: Vec<&Connector> =
+                        [parent, child].into_iter().filter(|c| latched(c)).collect();
                     if sides.is_empty() || sides.iter().any(|c| pick(&c.spec).is_none()) {
                         Real::INFINITY
                     } else {
@@ -386,7 +411,11 @@ impl Connectors {
         Ok(())
     }
 
-    fn make_links(&mut self, scene: &mut RigidScene, frames: &BTreeMap<ConnectorId, Transform>) -> Result<()> {
+    fn make_links(
+        &mut self,
+        scene: &mut RigidScene,
+        frames: &BTreeMap<ConnectorId, Transform>,
+    ) -> Result<()> {
         let ids: Vec<ConnectorId> = self.connectors.keys().copied().collect();
         for a in ids {
             let c = &self.connectors[&a];
@@ -394,7 +423,8 @@ impl Connectors {
             let Some(b) = c.reading.presence else {
                 continue;
             };
-            let busy = |id: ConnectorId| self.links.values().any(|l| l.parent == id || l.child == id);
+            let busy =
+                |id: ConnectorId| self.links.values().any(|l| l.parent == id || l.child == id);
             let (ca, cb) = (&self.connectors[&a], &self.connectors[&b]);
             if !wants
                 || busy(a)
@@ -409,14 +439,24 @@ impl Connectors {
             } else {
                 (a, b)
             };
-            let (pspec, cspec) = (&self.connectors[&parent].spec, &self.connectors[&child].spec);
+            let (pspec, cspec) = (
+                &self.connectors[&parent].spec,
+                &self.connectors[&child].spec,
+            );
             let child_body = cspec.body.expect("compatible pairs have a body");
             let frame_child = if pspec.snap || cspec.snap {
-                let relative = (frames[&child].rotation * FLIP).conjugate() * frames[&parent].rotation;
+                let relative =
+                    (frames[&child].rotation * FLIP).conjugate() * frames[&parent].rotation;
                 let turn = nearest_docking(twist(relative), pspec.rotations.max(cspec.rotations));
-                Transform::new(cspec.frame.position, cspec.frame.rotation * FLIP * Quat::from_rotation_x(turn))
+                Transform::new(
+                    cspec.frame.position,
+                    cspec.frame.rotation * FLIP * Quat::from_rotation_x(turn),
+                )
             } else {
-                scene.body_pose(child_body)?.inverse().compose(&frames[&parent])
+                scene
+                    .body_pose(child_body)?
+                    .inverse()
+                    .compose(&frames[&parent])
             };
             let joint = scene.insert_loop_joint(
                 JointDesc {

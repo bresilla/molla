@@ -1,0 +1,28 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.70s
+     Running tests/runtime_distance_gpu.rs (target/debug/deps/runtime_distance_gpu-de26a23e4fe7f035)
+
+running 1 test
+test runtime_distance_gpu_shared_response_and_independent_bounds ... 
+thread 'runtime_distance_gpu_shared_response_and_independent_bounds' (2913277) panicked at crates/molla-solvers/tests/runtime_distance_gpu.rs:43:74:
+called `Result::unwrap()` on an `Err` value: Gpu("GPU distance pipeline validation: Validation Error\n\nCaused by:\n  In Device::create_shader_module, label = 'runtime distance'\n    \nShader 'runtime distance' parsing error: name `target` is a reserved keyword\n   ┌─ wgsl:79:13\n   │\n79 │         var target = 0.0;\n   │             ^^^^^^ definition of `target`\n\n\n")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    runtime_distance_gpu_shared_response_and_independent_bounds
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.12s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_distance_gpu`
+make: *** [Makefile:75: test-gpu] Error 101

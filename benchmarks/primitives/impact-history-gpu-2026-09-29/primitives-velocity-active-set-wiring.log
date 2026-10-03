@@ -1,0 +1,16 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.74s
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.38s
+     Running `target/debug/examples/check_primitives_shaders`
+Error: "featherstone: error: Function [52] 'react_velocity_feedback' is invalid\n     ┌─ wgsl:2007:1\n     │  \n2007 │ ╭ fn react_velocity_feedback(\n2008 │ │     begin: u32, n: u32,\n2009 │ │     counts: ptr<function, StopCounts>,\n2010 │ │     sl: ptr<function, StopVectors>, sa: ptr<function, StopVectors>,\n     · │\n2072 │ │     if !solve_velocity_box(rows,&matrix,&rhs,&limits,&torque) { return false; }\n     │ │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ invalid function call\n     · │\n2086 │ │     return true;\n2087 │ │ }\n     │ ╰─^ naga::ir::Function [52]\n     │  \n     = Call to [51] is invalid\n     = Argument 1 value [219] doesn't match the type [45]\n\n"
+make: *** [Makefile:386: check-primitives-shader-wiring] Error 1

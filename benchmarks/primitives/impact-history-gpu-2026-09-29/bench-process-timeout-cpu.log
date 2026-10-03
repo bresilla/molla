@@ -1,0 +1,19 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running benches/runtime_primitives.rs (target/debug/deps/runtime_primitives-d0f671e015455fb0)
+benchmark_schema=3	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_process_start	primitive=distance	instances=1000	backend=cpu	timeout_seconds=1
+benchmark_schema=3	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=distance	instances=1000	backend=cpu
+case_process_timeout	primitive=distance	instances=1000	backend=cpu	status=signal: 9 (SIGKILL)	timeout_seconds=1
+Error: "benchmark worker timed out and was reaped; remaining cases were not run"
+error: bench failed, to rerun pass `-p molla-solvers --bench runtime_primitives`
+
+Caused by:
+  process didn't exit successfully: `/home/bresilla/data/code/OUSD/molla/target/debug/deps/runtime_primitives-d0f671e015455fb0 --primitive distance --backend cpu --counts 1000,1 --warmup 0 --steps 1 --case-timeout-seconds 1 --bench` (exit status: 1)
+make: *** [Makefile:348: bench-primitives] Error 1
+expected_failure_exit=2

@@ -509,13 +509,16 @@ impl XpbdParticlesKernel {
         let mut bg_uniforms: Vec<wgpu::BindGroup> = Vec::with_capacity(uniforms_per_step);
 
         let mut push_uniforms = |u: &Uniforms| {
-            let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::xpbd_particles uniforms"),
-                size: core::mem::size_of::<Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf, 0, bytemuck::bytes_of(u));
+            let buf = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::xpbd_particles uniforms"),
+                    size: core::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &buf, 0, bytemuck::bytes_of(u));
             let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("molla::xpbd_particles uniforms bg"),
                 layout: &self.layout_uniforms,

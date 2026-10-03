@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on artifact directory
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.85s
+     Running tests/runtime_scene.rs (target/debug/deps/runtime_scene-c580ed7f947ab22d)
+
+running 6 tests
+test fixed_flags_ignore_input_velocity_and_force_on_cpu_solvers ... ok
+test fixed_link_mass_and_forces_reach_the_articulation_root ... ok
+test detach_retains_world_pose_and_velocity_after_stepping ... ok
+test fixed_body_stays_at_current_pose_and_can_resume_dynamics ... ok
+test free_body_dynamics_are_independent_of_world_translation ... ok
+test independently_created_worlds_isolate_gravity_state_and_mutations ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

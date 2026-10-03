@@ -1,0 +1,174 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: function `body_poses` is never used
+  --> crates/molla-solvers/tests/common/gpu_readback.rs:27:8
+   |
+27 | pub fn body_poses(engine: &Engine, system: &FemRigidGpuSystem, count: usize) -> Vec<Transform> {
+   |        ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (test "featherstone_drift_gpu") generated 1 warning
+warning: `molla-solvers` (test "featherstone_stop_momentum") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.59s
+     Running tests/featherstone_drift_gpu.rs (target/debug/deps/featherstone_drift_gpu-01e9a04a0014a011)
+
+running 4 tests
+test compensated_drift_accumulates_sub_ulp_motion_without_double_redrift ... ok
+test compensated_drift_preserves_coordinates_across_large_reversals ... ok
+test compensated_fk_preserves_sub_ulp_translation_through_fixed_frames ... ok
+test corrected_velocity_drift_matches_cpu_without_reapplying_forces ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.05s
+
+     Running tests/featherstone_feedback_gpu.rs (target/debug/deps/featherstone_feedback_gpu-86426fb05b542894)
+
+running 3 tests
+test stable_feedback_matches_cpu_caps_and_coupled_momentum ... ok
+test stable_feedback_requires_rigorous_dynamics_and_faults_nonfinite_gains ... ok
+test stiff_coupled_feedback_trajectory_stays_bounded_on_gpu ... 512-step coupled GPU feedback trajectory: peak=0.006560687907040119rad/s; CPU parity and momentum passed
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.54s
+
+     Running tests/featherstone_polish_gpu.rs (target/debug/deps/featherstone_polish_gpu-813e4806259947b4)
+
+running 2 tests
+test d6_angular_limit_holds_under_gravity_gpu ... D6 angular limit: max excess = 0.00000 rad
+ok
+test distance_joint_length_holds_within_eps_gpu ... Distance Lagrange (GPU): worst |p|−L = 0.000e0
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.09s
+
+     Running tests/featherstone_stop_momentum.rs (target/debug/deps/featherstone_stop_momentum-47b2c0291c5caf76)
+
+running 3 tests
+test gpu_coupled_stops_transfer_impacts_and_release ... coupled stops masses=[2.0, 3.0, 5.0], velocities=[-2.3999998569488525, -2.3999998569488525, -2.3999998569488525], momentum before=-24, after=-23.999998569488525
+coupled stops masses=[1000.0, 1.0, 1000.0], velocities=[-1.5002501010894775, -1.500250220298767, -1.500250220298767], momentum before=-3002, after=-3002.0005716085434
+ok
+test gpu_scalar_stops_preserve_internal_momentum ... stop rotational=false sign=-1 q=0 dt=0.03 gpu=true: P=0.000000027120110601686065 expected=0, v=-0.000000015616414827945846 expected_v=0, position=-0.0000000004684924115316846, valid=true
+stop rotational=false sign=-1 q=0 dt=0.1 gpu=true: P=0.00000033378601127509455 expected=0, v=0.000000011920929132713809 expected_v=0, position=0, valid=true
+stop rotational=false sign=-1 q=0.1 dt=0.03 gpu=true: P=23.99999737739563 expected=24, v=3.333333730697632 expected_v=3.3333333333333335, position=0, valid=true
+stop rotational=false sign=-1 q=0.1 dt=0.1 gpu=true: P=23.999996602535248 expected=24, v=0.9999983906745911 expected_v=1, position=-0.00000016093254373572563, valid=true
+stop rotational=false sign=-1 q=0.13 dt=0.03 gpu=true: P=23.999999284744263 expected=24, v=4.3333330154418945 expected_v=4.333333333333334, position=-0.000000007674097801668722, valid=true
+stop rotational=false sign=-1 q=0.13 dt=0.1 gpu=true: P=23.99999964237213 expected=24, v=1.2999991178512573 expected_v=1.3, position=-0.000000081509355709386, valid=true
+stop rotational=false sign=-1 q=0.07 dt=0.03 gpu=true: P=23.999998807907104 expected=24, v=2.333333969116211 expected_v=2.3333333333333335, position=0, valid=true
+stop rotational=false sign=-1 q=0.07 dt=0.1 gpu=true: P=24.000000417232513 expected=24, v=0.6999991536140442 expected_v=0.7000000000000001, position=-0.00000008389353922666487, valid=true
+stop rotational=false sign=1 q=0 dt=0.03 gpu=true: P=-0.000000027120110601686065 expected=0, v=0.000000015616414827945846 expected_v=-0, position=0.0000000004684924115316846, valid=true
+stop rotational=false sign=1 q=0 dt=0.1 gpu=true: P=-0.00000033378601127509455 expected=0, v=-0.000000011920929132713809 expected_v=-0, position=0, valid=true
+stop rotational=false sign=1 q=0.1 dt=0.03 gpu=true: P=-23.99999737739563 expected=-24, v=-3.333333730697632 expected_v=-3.3333333333333335, position=0, valid=true
+stop rotational=false sign=1 q=0.1 dt=0.1 gpu=true: P=-23.999996602535248 expected=-24, v=-0.9999983906745911 expected_v=-1, position=0.00000016093254373572563, valid=true
+stop rotational=false sign=1 q=0.13 dt=0.03 gpu=true: P=-23.999999284744263 expected=-24, v=-4.3333330154418945 expected_v=-4.333333333333334, position=0.000000007674097801668722, valid=true
+stop rotational=false sign=1 q=0.13 dt=0.1 gpu=true: P=-23.99999964237213 expected=-24, v=-1.2999991178512573 expected_v=-1.3, position=0.000000081509355709386, valid=true
+stop rotational=false sign=1 q=0.07 dt=0.03 gpu=true: P=-23.999998807907104 expected=-24, v=-2.333333969116211 expected_v=-2.3333333333333335, position=0, valid=true
+stop rotational=false sign=1 q=0.07 dt=0.1 gpu=true: P=-24.000000417232513 expected=-24, v=-0.6999991536140442 expected_v=-0.7000000000000001, position=0.00000008389353922666487, valid=true
+stop rotational=true sign=-1 q=0 dt=0.03 gpu=true: P=-0.000000021457671917080035 expected=0, v=-0.000000004151888166603612 expected_v=0, position=-0.00000000012455664277766232, valid=true
+stop rotational=true sign=-1 q=0 dt=0.1 gpu=true: P=0.00000016689300785799333 expected=0, v=0.000000023841858265427618 expected_v=0, position=0, valid=true
+stop rotational=true sign=-1 q=0.1 dt=0.03 gpu=true: P=55.99999475479126 expected=56, v=3.3333325386047363 expected_v=3.3333333333333335, position=-0.000000027567146787532693, valid=true
+stop rotational=true sign=-1 q=0.1 dt=0.1 gpu=true: P=56.00000023841858 expected=56, v=1.0000007152557373 expected_v=1, position=0, valid=true
+stop rotational=true sign=-1 q=0.13 dt=0.03 gpu=true: P=55.999998807907104 expected=56, v=4.333332538604736 expected_v=4.333333333333334, position=-0.00000002197921133983982, valid=true
+stop rotational=true sign=-1 q=0.13 dt=0.1 gpu=true: P=56.000001549720764 expected=56, v=1.2999991178512573 expected_v=1.3, position=-0.000000081509355709386, valid=true
+stop rotational=true sign=-1 q=0.07 dt=0.03 gpu=true: P=56.00000190734863 expected=56, v=2.3333330154418945 expected_v=2.3333333333333335, position=-0.000000011399388100130636, valid=true
+stop rotational=true sign=-1 q=0.07 dt=0.1 gpu=true: P=56.000002801418304 expected=56, v=0.6999998688697815 expected_v=0.7000000000000001, position=-0.000000012367964430382017, valid=true
+stop rotational=true sign=1 q=0 dt=0.03 gpu=true: P=0.000000021457671917080035 expected=0, v=0.000000004151888166603612 expected_v=-0, position=0.00000000012455664277766232, valid=true
+stop rotational=true sign=1 q=0 dt=0.1 gpu=true: P=-0.00000016689300785799333 expected=0, v=-0.000000023841858265427618 expected_v=-0, position=0, valid=true
+stop rotational=true sign=1 q=0.1 dt=0.03 gpu=true: P=-55.99999475479126 expected=-56, v=-3.3333325386047363 expected_v=-3.3333333333333335, position=0.000000027567146787532693, valid=true
+stop rotational=true sign=1 q=0.1 dt=0.1 gpu=true: P=-56.00000023841858 expected=-56, v=-1.0000007152557373 expected_v=-1, position=0, valid=true
+stop rotational=true sign=1 q=0.13 dt=0.03 gpu=true: P=-55.999998807907104 expected=-56, v=-4.333332538604736 expected_v=-4.333333333333334, position=0.00000002197921133983982, valid=true
+stop rotational=true sign=1 q=0.13 dt=0.1 gpu=true: P=-56.000001549720764 expected=-56, v=-1.2999991178512573 expected_v=-1.3, position=0.000000081509355709386, valid=true
+stop rotational=true sign=1 q=0.07 dt=0.03 gpu=true: P=-56.00000190734863 expected=-56, v=-2.3333330154418945 expected_v=-2.3333333333333335, position=0.000000011399388100130636, valid=true
+stop rotational=true sign=1 q=0.07 dt=0.1 gpu=true: P=-56.000002801418304 expected=-56, v=-0.6999998688697815 expected_v=-0.7000000000000001, position=0.000000012367964430382017, valid=true
+ok
+test gpu_stop_drift_uses_corrected_velocity_and_latches_faults ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 24.30s
+
+     Running tests/runtime_d6_axis_certification.rs (target/debug/deps/runtime_d6_axis_certification-f61d8aa70cb587a9)
+
+running 1 test
+test gpu_d6_each_axis_free_bounded_locked_matches_analytic_motion ... d6_axis_cases=36 peak_pose=0.000001736658284289374 peak_rate=0.000006281558014812067
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 4.33s
+
+     Running tests/runtime_kinematic_constraints.rs (target/debug/deps/runtime_kinematic_constraints-d4778887bf0b1945)
+
+running 2 tests
+test gpu_accelerating_boundaries_drive_distance_cone_and_common_contacts ... prescribed distance sleep=false
+prescribed distance sleep=true
+prescribed contact common=false inherited=false angular=false
+prescribed contact common=true inherited=false angular=false
+prescribed contact common=false inherited=true angular=false
+prescribed contact common=true inherited=true angular=false
+prescribed contact common=false inherited=true angular=true
+ok
+test gpu_accelerating_static_capture_uses_input_slip_not_predicted_slip ... prescribed contact common=false inherited=true angular=false
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 58.32s
+
+     Running tests/runtime_kinematic_reactions.rs (target/debug/deps/runtime_kinematic_reactions-2288fee48f251a9c)
+
+running 4 tests
+test gpu_driven_motion_reactions_break_continuation_and_disable_match_cpu ... ok
+test gpu_driven_tree_angular_acceleration_matches_analytic_transmitted_loads ... GPU prescribed Fixed force_error=6.010235019057252e-7 torque_error=1.527984191792255e-6
+GPU prescribed Revolute force_error=6.451337884684275e-7 torque_error=8.596304119739507e-7
+GPU prescribed Ball force_error=2.5939802081656926e-6 torque_error=5.6401239596288735e-6
+ok
+test gpu_moving_kinematic_tree_reactions_match_centripetal_support_loads ... ok
+test gpu_translating_rotating_kinematic_root_matches_zero_hinge_acceleration ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 47.50s
+
+     Running tests/runtime_multidof_feedback_gpu.rs (target/debug/deps/runtime_multidof_feedback_gpu-c96cf063213942db)
+
+running 1 test
+test multidof_drives_use_nonzero_coordinates_and_match_cpu_with_stable_feedback ... multidof kind=D6 stable=false phase=0 peak_pose=1.5070001698839172e-8 peak_velocity=5.1598942817582205e-9 peak_reaction=1.8371237533310876e-6
+multidof kind=D6 stable=false phase=1 peak_pose=9.063640725982932e-4 peak_velocity=2.1753197164248168e-6 peak_reaction=1.551494474672092e-5
+multidof kind=D6 stable=false phase=2 peak_pose=9.053367672576069e-4 peak_velocity=9.478143013488794e-8 peak_reaction=8.843646045459249e-7
+multidof kind=D6 stable=false phase=3 peak_pose=9.034012236523719e-4 peak_velocity=1.6658426598038877e-6 peak_reaction=1.6304856644368565e-5
+multidof kind=D6 stable=true phase=0 peak_pose=2.631819552492277e-7 peak_velocity=1.8312752023274183e-8 peak_reaction=8.361870070412353e-6
+multidof kind=D6 stable=true phase=1 peak_pose=9.024753853430008e-4 peak_velocity=1.9478237419020904e-6 peak_reaction=1.2488565105109594e-5
+multidof kind=D6 stable=true phase=2 peak_pose=9.082930599828925e-4 peak_velocity=6.203146092632135e-8 peak_reaction=9.639176931282276e-7
+multidof kind=D6 stable=true phase=3 peak_pose=9.002214626712664e-4 peak_velocity=1.8846154102454675e-6 peak_reaction=1.5337556042486207e-5
+multidof kind=Free stable=false phase=0 peak_pose=1.5070001698839172e-8 peak_velocity=5.1598942817582205e-9 peak_reaction=1.8371237533310876e-6
+multidof kind=Free stable=false phase=1 peak_pose=9.063640725982932e-4 peak_velocity=2.1753197164248168e-6 peak_reaction=1.551494474672092e-5
+multidof kind=Free stable=false phase=2 peak_pose=9.053367672576069e-4 peak_velocity=9.478143013488794e-8 peak_reaction=8.843646045459249e-7
+multidof kind=Free stable=false phase=3 peak_pose=9.034012236523719e-4 peak_velocity=1.6658426598038877e-6 peak_reaction=1.6304856644368565e-5
+multidof kind=Free stable=true phase=0 peak_pose=2.631819552492277e-7 peak_velocity=1.8312752023274183e-8 peak_reaction=8.361870070412353e-6
+multidof kind=Free stable=true phase=1 peak_pose=9.024753853430008e-4 peak_velocity=1.9478237419020904e-6 peak_reaction=1.2488565105109594e-5
+multidof kind=Free stable=true phase=2 peak_pose=9.082930599828925e-4 peak_velocity=6.203146092632135e-8 peak_reaction=9.639176931282276e-7
+multidof kind=Free stable=true phase=3 peak_pose=9.002214626712664e-4 peak_velocity=1.8846154102454675e-6 peak_reaction=1.5337556042486207e-5
+multidof kind=Ball stable=false phase=0 peak_pose=2.6337564208732378e-8 peak_velocity=5.4550273803200484e-9 peak_reaction=1.99086988185246e-6
+multidof kind=Ball stable=false phase=1 peak_pose=8.885034201974097e-4 peak_velocity=1.7375313953718775e-6 peak_reaction=1.0241423677502972e-5
+multidof kind=Ball stable=false phase=2 peak_pose=9.045110795476948e-4 peak_velocity=4.288692493349959e-8 peak_reaction=4.0089494923315624e-7
+multidof kind=Ball stable=false phase=3 peak_pose=9.121221402717361e-4 peak_velocity=2.0914049086635512e-6 peak_reaction=1.4532826006826466e-5
+multidof kind=Ball stable=true phase=0 peak_pose=2.6337564208732378e-8 peak_velocity=5.417342543400618e-9 peak_reaction=1.9771148011845637e-6
+multidof kind=Ball stable=true phase=1 peak_pose=9.126709960255988e-4 peak_velocity=1.687379566665471e-6 peak_reaction=1.0994181132831067e-5
+multidof kind=Ball stable=true phase=2 peak_pose=8.788278261045861e-4 peak_velocity=5.7672729807683124e-8 peak_reaction=3.770246336502606e-7
+multidof kind=Ball stable=true phase=3 peak_pose=9.112229920598123e-4 peak_velocity=1.901048384804804e-6 peak_reaction=1.3099916138279337e-5
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.23s
+
+     Running tests/runtime_multidof_limits.rs (target/debug/deps/runtime_multidof_limits-778e86f1d9e403fe)
+
+running 2 tests
+test gpu_d6_angular_projection_preserves_other_xyz_axes_and_authored_frames ... ok
+test gpu_d6_near_gimbal_projection_preserves_resolvable_xyz_axes ... near_gimbal sign=-1 axis=0 error=0.000004197792258658944
+near_gimbal sign=-1 axis=1 error=0.000003876250033998287
+near_gimbal sign=-1 axis=2 error=0.0000004878850443287176
+near_gimbal sign=1 axis=0 error=0.000005475198445877313
+near_gimbal sign=1 axis=1 error=0.0000057596409589333435
+near_gimbal sign=1 axis=2 error=0.0000009248328595866584
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 33.17s
+

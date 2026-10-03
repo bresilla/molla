@@ -1,0 +1,17 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-sensors v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sensors)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0432]: unresolved import `gpu_readback::body_poses`
+  --> crates/molla-solvers/tests/fem_tracked_vehicle_gpu.rs:16:20
+   |
+16 | use gpu_readback::{body_poses, read};
+   |                    ^^^^^^^^^^ no `body_poses` in `gpu_readback`
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `molla-solvers` (test "fem_tracked_vehicle_gpu") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+make: *** [Makefile:344: clippy-check] Error 101

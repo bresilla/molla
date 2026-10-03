@@ -1,0 +1,30 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.53s
+     Running tests/featherstone_mixed_distance.rs (target/debug/deps/featherstone_mixed_distance-805e37d04c6df793)
+
+running 1 test
+test gpu_standalone_distance_slack_unilateral_and_zero_bounds_preserve_rotation ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } dt=0.00001 cases=32
+
+thread 'gpu_standalone_distance_slack_unilateral_and_zero_bounds_preserve_rotation' (1169574) panicked at crates/molla-solvers/tests/featherstone_mixed_distance.rs:624:5:
+assertion `left == right` failed
+  left: 2032160
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_standalone_distance_slack_unilateral_and_zero_bounds_preserve_rotation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 100.98s
+
+error: test failed, to rerun pass `-p molla-solvers --test featherstone_mixed_distance`
+make: *** [Makefile:172: test-gpu] Error 101

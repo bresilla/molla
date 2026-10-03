@@ -1,0 +1,19 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.77s
+     Running tests/soft_vt_contact_gpu.rs (target/debug/deps/soft_vt_contact_gpu-191ac2a5eae74a57)
+
+running 3 tests
+test gpu_jelly_rests_on_cloth_no_passthrough ... GPU jelly-on-cloth: cube_min_y = 0.9973 m (cloth held at y ≈ 1.0)
+ok
+test gpu_small_jelly_rests_on_cloth ... GPU small jelly-on-cloth (600 steps): cube_min_y = 1.0328 m
+ok
+test gpu_vt_contacts_match_cpu_reference ... max per-vertex CPU/GPU position drift after 60 steps: 0.0000 m (vertex 150)  cpu=DVec3(-0.09999999999999999, 1.3989074557942576, -0.0999999999999994) gpu=DVec3(-0.10000000894069672, 1.3989077806472778, -0.10000000149011612)
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.54s
+

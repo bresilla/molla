@@ -14,24 +14,44 @@ fn viewer_readback_scene_switches_preserve_solver_output() {
     world.insert_resource(GpuBpExampleState::default());
     world.insert_resource(ReferencePendulumState::default());
     let scenes = std::iter::once(Scene::PpfWoven)
-        .chain(Scene::ALL.iter().copied().filter(|scene| matches!(
-            scene.solver_kind(),
-            SolverKind::Barrier | SolverKind::BarrierCpu | SolverKind::BarrierCpuChains
-        )))
+        .chain(Scene::ALL.iter().copied().filter(|scene| {
+            matches!(
+                scene.solver_kind(),
+                SolverKind::Barrier | SolverKind::BarrierCpu | SolverKind::BarrierCpuChains
+            )
+        }))
         .chain([Scene::VbdCloth, Scene::Arm, Scene::Pile, Scene::PpfWoven]);
     for scene in scenes {
         eprintln!("viewer readback: {}", scene.label());
         world.resource_mut::<Sim>().rebuild_scene(scene);
-        let initial = world.resource::<Sim>().state_a.particle_q.host().unwrap().to_vec();
+        let initial = world
+            .resource::<Sim>()
+            .state_a
+            .particle_q
+            .host()
+            .unwrap()
+            .to_vec();
         for _ in 0..2 {
             world.run_system_once(step_simulation).unwrap();
         }
         let sim = world.resource::<Sim>();
         let particles = sim.state_a.particle_q.host().unwrap();
         assert!(particles.iter().all(|p| p.is_finite()));
-        assert!(sim.state_a.body_q.host().unwrap().iter().all(|p| p.position.is_finite()));
+        assert!(
+            sim.state_a
+                .body_q
+                .host()
+                .unwrap()
+                .iter()
+                .all(|p| p.position.is_finite())
+        );
         if matches!(scene, Scene::PpfWoven | Scene::VbdCloth) {
-            assert!(initial.iter().zip(particles).any(|(a, b)| (*a - *b).length() > 1e-8));
+            assert!(
+                initial
+                    .iter()
+                    .zip(particles)
+                    .any(|(a, b)| (*a - *b).length() > 1e-8)
+            );
         }
     }
 }

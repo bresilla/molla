@@ -59,7 +59,7 @@ pub(super) fn acceleration(
                 .collect(),
         );
     }
-    let bias = crate::inverse_dynamics(model, state, articulation, &vec![0.0; n])?;
+    let bias = crate::rnea::inverse_dynamics_response(model, state, articulation, &vec![0.0; n])?;
     let force = forces[body];
     let wrench = [
         force.linear.x,

@@ -1,0 +1,48 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.76s
+     Running tests/runtime_d6_singular_bounds.rs (target/debug/deps/runtime_d6_singular_bounds-7c927c703664e350)
+
+running 1 test
+singular_xyz_poles=[-1.0, 1.0]
+singular_xyz_crossing sign=-1 elapsed=0.1s pitch=1.6657963267948968 orientation_error=2.9802322387695313e-8 angular_rate_error=1.1191048088221578e-13
+singular_xyz_crossing sign=-1 elapsed=0.2s pitch=1.7657963267948966 orientation_error=0e0 angular_rate_error=1.1013412404281553e-13
+singular_xyz_crossing sign=-1 elapsed=0.3s pitch=1.8657963267948967 orientation_error=0e0 angular_rate_error=1.1191048088221578e-13
+singular_xyz_crossing sign=-1 elapsed=0.4s pitch=1.9 orientation_error=0e0 angular_rate_error=4.44089209850166e-13
+singular_xyz_crossing sign=-1 elapsed=0.5s pitch=1.9 orientation_error=0e0 angular_rate_error=4.44089209850166e-13
+singular_xyz_crossing sign=-1 elapsed=0.6s pitch=1.9 orientation_error=0e0 angular_rate_error=4.44089209850166e-13
+singular_xyz_crossing sign=-1 elapsed=0.7000000000000001s pitch=1.9 orientation_error=0e0 angular_rate_error=4.44089209850166e-13
+singular_xyz_crossing sign=-1 elapsed=0.8s pitch=1.9 orientation_error=0e0 angular_rate_error=4.44089209850166e-13
+singular_xyz_crossing sign=-1 elapsed=0.9s pitch=1.9 orientation_error=0e0 angular_rate_error=4.44089209850166e-13
+singular_xyz_crossing sign=-1 elapsed=1s pitch=1.9 orientation_error=0e0 angular_rate_error=4.44089209850166e-13
+singular_xyz_crossing sign=1 elapsed=0.1s pitch=1.6657963267948968 orientation_error=2.9802322387695313e-8 angular_rate_error=1.1191048088221578e-13
+singular_xyz_crossing sign=1 elapsed=0.2s pitch=1.7657963267948966 orientation_error=0e0 angular_rate_error=1.1013412404281553e-13
+singular_xyz_crossing sign=1 elapsed=0.3s pitch=1.8657963267948967 orientation_error=0e0 angular_rate_error=1.1191048088221578e-13
+singular_xyz_crossing sign=1 elapsed=0.4s pitch=1.9 orientation_error=0e0 angular_rate_error=1.0097419586828951e-28
+singular_xyz_crossing sign=1 elapsed=0.5s pitch=1.9 orientation_error=0e0 angular_rate_error=1.0097419586828951e-28
+singular_xyz_crossing sign=1 elapsed=0.6s pitch=1.9 orientation_error=0e0 angular_rate_error=1.0097419586828951e-28
+singular_xyz_crossing sign=1 elapsed=0.7000000000000001s pitch=1.9 orientation_error=0e0 angular_rate_error=1.0097419586828951e-28
+singular_xyz_crossing sign=1 elapsed=0.8s pitch=1.9 orientation_error=0e0 angular_rate_error=1.0097419586828951e-28
+singular_xyz_crossing sign=1 elapsed=0.9s pitch=1.9 orientation_error=0e0 angular_rate_error=1.0097419586828951e-28
+singular_xyz_crossing sign=1 elapsed=1s pitch=1.9 orientation_error=0e0 angular_rate_error=1.0097419586828951e-28
+test cpu_free_d6_motion_crosses_both_xyz_poles_without_false_stops ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.20s
+
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error: manual implementation of `.is_multiple_of()`
+   --> crates/molla-solvers/tests/runtime_d6_singular_bounds.rs:248:8
+    |
+248 |     if (frame + 1) % 100 == 0 {
+    |        ^^^^^^^^^^^^^^^^^^^^^^ help: replace with: `(frame + 1).is_multiple_of(100)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_is_multiple_of
+    = note: `-D clippy::manual-is-multiple-of` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_is_multiple_of)]`
+
+error: could not compile `molla-solvers` (test "runtime_d6_singular_bounds") due to 1 previous error
+make: *** [Makefile:428: clippy-check] Error 101

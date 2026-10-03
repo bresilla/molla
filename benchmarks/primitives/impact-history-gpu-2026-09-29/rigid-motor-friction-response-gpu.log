@@ -1,0 +1,47 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error: `<` is interpreted as a start of generic arguments for `f64`, not a comparison
+   --> crates/molla-solvers/src/coupled_response_gpu_tests.rs:356:91
+    |
+356 |                         assert!((scalar.impulse[0] as f64-expected[2]).abs()/scale as f64 < 3e-7);
+    |                                                                                           ^ ---- interpreted as generic arguments
+    |                                                                                           |
+    |                                                                                           not interpreted as comparison
+    |
+help: try comparing the cast value
+    |
+356 |                         assert!((scalar.impulse[0] as f64-expected[2]).abs()/(scale as f64) < 3e-7);
+    |                                                                              +            +
+
+error: `<` is interpreted as a start of generic arguments for `f64`, not a comparison
+   --> crates/molla-solvers/src/coupled_response_gpu_tests.rs:370:83
+    |
+370 |                         assert!((impulse[0] as f64+expected[1]).abs()/scale as f64<3e-7);
+    |                                                                                   ^---- interpreted as generic arguments
+    |                                                                                   |
+    |                                                                                   not interpreted as comparison
+    |
+help: try comparing the cast value
+    |
+370 |                         assert!((impulse[0] as f64+expected[1]).abs()/(scale as f64)<3e-7);
+    |                                                                       +            +
+
+error: `<` is interpreted as a start of generic arguments for `f64`, not a comparison
+   --> crates/molla-solvers/src/coupled_response_gpu_tests.rs:371:83
+    |
+371 |                         assert!((impulse[1] as f64-expected[0]).abs()/scale as f64<3e-7);
+    |                                                                                   ^---- interpreted as generic arguments
+    |                                                                                   |
+    |                                                                                   not interpreted as comparison
+    |
+help: try comparing the cast value
+    |
+371 |                         assert!((impulse[1] as f64-expected[0]).abs()/(scale as f64)<3e-7);
+    |                                                                       +            +
+
+error: could not compile `molla-solvers` (lib test) due to 3 previous errors
+make: *** [Makefile:237: test-primitives-coupled-response-gpu] Error 101

@@ -1,0 +1,21 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.20s
+     Running tests/runtime_distance_gpu.rs (target/debug/deps/runtime_distance_gpu-73a3d0bb456975ab)
+
+running 5 tests
+test runtime_distance_gpu_offset_rotated_frames_full_inertia_and_loop ... offset redundant distance one-second CPU/GPU peak position=0.0000003462291781151763
+ok
+test runtime_distance_gpu_retains_warm_resources_and_tracks_mutation ... distance GPU warm [buffers, bytes, groups, pipelines, shaders]=[89, 529616, 28, 6, 6]
+ok
+test runtime_distance_gpu_scalar_stop_couples_to_other_articulation ... ok
+test runtime_distance_gpu_shared_response_and_independent_bounds ... ok
+test runtime_distance_gpu_zero_equality_failure_and_resume_are_atomic ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 110.94s
+

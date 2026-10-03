@@ -1,0 +1,41 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.10s
+     Running tests/runtime_cone_capability.rs (target/debug/deps/runtime_cone_capability-d670634b2df45446)
+
+running 1 test
+test cpu_refuses_unsupported_cone_chart_atomically ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/runtime_cone_limits.rs (target/debug/deps/runtime_cone_limits-15ee9f156b65c2b4)
+
+running 2 tests
+test cpu_zero_cone_preserves_free_twist ... ok
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0.4,0.4 peak=1.90958701021092e-7 torque_error=0e0
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0.4,0.9 peak=1.90958701021092e-7 torque_error=0e0
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0,0.9 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0,0 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0.4,0.4 peak=1.9095870155399958e-7 torque_error=3.9968028886505635e-11
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0.4,0.9 peak=1.9095870155399958e-7 torque_error=3.9968028886505635e-11
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0,0.9 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0,0 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0.4,0.4 peak=1.909587011987279e-7 torque_error=0e0
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0.4,0.9 peak=1.909587011987279e-7 torque_error=0e0
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0,0.9 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0,0 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0.4,0.4 peak=1.9095870102109206e-7 torque_error=7.993682894254012e-12
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0.4,0.9 peak=1.9095870102109206e-7 torque_error=2.082963028648268e-15
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0,0.9 peak=1.1957467920563633e-16 torque_error=6.661338147750939e-16
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0,0 peak=0e0 torque_error=2.220446049250313e-16
+test cpu_loaded_cones_hold_boundary_and_react_torque ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.41s
+

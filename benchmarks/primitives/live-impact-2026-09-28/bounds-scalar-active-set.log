@@ -1,0 +1,16 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-sensors v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sensors)
+   Compiling molla-fem v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-fem)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+   Compiling molla v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla)
+   Compiling molla_viewer v0.0.1 (/home/bresilla/data/code/OUSD/molla/bin/molla_viewer)
+make: *** [Makefile:74: test] Interrupt

@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.03s
+     Running tests/runtime_restitution_gpu.rs (target/debug/deps/runtime_restitution_gpu-229ebd8fcc10f27b)
+
+running 5 tests
+test failed_impact_frame_restores_history_and_recovers_after_compaction ... ok
+test impact_reactions_break_a_joint_and_continue_without_repeating_the_episode ... ok
+test live_normal_impacts_publish_one_impulse_and_match_cpu_rebound ... ok
+test oblique_impact_reports_final_slip_and_matches_cpu_energy_and_impulse ... ok
+test reaction_capture_does_not_change_contact_momentum_transport ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 109.92s
+

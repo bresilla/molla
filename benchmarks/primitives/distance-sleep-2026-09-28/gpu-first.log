@@ -1,0 +1,16 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.91s
+     Running tests/runtime_distance_sleep.rs (target/debug/deps/runtime_distance_sleep-7f54b115e6421721)
+
+running 2 tests
+test gpu_distance_automatic_sleep_and_fixed_boundary_wake ... ok
+test gpu_distance_sleep_keeps_other_islands_active_and_preserves_nonwaking_edits ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 10.88s
+

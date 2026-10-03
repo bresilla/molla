@@ -9,16 +9,10 @@ use crate::featherstone::JointEffort;
 /// Acceleration-model drives scale by the joint's own inertia; only force
 /// drives are coupled here.
 const ACCELERATION_MODEL: u32 = 1;
-const SWEEPS: usize = 64;
 
-/// A force-model velocity drive is the implicit damper `τ = kd·(v* − v⁺)`.
-/// Its joint's own inertia leaves out gravity, loads carried through
-/// compliant and loop joints, and the other drives, so under load a drive
-/// stalls far below its force limit. Here `v⁺` is the rate the step
-/// predicts with every force in it, and the drives' torques reach every
-/// joint through the articulation's inverse mass:
-/// `(K⁻¹ + dt·G)·τ = v* − v_pred + dt·G·τ₀`, each `τ` within its limit.
-/// Joints under a brake keep the per-joint estimate.
+/// Solve force-model velocity drives against articulation inverse mass and force caps.
+/// `(K⁻¹ + dt·G)·τ = v* − v_pred + dt·G·τ₀`.
+/// Braked and acceleration-model axes retain their per-joint estimates.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn react_velocity_drives(
     model: &Model,
@@ -68,8 +62,14 @@ pub(crate) fn react_velocity_drives(
             unit
         })
         .collect();
-    let responses = joint_mass.factor(articulation, count)?.solve_batch(&units)?;
+    let responses = joint_mass.drive_responses(articulation, count, &units)?;
     let qd = state.joint_qd.host()?;
+    joint_mass.project_drive_acceleration(
+        articulation,
+        &qd[first..first + count],
+        &mut acceleration[first..first + count],
+        dt,
+    )?;
     let n = drives.len();
     let coupling = |i: usize, j: usize| {
         0.5 * (responses[j][drives[i] - first] + responses[i][drives[j] - first])
@@ -87,26 +87,14 @@ pub(crate) fn react_velocity_drives(
         rhs[i] = targets[dof] - predicted
             + dt * (0..n).map(|j| coupling(i, j) * applied[j]).sum::<Real>();
     }
-    // Projected Gauss–Seidel over the box of force limits, from the torques
-    // the joints' own estimates applied.
-    let mut torques = applied.clone();
-    for _ in 0..SWEEPS {
-        let mut change: Real = 0.0;
-        for i in 0..n {
-            let diagonal = matrix[i * n + i];
-            if diagonal <= 0.0 {
-                continue;
-            }
-            let residual = rhs[i] - (0..n).map(|j| matrix[i * n + j] * torques[j]).sum::<Real>();
-            let limit = limits.get(drives[i]).copied().unwrap_or(Real::INFINITY).abs();
-            let next = (torques[i] + residual / diagonal).clamp(-limit, limit);
-            change = change.max((next - torques[i]).abs());
-            torques[i] = next;
-        }
-        if change <= 1e-9 * (1.0 + torques.iter().fold(0.0, |m: Real, t| m.max(t.abs()))) {
-            break;
-        }
-    }
+    let bounds: Vec<_> = drives
+        .iter()
+        .map(|&dof| {
+            let limit = limits.get(dof).copied().unwrap_or(Real::INFINITY).abs();
+            [-limit, limit]
+        })
+        .collect();
+    let torques = crate::loop_forces::bounded_feedback_solve(&matrix, &rhs, &bounds)?;
     for (i, &dof) in drives.iter().enumerate() {
         let delta = torques[i] - applied[i];
         if delta == 0.0 {
@@ -117,7 +105,10 @@ pub(crate) fn react_velocity_drives(
         }
         efforts[dof].drive = torques[i];
     }
-    if acceleration[first..first + count].iter().any(|a| !a.is_finite()) {
+    if acceleration[first..first + count]
+        .iter()
+        .any(|a| !a.is_finite())
+    {
         return Err(Error::Solver("non-finite velocity drive reaction".into()));
     }
     Ok(())

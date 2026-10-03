@@ -175,44 +175,62 @@ impl TireBrushGpuKernel {
         let out_bytes = (capacity * core::mem::size_of::<BrushWheelOutput>()) as u64;
         let terrain_bytes = (terrain_capacity * core::mem::size_of::<f32>()) as u64;
 
-        let in_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush persistent in"),
-            size: in_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush persistent out"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let terrain_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush persistent terrain"),
-            size: terrain_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let friction_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush persistent terrain friction"),
-            size: terrain_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let terrain_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush persistent terrain uniforms"),
-            size: core::mem::size_of::<TerrainUniformsCpu>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush persistent stage"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let in_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush persistent in"),
+                size: in_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush persistent out"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let terrain_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush persistent terrain"),
+                size: terrain_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let friction_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush persistent terrain friction"),
+                size: terrain_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let terrain_uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush persistent terrain uniforms"),
+                size: core::mem::size_of::<TerrainUniformsCpu>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let stage = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush persistent stage"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
 
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_brush persistent bg"),
@@ -282,14 +300,30 @@ impl TireBrushGpuKernel {
         let terrain_u = validate_terrain(terrain, Some(batch.terrain_capacity))?;
         let wheels_patched = patched_wheels(wheels, terrain.is_some());
         let out_bytes = (n * core::mem::size_of::<BrushWheelOutput>()) as u64;
-        queue.write_buffer(&batch.in_buf, 0, bytemuck::cast_slice(&wheels_patched));
+        molla_core::gpu_write_buffer!(
+            queue,
+            &batch.in_buf,
+            0,
+            bytemuck::cast_slice(&wheels_patched)
+        );
         if let Some(t) = terrain {
-            queue.write_buffer(&batch.terrain_buf, 0, bytemuck::cast_slice(t.heights));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &batch.terrain_buf,
+                0,
+                bytemuck::cast_slice(t.heights)
+            );
             if let Some(friction_map) = t.friction_map {
-                queue.write_buffer(&batch.friction_buf, 0, bytemuck::cast_slice(friction_map));
+                molla_core::gpu_write_buffer!(
+                    queue,
+                    &batch.friction_buf,
+                    0,
+                    bytemuck::cast_slice(friction_map)
+                );
             }
         }
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &batch.terrain_uniform_buf,
             0,
             bytemuck::bytes_of(&terrain_u),
@@ -332,21 +366,27 @@ impl TireBrushGpuKernel {
         let wheels_patched = patched_wheels(wheels, terrain.is_some());
         let in_bytes = std::mem::size_of_val(wheels) as u64;
         let out_bytes = (n * core::mem::size_of::<BrushWheelOutput>()) as u64;
-        let in_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush in"),
-            size: in_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush out"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&in_buf, 0, bytemuck::cast_slice(&wheels_patched));
+        let in_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush in"),
+                size: in_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush out"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &in_buf, 0, bytemuck::cast_slice(&wheels_patched));
 
         // Heightfield storage + uniforms.
         let terrain_u = validate_terrain(terrain, None)?;
@@ -354,33 +394,52 @@ impl TireBrushGpuKernel {
             .map(|t| (t.nx as u64 * t.nz as u64 * core::mem::size_of::<f32>() as u64).max(4))
             .unwrap_or(4);
         let friction_buf_size = terrain_buf_size;
-        let terrain_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush terrain"),
-            size: terrain_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let terrain_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush terrain"),
+                size: terrain_buf_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         if let Some(t) = terrain {
-            queue.write_buffer(&terrain_buf, 0, bytemuck::cast_slice(t.heights));
+            molla_core::gpu_write_buffer!(queue, &terrain_buf, 0, bytemuck::cast_slice(t.heights));
         }
-        let friction_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush terrain friction"),
-            size: friction_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let friction_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush terrain friction"),
+                size: friction_buf_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         if let Some(t) = terrain
             && let Some(friction_map) = t.friction_map
         {
-            queue.write_buffer(&friction_buf, 0, bytemuck::cast_slice(friction_map));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &friction_buf,
+                0,
+                bytemuck::cast_slice(friction_map)
+            );
         }
-        let terrain_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush terrain uniforms"),
-            size: core::mem::size_of::<TerrainUniformsCpu>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&terrain_uniform_buf, 0, bytemuck::bytes_of(&terrain_u));
+        let terrain_uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush terrain uniforms"),
+                size: core::mem::size_of::<TerrainUniformsCpu>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &terrain_uniform_buf,
+            0,
+            bytemuck::bytes_of(&terrain_u)
+        );
 
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_brush bg"),
@@ -425,12 +484,15 @@ impl TireBrushGpuKernel {
             pass.set_bind_group(1, &bg_u, &[]);
             pass.dispatch_workgroups(n as u32, 1, 1);
         }
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush stage"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush stage"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         encoder.copy_buffer_to_buffer(&out_buf, 0, &stage, 0, out_bytes);
         queue.submit(std::iter::once(encoder.finish()));
         read_outputs(device, &stage, out_bytes)
@@ -460,47 +522,69 @@ impl TireBrushGpuKernel {
             )));
         }
         let out_bytes = (wheel_count * core::mem::size_of::<BrushWheelOutput>()) as u64;
-        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush external-input out"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
+        let out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush external-input out"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
 
         let terrain_u = validate_terrain(terrain, None)?;
         let terrain_buf_size = terrain
             .map(|t| (t.nx as u64 * t.nz as u64 * core::mem::size_of::<f32>() as u64).max(4))
             .unwrap_or(4);
         let friction_buf_size = terrain_buf_size;
-        let terrain_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush external-input terrain"),
-            size: terrain_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let terrain_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush external-input terrain"),
+                size: terrain_buf_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         if let Some(t) = terrain {
-            queue.write_buffer(&terrain_buf, 0, bytemuck::cast_slice(t.heights));
+            molla_core::gpu_write_buffer!(queue, &terrain_buf, 0, bytemuck::cast_slice(t.heights));
         }
-        let friction_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush external-input terrain friction"),
-            size: friction_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let friction_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush external-input terrain friction"),
+                size: friction_buf_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         if let Some(t) = terrain
             && let Some(friction_map) = t.friction_map
         {
-            queue.write_buffer(&friction_buf, 0, bytemuck::cast_slice(friction_map));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &friction_buf,
+                0,
+                bytemuck::cast_slice(friction_map)
+            );
         }
-        let terrain_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush external-input terrain uniforms"),
-            size: core::mem::size_of::<TerrainUniformsCpu>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&terrain_uniform_buf, 0, bytemuck::bytes_of(&terrain_u));
+        let terrain_uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush external-input terrain uniforms"),
+                size: core::mem::size_of::<TerrainUniformsCpu>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &terrain_uniform_buf,
+            0,
+            bytemuck::bytes_of(&terrain_u)
+        );
 
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_brush external-input bg"),
@@ -545,12 +629,15 @@ impl TireBrushGpuKernel {
             pass.set_bind_group(1, &bg_u, &[]);
             pass.dispatch_workgroups(wheel_count as u32, 1, 1);
         }
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush external-input stage"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush external-input stage"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         encoder.copy_buffer_to_buffer(&out_buf, 0, &stage, 0, out_bytes);
         queue.submit(std::iter::once(encoder.finish()));
         read_outputs(device, &stage, out_bytes)
@@ -575,45 +662,67 @@ impl TireBrushGpuKernel {
             )));
         }
         let out_bytes = (wheel_count * core::mem::size_of::<BrushWheelOutput>()) as u64;
-        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush resident external-input out"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
+        let out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush resident external-input out"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
 
         let terrain_u = validate_terrain(terrain, None)?;
         let terrain_buf_size = terrain
             .map(|t| (t.nx as u64 * t.nz as u64 * core::mem::size_of::<f32>() as u64).max(4))
             .unwrap_or(4);
         let friction_buf_size = terrain_buf_size;
-        let terrain_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush resident external-input terrain"),
-            size: terrain_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let terrain_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush resident external-input terrain"),
+                size: terrain_buf_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         if let Some(t) = terrain {
-            queue.write_buffer(&terrain_buf, 0, bytemuck::cast_slice(t.heights));
+            molla_core::gpu_write_buffer!(queue, &terrain_buf, 0, bytemuck::cast_slice(t.heights));
         }
-        let friction_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush resident external-input terrain friction"),
-            size: friction_buf_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let friction_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush resident external-input terrain friction"),
+                size: friction_buf_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         if let Some(t) = terrain
             && let Some(friction_map) = t.friction_map
         {
-            queue.write_buffer(&friction_buf, 0, bytemuck::cast_slice(friction_map));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &friction_buf,
+                0,
+                bytemuck::cast_slice(friction_map)
+            );
         }
-        let terrain_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush resident external-input terrain uniforms"),
-            size: core::mem::size_of::<TerrainUniformsCpu>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&terrain_uniform_buf, 0, bytemuck::bytes_of(&terrain_u));
+        let terrain_uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush resident external-input terrain uniforms"),
+                size: core::mem::size_of::<TerrainUniformsCpu>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &terrain_uniform_buf,
+            0,
+            bytemuck::bytes_of(&terrain_u)
+        );
 
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_brush resident external-input bg"),
@@ -682,12 +791,15 @@ impl TireBrushGpuKernel {
             return Ok(Vec::new());
         }
         let out_bytes = (output.wheel_count * core::mem::size_of::<BrushWheelOutput>()) as u64;
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_brush resident output readback stage"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_brush resident output readback stage"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::tire_brush resident output readback encoder"),
         });
@@ -789,7 +901,7 @@ fn read_outputs(
     receiver
         .recv()
         .map_err(|e| Error::Gpu(format!("tire_brush recv: {e:?}")))??;
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let out: Vec<BrushWheelOutput> = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     stage.unmap();

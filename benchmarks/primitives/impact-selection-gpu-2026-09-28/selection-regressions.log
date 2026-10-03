@@ -1,0 +1,22 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.34s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 7 tests
+test contact_response_gpu::impact_tests::articulated_impacts_match_cpu_with_joint_rows_boundaries_and_endpoint_exchange ... articulated impact response peak rate error=2.2698148828492748e-5, peak Gram error=1.762245922520833e-7
+ok
+test contact_response_gpu::impact_tests::episodes_select_coupled_dynamic_groups_without_rebounding_shared_ground_neighbors ... ok
+test contact_response_gpu::impact_tests::predicted_selection_matches_cpu_with_articulation_and_accelerating_boundaries ... articulated impact response peak rate error=2.2698148828492748e-5, peak Gram error=1.762245922520833e-7
+ok
+test contact_response_gpu::impact_tests::predicted_selection_retains_sub_ulp_approach_and_retires_separating_rows ... ok
+test contact_response_gpu::impact_tests::retained_predictor_increment_survives_large_common_normal_velocity ... ok
+test contact_response_gpu::impact_tests::separating_contact_keeps_graph_connectivity_without_consuming_solve_capacity ... ok
+test contact_response_gpu::impact_tests::zero_friction_zero_penalty_predictor_change_and_fault_retirement ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 184 filtered out; finished in 6.47s
+

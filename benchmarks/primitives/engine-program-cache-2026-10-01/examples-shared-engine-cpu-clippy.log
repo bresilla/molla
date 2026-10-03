@@ -1,0 +1,29 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.36s
+     Running `target/debug/examples/runtime_primitives all`
+example=distance backend=cpu
+distance=DistanceReading { separation: 1.0, violation: 0.0, active: Equality, force: DVec3(0.0, 19.999999999999996, 0.0), sample_dt: 0.004166666666666667 }
+example=cone backend=cpu
+cone=ConeReading { swing: [-0.25, 0.0], violation: 0.0, active: true, torque: DVec3(0.0, 0.0, 3.87564968684258), sample_dt: 0.004166666666666667 }
+example=reaction backend=cpu
+reaction=JointReaction { child: SpatialVector { linear: DVec3(0.0, 20.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }, parent: SpatialVector { linear: DVec3(0.0, -20.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }, sample_dt: 0.004166666666666667, peak_force: 20.0, peak_torque: 0.0 }
+example=break backend=cpu
+break=JointBreakEvent { frame: 0, joint: JointHandle(2), parent: None, child: BodyHandle(1), trigger: Force, limits: JointBreakLimits { force: Some(5.0), torque: None }, sample: JointReactionSample { joint: JointHandle(2), child: SpatialVector { linear: DVec3(0.0, 20.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }, parent: SpatialVector { linear: DVec3(-0.0, -20.0, -0.0), angular: DVec3(-0.0, -0.0, -0.0) }, anchors: [DVec3(0.0, 0.0, 0.0), DVec3(0.0, 0.0, 0.0)], substep: 0, time_offset: 0.0010416666666666667, sample_dt: 0.0010416666666666667 } }
+detached_body_velocity=SpatialVector { linear: DVec3(0.0, -0.07291666666666666, 0.0), angular: DVec3(0.0, 0.0, 0.0) }
+example=friction backend=cpu
+friction_contacts=[ContactPair { colliders: [ColliderHandle(2), ColliderHandle(3)], bodies: [Some(BodyHandle(1)), None], normal: DVec3(0.0, -1.0, 0.0), points: [ContactForce { bodies: [Some(BodyId(0)), None], colliders: [Some(ShapeId(0)), Some(ShapeId(1))], point: DVec3(0.38715936115156796, -9.999999999998899e-5, 0.0), normal: DVec3(0.0, -1.0, 0.0), penetration: 0.00019999999999997797, friction: 0.4, static_friction: 0.8, friction_regime: Sticking, applied_friction: 0.8, tangent_impulse: DVec3(2.9609894914527514e-16, 0.0, 0.0), normal_force: 20.0, sample_dt: 0.0010416666666666667, normal_impulse: 0.020833333333333332, force_on_b: DVec3(2.8425499117946413e-13, -20.0, 0.0), acted: true }, ContactForce { bodies: [Some(BodyId(0)), None], colliders: [Some(ShapeId(0)), Some(ShapeId(1))], point: DVec3(0.3875064912128898, -9.999999999998899e-5, 0.0), normal: DVec3(0.0, -1.0, 0.0), penetration: 0.00019999999999997797, friction: 0.4, static_friction: 0.8, friction_regime: Sticking, applied_friction: 0.8, tangent_impulse: DVec3(-3.701236864315939e-16, -0.0, 0.0), normal_force: 20.0, sample_dt: 0.0010416666666666667, normal_impulse: 0.020833333333333332, force_on_b: DVec3(-3.5531873897433016e-13, -20.0, 0.0), acted: true }, ContactForce { bodies: [Some(BodyId(0)), None], colliders: [Some(ShapeId(0)), Some(ShapeId(1))], point: DVec3(0.3878536212742117, -9.999999999998899e-5, 0.0), normal: DVec3(0.0, -1.0, 0.0), penetration: 0.00019999999999997797, friction: 0.4, static_friction: 0.8, friction_regime: Sticking, applied_friction: 0.8, tangent_impulse: DVec3(-7.402473728631878e-17, -0.0, 0.0), normal_force: 20.0, sample_dt: 0.0010416666666666667, normal_impulse: 0.020833333333333332, force_on_b: DVec3(-7.106374779486603e-14, -20.0, 0.0), acted: true }, ContactForce { bodies: [Some(BodyId(0)), None], colliders: [Some(ShapeId(0)), Some(ShapeId(1))], point: DVec3(0.38820075133553356, -9.999999999998899e-5, 0.0), normal: DVec3(0.0, -1.0, 0.0), penetration: 0.00019999999999997797, friction: 0.4, static_friction: 0.8, friction_regime: Sticking, applied_friction: 0.8, tangent_impulse: DVec3(3.701236864315939e-16, 0.0, 0.0), normal_force: 20.0, sample_dt: 0.0010416666666666667, normal_impulse: 0.020833333333333332, force_on_b: DVec3(3.5531873897433016e-13, -20.0, 0.0), acted: true }] }]
+rolling_body_velocity=SpatialVector { linear: DVec3(0.3332448588689838, -7.346519423369632e-15, 0.0), angular: DVec3(0.0, 0.0, -0.6666230423464368) }
+example=d6 backend=cpu
+d6_pose=Transform { position: DVec3(0.2663612842492851, 0.0, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }
+    Checking molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+    Checking molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.49s

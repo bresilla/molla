@@ -35,6 +35,25 @@ struct Uniforms {
 
 const WORKGROUP_SIZE: u32 = 64;
 
+/// Retained Jacobian requests and bindings for one pose buffer.
+pub struct JacobianDispatch {
+    pipeline: wgpu::ComputePipeline,
+    groups: [wgpu::BindGroup; 4],
+    count: u32,
+}
+
+impl JacobianDispatch {
+    pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+        pass.set_pipeline(&self.pipeline);
+        for (i, group) in self.groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, group, &[]);
+        }
+        pass.dispatch_workgroups(self.count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        molla_core::gpu_metrics::record_dispatch();
+    }
+}
+
 pub struct JacobianKernel {
     pipeline: wgpu::ComputePipeline,
     layout_model: wgpu::BindGroupLayout,
@@ -66,7 +85,6 @@ impl JacobianKernel {
         queue: &wgpu::Queue,
         model: &Model,
     ) -> Result<Self> {
-
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::jacobian"),
             source: wgpu::ShaderSource::Wgsl(
@@ -160,13 +178,21 @@ impl JacobianKernel {
         }
         dof_offsets.push(acc);
 
-        let art_offsets_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::jacobian art_offsets"),
-            size: (art_offsets.len() * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&art_offsets_buf, 0, bytemuck::cast_slice(&art_offsets));
+        let art_offsets_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::jacobian art_offsets"),
+                size: (art_offsets.len() * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &art_offsets_buf,
+            0,
+            bytemuck::cast_slice(&art_offsets)
+        );
 
         Ok(Self {
             pipeline,
@@ -187,14 +213,17 @@ impl JacobianKernel {
     /// Allocate an output buffer big enough for `total_floats` entries.
     pub fn create_output_buffer(&self, device: &wgpu::Device, total_floats: usize) -> wgpu::Buffer {
         let len = total_floats.max(1);
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::jacobian out"),
-            size: (len * core::mem::size_of::<f32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
+        molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::jacobian out"),
+                size: (len * core::mem::size_of::<f32>()) as u64,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        )
     }
 
     /// Dispatch a batch of Jacobian requests using `state.body_q` as the
@@ -235,9 +264,7 @@ impl JacobianKernel {
             .ok_or_else(|| Error::Gpu("JacobianKernel::dispatch: no queue".into()))?
             .clone();
 
-        self.dispatch_with_body_q_on_device(
-            &device, &queue, model, body_q, requests, jacobian_out,
-        )
+        self.dispatch_with_body_q_on_device(&device, &queue, model, body_q, requests, jacobian_out)
     }
 
     /// Dispatch on the kernel's device and queue with caller-supplied body poses.
@@ -250,9 +277,33 @@ impl JacobianKernel {
         requests: &[JacobianRequest],
         jacobian_out: &wgpu::Buffer,
     ) -> Result<()> {
+        if let Some(prepared) = self.prepare_with_body_q_on_device(
+            device,
+            queue,
+            model,
+            body_q,
+            requests,
+            jacobian_out,
+        )? {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            prepared.encode(&mut encoder);
+            queue.submit([encoder.finish()]);
+        }
+        Ok(())
+    }
 
+    /// Retain requests and bindings; recreate after replacing any referenced buffer.
+    pub fn prepare_with_body_q_on_device(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        body_q: &wgpu::Buffer,
+        requests: &[JacobianRequest],
+        jacobian_out: &wgpu::Buffer,
+    ) -> Result<Option<JacobianDispatch>> {
         if requests.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         let mut ranges = Vec::with_capacity(requests.len());
         for r in requests {
@@ -282,13 +333,16 @@ impl JacobianKernel {
             ));
         }
 
-        let req_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::jacobian requests"),
-            size: std::mem::size_of_val(requests) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&req_buf, 0, bytemuck::cast_slice(requests));
+        let req_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::jacobian requests"),
+                size: std::mem::size_of_val(requests) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &req_buf, 0, bytemuck::cast_slice(requests));
 
         let bg_model = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::jacobian model bg"),
@@ -302,7 +356,7 @@ impl JacobianKernel {
                 buffer_entry(5, model.joint_dof_offset.device_buffer())?,
                 buffer_entry(6, model.joint_x_c.device_buffer())?,
                 buffer_entry(7, model.joint_reversed.device_buffer())?,
-                buffer_entry(8, model.joint_enabled.device_buffer())?,
+                buffer_entry(8, model.joint_motion_flags.device_buffer())?,
                 buffer_entry(9, model.body_flags.device_buffer())?,
                 buffer_entry(10, model.joint_limit_lower.device_buffer())?,
                 buffer_entry(11, model.joint_limit_upper.device_buffer())?,
@@ -343,13 +397,16 @@ impl JacobianKernel {
             _pad1: 0,
             _pad2: 0,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::jacobian uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::jacobian uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::jacobian uniforms bg"),
             layout: &self.layout_uniforms,
@@ -359,24 +416,11 @@ impl JacobianKernel {
             }],
         });
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("molla::jacobian encoder"),
-        });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("molla::jacobian pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bg_model, &[]);
-            pass.set_bind_group(1, &bg_state, &[]);
-            pass.set_bind_group(2, &bg_arts, &[]);
-            pass.set_bind_group(3, &bg_uniforms, &[]);
-            let groups = (requests.len() as u32).div_ceil(WORKGROUP_SIZE).max(1);
-            pass.dispatch_workgroups(groups, 1, 1);
-        }
-        queue.submit(std::iter::once(encoder.finish()));
-        Ok(())
+        Ok(Some(JacobianDispatch {
+            pipeline: self.pipeline.clone(),
+            groups: [bg_model, bg_state, bg_arts, bg_uniforms],
+            count: requests.len() as u32,
+        }))
     }
 
     /// Copy the full output buffer to host as `Vec<f32>`.
@@ -396,12 +440,15 @@ impl JacobianKernel {
             .clone();
         let len = len.max(1);
         let byte_size = (len * 4) as u64;
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::jacobian staging"),
-            size: byte_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let staging = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::jacobian staging"),
+                size: byte_size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::jacobian readback encoder"),
         });
@@ -418,7 +465,7 @@ impl JacobianKernel {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("jacobian recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("jacobian map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = molla_core::gpu_readback!(slice);
         let out: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&mapped).to_vec();
         drop(mapped);
         staging.unmap();

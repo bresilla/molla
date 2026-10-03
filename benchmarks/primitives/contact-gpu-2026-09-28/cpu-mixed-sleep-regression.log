@@ -1,0 +1,9 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+error: no test target named `runtime_sleep` in `molla-solvers` package
+
+help: a target with a similar name exists: `runtime_scene`
+make: *** [Makefile:74: test] Error 101

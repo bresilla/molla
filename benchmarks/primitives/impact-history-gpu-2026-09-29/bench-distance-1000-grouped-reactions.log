@@ -1,0 +1,24 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `release` profile [optimized] target(s) in 12.38s
+     Running benches/runtime_primitives.rs (target/release/deps/runtime_primitives-c87dd9596ff6fd06)
+benchmark_schema=3	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=release
+case_process_start	primitive=distance	instances=1000	backend=cpu	timeout_seconds=180
+benchmark_schema=3	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=release
+case_start	primitive=distance	instances=1000	backend=cpu
+case_setup_complete	primitive=distance	instances=1000	backend=cpu	seconds=3.646414160
+case_warmup_complete	primitive=distance	instances=1000	backend=cpu	steps=20
+case_ok	primitive=distance	instances=1000	backend=cpu	bodies=1000	articulations=1000	warmup=20	steps=1000	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=2000	contact_width=8	setup_seconds=3.646414160	wall_seconds=15.870371541	max_step_seconds=0.016685669	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=0	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=distance	instances=1000	backend=gpu	timeout_seconds=180
+benchmark_schema=3	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=distance	instances=1000	backend=gpu
+case_setup_complete	primitive=distance	instances=1000	backend=gpu	seconds=7.469833166
+case_warmup_complete	primitive=distance	instances=1000	backend=gpu	steps=20
+case_ok	primitive=distance	instances=1000	backend=gpu	bodies=1000	articulations=1000	warmup=20	steps=1000	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=2000	contact_width=8	setup_seconds=7.469833166	wall_seconds=3.385348024	max_step_seconds=0.010601813	device_timeline_seconds=Some(3.3849466880000003)	state_upload_bytes=148000000	state_readout_bytes=676004000	boundary_buffer_bytes=4445632	boundary_buffers=Some(128)	boundary_allocations=None	model_compilations=Some(2)	break_events=0	encoded_dispatches=36000	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable

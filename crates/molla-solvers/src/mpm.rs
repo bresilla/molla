@@ -704,12 +704,15 @@ impl MpmSimulation {
         let n_rigid = cfg.max_rigid.max(1) as u64;
 
         let mk_buf = |label: &str, size_bytes: u64, usage: wgpu::BufferUsages| -> wgpu::Buffer {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: size_bytes,
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: size_bytes,
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
 
         let storage = wgpu::BufferUsages::STORAGE
@@ -745,12 +748,15 @@ impl MpmSimulation {
         let rigid_wrench = mk_buf("mpm.rigid_wrench", n_rigid * 32, storage);
 
         // Stage 24d.2: persistent uniform buffer + readback staging.
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::mpm uniforms (persistent)"),
-            size: std::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::mpm uniforms (persistent)"),
+                size: std::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::mpm uniforms bg (persistent)"),
             layout: &layout_uniforms,
@@ -761,18 +767,24 @@ impl MpmSimulation {
         });
 
         let stage_bytes = n_particles * 16;
-        let stage_pos = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::mpm stage_pos (persistent)"),
-            size: stage_bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let stage_vel = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::mpm stage_vel (persistent)"),
-            size: stage_bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage_pos = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::mpm stage_pos (persistent)"),
+                size: stage_bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
+        let stage_vel = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::mpm stage_vel (persistent)"),
+                size: stage_bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
 
         // Pre-build bind groups for the persistent buffers.
         let bg_particles = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -924,14 +936,15 @@ impl MpmSimulation {
         let mass: Vec<f32> = vec![self.cfg.particle_mass; n];
         let jp: Vec<f32> = vec![0.0; n];
 
-        queue.write_buffer(&self.p_pos, 0, bytemuck::cast_slice(&pos));
-        queue.write_buffer(&self.p_vel, 0, bytemuck::cast_slice(&vel));
-        queue.write_buffer(&self.p_c, 0, bytemuck::cast_slice(&c_data));
-        queue.write_buffer(&self.p_f, 0, bytemuck::cast_slice(&f_data));
-        queue.write_buffer(&self.p_volume, 0, bytemuck::cast_slice(&volume));
-        queue.write_buffer(&self.p_mass, 0, bytemuck::cast_slice(&mass));
-        queue.write_buffer(&self.p_jp, 0, bytemuck::cast_slice(&jp));
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(queue, &self.p_pos, 0, bytemuck::cast_slice(&pos));
+        molla_core::gpu_write_buffer!(queue, &self.p_vel, 0, bytemuck::cast_slice(&vel));
+        molla_core::gpu_write_buffer!(queue, &self.p_c, 0, bytemuck::cast_slice(&c_data));
+        molla_core::gpu_write_buffer!(queue, &self.p_f, 0, bytemuck::cast_slice(&f_data));
+        molla_core::gpu_write_buffer!(queue, &self.p_volume, 0, bytemuck::cast_slice(&volume));
+        molla_core::gpu_write_buffer!(queue, &self.p_mass, 0, bytemuck::cast_slice(&mass));
+        molla_core::gpu_write_buffer!(queue, &self.p_jp, 0, bytemuck::cast_slice(&jp));
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.tire_compaction_buf,
             0,
             bytemuck::cast_slice(&vec![[0.0_f32; 4]; n]),
@@ -967,8 +980,13 @@ impl MpmSimulation {
             .map(|(_, _, v)| [v[0], v[1], v[2], 0.0])
             .collect();
         if !centers.is_empty() {
-            queue.write_buffer(&self.rigid_center, 0, bytemuck::cast_slice(&centers));
-            queue.write_buffer(&self.rigid_vel, 0, bytemuck::cast_slice(&vels));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &self.rigid_center,
+                0,
+                bytemuck::cast_slice(&centers)
+            );
+            molla_core::gpu_write_buffer!(queue, &self.rigid_vel, 0, bytemuck::cast_slice(&vels));
         }
         self.rigid_count = n as u32;
         Ok(())
@@ -1071,7 +1089,8 @@ impl MpmSimulation {
     pub fn reset_tire_compaction_with(&mut self, queue: &wgpu::Queue) {
         self.reset_tire_compaction();
         if self.particle_count > 0 {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &self.tire_compaction_buf,
                 0,
                 bytemuck::cast_slice(&self.tire_compaction),
@@ -1090,12 +1109,15 @@ impl MpmSimulation {
             return Ok(vec![]);
         }
         let bytes = (self.particle_count as u64) * 16;
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::mpm tire_compaction readback"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::mpm tire_compaction readback"),
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::mpm tire_compaction readback encoder"),
         });
@@ -1115,7 +1137,7 @@ impl MpmSimulation {
         receiver
             .recv()
             .map_err(|e| Error::Gpu(format!("mpm tire compaction recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = molla_core::gpu_readback!(slice);
         let out: Vec<[f32; 4]> =
             bytemuck::cast_slice(&data)[..self.particle_count as usize].to_vec();
         drop(data);
@@ -1354,9 +1376,20 @@ impl MpmSimulation {
                 output.compaction.len(),
             )));
         }
-        queue.write_buffer(&self.p_pos, 0, bytemuck::cast_slice(&output.positions));
-        queue.write_buffer(&self.p_vel, 0, bytemuck::cast_slice(&output.velocities));
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
+            &self.p_pos,
+            0,
+            bytemuck::cast_slice(&output.positions)
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &self.p_vel,
+            0,
+            bytemuck::cast_slice(&output.velocities)
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.tire_compaction_buf,
             0,
             bytemuck::cast_slice(&output.compaction),
@@ -1454,7 +1487,7 @@ impl MpmSimulation {
             snow_hardening: snow_h,
         };
         // Stage 24d.2: persistent uniform buffer — one upload per call.
-        queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        molla_core::gpu_write_buffer!(queue, &self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         // Stage 24d.4 — material table upload. Row 0 mirrors
         // `cfg.rheology` unless `set_materials` installed a
@@ -1471,9 +1504,9 @@ impl MpmSimulation {
                 table[2 * i + 1] = row[1];
             }
         }
-        queue.write_buffer(&self.material_table, 0, bytemuck::cast_slice(&table));
+        molla_core::gpu_write_buffer!(queue, &self.material_table, 0, bytemuck::cast_slice(&table));
         if let Some(ids) = self.particle_material_dirty.take() {
-            queue.write_buffer(&self.p_material, 0, bytemuck::cast_slice(&ids));
+            molla_core::gpu_write_buffer!(queue, &self.p_material, 0, bytemuck::cast_slice(&ids));
         }
 
         let grid_total = self.cfg.grid_size.pow(3);
@@ -1608,7 +1641,7 @@ impl MpmSimulation {
         receiver
             .recv()
             .map_err(|e| Error::Gpu(format!("mpm readback recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = molla_core::gpu_readback!(slice);
         let raw: Vec<[f32; 4]> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         self.stage_pos.unmap();
@@ -1649,7 +1682,7 @@ impl MpmSimulation {
         receiver
             .recv()
             .map_err(|e| Error::Gpu(format!("mpm vel recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = molla_core::gpu_readback!(slice);
         let raw: Vec<[f32; 4]> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         self.stage_vel.unmap();
@@ -1695,18 +1728,24 @@ impl MpmSimulation {
         let grid_total = self.cfg.grid_size.pow(3) as u64;
         let mass_bytes = grid_total * 4;
         let mom_bytes = grid_total * 12;
-        let stage_mass = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mpm.read_grid stage_mass"),
-            size: mass_bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let stage_mom = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mpm.read_grid stage_mom"),
-            size: mom_bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage_mass = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("mpm.read_grid stage_mass"),
+                size: mass_bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
+        let stage_mom = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("mpm.read_grid stage_mom"),
+                size: mom_bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("mpm.read_grid encoder"),
         });
@@ -1734,8 +1773,8 @@ impl MpmSimulation {
             .map_err(|e| Error::Gpu(format!("grid mass recv: {e:?}")))??;
         rp.recv()
             .map_err(|e| Error::Gpu(format!("grid mom recv: {e:?}")))??;
-        let data_m = slice_m.get_mapped_range();
-        let data_p = slice_p.get_mapped_range();
+        let data_m = molla_core::gpu_readback!(slice_m);
+        let data_p = molla_core::gpu_readback!(slice_p);
         let mass: Vec<f32> = bytemuck::cast_slice(&data_m).to_vec();
         let mom: Vec<f32> = bytemuck::cast_slice(&data_p).to_vec();
         drop(data_m);
@@ -1754,12 +1793,15 @@ impl MpmSimulation {
             return Ok(vec![]);
         }
         let bytes = (self.rigid_count as u64) * 32;
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::mpm read_rigid_wrenches stage"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::mpm read_rigid_wrenches stage"),
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::mpm read_rigid_wrenches encoder"),
         });
@@ -1779,7 +1821,7 @@ impl MpmSimulation {
         receiver
             .recv()
             .map_err(|e| Error::Gpu(format!("mpm wrench recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = molla_core::gpu_readback!(slice);
         let raw: Vec<[f32; 4]> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         stage.unmap();

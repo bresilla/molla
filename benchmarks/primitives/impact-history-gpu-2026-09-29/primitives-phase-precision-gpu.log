@@ -1,0 +1,207 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.46s
+     Running tests/runtime_d6_angular_mass.rs (target/debug/deps/runtime_d6_angular_mass-130d77b786e52dba)
+
+running 1 test
+test gpu_standalone_phase_intervals_preserve_authored_stop_response ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } dt=0.00001 width=1e-9
+angular_mass case=0 reversed=false rate_error=5.285226369e-11 linear_error=2.551631499e-11 pose_error=2.845995267e-7 rotation_error=1.164337731e-7
+angular_mass case=1 reversed=false rate_error=1.045733107e-10 linear_error=6.835906965e-11 pose_error=2.845637390e-7 rotation_error=1.164455754e-7
+angular_mass case=2 reversed=false rate_error=5.441675558e-11 linear_error=2.907240872e-11 pose_error=2.845279688e-7 rotation_error=1.164574565e-7
+angular_mass case=3 reversed=false rate_error=1.014464577e-10 linear_error=6.608094633e-11 pose_error=2.845637390e-7 rotation_error=1.164455754e-7
+angular_mass case=4 reversed=false rate_error=9.833205429e-11 linear_error=9.632431914e-11 pose_error=1.276266293e-7 rotation_error=3.828830276e-8
+angular_mass case=5 reversed=false rate_error=1.071213165e-10 linear_error=1.523565001e-10 pose_error=1.275842468e-7 rotation_error=3.830843799e-8
+angular_mass case=6 reversed=false rate_error=9.838869099e-11 linear_error=9.280676465e-11 pose_error=1.275418992e-7 rotation_error=3.832880549e-8
+angular_mass case=7 reversed=false rate_error=1.065235406e-10 linear_error=1.511284342e-10 pose_error=1.275842468e-7 rotation_error=3.830843799e-8
+angular_mass case=8 reversed=false rate_error=9.833205429e-11 linear_error=9.632431914e-11 pose_error=1.276266296e-7 rotation_error=3.828830238e-8
+angular_mass case=9 reversed=false rate_error=1.071213165e-10 linear_error=1.523565001e-10 pose_error=1.275842473e-7 rotation_error=3.830843767e-8
+angular_mass case=10 reversed=false rate_error=9.838869100e-11 linear_error=9.280676465e-11 pose_error=1.275418996e-7 rotation_error=3.832880519e-8
+angular_mass case=11 reversed=false rate_error=1.065235406e-10 linear_error=1.511284342e-10 pose_error=1.275842473e-7 rotation_error=3.830843767e-8
+angular_mass case=12 reversed=false rate_error=5.285226369e-11 linear_error=2.551631499e-11 pose_error=2.845995270e-7 rotation_error=1.164337727e-7
+angular_mass case=13 reversed=false rate_error=1.045733107e-10 linear_error=6.835906965e-11 pose_error=2.845637392e-7 rotation_error=1.164455751e-7
+angular_mass case=14 reversed=false rate_error=5.441675558e-11 linear_error=2.907240872e-11 pose_error=2.845279689e-7 rotation_error=1.164574561e-7
+angular_mass case=15 reversed=false rate_error=1.014464577e-10 linear_error=6.608094633e-11 pose_error=2.845637392e-7 rotation_error=1.164455751e-7
+angular_mass case=16 reversed=true rate_error=4.778025923e-11 linear_error=6.015389383e-11 pose_error=3.622265861e-7 rotation_error=6.761832518e-8
+angular_mass case=17 reversed=true rate_error=1.015183256e-10 linear_error=1.503947037e-10 pose_error=3.622046443e-7 rotation_error=6.763220776e-8
+angular_mass case=18 reversed=true rate_error=4.636541218e-11 linear_error=6.391334299e-11 pose_error=3.621827335e-7 rotation_error=6.764626319e-8
+angular_mass case=19 reversed=true rate_error=9.819273823e-11 linear_error=1.462133981e-10 pose_error=3.622046443e-7 rotation_error=6.763220776e-8
+angular_mass case=20 reversed=true rate_error=9.857634628e-11 linear_error=1.435620313e-10 pose_error=9.602619932e-8 rotation_error=1.383666413e-7
+angular_mass case=21 reversed=true rate_error=1.060192431e-10 linear_error=1.621595321e-10 pose_error=9.603315693e-8 rotation_error=1.384422511e-7
+angular_mass case=22 reversed=true rate_error=9.830805520e-11 linear_error=1.412679213e-10 pose_error=9.604023545e-8 rotation_error=1.385179053e-7
+angular_mass case=23 reversed=true rate_error=1.059692272e-10 linear_error=1.620903565e-10 pose_error=9.603315693e-8 rotation_error=1.384422511e-7
+angular_mass case=24 reversed=true rate_error=9.857634628e-11 linear_error=1.435620313e-10 pose_error=9.602619999e-8 rotation_error=1.383666409e-7
+angular_mass case=25 reversed=true rate_error=1.060192431e-10 linear_error=1.621595321e-10 pose_error=9.603315730e-8 rotation_error=1.384422506e-7
+angular_mass case=26 reversed=true rate_error=9.830805520e-11 linear_error=1.412679213e-10 pose_error=9.604023582e-8 rotation_error=1.385179049e-7
+angular_mass case=27 reversed=true rate_error=1.059692272e-10 linear_error=1.620903565e-10 pose_error=9.603315730e-8 rotation_error=1.384422506e-7
+angular_mass case=28 reversed=true rate_error=4.855968712e-11 linear_error=3.828680599e-11 pose_error=3.622265862e-7 rotation_error=6.761832488e-8
+angular_mass case=29 reversed=true rate_error=1.017162830e-10 linear_error=1.548005492e-10 pose_error=3.622046445e-7 rotation_error=6.763220756e-8
+angular_mass case=30 reversed=true rate_error=4.695741551e-11 linear_error=4.281455000e-11 pose_error=3.621827336e-7 rotation_error=6.764626308e-8
+angular_mass case=31 reversed=true rate_error=9.991374886e-11 linear_error=1.522700699e-10 pose_error=3.622046445e-7 rotation_error=6.763220756e-8
+angular_mass case=32 reversed=false rate_error=4.779215142e-11 linear_error=5.680100723e-11 pose_error=5.708730227e-8 rotation_error=8.564737311e-8
+angular_mass case=33 reversed=false rate_error=9.996100236e-11 linear_error=9.545103871e-11 pose_error=5.706198727e-8 rotation_error=8.569527471e-8
+angular_mass case=34 reversed=false rate_error=4.746673745e-11 linear_error=4.893420248e-11 pose_error=5.703677004e-8 rotation_error=8.574325813e-8
+angular_mass case=35 reversed=false rate_error=1.009294772e-10 linear_error=9.657053477e-11 pose_error=5.706198727e-8 rotation_error=8.569527471e-8
+angular_mass case=36 reversed=false rate_error=9.759229852e-11 linear_error=9.760306641e-11 pose_error=2.067774840e-7 rotation_error=1.021879180e-7
+angular_mass case=37 reversed=false rate_error=1.058048806e-10 linear_error=1.516417222e-10 pose_error=2.067771919e-7 rotation_error=1.022010840e-7
+angular_mass case=38 reversed=false rate_error=9.700458794e-11 linear_error=9.889050318e-11 pose_error=2.067769297e-7 rotation_error=1.022143395e-7
+angular_mass case=39 reversed=false rate_error=1.052098967e-10 linear_error=1.502339473e-10 pose_error=2.067771919e-7 rotation_error=1.022010840e-7
+angular_mass case=40 reversed=false rate_error=9.759229852e-11 linear_error=9.760306640e-11 pose_error=2.067774840e-7 rotation_error=1.021879182e-7
+angular_mass case=41 reversed=false rate_error=1.058048806e-10 linear_error=1.516417222e-10 pose_error=2.067771914e-7 rotation_error=1.022010841e-7
+angular_mass case=42 reversed=false rate_error=9.700458793e-11 linear_error=9.889050318e-11 pose_error=2.067769296e-7 rotation_error=1.022143397e-7
+angular_mass case=43 reversed=false rate_error=1.052098967e-10 linear_error=1.502339473e-10 pose_error=2.067771914e-7 rotation_error=1.022010841e-7
+angular_mass case=44 reversed=false rate_error=4.693866496e-11 linear_error=4.151965655e-11 pose_error=5.708730242e-8 rotation_error=8.564737327e-8
+angular_mass case=45 reversed=false rate_error=6.319600247e-11 linear_error=3.387787675e-11 pose_error=5.706198742e-8 rotation_error=8.569527487e-8
+angular_mass case=46 reversed=false rate_error=4.816663941e-11 linear_error=3.056810842e-11 pose_error=5.703677015e-8 rotation_error=8.574325837e-8
+angular_mass case=47 reversed=false rate_error=6.341241872e-11 linear_error=3.334723699e-11 pose_error=5.706198742e-8 rotation_error=8.569527487e-8
+angular_mass case=48 reversed=true rate_error=4.691496192e-11 linear_error=6.039498645e-11 pose_error=3.468407198e-7 rotation_error=1.152432246e-8
+angular_mass case=49 reversed=true rate_error=1.007978945e-10 linear_error=1.492987370e-10 pose_error=3.468056858e-7 rotation_error=1.147621050e-8
+angular_mass case=50 reversed=true rate_error=4.570521218e-11 linear_error=6.269862826e-11 pose_error=3.467706811e-7 rotation_error=1.142893576e-8
+angular_mass case=51 reversed=true rate_error=9.793950915e-11 linear_error=1.456552189e-10 pose_error=3.468056858e-7 rotation_error=1.147621050e-8
+angular_mass case=52 reversed=true rate_error=9.982497225e-11 linear_error=1.435095436e-10 pose_error=2.021829843e-7 rotation_error=7.764039630e-8
+angular_mass case=53 reversed=true rate_error=1.058815733e-10 linear_error=1.618713604e-10 pose_error=2.021846132e-7 rotation_error=7.757379976e-8
+angular_mass case=54 reversed=true rate_error=9.833212095e-11 linear_error=1.418017216e-10 pose_error=2.021862996e-7 rotation_error=7.750729933e-8
+angular_mass case=55 reversed=true rate_error=1.074202913e-10 linear_error=1.643195562e-10 pose_error=2.021846132e-7 rotation_error=7.757379976e-8
+angular_mass case=56 reversed=true rate_error=9.982497225e-11 linear_error=1.435095436e-10 pose_error=2.021829838e-7 rotation_error=7.764039624e-8
+angular_mass case=57 reversed=true rate_error=1.058815733e-10 linear_error=1.618713604e-10 pose_error=2.021846127e-7 rotation_error=7.757379981e-8
+angular_mass case=58 reversed=true rate_error=9.833212095e-11 linear_error=1.418017216e-10 pose_error=2.021862991e-7 rotation_error=7.750729926e-8
+angular_mass case=59 reversed=true rate_error=1.074202913e-10 linear_error=1.643195562e-10 pose_error=2.021846127e-7 rotation_error=7.757379981e-8
+angular_mass case=60 reversed=true rate_error=4.692359691e-11 linear_error=4.562869890e-11 pose_error=3.468407200e-7 rotation_error=1.152432238e-8
+angular_mass case=61 reversed=true rate_error=6.413098477e-11 linear_error=9.762144278e-11 pose_error=3.468056855e-7 rotation_error=1.147621030e-8
+angular_mass case=62 reversed=true rate_error=4.461671642e-11 linear_error=4.833665699e-11 pose_error=3.467706813e-7 rotation_error=1.142893567e-8
+angular_mass case=63 reversed=true rate_error=6.283321914e-11 linear_error=9.531704153e-11 pose_error=3.468056855e-7 rotation_error=1.147621030e-8
+standalone_narrow_acceleration case=0 error=5.285226369e-6
+standalone_narrow_acceleration case=1 error=1.045733107e-5
+standalone_narrow_acceleration case=2 error=5.441675558e-6
+standalone_narrow_acceleration case=3 error=1.014464577e-5
+standalone_narrow_acceleration case=4 error=9.833205429e-6
+standalone_narrow_acceleration case=5 error=1.071213165e-5
+standalone_narrow_acceleration case=6 error=9.838869099e-6
+standalone_narrow_acceleration case=7 error=1.065235406e-5
+standalone_narrow_acceleration case=8 error=9.833205429e-6
+standalone_narrow_acceleration case=9 error=1.071213165e-5
+standalone_narrow_acceleration case=10 error=9.838869100e-6
+standalone_narrow_acceleration case=11 error=1.065235406e-5
+standalone_narrow_acceleration case=12 error=5.285226369e-6
+standalone_narrow_acceleration case=13 error=1.045733107e-5
+standalone_narrow_acceleration case=14 error=5.441675558e-6
+standalone_narrow_acceleration case=15 error=1.014464577e-5
+standalone_narrow_acceleration case=16 error=4.778025923e-6
+standalone_narrow_acceleration case=17 error=1.015183256e-5
+standalone_narrow_acceleration case=18 error=4.636541218e-6
+standalone_narrow_acceleration case=19 error=9.819273823e-6
+standalone_narrow_acceleration case=20 error=9.857634628e-6
+standalone_narrow_acceleration case=21 error=1.060192431e-5
+standalone_narrow_acceleration case=22 error=9.830805520e-6
+standalone_narrow_acceleration case=23 error=1.059692272e-5
+standalone_narrow_acceleration case=24 error=9.857634628e-6
+standalone_narrow_acceleration case=25 error=1.060192431e-5
+standalone_narrow_acceleration case=26 error=9.830805520e-6
+standalone_narrow_acceleration case=27 error=1.059692272e-5
+standalone_narrow_acceleration case=28 error=4.855968712e-6
+standalone_narrow_acceleration case=29 error=1.017162830e-5
+standalone_narrow_acceleration case=30 error=4.695741551e-6
+standalone_narrow_acceleration case=31 error=9.991374886e-6
+standalone_narrow_acceleration case=32 error=4.779215142e-6
+standalone_narrow_acceleration case=33 error=9.996100236e-6
+standalone_narrow_acceleration case=34 error=4.746673745e-6
+standalone_narrow_acceleration case=35 error=1.009294772e-5
+standalone_narrow_acceleration case=36 error=9.759229852e-6
+standalone_narrow_acceleration case=37 error=1.058048806e-5
+standalone_narrow_acceleration case=38 error=9.700458794e-6
+standalone_narrow_acceleration case=39 error=1.052098967e-5
+standalone_narrow_acceleration case=40 error=9.759229852e-6
+standalone_narrow_acceleration case=41 error=1.058048806e-5
+standalone_narrow_acceleration case=42 error=9.700458793e-6
+standalone_narrow_acceleration case=43 error=1.052098967e-5
+standalone_narrow_acceleration case=44 error=4.693866496e-6
+standalone_narrow_acceleration case=45 error=6.319600247e-6
+standalone_narrow_acceleration case=46 error=4.816663941e-6
+standalone_narrow_acceleration case=47 error=6.341241872e-6
+standalone_narrow_acceleration case=48 error=4.691496192e-6
+standalone_narrow_acceleration case=49 error=1.007978945e-5
+standalone_narrow_acceleration case=50 error=4.570521218e-6
+standalone_narrow_acceleration case=51 error=9.793950915e-6
+standalone_narrow_acceleration case=52 error=9.982497225e-6
+standalone_narrow_acceleration case=53 error=1.058815733e-5
+standalone_narrow_acceleration case=54 error=9.833212095e-6
+standalone_narrow_acceleration case=55 error=1.074202913e-5
+standalone_narrow_acceleration case=56 error=9.982497225e-6
+standalone_narrow_acceleration case=57 error=1.058815733e-5
+standalone_narrow_acceleration case=58 error=9.833212095e-6
+standalone_narrow_acceleration case=59 error=1.074202913e-5
+standalone_narrow_acceleration case=60 error=4.692359691e-6
+standalone_narrow_acceleration case=61 error=6.413098477e-6
+standalone_narrow_acceleration case=62 error=4.461671642e-6
+standalone_narrow_acceleration case=63 error=6.283321914e-6
+standalone_phase_retained case=0 violation=1.387778781e-17
+standalone_phase_retained case=1 violation=1.387778781e-17
+standalone_phase_retained case=2 violation=0.000000000e0
+standalone_phase_retained case=3 violation=0.000000000e0
+standalone_phase_retained case=4 violation=0.000000000e0
+standalone_phase_retained case=5 violation=0.000000000e0
+standalone_phase_retained case=6 violation=0.000000000e0
+standalone_phase_retained case=7 violation=0.000000000e0
+standalone_phase_retained case=8 violation=0.000000000e0
+standalone_phase_retained case=9 violation=0.000000000e0
+standalone_phase_retained case=10 violation=0.000000000e0
+standalone_phase_retained case=11 violation=0.000000000e0
+standalone_phase_retained case=12 violation=1.387778781e-17
+standalone_phase_retained case=13 violation=1.387778781e-17
+standalone_phase_retained case=14 violation=0.000000000e0
+standalone_phase_retained case=15 violation=0.000000000e0
+standalone_phase_retained case=16 violation=1.387778781e-17
+standalone_phase_retained case=17 violation=1.387778781e-17
+standalone_phase_retained case=18 violation=0.000000000e0
+standalone_phase_retained case=19 violation=0.000000000e0
+standalone_phase_retained case=20 violation=0.000000000e0
+standalone_phase_retained case=21 violation=0.000000000e0
+standalone_phase_retained case=22 violation=0.000000000e0
+standalone_phase_retained case=23 violation=0.000000000e0
+standalone_phase_retained case=24 violation=0.000000000e0
+standalone_phase_retained case=25 violation=0.000000000e0
+standalone_phase_retained case=26 violation=0.000000000e0
+standalone_phase_retained case=27 violation=0.000000000e0
+standalone_phase_retained case=28 violation=0.000000000e0
+standalone_phase_retained case=29 violation=0.000000000e0
+standalone_phase_retained case=30 violation=1.665334537e-16
+standalone_phase_retained case=31 violation=1.665334537e-16
+standalone_phase_retained case=32 violation=1.387778781e-17
+standalone_phase_retained case=33 violation=1.387778781e-17
+standalone_phase_retained case=34 violation=0.000000000e0
+standalone_phase_retained case=35 violation=0.000000000e0
+standalone_phase_retained case=36 violation=3.885780586e-16
+standalone_phase_retained case=37 violation=3.885780586e-16
+standalone_phase_retained case=38 violation=0.000000000e0
+standalone_phase_retained case=39 violation=0.000000000e0
+standalone_phase_retained case=40 violation=3.885780586e-16
+standalone_phase_retained case=41 violation=3.885780586e-16
+standalone_phase_retained case=42 violation=0.000000000e0
+standalone_phase_retained case=43 violation=0.000000000e0
+standalone_phase_retained case=44 violation=1.665334537e-16
+standalone_phase_retained case=45 violation=1.665334537e-16
+standalone_phase_retained case=46 violation=0.000000000e0
+standalone_phase_retained case=47 violation=0.000000000e0
+standalone_phase_retained case=48 violation=1.387778781e-17
+standalone_phase_retained case=49 violation=1.387778781e-17
+standalone_phase_retained case=50 violation=0.000000000e0
+standalone_phase_retained case=51 violation=0.000000000e0
+standalone_phase_retained case=52 violation=0.000000000e0
+standalone_phase_retained case=53 violation=0.000000000e0
+standalone_phase_retained case=54 violation=0.000000000e0
+standalone_phase_retained case=55 violation=0.000000000e0
+standalone_phase_retained case=56 violation=0.000000000e0
+standalone_phase_retained case=57 violation=0.000000000e0
+standalone_phase_retained case=58 violation=0.000000000e0
+standalone_phase_retained case=59 violation=0.000000000e0
+standalone_phase_retained case=60 violation=1.665334537e-16
+standalone_phase_retained case=61 violation=1.665334537e-16
+standalone_phase_retained case=62 violation=0.000000000e0
+standalone_phase_retained case=63 violation=0.000000000e0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 12.84s
+

@@ -2009,7 +2009,10 @@ pub fn tire_adhesion_sliding_continuity_report() -> TireAdhesionSlidingContinuit
     let mut force_sign_stable = true;
     let mut moment_sign_stable = true;
     let mut max_mirrored_moment_error_over_load_radius = 0.0_f64;
-    let constant_friction = SurfaceMaterial { mu_dynamic: material.mu_static, ..material };
+    let constant_friction = SurfaceMaterial {
+        mu_dynamic: material.mu_static,
+        ..material
+    };
 
     for slip_ratio in [
         0.000, 0.015, 0.030, 0.045, 0.060, 0.080, 0.105, 0.135, 0.170, 0.215, 0.270,
@@ -2084,18 +2087,31 @@ pub fn tire_adhesion_sliding_continuity_report() -> TireAdhesionSlidingContinuit
         max_budget_ratio = max_budget_ratio
             .max(sample.consumed_friction_budget_n / sample.available_friction_budget_n.max(1.0));
         let mirrored = tire_rig_point(
-            &params, &terrain, &material, load_n, speed_m_per_s,
-            0.080, -slip_angle_rad, 0.0,
+            &params,
+            &terrain,
+            &material,
+            load_n,
+            speed_m_per_s,
+            0.080,
+            -slip_angle_rad,
+            0.0,
         );
         let control = tire_rig_point(
-            &params, &terrain, &constant_friction, load_n, speed_m_per_s,
-            0.080, slip_angle_rad, 0.0,
+            &params,
+            &terrain,
+            &constant_friction,
+            load_n,
+            speed_m_per_s,
+            0.080,
+            slip_angle_rad,
+            0.0,
         );
         finite_outputs &= mirrored.is_finite() && control.is_finite();
-        max_mirrored_moment_error_over_load_radius = max_mirrored_moment_error_over_load_radius.max(
-            (sample.aligning_moment_nm + mirrored.telemetry.aligning_moment_nm).abs()
-                / (load_n * params.radius),
-        );
+        max_mirrored_moment_error_over_load_radius = max_mirrored_moment_error_over_load_radius
+            .max(
+                (sample.aligning_moment_nm + mirrored.telemetry.aligning_moment_nm).abs()
+                    / (load_n * params.radius),
+            );
         moment_sign_stable &= control.telemetry.aligning_moment_nm < 0.0;
         if let Some(prev) = previous_moment {
             max_moment_jump_over_load_radius = max_moment_jump_over_load_radius.max(

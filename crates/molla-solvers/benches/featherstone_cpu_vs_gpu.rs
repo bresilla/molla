@@ -95,6 +95,7 @@ fn run_cpu(
     });
 }
 
+/// Measure submission through GPU completion, with setup uploads completed beforehand.
 fn run_gpu(
     group: &mut criterion::BenchmarkGroup<criterion::measurement::WallTime>,
     engine: &Engine,
@@ -112,6 +113,7 @@ fn run_gpu(
     control.upload_to_device(&device, &queue).unwrap();
     let contacts = Contacts::with_capacity(0);
     let mut solver = FeatherstoneSolver::new_gpu(engine, model).unwrap();
+    wait_for_gpu(&device);
     group.bench_function(BenchmarkId::new("gpu", label), |bencher| {
         bencher.iter(|| {
             solver
@@ -124,9 +126,19 @@ fn run_gpu(
                     &mut s_b,
                 )
                 .unwrap();
+            wait_for_gpu(&device);
             std::mem::swap(&mut s_a, &mut s_b);
         });
     });
+}
+
+fn wait_for_gpu(device: &wgpu::Device) {
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(120)),
+        })
+        .expect("Featherstone GPU completion failed or exceeded 120 seconds");
 }
 
 fn bench_chain_length(c: &mut Criterion) {

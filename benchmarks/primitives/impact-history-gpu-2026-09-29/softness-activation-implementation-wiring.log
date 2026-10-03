@@ -1,0 +1,30 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Checking molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+error[E0369]: binary operation `==` cannot be applied to type `&[molla_sim::joint_control::JointCompliance]`
+   --> crates/molla-sim/tests/runtime_softness_activation.rs:129:13
+    |
+129 |             assert_eq!(scene.model().joint_compliance.host().unwrap(), records);
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |             |
+    |             &[molla_sim::joint_control::JointCompliance]
+    |             std::vec::Vec<molla_sim::joint_control::JointCompliance>
+    |
+note: `molla_sim::joint_control::JointCompliance` does not implement `std::cmp::PartialEq`
+   --> crates/molla-sim/src/joint_control.rs:140:1
+    |
+140 | pub struct JointCompliance {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^ `molla_sim::joint_control::JointCompliance` is defined in another crate
+    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+For more information about this error, try `rustc --explain E0369`.
+error: could not compile `molla-sim` (test "runtime_softness_activation") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+make: *** [Makefile:380: clippy-check] Error 101

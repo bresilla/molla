@@ -60,7 +60,11 @@ impl SdfBakeKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::sdf_bake layout"),
-            bind_group_layouts: &[Some(&layout_mesh), Some(&layout_out), Some(&layout_uniforms)],
+            bind_group_layouts: &[
+                Some(&layout_mesh),
+                Some(&layout_out),
+                Some(&layout_uniforms),
+            ],
             immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -127,13 +131,16 @@ impl SdfBakeKernel {
             origin,
             dims: [res, tri_count, total, 0],
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sdf_bake uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sdf_bake uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sdf_bake uniforms bg"),
             layout: &self.layout_uniforms,
@@ -221,7 +228,7 @@ pub fn bake_mesh_to_sdf_gpu(
         "molla::sdf_bake vertices",
         bytemuck::cast_slice(&vert_pad),
     );
-    queue.write_buffer(&vertices_buf, 0, bytemuck::cast_slice(&vert_pad));
+    molla_core::gpu_write_buffer!(queue, &vertices_buf, 0, bytemuck::cast_slice(&vert_pad));
 
     let mut idx_flat: Vec<u32> = Vec::with_capacity(mesh.indices.len() * 3);
     for tri in &mesh.indices {
@@ -232,7 +239,7 @@ pub fn bake_mesh_to_sdf_gpu(
         "molla::sdf_bake indices",
         bytemuck::cast_slice(&idx_flat),
     );
-    queue.write_buffer(&indices_buf, 0, bytemuck::cast_slice(&idx_flat));
+    molla_core::gpu_write_buffer!(queue, &indices_buf, 0, bytemuck::cast_slice(&idx_flat));
 
     let mut out = Buffer::from_vec(vec![0.0 as Real; total], BufferUsage::StorageReadWrite);
     out.ensure_device(&device)?;
@@ -266,12 +273,15 @@ pub fn bake_mesh_to_sdf_gpu(
 
 fn make_storage(device: &wgpu::Device, label: &str, data: &[u8]) -> wgpu::Buffer {
     let size = (data.len().max(16)) as u64;
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+    molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    )
 }
 
 fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntry> {

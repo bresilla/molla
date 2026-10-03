@@ -1,0 +1,14 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/loop_forces.rs (target/debug/deps/loop_forces-bb0d3fd222ac0e34)
+
+running 3 tests
+test closed_four_bar_moves_without_breaking_closure ... ok
+test loop_motor_cap_and_world_anchor_are_applied ... ok
+test loop_joint_does_not_project_and_survives_tree_edits ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

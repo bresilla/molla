@@ -1,0 +1,16 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.87s
+     Running tests/runtime_rigid_fixed_loops.rs (target/debug/deps/runtime_rigid_fixed_loops-1b2770fb0f62b928)
+
+running 3 tests
+test gpu_rigid_fixed_loop_break_channels_and_explicit_repair_preserve_state ... ok
+test gpu_rigid_fixed_loop_projection_matches_independent_six_dimensional_impulse ... ok
+test gpu_rigid_fixed_loops_preserve_rotated_frames_and_balance_anchor_wrenches ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 110.10s
+

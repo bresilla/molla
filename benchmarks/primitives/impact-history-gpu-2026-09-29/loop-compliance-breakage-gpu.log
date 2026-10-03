@@ -1,0 +1,14 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.01s
+     Running tests/runtime_loop_compliance.rs (target/debug/deps/runtime_loop_compliance-2817011fbcfa4c19)
+
+running 1 test
+test gpu_compliant_loop_breakage_preserves_substep_motion_and_explicit_repair ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 26.08s
+

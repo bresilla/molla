@@ -1,0 +1,38 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.14s
+     Running tests/runtime_contact_reactions_gpu.rs (target/debug/deps/runtime_contact_reactions_gpu-3b22507b7b14d93f)
+
+running 3 tests
+test fixed_joint_boundary_keeps_independent_contact_islands_separate ... ok
+test reaction_capture_recompilation_preserves_contact_coordinate_residues ... 
+thread 'reaction_capture_recompilation_preserves_contact_coordinate_residues' (4116959) panicked at crates/molla-solvers/tests/runtime_contact_reactions_gpu.rs:210:29:
+called `Result::unwrap()` on an `Err` value: Gpu("GPU runtime contact pipeline validation: Validation Error\n\nCaused by:\n  In Device::create_shader_module, label = 'contact reaction assembly'\n    \nShader 'contact reaction assembly' parsing error: name `external` is a reserved keyword\n   ┌─ wgsl:14:42\n   │\n14 │ @group(0) @binding(6) var<storage, read> external: array<Spatial>;\n   │                                          ^^^^^^^^ definition of `external`\n\n\n")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test supported_contact_reactions_include_normal_tangent_and_immovable_endpoint_loads ... 
+thread 'supported_contact_reactions_include_normal_tangent_and_immovable_endpoint_loads' (4117942) panicked at crates/molla-solvers/tests/runtime_contact_reactions_gpu.rs:120:51:
+called `Result::unwrap()` on an `Err` value: Gpu("GPU runtime contact pipeline validation: Validation Error\n\nCaused by:\n  In Device::create_shader_module, label = 'contact reaction assembly'\n    \nShader 'contact reaction assembly' parsing error: name `external` is a reserved keyword\n   ┌─ wgsl:14:42\n   │\n14 │ @group(0) @binding(6) var<storage, read> external: array<Spatial>;\n   │                                          ^^^^^^^^ definition of `external`\n\n\n")
+FAILED
+
+failures:
+
+failures:
+    reaction_capture_recompilation_preserves_contact_coordinate_residues
+    supported_contact_reactions_include_normal_tangent_and_immovable_endpoint_loads
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 92.94s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_contact_reactions_gpu`
+make[1]: *** [Makefile:84: test-gpu] Error 101
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:146: test-primitives-contact-reactions-gpu] Error 2

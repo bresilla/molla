@@ -1,9 +1,29 @@
 use super::*;
 
 impl RigidScene {
+    /// Identity of a body's insertion; forks and subsequent edits retain it.
+    pub fn body_identity_stamp(&self, body: BodyHandle) -> Option<SceneStamp> {
+        self.description.body_identities.get(&body).cloned()
+    }
+
+    /// Identity of a joint's insertion; forks, repair and configuration edits retain it.
+    pub fn joint_identity_stamp(&self, joint: JointHandle) -> Option<SceneStamp> {
+        self.description.joint_identities.get(&joint).cloned()
+    }
+
     /// Structural identity of a body's joint-connected component across scene rebuilds.
     pub fn body_structure_stamp(&self, body: BodyHandle) -> Option<SceneStamp> {
         self.structure_stamps.get(&body).cloned()
+    }
+
+    /// Contact response identity; force-only compliant-loop edits retain it.
+    pub fn body_contact_stamp(&self, body: BodyHandle) -> Option<SceneStamp> {
+        self.contact_stamps.get(&body).cloned()
+    }
+
+    /// Contact onset identity; joint-response-only edits retain it.
+    pub fn body_contact_episode_stamp(&self, body: BodyHandle) -> Option<SceneStamp> {
+        self.contact_episode_stamps.get(&body).cloned()
     }
 
     /// Explicit pose/velocity edits and mutable state access; solver commits retain it.
@@ -24,8 +44,10 @@ impl RigidScene {
 
     pub(super) fn mark_body_state_edits(&mut self, changed: &[BodyHandle]) {
         let mut neighbours = BTreeMap::<BodyHandle, Vec<BodyHandle>>::new();
-        for joint in self.description.joints.values() {
-            if let Some(parent) = joint.parent {
+        for (&id, joint) in &self.description.joints {
+            if !self.description.broken_joints.contains(&id)
+                && let Some(parent) = joint.parent
+            {
                 neighbours.entry(parent).or_default().push(joint.child);
                 neighbours.entry(joint.child).or_default().push(parent);
             }
@@ -44,12 +66,27 @@ impl RigidScene {
     }
 }
 
-pub(super) fn update_structure_stamps(
+pub(super) fn update_structure_stamps<const CONTACTS: bool, const EPISODES: bool>(
     stamps: &mut BTreeMap<BodyHandle, SceneStamp>,
     old: &Description,
     next: &Description,
 ) {
     let mut changed = BTreeSet::new();
+    for &(a, b) in old
+        .body_pair_exclusions
+        .symmetric_difference(&next.body_pair_exclusions)
+    {
+        changed.extend([a, b]);
+    }
+    for &(a, b) in old
+        .collider_pair_exclusions
+        .symmetric_difference(&next.collider_pair_exclusions)
+    {
+        for id in [a, b] {
+            changed.extend(old.colliders.get(&id).and_then(|c| c.parent));
+            changed.extend(next.colliders.get(&id).and_then(|c| c.parent));
+        }
+    }
     for &body in old.bodies.keys().chain(next.bodies.keys()) {
         if old.bodies.get(&body) != next.bodies.get(&body) {
             changed.insert(body);
@@ -73,13 +110,30 @@ pub(super) fn update_structure_stamps(
             || old.joint_settings.get(&id) != next.joint_settings.get(&id)
             || old.joint_axes.get(&id) != next.joint_axes.get(&id)
             || old.joint_softness.get(&id) != next.joint_softness.get(&id)
-            || old.loop_joints.contains(&id) != next.loop_joints.contains(&id);
+            || old.distance_limits.get(&id) != next.distance_limits.get(&id)
+            || old.cone_limits.get(&id) != next.cone_limits.get(&id)
+            || old.loop_joints.contains(&id) != next.loop_joints.contains(&id)
+            || old.broken_joints.contains(&id) != next.broken_joints.contains(&id);
+        let force_only = CONTACTS
+            && old.loop_joints.contains(&id)
+            && next.loop_joints.contains(&id)
+            && old.joint_softness.contains_key(&id)
+            && next.joint_softness.contains_key(&id)
+            && !old.cone_limits.contains_key(&id)
+            && !next.cone_limits.contains_key(&id)
+            && before.map(|joint| (joint.parent, joint.child))
+                == after.map(|joint| (joint.parent, joint.child))
+            && old.joint_settings.get(&id).map(|s| s.contacts_enabled)
+                == next.joint_settings.get(&id).map(|s| s.contacts_enabled)
+            && old.broken_joints.contains(&id) == next.broken_joints.contains(&id);
         for joint in before.into_iter().chain(after) {
-            if edited {
+            if edited && !force_only && !EPISODES {
                 changed.insert(joint.child);
                 changed.extend(joint.parent);
             }
-            if let Some(parent) = joint.parent {
+            if (!old.broken_joints.contains(&id) || !next.broken_joints.contains(&id))
+                && let Some(parent) = joint.parent
+            {
                 neighbours.entry(parent).or_default().push(joint.child);
                 neighbours.entry(joint.child).or_default().push(parent);
             }

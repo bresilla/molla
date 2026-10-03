@@ -1,0 +1,4 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+cargo 1.94.1 (29ea6fb6a 2026-03-24)
+rustc 1.94.1 (e408947bf 2026-03-25)
+CPU benchmark start: cone10000 deadline=3600s

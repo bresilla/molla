@@ -1,0 +1,81 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Checking molla-sensors v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sensors)
+error: casting to the same type is unnecessary (`usize` -> `usize`)
+   --> crates/molla-solvers/tests/fem_contact_prepare_gpu.rs:141:23
+    |
+141 |     let native_rows = (128 * 1024 * 1024 / (3 * n * 4)) as usize;
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `(128 * 1024 * 1024 / (3 * n * 4))`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#unnecessary_cast
+    = note: `-D clippy::unnecessary-cast` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_cast)]`
+
+error: this `if` statement can be collapsed
+   --> crates/molla-solvers/tests/fem_patch_parallel_gpu.rs:200:17
+    |
+200 | /                 if index == 1 {
+201 | |                     if let Some(path) = std::env::var_os("MOLLA_PATCH_OUTPUT") {
+202 | |                         std::fs::write(path, bytemuck::cast_slice(&result[..34])).unwrap();
+203 | |                     }
+204 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+200 ~                 if index == 1
+201 ~                     && let Some(path) = std::env::var_os("MOLLA_PATCH_OUTPUT") {
+202 |                         std::fs::write(path, bytemuck::cast_slice(&result[..34])).unwrap();
+203 ~                     }
+    |
+
+error: could not compile `molla-solvers` (test "fem_contact_prepare_gpu") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `molla-solvers` (test "fem_patch_parallel_gpu") due to 1 previous error
+error: this range is empty so it will yield no values
+   --> crates/molla-sensors/tests/sensor_readback_gpu.rs:158:36
+    |
+158 |     assert!(source.readback_source(3..2).is_err());
+    |                                    ^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#reversed_empty_ranges
+    = note: `-D clippy::reversed-empty-ranges` implied by `-D clippy::correctness`
+    = help: to override `-D clippy::correctness` add `#[allow(clippy::reversed_empty_ranges)]`
+help: consider using the following if you are attempting to iterate over this range in reverse
+    |
+158 -     assert!(source.readback_source(3..2).is_err());
+158 +     assert!(source.readback_source((2..3).rev()).is_err());
+    |
+
+error: could not compile `molla-sensors` (test "sensor_readback_gpu") due to 1 previous error
+error: this `if` statement can be collapsed
+   --> crates/molla-sensors/tests/sensor_resource_retention_gpu.rs:156:16
+    |
+156 |           } else if let Some((index, symbol)) = line.split_once(": ") {
+    |  ________________^
+157 | |             if index.parse::<usize>().is_ok() {
+158 | |                 frames.push((symbol.to_string(), String::new()));
+159 | |             }
+160 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+156 ~         } else if let Some((index, symbol)) = line.split_once(": ")
+157 ~             && index.parse::<usize>().is_ok() {
+158 |                 frames.push((symbol.to_string(), String::new()));
+159 ~             }
+    |
+
+error: could not compile `molla-sensors` (test "sensor_resource_retention_gpu") due to 1 previous error
+make: *** [Makefile:344: clippy-check] Error 101

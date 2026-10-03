@@ -221,9 +221,11 @@ fn native_global_rejects_capacity_and_newton_exhaustion() {
             }))
             .unwrap();
         system.configure_material_contact_reuse(Some(8)).unwrap();
-        let mut config = GlobalNewtonConfig::default();
-        config.contact_capacity = if overflow { 1 } else { 128 };
-        config.restart = 16;
+        let mut config = GlobalNewtonConfig {
+            contact_capacity: if overflow { 1 } else { 128 },
+            restart: 16,
+            ..Default::default()
+        };
         config.solve.iterations = 1;
         system.configure_global_newton(Some(config)).unwrap();
         assert!(system.try_step_substep(h).unwrap());

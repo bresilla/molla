@@ -1,0 +1,14 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+     Running tests/runtime_ball_loop.rs (target/debug/deps/runtime_ball_loop-5896c4674488d93b)
+
+running 1 test
+test cpu_rigid_ball_loop_closes_an_existing_articulation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.08s
+

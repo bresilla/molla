@@ -1,0 +1,60 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.43s
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.49s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 1 test
+test joint_angles::tests::authored_intervals_select_equivalent_charts_across_poles_and_angle_wraps ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.00s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.48s
+     Running tests/runtime_d6_singular_bounds.rs (target/debug/deps/runtime_d6_singular_bounds-7c927c703664e350)
+
+running 1 test
+singular_xyz_frame sign=-1 phase_violation=8.320855611e-5 velocity=SpatialVector { linear: DVec3(0.0, -0.040874999999999995, 0.0), angular: DVec3(-24.000000000000007, 0.0, 0.0) }
+singular_xyz_frame sign=1 phase_violation=8.320855611e-5 velocity=SpatialVector { linear: DVec3(0.0, -0.040874999999999995, 0.0), angular: DVec3(-24.00000000000005, -9.273257736625356e-16, -2.868554769911109e-16) }
+test cpu_active_phase_interval_at_both_xyz_poles ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/runtime_d6_singular_bounds.rs (target/debug/deps/runtime_d6_singular_bounds-7c927c703664e350)
+
+running 1 test
+test cpu_free_d6_motion_crosses_both_xyz_poles_without_false_stops ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.78s
+     Running tests/runtime_d6_singular_bounds.rs (target/debug/deps/runtime_d6_singular_bounds-85d5f4f2034012d8)
+
+running 1 test
+adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+singular_xyz_frame sign=-1 phase_violation=8.320855611e-5 velocity=SpatialVector { linear: DVec3(0.0, -0.040874999999999995, 0.0), angular: DVec3(-24.000000000000007, 0.0, 0.0) }
+singular_xyz_frame sign=-1 phase_violation=8.320434669e-5 velocity=SpatialVector { linear: DVec3(0.0, -0.04087500274181366, 0.0), angular: DVec3(-23.999998092651367, -5.615087941991643e-23, -3.1658786022289087e-15) }
+singular_xyz_parity sign=-1 errors=[2.2029876700635498e-8, 0.0, 2.7418136649970393e-9, 1.9073486399179274e-6] tolerance=0.001
+singular_xyz_frame sign=1 phase_violation=8.320855611e-5 velocity=SpatialVector { linear: DVec3(0.0, -0.040874999999999995, 0.0), angular: DVec3(-24.00000000000005, -9.273257736625356e-16, -2.868554769911109e-16) }
+singular_xyz_frame sign=1 phase_violation=8.323062145e-5 velocity=SpatialVector { linear: DVec3(0.0, -0.04087500274181366, 0.0), angular: DVec3(-24.000003814697266, -2.4411755816799996e-7, -7.551441427722239e-8) }
+singular_xyz_parity sign=1 errors=[2.2029876700635498e-8, 0.0004613638505798092, 2.7418136649970393e-9, 3.8232460890412944e-6] tolerance=0.001
+test gpu_active_phase_interval_matches_cpu_at_both_xyz_poles ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 17.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/runtime_d6_singular_bounds.rs (target/debug/deps/runtime_d6_singular_bounds-85d5f4f2034012d8)
+
+running 1 test
+adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+test gpu_free_d6_motion_crosses_both_xyz_poles_without_false_stops ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 4.32s
+

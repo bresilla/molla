@@ -1,0 +1,112 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/compliant_loop_rows_gpu.rs (target/debug/deps/compliant_loop_rows_gpu-1d470e05e078ca3c)
+
+running 1 test
+test compliant_loop_rows_match_coordinate_derivatives_and_feedback_in_retained_batches ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/quaternion_fk_gpu.rs (target/debug/deps/quaternion_fk_gpu-82049d5bd9763968)
+
+running 2 tests
+test retained_fk_pairs_match_all_joint_kinds_and_prescribed_boundaries ... quaternion FK 156 joints / 18 articulations max error: [1.354472090042691e-14, 4.397774852615832e-10]
+ok
+test unjointed_and_fixed_only_models_use_current_pose_without_coordinate_storage ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
+     Running tests/featherstone_mass_inverse_gpu.rs (target/debug/deps/featherstone_mass_inverse_gpu-475c5131121bf9c9)
+
+running 1 test
+test joint_psd_inverse_preserves_scaled_weak_modes_and_rejects_indefinite_blocks ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.93s
+     Running tests/runtime_loop_compliance.rs (target/debug/deps/runtime_loop_compliance-2817011fbcfa4c19)
+
+running 1 test
+test gpu_compliant_loop_numeric_edits_keep_device_resources_retained ... GPU compliant loop standing resources=[141, 700768, 41, 16, 11]; state transfer diagnostics=GpuRuntimeDiagnostics { model_compilations: 2, current_model_bind_groups_created: 40, completed_frames: 1, last_substeps: 4, last_state_upload_bytes: 1248, last_state_readback_bytes: 13780 }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 101.50s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 6 tests
+test rigid_contact_activation_gpu::tests::activation_faults_guard_publication_and_recover_without_replacing_masks ... ok
+test rigid_contact_activation_gpu::tests::boundary_only_layout_has_no_dynamic_group_or_response ... ok
+test rigid_contact_activation_gpu::tests::contact_components_wake_in_one_dispatch_and_dormant_rows_retire ... ok
+test rigid_contact_activation_gpu::tests::empty_body_layout_binds_complete_dependency_elements ... ok
+test rigid_contact_activation_gpu::tests::support_loss_motion_surface_and_sleep_dependencies_wake_components ... ok
+test rigid_contact_activation_gpu::tests::watched_colliders_retain_support_across_compiled_pieces ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 248 filtered out; finished in 0.39s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/molla_compute-763de6d897da2e61)
+
+running 2 tests
+test engine::tests::gpu_program_cache_retains_valid_objects_without_crossing_engines ... ok
+test engine::tests::gpu_program_cache_surfaces_validation_and_retries_failed_variants ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.64s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

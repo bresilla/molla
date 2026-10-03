@@ -101,7 +101,8 @@ impl RadioMedium {
     ) -> Vec<Delivery> {
         let mut out = Vec::new();
         for (emitter, channel, data) in self.queue.drain(..) {
-            let (Some(tx), Some(tx_pose)) = (self.emitters.get(emitter), emitter_poses.get(emitter))
+            let (Some(tx), Some(tx_pose)) =
+                (self.emitters.get(emitter), emitter_poses.get(emitter))
             else {
                 continue;
             };
@@ -114,7 +115,11 @@ impl RadioMedium {
                 if tx.kind != RadioKind::Serial && distance > tx.range.min(rx.range) {
                     continue;
                 }
-                let towards = if distance > 0.0 { offset / distance } else { Vec3::X };
+                let towards = if distance > 0.0 {
+                    offset / distance
+                } else {
+                    Vec3::X
+                };
                 if tx.kind == RadioKind::Infrared
                     && (!within_aperture(tx_pose, -towards, tx.aperture)
                         || !within_aperture(rx_pose, towards, rx.aperture)
@@ -191,7 +196,11 @@ mod tests {
         let out = medium.deliver(&[at(0.0)], &[facing_back, at(5.0)], &mut |_, _| true);
         assert_eq!(out.iter().map(|d| d.receiver).collect::<Vec<_>>(), [0]);
         medium.send(0, vec![1]);
-        assert!(medium.deliver(&[at(0.0)], &[facing_back, at(5.0)], &mut |_, _| false).is_empty());
+        assert!(
+            medium
+                .deliver(&[at(0.0)], &[facing_back, at(5.0)], &mut |_, _| false)
+                .is_empty()
+        );
 
         let serial = RadioEndpoint {
             kind: RadioKind::Serial,

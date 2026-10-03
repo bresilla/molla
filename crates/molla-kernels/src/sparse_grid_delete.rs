@@ -154,7 +154,11 @@ impl<V: Value> SparseGridDeleteKernel<V> {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::sparse_grid_delete layout"),
-            bind_group_layouts: &[Some(&layout_storage), Some(&layout_io), Some(&layout_uniforms)],
+            bind_group_layouts: &[
+                Some(&layout_storage),
+                Some(&layout_io),
+                Some(&layout_uniforms),
+            ],
             immediate_size: 0,
         });
 
@@ -207,11 +211,14 @@ impl<V: Value> SparseGridDeleteKernel<V> {
             padded.push(c[2]);
             padded.push(0);
         }
-        let buf_coords = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_delete query_coords"),
-            contents: bytemuck::cast_slice(&padded),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
+        let buf_coords = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_delete query_coords"),
+                contents: bytemuck::cast_slice(&padded),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            }
+        );
 
         let uniforms = DeleteUniforms {
             count: coords.len() as u32,
@@ -219,11 +226,14 @@ impl<V: Value> SparseGridDeleteKernel<V> {
             internal_capacity: storage.internal_capacity,
             leaf_capacity: storage.leaf_capacity,
         };
-        let buf_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_delete uniforms"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let buf_uniforms = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_delete uniforms"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
 
         let bg_storage = self.bg_storage(device, storage, "mark_inactive");
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -286,12 +296,15 @@ impl<V: Value> SparseGridDeleteKernel<V> {
         // Stub coords buffer — bind_group_layout requires the same
         // binding even though `reclaim_empty_leaves` doesn't read
         // from it. wgpu's "min binding size" defaults to 4.
-        let stub_coords = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_grid_delete reclaim stub_coords"),
-            size: 16,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let stub_coords = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_grid_delete reclaim stub_coords"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         let uniforms = DeleteUniforms {
             count: pending,
@@ -299,11 +312,14 @@ impl<V: Value> SparseGridDeleteKernel<V> {
             internal_capacity: storage.internal_capacity,
             leaf_capacity: storage.leaf_capacity,
         };
-        let buf_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_delete reclaim uniforms"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let buf_uniforms = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_delete reclaim uniforms"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
 
         let bg_storage = self.bg_storage(device, storage, "reclaim");
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -376,23 +392,29 @@ impl<V: Value> SparseGridDeleteKernel<V> {
         queue: &wgpu::Queue,
         storage: &SparseGridStorage<V>,
     ) -> Result<[u32; COUNTER_SLOTS as usize]> {
-        let stub_coords = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_grid_delete fold stub_coords"),
-            size: 16,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let stub_coords = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_grid_delete fold stub_coords"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let uniforms = DeleteUniforms {
             count: 0,
             root_table_capacity: storage.root_table_capacity,
             internal_capacity: storage.internal_capacity,
             leaf_capacity: storage.leaf_capacity,
         };
-        let buf_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_delete fold uniforms"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let buf_uniforms = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_delete fold uniforms"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
         let bg_storage = self.bg_storage(device, storage, "fold");
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sparse_grid_delete fold io bg"),

@@ -43,7 +43,7 @@ fn pending_image_ranges_are_relative_to_nonzero_active_offsets() {
             &[&first.frame],
             &mut middle_pool,
             &specs,
-            &[3..6],
+            std::slice::from_ref(&(3..6)),
             stamp(2),
             |encoder, inputs, outputs| {
                 let channel = inputs.channel::<u32>(0, 0)?;
@@ -407,7 +407,10 @@ fn snapshot_sources_remain_leased_through_submission_and_warm_slots_reuse_bindin
     )
     .unwrap();
     let snapshot = snapshots
-        .try_capture(&[input.readback_source(0..257).unwrap()], stamp(9))
+        .try_capture(
+            std::slice::from_ref(&(input.readback_source(0..257).unwrap())),
+            stamp(9),
+        )
         .unwrap()
         .unwrap();
     let mut p = processor(&engine, 257, 1);

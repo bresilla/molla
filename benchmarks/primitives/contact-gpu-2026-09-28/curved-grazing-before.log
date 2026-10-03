@@ -1,0 +1,30 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running unittests src/lib.rs (target/debug/deps/molla_geometry-ab204e33ce70f222)
+
+running 1 test
+test narrow_phase::tests::curved_plane_grazing_between_rim_samples ... FAILED
+
+failures:
+
+---- narrow_phase::tests::curved_plane_grazing_between_rim_samples stdout ----
+
+thread 'narrow_phase::tests::curved_plane_grazing_between_rim_samples' (3850497) panicked at crates/molla-geometry/src/narrow_phase.rs:2556:13:
+assertion `left == right` failed: Cylinder { half_height: 0.7, radius: 0.3 }
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    narrow_phase::tests::curved_plane_grazing_between_rim_samples
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 121 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p molla-geometry --lib`
+make: *** [Makefile:70: test] Error 101

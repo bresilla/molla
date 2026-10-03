@@ -1,0 +1,14 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 2 tests
+test contact_response_gpu::tests::contact_publication_preserves_halted_predictor_and_redrift ... ok
+test contact_response_gpu::tests::contact_response_faults_preserve_status_and_retire_rates_and_impulses ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 111 filtered out; finished in 31.90s
+

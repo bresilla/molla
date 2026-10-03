@@ -1,0 +1,65 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.82s
+     Running tests/reaction_wrenches_gpu.rs (target/debug/deps/reaction_wrenches_gpu-93c0ee512f6ae3ab)
+
+running 3 tests
+test empty_and_maximum_fixed_trees_keep_wrenches_without_dofs ... ok
+test general_gpu_wrenches_match_cpu_for_all_joint_kinds_and_boundaries ... general GPU reactions: arts=144 joints=432 dofs=738 peak scaled wrench error=2.41202148723776e-6
+ok
+test prepared_reaction_dispatch_retains_resources ... retained GPU reaction resources=[59, 773680, 4, 3, 3]
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.05s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.10s
+     Running tests/runtime_kinematic_reactions.rs (target/debug/deps/runtime_kinematic_reactions-2288fee48f251a9c)
+
+running 1 test
+test gpu_translating_rotating_kinematic_root_matches_zero_hinge_acceleration ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 10.32s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.75s
+     Running tests/articulation_gpu.rs (target/debug/deps/articulation_gpu-b0fc9da9aaf29182)
+
+running 2 tests
+test gpu_rnea_decomposition_matches_cpu ... RNEA full: cpu=[-0.8222438774660967, 0.6943140236883094] gpu=[-0.8222440481185913, 0.6943135857582092]
+RNEA bias: cpu=[-4.827670419777171, -0.5054092341434131] gpu=[-4.827670574188232, -0.5054094791412354]
+CRBA M: cpu=[2.6467332445079097, 0.8233666222539544, 0.8233666222539544, 0.33333333333333326] gpu=[2.646733, 0.8233665, 0.8233665, 0.33333328]
+i=0: lhs=-0.82224405 rhs=-0.82224417 |Δ|=0.00000011920929
+i=1: lhs=0.6943136 rhs=0.69431376 |Δ|=0.00000017881393
+ok
+test gpu_rnea_pendulum_gravity_torque_matches_cpu ... RNEA pendulum: cpu=[-4.160609229433835] gpu=[-4.160609245300293]
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.96s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

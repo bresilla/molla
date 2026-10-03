@@ -181,48 +181,69 @@ impl TireThermalGpuKernel {
         let in_bytes = (capacity * core::mem::size_of::<TireThermalGpuInput>()) as u64;
         let state_bytes = (capacity * core::mem::size_of::<TireThermalGpuState>()) as u64;
         let out_bytes = (capacity * core::mem::size_of::<TireThermalGpuOutput>()) as u64;
-        let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal persistent input"),
-            size: in_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let state_in_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal persistent state in"),
-            size: state_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let state_out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal persistent state out"),
-            size: state_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal persistent output"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal persistent uniforms"),
-            size: core::mem::size_of::<TireThermalUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let stage_state = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal persistent stage state"),
-            size: state_bytes.max(4),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let stage_out = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal persistent stage output"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let input_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal persistent input"),
+                size: in_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let state_in_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal persistent state in"),
+                size: state_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let state_out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal persistent state out"),
+                size: state_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal persistent output"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal persistent uniforms"),
+                size: core::mem::size_of::<TireThermalUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let stage_state = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal persistent stage state"),
+                size: state_bytes.max(4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
+        let stage_out = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal persistent stage output"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_thermal persistent bg"),
             layout: &self.layout,
@@ -287,9 +308,9 @@ impl TireThermalGpuKernel {
         };
         let state_bytes = (n * core::mem::size_of::<TireThermalGpuState>()) as u64;
         let out_bytes = (n * core::mem::size_of::<TireThermalGpuOutput>()) as u64;
-        queue.write_buffer(&batch.input_buf, 0, bytemuck::cast_slice(inputs));
-        queue.write_buffer(&batch.state_in_buf, 0, bytemuck::cast_slice(states));
-        queue.write_buffer(&batch.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        molla_core::gpu_write_buffer!(queue, &batch.input_buf, 0, bytemuck::cast_slice(inputs));
+        molla_core::gpu_write_buffer!(queue, &batch.state_in_buf, 0, bytemuck::cast_slice(states));
+        molla_core::gpu_write_buffer!(queue, &batch.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::tire_thermal persistent encoder"),
@@ -334,52 +355,73 @@ impl TireThermalGpuKernel {
             _pad: [0; 3],
         };
 
-        let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal input"),
-            size: in_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let state_in_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal state in"),
-            size: state_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let state_out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal state out"),
-            size: state_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal output"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let stage_state = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal stage state"),
-            size: state_bytes.max(4),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let stage_out = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal stage output"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_thermal uniforms"),
-            size: core::mem::size_of::<TireThermalUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let input_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal input"),
+                size: in_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let state_in_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal state in"),
+                size: state_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let state_out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal state out"),
+                size: state_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal output"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let stage_state = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal stage state"),
+                size: state_bytes.max(4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
+        let stage_out = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal stage output"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_thermal uniforms"),
+                size: core::mem::size_of::<TireThermalUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
-        queue.write_buffer(&input_buf, 0, bytemuck::cast_slice(inputs));
-        queue.write_buffer(&state_in_buf, 0, bytemuck::cast_slice(states));
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        molla_core::gpu_write_buffer!(queue, &input_buf, 0, bytemuck::cast_slice(inputs));
+        molla_core::gpu_write_buffer!(queue, &state_in_buf, 0, bytemuck::cast_slice(states));
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_thermal bg"),
@@ -712,7 +754,7 @@ fn read_buffer<T: Pod>(
     receiver
         .recv()
         .map_err(|e| Error::Gpu(format!("tire_thermal recv: {e:?}")))??;
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let out = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     stage.unmap();

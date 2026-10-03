@@ -1,0 +1,61 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.39s
+     Running tests/runtime_kinematic_constraints.rs (target/debug/deps/runtime_kinematic_constraints-e8c47a47ffcd2137)
+
+running 3 tests
+test angular_boundary_acceleration_transmits_through_locked_swing ... ok
+test accelerating_distance_boundary_uses_free_velocity_and_reports_support ... ok
+test accelerating_contact_boundary_captures_from_rest_in_contact_only_and_common_paths ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/runtime_kinematic_reactions.rs (target/debug/deps/runtime_kinematic_reactions-ccdc49ef4f5f524d)
+
+running 12 tests
+test moving_kinematic_fixed_joint_reports_full_inertia_gyro_and_external_loads ... ok
+test driven_isolated_body_and_held_mode_have_distinct_motion ... ok
+test reversed_kinematic_joint_reports_load_on_the_authored_child ... ok
+test driven_acceleration_wakes_initially_stationary_dependents ... ok
+test driven_motion_edits_are_atomic_and_survive_fork_and_disable ... ok
+test driven_post_break_failure_restores_motion_and_configuration ... ok
+test translating_rotating_kinematic_root_does_not_add_spurious_hinge_acceleration ... ok
+test driven_com_motion_advances_once_per_substep_and_redrift ... ok
+test driven_fixed_hinge_ball_reactions_include_boundary_acceleration ... ok
+test driven_break_continues_parent_motion_and_preserves_detached_velocity ... ok
+test moving_kinematic_tree_reactions_match_centripetal_support_loads ... ok
+prescribed noncollinear orientation errors=[0.00041720486832807157, 0.0001042902356363985, 2.6071592993724533e-5]
+test noncollinear_angular_acceleration_has_second_order_orientation_convergence ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+    Checking molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Checking molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-sensors v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sensors)
+    Checking molla-fem v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-fem)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Checking molla v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla)
+    Checking molla_viewer v0.0.1 (/home/bresilla/data/code/OUSD/molla/bin/molla_viewer)
+warning: function `body_poses` is never used
+  --> crates/molla-solvers/tests/common/gpu_readback.rs:27:8
+   |
+27 | pub fn body_poses(engine: &Engine, system: &FemRigidGpuSystem, count: usize) -> Vec<Transform> {
+   |        ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (test "featherstone_drift_gpu") generated 1 warning
+warning: `molla-solvers` (test "featherstone_stop_momentum") generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 21.99s

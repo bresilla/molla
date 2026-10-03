@@ -24,7 +24,8 @@ pub(super) struct GroundSurface<'a> {
 
 impl GroundSurface<'_> {
     pub fn sample(&self, point: Vec3) -> Real {
-        self.grid.and_then(|grid| grid.sample(self.pose.inverse_transform_point(point)))
+        self.grid
+            .and_then(|grid| grid.sample(self.pose.inverse_transform_point(point)))
             .unwrap_or(self.fallback)
     }
 }
@@ -149,7 +150,9 @@ impl WheelForces {
                     (hub - hit.point).dot(hit.normal),
                     hit.surface.reference,
                     None,
-                    hit.surface.grid.map(|_| &friction_at as &dyn Fn(Vec3) -> Real),
+                    hit.surface
+                        .grid
+                        .map(|_| &friction_at as &dyn Fn(Vec3) -> Real),
                 )?;
                 (output, Some(pressure))
             } else {

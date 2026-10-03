@@ -1,0 +1,14 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.70s
+     Running tests/broadphase_lbvh_gpu.rs (target/debug/deps/broadphase_lbvh_gpu-e555a9cd78c20249)
+
+running 1 test
+test lbvh_complete_topology_and_level_bounds_match_brute_force ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.35s
+

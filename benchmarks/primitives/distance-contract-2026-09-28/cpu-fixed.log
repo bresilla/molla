@@ -1,0 +1,24 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.28s
+     Running tests/runtime_distance_contract.rs (target/debug/deps/runtime_distance_contract-2ac2510fe3e9089e)
+
+running 2 tests
+test cpu_distance_runtime_mutation_and_unrelated_compaction ... ok
+distance endpoint exchange case=0 duration=1s peak position=0
+distance endpoint exchange case=1 duration=1s peak position=0
+distance endpoint exchange case=2 duration=1s peak position=0
+distance endpoint exchange case=3 duration=1s peak position=0
+distance endpoint exchange case=4 duration=1s peak position=0
+distance endpoint exchange case=5 duration=1s peak position=0
+distance endpoint exchange case=6 duration=1s peak position=0
+distance endpoint exchange case=7 duration=1s peak position=0
+distance endpoint exchange case=8 duration=1s peak position=0
+test cpu_distance_endpoint_exchange_including_coincident_positive_bounds ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+

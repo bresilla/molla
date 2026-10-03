@@ -35,7 +35,7 @@ pub(super) fn compile_joints(
         dense_body(bodies, Some(joint.child))?;
         validate_pose(joint.frame_parent)?;
         validate_pose(joint.frame_child)?;
-        if matches!(joint.kind, JointType::Distance | JointType::Cable) {
+        if joint.kind == JointType::Cable {
             return Err(Error::Build("runtime joint kind is not supported".into()));
         }
         if matches!(joint.kind, JointType::Revolute | JointType::Prismatic)
@@ -49,6 +49,38 @@ pub(super) fn compile_joints(
             return Err(Error::Build("joint endpoints must differ".into()));
         }
         if description.loop_joints.contains(&id) {
+            if joint.kind != JointType::Distance
+                && !description.joint_softness.contains_key(&id)
+                && description.joint_axes[&id].iter().any(|axis| {
+                    (joint.kind == JointType::Ball && axis.limits.is_some())
+                        || axis.motor.is_some_and(|motor| {
+                            motor.mode != crate::JointTargetMode::None
+                                && (!matches!(
+                                    joint.kind,
+                                    JointType::Revolute
+                                        | JointType::Prismatic
+                                        | JointType::D6
+                                        | JointType::Ball
+                                ))
+                        })
+                        || (axis.brake != 0.0
+                            && !matches!(
+                                joint.kind,
+                                JointType::Revolute
+                                    | JointType::Prismatic
+                                    | JointType::D6
+                                    | JointType::Ball
+                            ))
+                })
+            {
+                return Err(Error::Build(
+                    "rigid ball loops require cone limits; this rigid-loop control kind is not supported"
+                        .into(),
+                ));
+            }
+            continue;
+        }
+        if description.broken_joints.contains(&id) {
             continue;
         }
         if let Some(parent) = joint.parent {
@@ -138,7 +170,7 @@ pub(super) fn compile_joints(
                     BodyId::NONE,
                     bodies[&root],
                     Transform::IDENTITY,
-                    Transform::IDENTITY,
+                    Transform::from_translation(desc.params.com),
                 )?
             } else {
                 builder.add_joint_fixed(
@@ -183,6 +215,20 @@ fn set_limits(
     builder: &mut ModelBuilder,
 ) -> Result<()> {
     let kind = description.joints[&id].kind;
+    let lowered_kind = if description.joint_softness.contains_key(&id) {
+        JointType::D6
+    } else {
+        kind
+    };
+    let mut speed_caps = vec![Real::INFINITY; lowered_kind.dof_count()];
+    for axis in JointAxis::ALL {
+        if axis.dof(kind).is_ok() {
+            speed_caps[axis.dof(lowered_kind)?] = description.joint_axes[&id][axis as usize]
+                .velocity_limit
+                .unwrap_or(Real::INFINITY);
+        }
+    }
+    builder.set_joint_velocity_limit(joint, &speed_caps)?;
     if let Some(&softness) = description.joint_softness.get(&id) {
         let mut lower = [Real::NEG_INFINITY; 6];
         let mut upper = [Real::INFINITY; 6];

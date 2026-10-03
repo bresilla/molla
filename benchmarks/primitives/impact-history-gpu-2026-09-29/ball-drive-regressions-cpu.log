@@ -1,0 +1,156 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on artifact directory
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.47s
+     Running tests/runtime_cone_configuration.rs (target/debug/deps/runtime_cone_configuration-15ae4138141ab5b9)
+
+running 5 tests
+test invalid_cone_mutations_are_atomic ... ok
+test rigid_fixed_loop_insertion_and_failed_controls_preserve_authored_state ... ok
+test rigid_ball_loop_configuration_is_transactional ... ok
+test rigid_axis_loops_author_limits_and_both_motor_models_atomically ... ok
+test cone_edits_preserve_tree_and_loop_handles_through_compaction ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_acceleration_drives.rs (target/debug/deps/runtime_acceleration_drives-42d406296076788c)
+
+running 2 tests
+zero conditional mobility: locked D6 and redundant Fixed/D6 rows, masses .01/1/100, controls retire while hard support remains physical
+test cpu_zero_acceleration_mobility_retires_drives_and_preserves_redundant_hard_support ... ok
+144 rotated off-centre/full-inertia hinge/slider/D6 closures: Force/Acceleration, masses .01/1/100, uncapped/capped/zero, independent pivot inertia and both-anchor reactions
+test cpu_acceleration_drives_use_locked_pivot_inertia_and_physical_force_caps ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+     Running tests/runtime_ball_loop.rs (target/debug/deps/runtime_ball_loop-6a145fa01e1a759f)
+
+running 4 tests
+rigid ball loaded: peak_anchor=6.497413668604471e-16, force_error=2.5121479338940403e-15, torque_error=1.0175362097255202e-15
+test cpu_rigid_ball_loop_transmits_loaded_anchor_and_cone_reactions ... ok
+test cpu_rigid_ball_loop_closes_an_existing_articulation ... ok
+test cpu_rigid_ball_loop_shares_two_articulation_impulses_and_preserves_twist ... ok
+rigid ball pendulum: dt=0.016666666666666666 duration=10s anchor=1.8376010349730206e-5 cone=0e0 initial_energy=7.70689814273917e0 peak_energy=7.707476207195801e0
+rigid ball pendulum: dt=0.008333333333333333 duration=10s anchor=4.739126792629447e-6 cone=0e0 initial_energy=7.70689814273917e0 peak_energy=7.707248007321249e0
+rigid ball pendulum: dt=0.004166666666666667 duration=10s anchor=1.2027922326821422e-6 cone=0e0 initial_energy=7.70689814273917e0 peak_energy=7.707088300644632e0
+test cpu_rigid_ball_loop_pendulum_ten_seconds_three_step_sizes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.57s
+
+     Running tests/runtime_cone_limits.rs (target/debug/deps/runtime_cone_limits-45dd0736f0ff3b87)
+
+running 9 tests
+test cpu_cone_and_radial_rows_share_offset_articulated_response ... ok
+test cpu_cone_mutation_sleep_and_compaction ... ok
+test cpu_zero_cone_preserves_free_twist ... ok
+test cpu_cone_impacts_preserve_two_body_angular_momentum ... ok
+diagonal loaded twist: peak_velocity=2.762840774863802e-7 peak_boundary=1.1589771808928617e-8 mean_torque_error=2.0313267041719543e-7
+test cpu_diagonal_ellipse_with_f32_quantized_inputs ... ok
+diagonal loaded twist: peak_velocity=2.948117125387566e-13 peak_boundary=1.5543122344752192e-15 mean_torque_error=3.336585009396813e-14
+test cpu_diagonal_ellipse_retains_loaded_free_twist ... ok
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0.4,0.4 peak=1.90958701021092e-7 torque_error=0e0
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0.4,0.9 peak=1.90958701021092e-7 torque_error=0e0
+cone pendulum duration=10s dt=0.016666666666666666 peak=0e0 initial_energy=5.595546871377419 peak_energy=5.60063347167322 final_energy=0.7750296825671383
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0,0.9 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0,0 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0.4,0.4 peak=1.9095870155399958e-7 torque_error=3.9968028886505635e-11
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0.4,0.9 peak=1.9095870155399958e-7 torque_error=3.9968028886505635e-11
+cone pendulum duration=10s dt=0.008333333333333333 peak=0e0 initial_energy=5.595546871377419 peak_energy=5.598089328526084 final_energy=0.7747382236909289
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0,0.9 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0,0 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0.4,0.4 peak=1.909587011987279e-7 torque_error=0e0
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0.4,0.9 peak=1.909587011987279e-7 torque_error=0e0
+CPU external ball cone duration=10s peak_anchor=5.504977390387689e-3 peak_cone=0e0
+test cpu_external_ball_cone_preserves_compliant_anchor_under_gravity ... ok
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0,0.9 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0,0 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0.4,0.4 peak=1.9095870102109206e-7 torque_error=7.993682894254012e-12
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0.4,0.9 peak=1.9095870102109206e-7 torque_error=2.082963028648268e-15
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0,0.9 peak=1.1957467920563633e-16 torque_error=6.661338147750939e-16
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0,0 peak=0e0 torque_error=2.220446049250313e-16
+test cpu_loaded_cones_hold_boundary_and_react_torque ... ok
+cone pendulum duration=10s dt=0.004166666666666667 peak=0e0 initial_energy=5.595546871377419 peak_energy=5.59681788976309 final_energy=0.774571185552668
+test cpu_cone_pendulum_is_bounded_for_ten_seconds ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.90s
+
+     Running tests/runtime_joint_breakage.rs (target/debug/deps/runtime_joint_breakage-37e91d5251152084)
+
+running 13 tests
+test surviving_motor_efforts_follow_handles_across_new_root_dof_compaction ... ok
+test contact_load_triggers_break_and_all_substep_contact_samples_are_retained ... ok
+test angular_stop_peak_is_sampled_before_mean_reduction ... ok
+test transient_peak_triggers_below_frame_mean_threshold_and_repair_starts_a_new_episode ... ok
+test later_force_failure_rolls_back_state_topology_events_and_input_validity ... ok
+test sleeping_zero_threshold_joint_waits_for_a_valid_sample_and_readout_is_optional ... ok
+test compliant_loop_break_preserves_boundary_motion_and_legacy_frame_reactions ... ok
+test channels_simultaneous_breaks_and_disabled_limits_follow_actual_loads ... ok
+test gravity_break_occurs_before_the_next_substep_not_at_frame_end ... ok
+test sequential_break_boundaries_commit_once_or_roll_back_together ... ok
+test automatic_break_refreshes_collision_policy_before_the_following_substep ... ok
+test subthreshold_frames_retain_model_identity_and_match_the_ordinary_cpu_path ... ok
+test all_supported_constrained_joint_kinds_break_under_the_same_support_load ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/runtime_rigid_axis_loops.rs (target/debug/deps/runtime_rigid_axis_loops-9dde92a2e3805d04)
+
+running 4 tests
+24 rigid axis closures: force/torque/both breaks, capture=false, exact repair state and follow-up step passed
+24 rigid axis closures: force/torque/both breaks, capture=true, exact repair state and follow-up step passed
+test cpu_rigid_axis_loop_break_channels_and_explicit_repair_preserve_state ... ok
+rigid-axis loops hz=60 substeps=1 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=60 substeps=1 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+48 floating hinge/slider/D6 pairs: independent five/six-row impulse, COM, full inertia and both-anchor wrenches passed
+test cpu_rigid_axis_loops_match_independent_floating_impulse_projection ... ok
+rigid-axis loops hz=60 substeps=4 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=60 substeps=4 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=1 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=1 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=4 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+test cpu_rigid_axis_loops_match_nonzero_equal_bound_motion_and_wrenches ... ok
+rigid-axis loops hz=240 substeps=4 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+test cpu_rigid_axis_loops_match_independent_hard_bound_motion_and_wrenches ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.42s
+
+     Running tests/runtime_rigid_fixed_loops.rs (target/debug/deps/runtime_rigid_fixed_loops-2b1cb2aaa9e6a50a)
+
+running 3 tests
+test cpu_rigid_fixed_loop_projection_matches_independent_six_dimensional_impulse ... ok
+test cpu_rigid_fixed_loop_break_channels_and_explicit_repair_preserve_state ... ok
+test cpu_rigid_fixed_loops_preserve_rotated_frames_and_balance_anchor_wrenches ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/runtime_rigid_loop_drives.rs (target/debug/deps/runtime_rigid_loop_drives-ebc59de2a2dc015c)
+
+running 7 tests
+test cpu_rigid_loop_acceleration_feedback_is_applied_once_during_mass_scaled_impacts ... ok
+test cpu_rigid_loop_controls_are_applied_once_during_live_oblique_impacts ... ok
+D6 Force controls with live friction: 96 frames, masses .01/1/100, static hold/capped slide/brake/reversal, independent impulse/rate/reaction oracle
+test cpu_rigid_loop_force_drives_share_live_friction_response ... ok
+Force motor + brake breaking/repair: 24 rotated axis closures, capture=false, event oracle, broken-row retirement and live-control repair verified
+D6 Force controls with live friction: 96 frames, masses .01/1/100, static hold/capped slide/brake/reversal, independent impulse/rate/reaction oracle
+test cpu_rigid_loop_acceleration_drives_share_live_friction_response ... ok
+Force motor + brake breaking/repair: 24 rotated axis closures, capture=true, event oracle, broken-row retirement and live-control repair verified
+test cpu_rigid_loop_motor_brake_breaking_and_repair_retire_and_restore_controls ... ok
+rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 60Hz/1 steps
+rigid-loop Acceleration controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 60Hz/1 steps
+rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 240Hz/4 steps
+test cpu_rigid_loop_force_drives_match_independent_implicit_oracle ... ok
+rigid-loop Acceleration controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 240Hz/4 steps
+test cpu_rigid_loop_acceleration_drives_match_independent_implicit_oracle ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+    Checking molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Checking molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.97s

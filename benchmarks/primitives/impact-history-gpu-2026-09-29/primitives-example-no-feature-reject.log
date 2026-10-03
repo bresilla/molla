@@ -1,0 +1,10 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running `target/debug/examples/runtime_primitives --gpu reaction`
+example=reaction backend=gpu
+Error: "GPU selection requires the gpu feature; no CPU fallback"
+make: *** [Makefile:685: example-primitives] Error 1

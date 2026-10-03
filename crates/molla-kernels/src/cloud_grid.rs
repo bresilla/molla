@@ -59,8 +59,7 @@ impl CloudGridKernel {
             || limits.max_compute_workgroup_storage_size < 13_312
             || limits.max_storage_buffers_per_shader_stage < 7
             || buffers.iter().zip(required).any(|(buffer, bytes)| {
-                buffer.size() < bytes
-                    || buffer.size() > limits.max_storage_buffer_binding_size as u64
+                buffer.size() < bytes || buffer.size() > limits.max_storage_buffer_binding_size
             })
         {
             return Err(Error::Gpu(
@@ -68,12 +67,15 @@ impl CloudGridKernel {
             ));
         }
         let storage = |size, label| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let memberships = storage(max_points as u64 * 4, "molla::cloud grid memberships");
         let scratch = storage(
@@ -84,12 +86,15 @@ impl CloudGridKernel {
             max_cells.div_ceil(256) as u64 * 8,
             "molla::cloud grid block offsets",
         );
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::cloud grid parameters"),
-            size: 80,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::cloud grid parameters"),
+                size: 80,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let all = [
             buffers[0],
             &memberships,
@@ -261,7 +266,7 @@ impl CloudGridKernel {
         let columns = cells.min(self.max_groups);
         params.counts[2] = cells.div_ceil(256);
         params.counts[3] = columns;
-        queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&params));
+        molla_core::gpu_write_buffer!(queue, &self.uniform, 0, bytemuck::bytes_of(&params));
         encoder.clear_buffer(&self.scratch, 0, Some(cells as u64 * 12));
         let groups = [
             [points.div_ceil(256), 1],

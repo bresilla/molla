@@ -1,0 +1,13 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 1 test
+test rigid_world::bounds_tests::retained_bounds_match_rebuilt_bounds_through_edits_sleep_and_failure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 121 filtered out; finished in 41.16s
+

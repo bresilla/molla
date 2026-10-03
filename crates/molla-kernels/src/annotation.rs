@@ -54,18 +54,21 @@ impl AnnotationKernel {
             || buffers
                 .iter()
                 .zip(required)
-                .any(|(b, n)| b.size() < n || b.size() > l.max_storage_buffer_binding_size as u64)
+                .any(|(b, n)| b.size() < n || b.size() > l.max_storage_buffer_binding_size)
         {
             return Err(Error::Gpu(
                 "annotation: invalid device or buffer capacity".into(),
             ));
         }
-        let params = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::annotation parameters"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let params = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::annotation parameters"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::annotation layout"),
             entries: &std::array::from_fn::<_, 8, _>(|i| wgpu::BindGroupLayoutEntry {
@@ -208,7 +211,8 @@ impl AnnotationKernel {
         }
         let [pixels, images, labels] = active;
         let slots = images * labels;
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.params,
             0,
             bytemuck::cast_slice(&[pixels, images, labels, slots]),

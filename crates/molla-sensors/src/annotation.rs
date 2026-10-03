@@ -12,10 +12,10 @@ use crate::{
     readback::{BufferLease, DeviceBuffer, ReadbackSource, ReadbackStamp},
 };
 use crate::{ProcessorStorageLimits, ProcessorStorageUsage};
+use arrayvec::ArrayVec;
 use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_kernels::{AnnotationBindings, AnnotationKernel};
-use arrayvec::ArrayVec;
 use molla_storage::{BufferElement, BufferUsage};
 use std::{any::TypeId, ops::Range, sync::Arc};
 
@@ -793,9 +793,9 @@ pub(crate) fn checked_budget(config: AnnotationConfig, limits: &wgpu::Limits) ->
         || limits.max_compute_workgroup_size_x < 256
         || limits.max_compute_workgroup_storage_size < 1024
         || limits.max_storage_buffers_per_shader_stage < 7
-        || [4 * p, 8 * l, 16 * i, 32 * slots, 16].into_iter().any(|b| {
-            b > limits.max_buffer_size || b > limits.max_storage_buffer_binding_size as u64
-        })
+        || [4 * p, 8 * l, 16 * i, 32 * slots, 16]
+            .into_iter()
+            .any(|b| b > limits.max_buffer_size || b > limits.max_storage_buffer_binding_size)
     {
         return Err(Error::Gpu(
             "annotation: memory or device budget exceeded".into(),

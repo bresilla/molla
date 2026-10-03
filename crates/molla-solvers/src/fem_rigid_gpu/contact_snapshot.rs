@@ -40,24 +40,30 @@ impl ContactSolveSnapshot {
         let source = sources(bindings);
         Self {
             buffers: std::array::from_fn(|i| {
-                device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(NAMES[i]),
-                    size: source[i].size(),
-                    usage: wgpu::BufferUsages::COPY_DST
-                        | wgpu::BufferUsages::COPY_SRC
-                        | wgpu::BufferUsages::STORAGE,
-                    mapped_at_creation: false,
-                })
+                molla_core::gpu_create_buffer!(
+                    device,
+                    &wgpu::BufferDescriptor {
+                        label: Some(NAMES[i]),
+                        size: source[i].size(),
+                        usage: wgpu::BufferUsages::COPY_DST
+                            | wgpu::BufferUsages::COPY_SRC
+                            | wgpu::BufferUsages::STORAGE,
+                        mapped_at_creation: false,
+                    }
+                )
             }),
             solved: [source[1], source[8]].map(|buffer| {
-                device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("FEM pre-drift solved velocity snapshot"),
-                    size: buffer.size(),
-                    usage: wgpu::BufferUsages::COPY_DST
-                        | wgpu::BufferUsages::COPY_SRC
-                        | wgpu::BufferUsages::STORAGE,
-                    mapped_at_creation: false,
-                })
+                molla_core::gpu_create_buffer!(
+                    device,
+                    &wgpu::BufferDescriptor {
+                        label: Some("FEM pre-drift solved velocity snapshot"),
+                        size: buffer.size(),
+                        usage: wgpu::BufferUsages::COPY_DST
+                            | wgpu::BufferUsages::COPY_SRC
+                            | wgpu::BufferUsages::STORAGE,
+                        mapped_at_creation: false,
+                    }
+                )
             }),
             settings: None,
         }

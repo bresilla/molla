@@ -3,9 +3,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+mod builder;
 mod readout;
 mod tree;
 
+pub use builder::RigidSceneBuilder;
+
+pub use crate::joint_control::{
+    DistanceLimits, JointBreakLimits, JointBreakTrigger, SphericalConeLimits,
+};
 use crate::joint_control::{JointAxes, JointAxis, JointAxisSettings, JointMotor, JointSoftness};
 use molla_core::{BodyId, Error, JointId, Result, ShapeId, WorldId};
 use molla_math::{Quat, Real, SpatialVector, Transform, Vec3};
@@ -35,6 +41,10 @@ handle!(JointHandle);
 /// Compiled scene identity; simulation steps and motor updates retain it.
 #[derive(Clone, Debug)]
 pub struct SceneStamp(Arc<()>);
+
+/// State, force, control and description identity for solved dynamics readouts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DynamicsStamp(SceneStamp, u64);
 
 impl PartialEq for SceneStamp {
     fn eq(&self, other: &Self) -> bool {
@@ -248,16 +258,59 @@ impl Default for JointSettings {
 struct Description {
     next_id: u64,
     bodies: BTreeMap<BodyHandle, BodyDesc>,
+    body_identities: BTreeMap<BodyHandle, SceneStamp>,
+    kinematic_acceleration: BTreeMap<BodyHandle, SpatialVector>,
     colliders: BTreeMap<ColliderHandle, ColliderDesc>,
     collider_stamps: BTreeMap<ColliderHandle, SceneStamp>,
     joints: BTreeMap<JointHandle, JointDesc>,
+    joint_identities: BTreeMap<JointHandle, SceneStamp>,
     joint_settings: BTreeMap<JointHandle, JointSettings>,
     joint_axes: BTreeMap<JointHandle, [JointAxisSettings; 6]>,
     joint_softness: BTreeMap<JointHandle, JointSoftness>,
     loop_joints: BTreeSet<JointHandle>,
+    distance_limits: BTreeMap<JointHandle, DistanceLimits>,
+    cone_limits: BTreeMap<JointHandle, SphericalConeLimits>,
+    break_limits: BTreeMap<JointHandle, JointBreakLimits>,
+    broken_joints: BTreeSet<JointHandle>,
+    body_pair_exclusions: BTreeSet<(BodyHandle, BodyHandle)>,
+    collider_pair_exclusions: BTreeSet<(ColliderHandle, ColliderHandle)>,
 }
 
 impl Description {
+    fn insert_body(&mut self, mut desc: BodyDesc) -> Result<BodyHandle> {
+        if let Some(mass) = desc.additional_mass {
+            mass.validate()?;
+            desc.params.mass = mass.mass;
+            desc.params.com = mass.local_com;
+            desc.params.inertia = mass.inertia;
+        }
+        let id = BodyHandle(self.allocate()?);
+        self.bodies.insert(id, desc);
+        self.body_identities.insert(id, SceneStamp(Arc::new(())));
+        Ok(id)
+    }
+
+    fn insert_collider(&mut self, desc: ColliderDesc) -> Result<ColliderHandle> {
+        let id = ColliderHandle(self.allocate()?);
+        self.colliders.insert(id, desc);
+        self.collider_stamps.insert(id, SceneStamp(Arc::new(())));
+        Ok(id)
+    }
+
+    fn insert_joint(&mut self, desc: JointDesc) -> Result<JointHandle> {
+        let id = JointHandle(self.allocate()?);
+        if desc.kind == JointType::Distance {
+            self.distance_limits.insert(id, DistanceLimits::default());
+            self.loop_joints.insert(id);
+        }
+        self.joints.insert(id, desc);
+        self.joint_identities.insert(id, SceneStamp(Arc::new(())));
+        self.joint_settings.insert(id, JointSettings::default());
+        self.joint_axes
+            .insert(id, [JointAxisSettings::default(); 6]);
+        Ok(id)
+    }
+
     fn allocate(&mut self) -> Result<u64> {
         self.next_id = self
             .next_id
@@ -268,11 +321,13 @@ impl Description {
 }
 
 struct Snapshot {
+    model_stamp: SceneStamp,
     stamp: SceneStamp,
     model: Model,
     state: State,
     control: Control,
     bodies: BTreeMap<BodyHandle, BodyId>,
+    body_handles: Vec<BodyHandle>,
     colliders: BTreeMap<ColliderHandle, Vec<ShapeId>>,
     shape_colliders: Vec<ColliderHandle>,
     joints: BTreeMap<JointHandle, JointId>,
@@ -363,6 +418,7 @@ impl DriveState {
 }
 
 /// CPU-owned rigid scene. Successful edits invalidate dense indices, not handles.
+/// Implicit free roots use world COM translation and velocity; authored joints retain their frames.
 pub struct RigidScene {
     description: Description,
     snapshot: Snapshot,
@@ -372,16 +428,103 @@ pub struct RigidScene {
     activation_identity: SceneStamp,
     activation_bodies: BTreeMap<BodyHandle, u64>,
     structure_stamps: BTreeMap<BodyHandle, SceneStamp>,
+    contact_stamps: BTreeMap<BodyHandle, SceneStamp>,
+    contact_episode_stamps: BTreeMap<BodyHandle, SceneStamp>,
     state_edit_stamp: SceneStamp,
     state_base_stamp: SceneStamp,
     body_state_stamps: BTreeMap<BodyHandle, SceneStamp>,
+    dynamics_stamp: DynamicsStamp,
+    solver_input_stamp: DynamicsStamp,
+}
+
+pub struct RigidStepCheckpoint {
+    model_stamp: SceneStamp,
+    state: State,
+    valid_poses: BTreeMap<BodyHandle, Transform>,
+    dynamics_stamp: DynamicsStamp,
+    solver_input_stamp: DynamicsStamp,
+    activation_global: u64,
+    activation_identity: SceneStamp,
+    activation_bodies: BTreeMap<BodyHandle, u64>,
 }
 
 impl RigidScene {
+    /// Save host state and activation validity before solver-only commits.
+    pub fn checkpoint_step(&self) -> Result<RigidStepCheckpoint> {
+        Ok(RigidStepCheckpoint {
+            model_stamp: self.model_stamp(),
+            state: self.state().clone_host()?,
+            valid_poses: self.snapshot.valid_poses.clone(),
+            dynamics_stamp: self.dynamics_stamp.clone(),
+            solver_input_stamp: self.solver_input_stamp.clone(),
+            activation_global: self.activation_global,
+            activation_identity: self.activation_identity.clone(),
+            activation_bodies: self.activation_bodies.clone(),
+        })
+    }
+
+    /// Restore solver-only commits while retaining the same compiled model and controls.
+    pub fn restore_step(&mut self, checkpoint: RigidStepCheckpoint) -> Result<()> {
+        if self.model_stamp() != checkpoint.model_stamp {
+            return Err(Error::Build(
+                "step checkpoint belongs to another compiled model".into(),
+            ));
+        }
+        if self.solver_input_stamp != checkpoint.solver_input_stamp {
+            return Err(Error::Build(
+                "step checkpoint cannot restore across dynamics input edits".into(),
+            ));
+        }
+        self.snapshot.state = checkpoint.state;
+        self.snapshot.valid_poses = checkpoint.valid_poses;
+        self.dynamics_stamp = checkpoint.dynamics_stamp;
+        self.activation_global = checkpoint.activation_global;
+        self.activation_identity = checkpoint.activation_identity;
+        self.activation_bodies = checkpoint.activation_bodies;
+        Ok(())
+    }
+
+    /// Fork current host dynamics and authoring into an independent compiled snapshot.
+    pub fn fork(&self) -> Result<Self> {
+        Ok(Self {
+            description: self.description.clone(),
+            snapshot: compile(&self.description, self.gravity, Some(&self.snapshot))?,
+            gravity: self.gravity,
+            revision: self.revision,
+            activation_global: self.activation_global,
+            activation_identity: self.activation_identity.clone(),
+            activation_bodies: self.activation_bodies.clone(),
+            structure_stamps: self.structure_stamps.clone(),
+            contact_stamps: self.contact_stamps.clone(),
+            contact_episode_stamps: self.contact_episode_stamps.clone(),
+            state_edit_stamp: self.state_edit_stamp.clone(),
+            state_base_stamp: self.state_base_stamp.clone(),
+            body_state_stamps: self.body_state_stamps.clone(),
+            dynamics_stamp: self.dynamics_stamp.clone(),
+            solver_input_stamp: self.solver_input_stamp.clone(),
+        })
+    }
     pub fn new() -> Result<Self> {
-        let description = Description::default();
-        let gravity = Vec3::new(0.0, -9.81, 0.0);
+        Self::from_description(Description::default(), Vec3::new(0.0, -9.81, 0.0))
+    }
+
+    fn from_description(description: Description, gravity: Vec3) -> Result<Self> {
         let snapshot = compile(&description, gravity, None)?;
+        let empty = Description::default();
+        let mut structure_stamps = BTreeMap::new();
+        let mut contact_stamps = BTreeMap::new();
+        let mut contact_episode_stamps = BTreeMap::new();
+        readout::update_structure_stamps::<false, false>(
+            &mut structure_stamps,
+            &empty,
+            &description,
+        );
+        readout::update_structure_stamps::<true, false>(&mut contact_stamps, &empty, &description);
+        readout::update_structure_stamps::<true, true>(
+            &mut contact_episode_stamps,
+            &empty,
+            &description,
+        );
         Ok(Self {
             description,
             snapshot,
@@ -390,15 +533,43 @@ impl RigidScene {
             activation_global: 0,
             activation_identity: SceneStamp(Arc::new(())),
             activation_bodies: BTreeMap::new(),
-            structure_stamps: BTreeMap::new(),
+            structure_stamps,
+            contact_stamps,
+            contact_episode_stamps,
             state_edit_stamp: SceneStamp(Arc::new(())),
             state_base_stamp: SceneStamp(Arc::new(())),
             body_state_stamps: BTreeMap::new(),
+            dynamics_stamp: DynamicsStamp(SceneStamp(Arc::new(())), 0),
+            solver_input_stamp: DynamicsStamp(SceneStamp(Arc::new(())), 0),
         })
     }
 
     pub fn model(&self) -> &Model {
         &self.snapshot.model
+    }
+
+    /// Allocate and upload the current compiled model on the selected device.
+    #[cfg(feature = "gpu")]
+    pub fn upload_model_to_device(
+        &mut self,
+        device: &Arc<wgpu::Device>,
+        queue: &wgpu::Queue,
+    ) -> Result<()> {
+        self.snapshot.model.upload_to_device(device, queue)
+    }
+
+    /// Synchronize gravity, tree compliance and controls without replacing state or scene identity.
+    #[cfg(feature = "gpu")]
+    pub fn upload_controls_to_device(
+        &mut self,
+        device: &Arc<wgpu::Device>,
+        queue: &wgpu::Queue,
+    ) -> Result<()> {
+        self.snapshot.model.gravity.ensure_device(device)?;
+        self.snapshot.model.gravity.upload(queue)?;
+        self.snapshot.model.joint_compliance.ensure_device(device)?;
+        self.snapshot.model.joint_compliance.upload(queue)?;
+        self.snapshot.control.upload_to_device(device, queue)
     }
     pub fn state(&self) -> &State {
         &self.snapshot.state
@@ -423,6 +594,24 @@ impl RigidScene {
     pub fn stamp(&self) -> SceneStamp {
         self.snapshot.stamp.clone()
     }
+
+    pub fn dynamics_stamp(&self) -> DynamicsStamp {
+        self.dynamics_stamp.clone()
+    }
+
+    fn touch_dynamics(&mut self) {
+        let (version, overflow) = self.dynamics_stamp.1.overflowing_add(1);
+        if overflow {
+            self.dynamics_stamp.0 = SceneStamp(Arc::new(()));
+        }
+        self.dynamics_stamp.1 = version;
+        self.solver_input_stamp = self.dynamics_stamp.clone();
+    }
+
+    /// Compiled-model identity; pose, velocity, gravity and control edits retain it.
+    pub fn model_stamp(&self) -> SceneStamp {
+        self.snapshot.model_stamp.clone()
+    }
     pub fn gravity(&self) -> Vec3 {
         self.gravity
     }
@@ -438,11 +627,13 @@ impl RigidScene {
     }
 
     fn activate_all(&mut self) {
+        self.touch_dynamics();
         self.activation_global = self.activation_global.wrapping_add(1);
         self.activation_bodies.clear();
     }
 
     fn activate_body(&mut self, id: BodyHandle) {
+        self.touch_dynamics();
         let version = self.activation_bodies.entry(id).or_default();
         *version = version.wrapping_add(1);
     }
@@ -668,7 +859,12 @@ impl RigidScene {
                 .iter()
                 .position(|&child| child as usize == i)
                 .ok_or_else(|| missing("body joint"))?;
-            seed_joint_near(self.model(), &mut next, JointId::from_index(joint), self.state())?;
+            seed_joint_near(
+                self.model(),
+                &mut next,
+                JointId::from_index(joint),
+                self.state(),
+            )?;
         }
         crate::eval_fk(self.model(), &mut next)?;
         crate::eval_body_velocities(self.model(), &mut next)?;
@@ -758,8 +954,10 @@ impl RigidScene {
 
     /// Commit finite rigid state while retaining the scene identity and last valid poses.
     pub fn commit_step(&mut self, next: State) -> Result<()> {
+        let inputs = self.solver_input_stamp.clone();
         self.commit_state(next)?;
         self.activate_all();
+        self.solver_input_stamp = inputs;
         Ok(())
     }
 
@@ -797,6 +995,7 @@ impl RigidScene {
             self.snapshot.valid_poses.insert(id, poses[index.index()]);
         }
         self.snapshot.state = next;
+        self.touch_dynamics();
         Ok(())
     }
 
@@ -863,6 +1062,9 @@ impl RigidScene {
             return Err(Error::Build("body wrench overflow".into()));
         }
         self.snapshot.state.body_f.host_mut()?[i] = next;
+        if current != next {
+            self.touch_dynamics();
+        }
         if wake && current != next {
             self.activate_body(id);
         }
@@ -902,6 +1104,9 @@ impl RigidScene {
         let i = self.body_index(id).ok_or_else(|| missing("body"))?.index();
         let changed = self.snapshot.state.body_f.host()?[i] != SpatialVector::ZERO;
         self.snapshot.state.body_f.host_mut()?[i] = SpatialVector::ZERO;
+        if changed {
+            self.touch_dynamics();
+        }
         if wake && changed {
             self.activate_body(id);
         }
@@ -925,9 +1130,15 @@ impl RigidScene {
 
     /// Set a collider's belt surface velocity (its own frame) in place,
     /// without a rebuild; a change wakes the scene so resting bodies ride it.
-    pub fn set_collider_surface_velocity(&mut self, id: ColliderHandle, velocity: Vec3) -> Result<()> {
+    pub fn set_collider_surface_velocity(
+        &mut self,
+        id: ColliderHandle,
+        velocity: Vec3,
+    ) -> Result<()> {
         if !velocity.is_finite() {
-            return Err(Error::Build("collider surface velocity must be finite".into()));
+            return Err(Error::Build(
+                "collider surface velocity must be finite".into(),
+            ));
         }
         let desc = self
             .description
@@ -1000,10 +1211,7 @@ impl RigidScene {
     }
 
     pub fn body_handle(&self, index: BodyId) -> Option<BodyHandle> {
-        self.snapshot
-            .bodies
-            .iter()
-            .find_map(|(&id, &i)| (i == index).then_some(id))
+        self.snapshot.body_handles.get(index.index()).copied()
     }
 
     pub fn collider_handle(&self, index: ShapeId) -> Option<ColliderHandle> {
@@ -1019,7 +1227,84 @@ impl RigidScene {
         self.description.joints.get(&id)
     }
 
-    /// Force-element joints omitted from the reduced-coordinate tree.
+    pub fn body_pair_excluded(&self, a: BodyHandle, b: BodyHandle) -> Result<bool> {
+        self.body(a).ok_or_else(|| missing("body"))?;
+        self.body(b).ok_or_else(|| missing("body"))?;
+        Ok(self
+            .description
+            .body_pair_exclusions
+            .contains(&(a.min(b), a.max(b))))
+    }
+
+    /// Exclude every collider pair across two bodies independently of joint policy.
+    pub fn set_body_pair_excluded(
+        &mut self,
+        a: BodyHandle,
+        b: BodyHandle,
+        excluded: bool,
+    ) -> Result<()> {
+        if a == b {
+            return Err(Error::Build("body pair endpoints must differ".into()));
+        }
+        if self.body_pair_excluded(a, b)? == excluded {
+            return Ok(());
+        }
+        self.rebuild(|d| {
+            let pair = (a.min(b), a.max(b));
+            if excluded {
+                d.body_pair_exclusions.insert(pair);
+            } else {
+                d.body_pair_exclusions.remove(&pair);
+            }
+            Ok(())
+        })?;
+        self.activate_body(a);
+        self.activate_body(b);
+        Ok(())
+    }
+
+    pub fn collider_pair_excluded(&self, a: ColliderHandle, b: ColliderHandle) -> Result<bool> {
+        self.collider(a).ok_or_else(|| missing("collider"))?;
+        self.collider(b).ok_or_else(|| missing("collider"))?;
+        Ok(self
+            .description
+            .collider_pair_exclusions
+            .contains(&(a.min(b), a.max(b))))
+    }
+
+    /// Exclude all compiled shape pairs for two stable collider handles.
+    pub fn set_collider_pair_excluded(
+        &mut self,
+        a: ColliderHandle,
+        b: ColliderHandle,
+        excluded: bool,
+    ) -> Result<()> {
+        if a == b {
+            return Err(Error::Build("collider pair endpoints must differ".into()));
+        }
+        if self.collider_pair_excluded(a, b)? == excluded {
+            return Ok(());
+        }
+        let parents = [
+            self.collider(a).unwrap().parent,
+            self.collider(b).unwrap().parent,
+        ];
+        self.rebuild(|d| {
+            let pair = (a.min(b), a.max(b));
+            if excluded {
+                d.collider_pair_exclusions.insert(pair);
+            } else {
+                d.collider_pair_exclusions.remove(&pair);
+            }
+            Ok(())
+        })?;
+        for body in parents.into_iter().flatten() {
+            self.activate_body(body);
+        }
+        Ok(())
+    }
+
+    /// External force/impulse joints omitted from the reduced-coordinate tree.
     pub fn loop_joints(&self) -> impl Iterator<Item = (JointHandle, &JointDesc)> {
         self.description
             .loop_joints
@@ -1027,8 +1312,197 @@ impl RigidScene {
             .map(|id| (*id, &self.description.joints[id]))
     }
 
+    /// Rigid external ball constraints, including disabled joints.
+    pub fn rigid_ball_joints(&self) -> impl Iterator<Item = (JointHandle, &JointDesc)> {
+        self.rigid_loop_joints()
+            .filter(|(_, joint)| joint.kind == JointType::Ball)
+    }
+
+    /// Rigid external nonradial constraints, including disabled joints.
+    pub fn rigid_loop_joints(&self) -> impl Iterator<Item = (JointHandle, &JointDesc)> {
+        self.loop_joints().filter(|(id, joint)| {
+            joint.kind != JointType::Distance && !self.description.joint_softness.contains_key(id)
+        })
+    }
+
+    /// Radial links, including disabled links, outside the reduced-coordinate tree.
+    pub fn distance_joints(
+        &self,
+    ) -> impl Iterator<Item = (JointHandle, &JointDesc, DistanceLimits)> {
+        self.description
+            .distance_limits
+            .iter()
+            .map(|(&id, &limits)| (id, &self.description.joints[&id], limits))
+    }
+
+    pub fn distance_limits(&self, id: JointHandle) -> Result<DistanceLimits> {
+        self.description
+            .distance_limits
+            .get(&id)
+            .copied()
+            .ok_or_else(|| Error::Build("distance limits require a distance joint".into()))
+    }
+
+    /// Replace radial bounds transactionally and activate their endpoint dependencies.
+    pub fn set_distance_limits(&mut self, id: JointHandle, limits: DistanceLimits) -> Result<()> {
+        limits.validate()?;
+        if self.distance_limits(id)? == limits {
+            return Ok(());
+        }
+        let joint = self.joint(id).ok_or_else(|| missing("joint"))?;
+        let endpoints = [joint.parent, Some(joint.child)];
+        self.rebuild(|d| {
+            d.distance_limits.insert(id, limits);
+            Ok(())
+        })?;
+        for body in endpoints.into_iter().flatten() {
+            self.activate_body(body);
+        }
+        Ok(())
+    }
+
+    /// Explicit cone configurations on tree and loop ball joints, including disabled joints.
+    pub fn cone_joints(
+        &self,
+    ) -> impl Iterator<Item = (JointHandle, &JointDesc, SphericalConeLimits)> {
+        self.description
+            .cone_limits
+            .iter()
+            .map(|(&id, &limits)| (id, &self.description.joints[&id], limits))
+    }
+
+    pub fn cone_limits(&self, id: JointHandle) -> Result<SphericalConeLimits> {
+        if self.joint(id).ok_or_else(|| missing("joint"))?.kind != JointType::Ball {
+            return Err(Error::Build("cone limits require a ball joint".into()));
+        }
+        Ok(self
+            .description
+            .cone_limits
+            .get(&id)
+            .copied()
+            .unwrap_or_default())
+    }
+
+    /// Store cone bounds transactionally and activate their endpoint dependencies.
+    pub fn set_cone_limits(&mut self, id: JointHandle, limits: SphericalConeLimits) -> Result<()> {
+        limits.validate()?;
+        if self.cone_limits(id)? == limits {
+            return Ok(());
+        }
+        let joint = self.joint(id).ok_or_else(|| missing("joint"))?;
+        if !limits.is_unrestricted() {
+            crate::spherical_cone::basis(joint.axis)?;
+        }
+        let endpoints = [joint.parent, Some(joint.child)];
+        self.rebuild(|d| {
+            if limits == SphericalConeLimits::default() {
+                d.cone_limits.remove(&id);
+            } else {
+                d.cone_limits.insert(id, limits);
+            }
+            Ok(())
+        })?;
+        for body in endpoints.into_iter().flatten() {
+            self.activate_body(body);
+        }
+        Ok(())
+    }
+
     pub fn joint_settings(&self, id: JointHandle) -> Option<JointSettings> {
         self.description.joint_settings.get(&id).copied()
+    }
+
+    pub fn joint_break_limits(&self, id: JointHandle) -> Result<JointBreakLimits> {
+        self.joint(id).ok_or_else(|| missing("joint"))?;
+        Ok(self
+            .description
+            .break_limits
+            .get(&id)
+            .copied()
+            .unwrap_or_default())
+    }
+
+    pub fn breakable_joints(&self) -> impl Iterator<Item = (JointHandle, JointBreakLimits)> {
+        self.description
+            .break_limits
+            .iter()
+            .filter_map(|(&id, &limits)| {
+                let joint = &self.description.joints[&id];
+                (limits.is_enabled()
+                    && self.description.joint_settings[&id].enabled
+                    && self.description.bodies[&joint.child].enabled
+                    && joint
+                        .parent
+                        .is_none_or(|p| self.description.bodies[&p].enabled))
+                .then_some((id, limits))
+            })
+    }
+
+    /// Replace thresholds without rebuilding topology; activate endpoint dependencies.
+    pub fn set_joint_break_limits(
+        &mut self,
+        id: JointHandle,
+        limits: JointBreakLimits,
+    ) -> Result<()> {
+        limits.validate()?;
+        if self.joint_break_limits(id)? == limits {
+            return Ok(());
+        }
+        let joint = self.joint(id).unwrap();
+        let endpoints = [joint.parent, Some(joint.child)];
+        if limits == JointBreakLimits::default() {
+            self.description.break_limits.remove(&id);
+        } else {
+            self.description.break_limits.insert(id, limits);
+        }
+        self.touch_dynamics();
+        for body in endpoints.into_iter().flatten() {
+            self.activate_body(body);
+        }
+        Ok(())
+    }
+
+    pub fn joint_broken(&self, id: JointHandle) -> Result<bool> {
+        self.joint(id).ok_or_else(|| missing("joint"))?;
+        Ok(self.description.broken_joints.contains(&id))
+    }
+
+    /// Detach a batch atomically, preserving handles, body poses and velocities.
+    pub fn break_joints(&mut self, joints: &[JointHandle]) -> Result<Vec<JointHandle>> {
+        let mut changed = BTreeSet::new();
+        for &id in joints {
+            if !self.joint_broken(id)? {
+                changed.insert(id);
+            }
+        }
+        if changed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let endpoints: BTreeSet<_> = changed
+            .iter()
+            .flat_map(|id| {
+                let joint = &self.description.joints[id];
+                [joint.parent, Some(joint.child)].into_iter().flatten()
+            })
+            .collect();
+        self.rebuild(|d| {
+            for &id in &changed {
+                d.joint_settings.get_mut(&id).unwrap().enabled = false;
+                d.broken_joints.insert(id);
+            }
+            Ok(())
+        })?;
+        for body in endpoints {
+            self.activate_body(body);
+        }
+        Ok(changed.into_iter().collect())
+    }
+
+    /// Explicitly clear broken state and re-enable the authored joint.
+    pub fn repair_joint(&mut self, id: JointHandle) -> Result<()> {
+        let mut settings = self.joint_settings(id).ok_or_else(|| missing("joint"))?;
+        settings.enabled = true;
+        self.set_joint_settings(id, settings)
     }
 
     pub fn set_joint_settings(&mut self, id: JointHandle, settings: JointSettings) -> Result<()> {
@@ -1036,6 +1510,9 @@ impl RigidScene {
             *d.joint_settings
                 .get_mut(&id)
                 .ok_or_else(|| missing("joint"))? = settings;
+            if settings.enabled {
+                d.broken_joints.remove(&id);
+            }
             Ok(())
         })
     }
@@ -1045,14 +1522,33 @@ impl RigidScene {
         Ok(self.description.joint_softness.get(&id).copied())
     }
 
-    /// Softness gain edits retain the compiled layout; toggles rebuild it.
+    /// Gain edits retain the compiled layout and activate endpoints; toggles rebuild it.
     pub fn set_joint_softness(
         &mut self,
         id: JointHandle,
         softness: Option<JointSoftness>,
     ) -> Result<()> {
         let previous = self.joint_softness(id)?;
-        if softness.is_none() && self.description.loop_joints.contains(&id) {
+        if self.joint(id).unwrap().kind == JointType::Distance {
+            return if softness.is_none() {
+                Ok(())
+            } else {
+                Err(Error::Build(
+                    "distance joints do not support scalar compliance".into(),
+                ))
+            };
+        }
+        if softness.is_none()
+            && self.description.loop_joints.contains(&id)
+            && !matches!(
+                self.joint(id).unwrap().kind,
+                JointType::Ball
+                    | JointType::Fixed
+                    | JointType::Revolute
+                    | JointType::Prismatic
+                    | JointType::D6
+            )
+        {
             return Err(Error::Build("loop joints require compliance".into()));
         }
         if let Some(value) = softness {
@@ -1062,6 +1558,8 @@ impl RigidScene {
             return Ok(());
         }
         if let (Some(_), Some(value)) = (previous, softness) {
+            let joint = self.joint(id).unwrap();
+            let endpoints = [joint.parent, Some(joint.child)];
             if let Some(joint) = self.joint_index(id) {
                 let offsets = self.model().joint_dof_offset.host()?;
                 let range = offsets[joint.index()] as usize..offsets[joint.index() + 1] as usize;
@@ -1071,6 +1569,10 @@ impl RigidScene {
                 }
             }
             self.description.joint_softness.insert(id, value);
+            self.touch_dynamics();
+            for body in endpoints.into_iter().flatten() {
+                self.activate_body(body);
+            }
             return Ok(());
         }
         self.edit(|d| {
@@ -1094,6 +1596,11 @@ impl RigidScene {
 
     pub fn joint_locked_axes(&self, id: JointHandle) -> Result<JointAxes> {
         let kind = self.joint(id).ok_or_else(|| missing("joint"))?.kind;
+        if kind == JointType::Distance {
+            return Err(Error::Build(
+                "distance joints use radial limits, not axis locks".into(),
+            ));
+        }
         let mut axes = JointAxes::NONE;
         for axis in JointAxis::ALL {
             if axis.dof(kind).is_err() || self.description.joint_axes[&id][axis as usize].locked {
@@ -1137,6 +1644,39 @@ impl RigidScene {
         })
     }
 
+    /// Cap a tree rate or external-loop coordinate rate in m/s or rad/s; None removes it.
+    /// External angular rates use the rotation-log coordinates shared with drives.
+    pub fn set_joint_velocity_limit(
+        &mut self,
+        id: JointHandle,
+        axis: JointAxis,
+        limit: Option<Real>,
+    ) -> Result<()> {
+        let kind = self.joint(id).ok_or_else(|| missing("joint"))?.kind;
+        axis.dof(kind)?;
+        if self.description.loop_joints.contains(&id)
+            && !matches!(
+                kind,
+                JointType::Revolute | JointType::Prismatic | JointType::Ball | JointType::D6
+            )
+        {
+            return Err(Error::Build(
+                "this external-loop speed cap is not supported".into(),
+            ));
+        }
+        if limit.is_some_and(|value| !value.is_finite() || value < 0.0) {
+            return Err(Error::Build("invalid joint velocity limit".into()));
+        }
+        if self.description.joint_axes[&id][axis as usize].velocity_limit == limit {
+            return Ok(());
+        }
+        self.edit(|d| {
+            d.joint_axes.get_mut(&id).ok_or_else(|| missing("joint"))?[axis as usize]
+                .velocity_limit = limit;
+            Ok(())
+        })
+    }
+
     /// Update motor authoring and active controls without rebuilding the solver snapshot.
     pub fn set_joint_motor(
         &mut self,
@@ -1157,6 +1697,17 @@ impl RigidScene {
     ) -> Result<()> {
         motor.validate()?;
         axis.dof(self.joint(id).ok_or_else(|| missing("joint"))?.kind)?;
+        if motor.mode != crate::JointTargetMode::None
+            && self.rigid_loop_joints().any(|(joint, _)| joint == id)
+            && (!matches!(
+                self.joint(id).unwrap().kind,
+                JointType::Revolute | JointType::Prismatic | JointType::D6 | JointType::Ball
+            ))
+        {
+            return Err(Error::Build(
+                "this rigid-loop motor kind is not supported".into(),
+            ));
+        }
         let dof = self.snapshot.joint_layouts[&id][axis as usize].expect("validated joint axis");
         let mut changed = self.description.joint_axes[&id][axis as usize].motor != Some(motor);
         let ends = self
@@ -1186,6 +1737,9 @@ impl RigidScene {
             .get_mut(&id)
             .ok_or_else(|| missing("joint"))?[axis as usize]
             .motor = Some(motor);
+        if changed {
+            self.touch_dynamics();
+        }
         if changed && wake {
             for body in ends.into_iter().flatten() {
                 self.activate_body(body);
@@ -1195,11 +1749,29 @@ impl RigidScene {
     }
 
     /// Set a joint axis's brake damping in place, without a rebuild.
-    pub fn set_joint_brake(&mut self, id: JointHandle, axis: JointAxis, damping: Real) -> Result<()> {
+    pub fn set_joint_brake(
+        &mut self,
+        id: JointHandle,
+        axis: JointAxis,
+        damping: Real,
+    ) -> Result<()> {
         if !damping.is_finite() || damping < 0.0 {
-            return Err(Error::Build("joint brake damping must be finite and nonnegative".into()));
+            return Err(Error::Build(
+                "joint brake damping must be finite and nonnegative".into(),
+            ));
         }
         axis.dof(self.joint(id).ok_or_else(|| missing("joint"))?.kind)?;
+        if damping != 0.0
+            && self.rigid_loop_joints().any(|(joint, _)| joint == id)
+            && !matches!(
+                self.joint(id).unwrap().kind,
+                JointType::Revolute | JointType::Prismatic | JointType::D6 | JointType::Ball
+            )
+        {
+            return Err(Error::Build(
+                "rigid loops do not yet support axis brakes".into(),
+            ));
+        }
         let settings = &mut self
             .description
             .joint_axes
@@ -1209,13 +1781,18 @@ impl RigidScene {
             return Ok(());
         }
         settings.brake = damping;
-        if let (Some(joint), Some(dof)) =
-            (self.joint_index(id), self.snapshot.joint_layouts[&id][axis as usize])
-        {
+        self.touch_dynamics();
+        if let (Some(joint), Some(dof)) = (
+            self.joint_index(id),
+            self.snapshot.joint_layouts[&id][axis as usize],
+        ) {
             let offset = self.model().joint_dof_offset.host()?[joint.index()] as usize;
             self.snapshot.control.joint_damping.host_mut()?[offset + dof] = damping;
         }
-        let ends = self.joint(id).map(|j| [j.parent, Some(j.child)]).unwrap_or_default();
+        let ends = self
+            .joint(id)
+            .map(|j| [j.parent, Some(j.child)])
+            .unwrap_or_default();
         for body in ends.into_iter().flatten() {
             self.activate_body(body);
         }
@@ -1263,33 +1840,34 @@ impl RigidScene {
         self.description.joints.iter().map(|(&id, desc)| (id, desc))
     }
 
-    pub fn insert_body(&mut self, mut desc: BodyDesc) -> Result<BodyHandle> {
-        if let Some(mass) = desc.additional_mass {
-            mass.validate()?;
-            desc.params.mass = mass.mass;
-            desc.params.com = mass.local_com;
-            desc.params.inertia = mass.inertia;
-        }
-        self.edit(|d| {
-            let id = BodyHandle(d.allocate()?);
-            d.bodies.insert(id, desc);
-            Ok(id)
-        })
+    pub fn insert_body(&mut self, desc: BodyDesc) -> Result<BodyHandle> {
+        self.edit(|d| d.insert_body(desc))
     }
 
     /// Remove a body, its colliders and incident joints; surviving children become roots.
     pub fn remove_body(&mut self, id: BodyHandle) -> Result<()> {
         self.edit(|d| {
             d.bodies.remove(&id).ok_or_else(|| missing("body"))?;
+            d.body_identities.remove(&id);
+            d.kinematic_acceleration.remove(&id);
             d.colliders.retain(|_, c| c.parent != Some(id));
             d.collider_stamps
                 .retain(|id, _| d.colliders.contains_key(id));
             d.joints
                 .retain(|_, j| j.parent != Some(id) && j.child != id);
+            d.joint_identities.retain(|id, _| d.joints.contains_key(id));
             d.joint_settings.retain(|id, _| d.joints.contains_key(id));
             d.joint_axes.retain(|id, _| d.joints.contains_key(id));
             d.joint_softness.retain(|id, _| d.joints.contains_key(id));
             d.loop_joints.retain(|id| d.joints.contains_key(id));
+            d.distance_limits.retain(|id, _| d.joints.contains_key(id));
+            d.cone_limits.retain(|id, _| d.joints.contains_key(id));
+            d.break_limits.retain(|id, _| d.joints.contains_key(id));
+            d.broken_joints.retain(|id| d.joints.contains_key(id));
+            d.body_pair_exclusions
+                .retain(|(a, b)| d.bodies.contains_key(a) && d.bodies.contains_key(b));
+            d.collider_pair_exclusions
+                .retain(|(a, b)| d.colliders.contains_key(a) && d.colliders.contains_key(b));
             Ok(())
         })
     }
@@ -1310,11 +1888,51 @@ impl RigidScene {
         }
         self.rebuild(|d| {
             d.bodies.get_mut(&id).ok_or_else(|| missing("body"))?.kind = kind;
+            if kind != BodyKind::Kinematic {
+                d.kinematic_acceleration.remove(&id);
+            }
             Ok(())
         })?;
         if wake && kind != BodyKind::Fixed {
             self.activate_body(id);
         }
+        Ok(())
+    }
+
+    /// Constant world COM/angular acceleration; None holds externally authored motion.
+    pub fn kinematic_acceleration(&self, id: BodyHandle) -> Result<Option<SpatialVector>> {
+        self.body(id).ok_or_else(|| missing("body"))?;
+        Ok(self.description.kinematic_acceleration.get(&id).copied())
+    }
+
+    /// Enable acceleration-driven motion; Some(ZERO) advances at constant velocity.
+    /// Disabled bodies retain this setting without advancing. Changing mobility clears it.
+    /// Consumed by the CPU and GPU Featherstone runtime.
+    pub fn set_kinematic_acceleration(
+        &mut self,
+        id: BodyHandle,
+        acceleration: Option<SpatialVector>,
+    ) -> Result<()> {
+        let body = self.body(id).ok_or_else(|| missing("body"))?;
+        if acceleration.is_some_and(|a| {
+            body.kind != BodyKind::Kinematic || !a.linear.is_finite() || !a.angular.is_finite()
+        }) {
+            return Err(Error::Build(
+                "invalid prescribed kinematic acceleration".into(),
+            ));
+        }
+        if self.kinematic_acceleration(id)? == acceleration {
+            return Ok(());
+        }
+        self.rebuild(|d| {
+            if let Some(acceleration) = acceleration {
+                d.kinematic_acceleration.insert(id, acceleration);
+            } else {
+                d.kinematic_acceleration.remove(&id);
+            }
+            Ok(())
+        })?;
+        self.activate_body(id);
         Ok(())
     }
 
@@ -1403,12 +2021,7 @@ impl RigidScene {
     }
 
     pub fn insert_collider(&mut self, desc: ColliderDesc) -> Result<ColliderHandle> {
-        self.edit(|d| {
-            let id = ColliderHandle(d.allocate()?);
-            d.colliders.insert(id, desc);
-            d.collider_stamps.insert(id, SceneStamp(Arc::new(())));
-            Ok(id)
-        })
+        self.edit(|d| d.insert_collider(desc))
     }
 
     pub fn replace_collider(&mut self, id: ColliderHandle, desc: ColliderDesc) -> Result<()> {
@@ -1436,18 +2049,14 @@ impl RigidScene {
         self.edit(|d| {
             d.colliders.remove(&id).ok_or_else(|| missing("collider"))?;
             d.collider_stamps.remove(&id);
+            d.collider_pair_exclusions
+                .retain(|(a, b)| *a != id && *b != id);
             Ok(())
         })
     }
 
     pub fn insert_joint(&mut self, desc: JointDesc) -> Result<JointHandle> {
-        self.edit(|d| {
-            let id = JointHandle(d.allocate()?);
-            d.joints.insert(id, desc);
-            d.joint_settings.insert(id, JointSettings::default());
-            d.joint_axes.insert(id, [JointAxisSettings::default(); 6]);
-            Ok(id)
-        })
+        self.edit(|d| d.insert_joint(desc))
     }
 
     /// Insert a compliant force joint without merging or projecting either tree.
@@ -1456,10 +2065,16 @@ impl RigidScene {
         desc: JointDesc,
         softness: JointSoftness,
     ) -> Result<JointHandle> {
+        if desc.kind == JointType::Distance {
+            return Err(Error::Build(
+                "insert a rigid distance joint and set its radial limits".into(),
+            ));
+        }
         softness.validate()?;
         self.edit(|d| {
             let id = JointHandle(d.allocate()?);
             d.joints.insert(id, desc);
+            d.joint_identities.insert(id, SceneStamp(Arc::new(())));
             d.joint_settings.insert(id, JointSettings::default());
             d.joint_axes.insert(id, [JointAxisSettings::default(); 6]);
             d.joint_softness.insert(id, softness);
@@ -1468,13 +2083,44 @@ impl RigidScene {
         })
     }
 
+    /// Insert a rigid axis or ball constraint without merging the endpoint trees.
+    pub fn insert_rigid_loop_joint(&mut self, desc: JointDesc) -> Result<JointHandle> {
+        if !matches!(
+            desc.kind,
+            JointType::Ball
+                | JointType::Fixed
+                | JointType::Revolute
+                | JointType::Prismatic
+                | JointType::D6
+        ) {
+            return Err(Error::Build(
+                "rigid loop insertion requires a fixed, revolute, prismatic, ball or D6 joint"
+                    .into(),
+            ));
+        }
+        self.edit(|d| {
+            let id = JointHandle(d.allocate()?);
+            d.joints.insert(id, desc);
+            d.joint_identities.insert(id, SceneStamp(Arc::new(())));
+            d.joint_settings.insert(id, JointSettings::default());
+            d.joint_axes.insert(id, [JointAxisSettings::default(); 6]);
+            d.loop_joints.insert(id);
+            Ok(id)
+        })
+    }
+
     pub fn remove_joint(&mut self, id: JointHandle) -> Result<()> {
         self.edit(|d| {
             d.joints.remove(&id).ok_or_else(|| missing("joint"))?;
+            d.joint_identities.remove(&id);
             d.joint_settings.remove(&id);
             d.joint_axes.remove(&id);
             d.joint_softness.remove(&id);
             d.loop_joints.remove(&id);
+            d.distance_limits.remove(&id);
+            d.cone_limits.remove(&id);
+            d.break_limits.remove(&id);
+            d.broken_joints.remove(&id);
             Ok(())
         })
     }
@@ -1501,10 +2147,26 @@ impl RigidScene {
         let mut next = self.description.clone();
         let result = change(&mut next)?;
         let snapshot = compile(&next, self.gravity, Some(&self.snapshot))?;
-        readout::update_structure_stamps(&mut self.structure_stamps, &self.description, &next);
-        self.body_state_stamps.retain(|body, _| next.bodies.contains_key(body));
+        readout::update_structure_stamps::<false, false>(
+            &mut self.structure_stamps,
+            &self.description,
+            &next,
+        );
+        readout::update_structure_stamps::<true, false>(
+            &mut self.contact_stamps,
+            &self.description,
+            &next,
+        );
+        readout::update_structure_stamps::<true, true>(
+            &mut self.contact_episode_stamps,
+            &self.description,
+            &next,
+        );
+        self.body_state_stamps
+            .retain(|body, _| next.bodies.contains_key(body));
         self.description = next;
         self.snapshot = snapshot;
+        self.touch_dynamics();
         self.revision += 1;
         Ok(result)
     }
@@ -1569,7 +2231,11 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
             }
         };
         poses.insert(id, params.pose);
-        bodies.insert(id, builder.add_body(params));
+        let body = builder.add_body(params);
+        if desc.enabled {
+            builder.set_kinematic_acceleration(body, d.kinematic_acceleration.get(&id).copied())?;
+        }
+        bodies.insert(id, body);
     }
     let mut colliders = BTreeMap::new();
     let mut shape_colliders = Vec::new();
@@ -1591,7 +2257,8 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         for &shape in &shapes {
             builder.set_shape_material(shape, desc.friction, desc.restitution)?;
             builder.set_shape_contact_material(shape, desc.contact_material)?;
-            builder.set_shape_surface_velocity(shape, desc.pose.rotation * desc.surface_velocity)?;
+            builder
+                .set_shape_surface_velocity(shape, desc.pose.rotation * desc.surface_velocity)?;
             builder.set_shape_collision_groups(shape, desc.memberships, desc.filter)?;
             builder.set_shape_flags(shape, flags)?;
             shape_colliders.push(id);
@@ -1611,6 +2278,7 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
         .collect();
     for (&id, joint) in &d.joints {
         if !d.joint_settings[&id].contacts_enabled
+            && !d.broken_joints.contains(&id)
             && let Some(parent) = joint.parent
         {
             let shapes_for = |body| {
@@ -1623,6 +2291,26 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
                 for b in shapes_for(joint.child) {
                     builder.add_shape_collision_exclusion(a, b);
                 }
+            }
+        }
+    }
+    for &(a, b) in &d.body_pair_exclusions {
+        let shapes_for = |body| {
+            d.colliders
+                .iter()
+                .filter(move |(_, c)| c.parent == Some(body))
+                .flat_map(|(id, _)| colliders[id].iter().copied())
+        };
+        for a in shapes_for(a) {
+            for b in shapes_for(b) {
+                builder.add_shape_collision_exclusion(a, b);
+            }
+        }
+    }
+    for &(a, b) in &d.collider_pair_exclusions {
+        for &a in &colliders[&a] {
+            for &b in &colliders[&b] {
+                builder.add_shape_collision_exclusion(a, b);
             }
         }
     }
@@ -1688,6 +2376,11 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
                 && s.model.joint_type.host()?[previous.index()] == JointType::Free as u32
             {
                 copy_joint(s, previous, &model, &mut state, &mut control, joint)?;
+                if s.model.joint_x_c.host()?[previous.index()]
+                    != model.joint_x_c.host()?[joint.index()]
+                {
+                    seed_joint(&model, &mut state, joint)?;
+                }
             } else {
                 seed_joint(&model, &mut state, joint)?;
             }
@@ -1756,12 +2449,18 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
             control.joint_damping.host_mut()?[offset + dof] = settings.brake;
         }
     }
+    let mut body_handles = vec![BodyHandle(0); model.body_count];
+    for (&handle, &index) in &bodies {
+        body_handles[index.index()] = handle;
+    }
     Ok(Snapshot {
+        model_stamp: SceneStamp(Arc::new(())),
         stamp: SceneStamp(Arc::new(())),
         model,
         state,
         control,
         bodies,
+        body_handles,
         colliders,
         shape_colliders,
         joints,
@@ -1913,7 +2612,12 @@ fn add_joint(
     }
 }
 
-fn seed_joint_near(model: &Model, state: &mut State, joint: JointId, previous: &State) -> Result<()> {
+fn seed_joint_near(
+    model: &Model,
+    state: &mut State,
+    joint: JointId,
+    previous: &State,
+) -> Result<()> {
     seed_joint(model, state, joint)?;
     let j = joint.index();
     if model.joint_type.host()?[j] == JointType::Revolute as u32 {

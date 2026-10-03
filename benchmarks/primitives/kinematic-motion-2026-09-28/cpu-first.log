@@ -1,0 +1,40 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.54s
+     Running tests/runtime_kinematic_reactions.rs (target/debug/deps/runtime_kinematic_reactions-ccdc49ef4f5f524d)
+
+running 10 tests
+test driven_isolated_body_and_held_mode_have_distinct_motion ... ok
+test moving_kinematic_fixed_joint_reports_full_inertia_gyro_and_external_loads ... ok
+test reversed_kinematic_joint_reports_load_on_the_authored_child ... ok
+test driven_acceleration_wakes_initially_stationary_dependents ... ok
+test translating_rotating_kinematic_root_does_not_add_spurious_hinge_acceleration ... ok
+test driven_fixed_hinge_ball_reactions_include_boundary_acceleration ... FAILED
+test driven_motion_edits_are_atomic_and_survive_fork_and_disable ... ok
+test driven_com_motion_advances_once_per_substep_and_redrift ... ok
+test driven_break_continues_parent_motion_and_preserves_detached_velocity ... ok
+test moving_kinematic_tree_reactions_match_centripetal_support_loads ... ok
+
+failures:
+
+---- driven_fixed_hinge_ball_reactions_include_boundary_acceleration stdout ----
+
+thread 'driven_fixed_hinge_ball_reactions_include_boundary_acceleration' (369839) panicked at crates/molla-solvers/tests/runtime_kinematic_reactions.rs:69:5:
+actual=DVec3(5.999996718750001, 15.999999999998575, 0.0) expected=DVec3(6.0, 16.0, 0.0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    driven_fixed_hinge_ball_reactions_include_boundary_acceleration
+
+test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_kinematic_reactions`
+make: *** [Makefile:74: test] Error 101

@@ -1,0 +1,70 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.51s
+     Running tests/runtime_loop_controls.rs (target/debug/deps/runtime_loop_controls-1433d6030d0172c3)
+
+running 3 tests
+test cpu_compliant_loops_preserve_weak_modes_beside_null_modes ... ok
+loop controls hz=60 substeps=1 brakes=false: 288 cases passed
+loop controls hz=60 substeps=1 brakes=true: 288 cases passed
+loop controls hz=60 substeps=4 brakes=false: 288 cases passed
+loop controls hz=60 substeps=4 brakes=true: 288 cases passed
+loop controls hz=120 substeps=1 brakes=false: 288 cases passed
+loop controls hz=120 substeps=1 brakes=true: 288 cases passed
+loop controls hz=120 substeps=4 brakes=false: 288 cases passed
+loop controls hz=120 substeps=4 brakes=true: 288 cases passed
+loop controls hz=240 substeps=1 brakes=false: 288 cases passed
+loop controls hz=240 substeps=1 brakes=true: 288 cases passed
+loop controls hz=240 substeps=4 brakes=false: 288 cases passed
+test cpu_compliant_loop_controls_match_coupled_linear_angular_oracle ... ok
+loop controls hz=240 substeps=4 brakes=true: 288 cases passed
+test cpu_compliant_loop_brakes_are_independent_of_motor_caps_and_springs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 41.53s
+
+     Running tests/runtime_rigid_axis_loops.rs (target/debug/deps/runtime_rigid_axis_loops-f2adca86e62fec78)
+
+running 4 tests
+24 rigid axis closures: force/torque/both breaks, capture=false, exact repair state and follow-up step passed
+24 rigid axis closures: force/torque/both breaks, capture=true, exact repair state and follow-up step passed
+test cpu_rigid_axis_loop_break_channels_and_explicit_repair_preserve_state ... ok
+rigid-axis loops hz=60 substeps=1 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=60 substeps=1 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+48 floating hinge/slider/D6 pairs: independent five/six-row impulse, COM, full inertia and both-anchor wrenches passed
+test cpu_rigid_axis_loops_match_independent_floating_impulse_projection ... ok
+rigid-axis loops hz=60 substeps=4 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=60 substeps=4 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=1 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=1 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=4 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+test cpu_rigid_axis_loops_match_nonzero_equal_bound_motion_and_wrenches ... ok
+rigid-axis loops hz=240 substeps=4 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+test cpu_rigid_axis_loops_match_independent_hard_bound_motion_and_wrenches ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.53s
+
+     Running tests/runtime_rigid_fixed_loops.rs (target/debug/deps/runtime_rigid_fixed_loops-71b7f9c92463de14)
+
+running 4 tests
+test cpu_rigid_fixed_loop_projection_matches_independent_six_dimensional_impulse ... ok
+test cpu_rigid_fixed_loops_correct_displacements_above_coordinate_roundoff ... ok
+test cpu_rigid_fixed_loop_break_channels_and_explicit_repair_preserve_state ... ok
+
+thread 'cpu_rigid_fixed_loops_preserve_rotated_frames_and_balance_anchor_wrenches' (1139288) panicked at crates/molla-solvers/tests/runtime_rigid_fixed_loops.rs:99:5:
+hz=60 substeps=4 frame=11 joint=JointHandle(12) sample=3 sample force: DVec3(30.000001883373987, -19.999998711507008, 14.99999999999226) != DVec3(30.0, -20.0, 15.0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_rigid_fixed_loops_preserve_rotated_frames_and_balance_anchor_wrenches ... FAILED
+
+failures:
+
+failures:
+    cpu_rigid_fixed_loops_preserve_rotated_frames_and_balance_anchor_wrenches
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_rigid_fixed_loops`
+make: *** [Makefile:132: test] Error 101

@@ -1,0 +1,16 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.80s
+     Running tests/runtime_rigid_loop_drives.rs (target/debug/deps/runtime_rigid_loop_drives-ded95ec92747fef1)
+
+running 1 test
+test gpu_rigid_loop_force_drives_match_independent_implicit_oracle ... rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 60Hz/1 steps
+rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 240Hz/4 steps
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 25.13s
+

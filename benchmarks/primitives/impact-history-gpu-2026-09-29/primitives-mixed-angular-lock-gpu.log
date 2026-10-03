@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.83s
+     Running tests/runtime_d6_angular_locks.rs (target/debug/deps/runtime_d6_angular_locks-826360b15688d9a0)
+
+running 1 test
+
+thread 'gpu_mixed_euler_locks_preserve_physical_tangent_response' (2298629) panicked at crates/molla-solvers/tests/runtime_d6_angular_locks.rs:128:71:
+called `Result::unwrap()` on an `Err` value: Gpu("device request failed: Not enough memory left.")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test gpu_mixed_euler_locks_preserve_physical_tangent_response ... FAILED
+
+failures:
+
+failures:
+    gpu_mixed_euler_locks_preserve_physical_tangent_response
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.23s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_d6_angular_locks`
+make: *** [Makefile:418: test-primitives-angular-lock-wiring-gpu] Error 101

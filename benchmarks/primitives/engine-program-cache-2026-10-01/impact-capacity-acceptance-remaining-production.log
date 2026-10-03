@@ -1,0 +1,368 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 8 tests
+test contact_response_gpu::position_tests::coordinate_displacement_uses_joint_frames_not_velocity_caps_or_prescribed_time ... ok
+test contact_response_gpu::position_tests::displacement_retains_sub_ulp_motion_rates_and_cached_bindings_across_faults ... ok
+test contact_response_gpu::position_tests::exported_position_gaps_survive_large_rates_and_zero_depth_onsets ... ok
+test contact_response_gpu::position_tests::generated_distance_cone_and_axis_position_rows_match_cpu_geometry ... ok
+test contact_response_gpu::position_tests::onset_position_displacements_match_cpu_articulated_scalar_oracle ... articulated position displacement peak error=4.869755827969016e-9
+ok
+test contact_response_gpu::position_tests::predictor_projection_and_redrift_reuse_all_six_state_bindings ... ok
+test contact_response_gpu::position_tests::redundant_position_rows_are_mass_scaled_and_faults_retire_displacements ... ok
+test contact_response_gpu::position_tests::solved_displacement_updates_coordinates_then_redrifts_without_advancing_boundary_twice ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 246 filtered out; finished in 549.04s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 3 tests
+test contact_response_gpu::partition_tests::bounded_feedback_survives_impact_friction_partition_and_physical_merge ... ok
+test contact_response_gpu::partition_tests::chained_impact_and_friction_partition_contacts_scalars_and_physical_rates ... ok
+test contact_response_gpu::partition_tests::partition_masks_preserve_joint_only_islands_and_reject_split_graphs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 54.09s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.97s
+     Running tests/runtime_restitution_gpu.rs (target/debug/deps/runtime_restitution_gpu-cc4a760ba63dba28)
+
+running 6 tests
+test failed_impact_frame_restores_history_and_recovers_after_compaction ... ok
+test impact_reactions_break_a_joint_and_continue_without_repeating_the_episode ... ok
+test live_normal_impacts_publish_one_impulse_and_match_cpu_rebound ... ok
+test live_zero_depth_contact_retains_penalty_support_without_repeated_impacts ... ok
+test oblique_impact_reports_final_slip_and_matches_cpu_energy_and_impulse ... ok
+test reaction_capture_does_not_change_contact_momentum_transport ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 900.78s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.15s
+     Running tests/runtime_dispatch_metrics_gpu.rs (target/debug/deps/runtime_dispatch_metrics_gpu-de23d00c1a73a4fd)
+
+running 1 test
+test dispatch_counts_follow_substeps_and_batched_reaction_stages_not_body_count ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 105.70s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.89s
+     Running tests/runtime_multidof_feedback_gpu.rs (target/debug/deps/runtime_multidof_feedback_gpu-c96cf063213942db)
+
+running 1 test
+test multidof_drives_use_nonzero_coordinates_and_match_cpu_with_stable_feedback ... multidof kind=D6 stable=false phase=0 peak_pose=4.6566039913250917e-10 peak_velocity=5.159893728989247e-9 peak_reaction=1.8371237071390967e-6
+multidof kind=D6 stable=false phase=1 peak_pose=4.822496934103483e-4 peak_velocity=8.085418445533981e-7 peak_reaction=5.523005507023527e-6
+multidof kind=D6 stable=false phase=2 peak_pose=4.83028053035774e-4 peak_velocity=1.5308395494236978e-7 peak_reaction=8.135786754734393e-7
+multidof kind=D6 stable=false phase=3 peak_pose=4.8307037695333356e-4 peak_velocity=8.889079407477934e-7 peak_reaction=6.251191442222159e-6
+multidof kind=D6 stable=true phase=0 peak_pose=1.1478064628560824e-8 peak_velocity=5.574991906692228e-9 peak_reaction=2.045824128253278e-6
+multidof kind=D6 stable=true phase=1 peak_pose=4.8793673221889355e-4 peak_velocity=7.097632109002898e-7 peak_reaction=5.475573959287813e-6
+multidof kind=D6 stable=true phase=2 peak_pose=4.8300955463588134e-4 peak_velocity=1.652222704079178e-7 peak_reaction=8.585155764848996e-7
+multidof kind=D6 stable=true phase=3 peak_pose=4.8363352317102063e-4 peak_velocity=6.467560007948921e-7 peak_reaction=6.2132324749660774e-6
+multidof kind=Free stable=false phase=0 peak_pose=4.6566039913250917e-10 peak_velocity=5.159893729575872e-9 peak_reaction=1.8371237073404133e-6
+multidof kind=Free stable=false phase=1 peak_pose=4.822496934103483e-4 peak_velocity=8.085418469707972e-7 peak_reaction=5.5230054908584015e-6
+multidof kind=Free stable=false phase=2 peak_pose=4.83028053035774e-4 peak_velocity=1.530839549247412e-7 peak_reaction=8.135786740841023e-7
+multidof kind=Free stable=false phase=3 peak_pose=4.8307037695333356e-4 peak_velocity=8.889079460244222e-7 peak_reaction=6.251191485509464e-6
+multidof kind=Free stable=true phase=0 peak_pose=1.1478064786098453e-8 peak_velocity=5.574991921196646e-9 peak_reaction=2.045824135056539e-6
+multidof kind=Free stable=true phase=1 peak_pose=4.8793673221889355e-4 peak_velocity=7.097632102193894e-7 peak_reaction=5.4755739232575455e-6
+multidof kind=Free stable=true phase=2 peak_pose=4.8300955463588134e-4 peak_velocity=1.652222706429061e-7 peak_reaction=8.585155853589233e-7
+multidof kind=Free stable=true phase=3 peak_pose=4.8363352317102063e-4 peak_velocity=6.467560011311305e-7 peak_reaction=6.213232506010604e-6
+multidof kind=Ball stable=false phase=0 peak_pose=1.8015154833113795e-12 peak_velocity=5.455025060385863e-9 peak_reaction=1.9908689377506717e-6
+multidof kind=Ball stable=false phase=1 peak_pose=4.87135801523803e-4 peak_velocity=1.5002757696943132e-7 peak_reaction=2.1511341440617998e-6
+multidof kind=Ball stable=false phase=2 peak_pose=4.8117769325879835e-4 peak_velocity=3.984361929438885e-8 peak_reaction=2.3434287017117819e-7
+multidof kind=Ball stable=false phase=3 peak_pose=4.855920616094774e-4 peak_velocity=1.6707835467862977e-7 peak_reaction=2.5742590219461082e-6
+multidof kind=Ball stable=true phase=0 peak_pose=1.7890169955795517e-12 peak_velocity=5.417340707258933e-9 peak_reaction=1.97711421659748e-6
+multidof kind=Ball stable=true phase=1 peak_pose=4.866278408126625e-4 peak_velocity=1.5156286241694532e-7 peak_reaction=2.116546213397835e-6
+multidof kind=Ball stable=true phase=2 peak_pose=4.8121778514217354e-4 peak_velocity=5.435987870205296e-8 peak_reaction=2.086884397015715e-7
+multidof kind=Ball stable=true phase=3 peak_pose=4.8604155520755446e-4 peak_velocity=1.7362374527050815e-7 peak_reaction=2.3560787804694577e-6
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 146.01s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.91s
+     Running tests/runtime_multidof_limits.rs (target/debug/deps/runtime_multidof_limits-778e86f1d9e403fe)
+
+running 3 tests
+test gpu_d6_common_rows_satisfy_xyz_bounds_and_keep_free_response ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } route=common_rows external_fixed_loops=1
+bounded_xyz axis=0 angles=[0.0999791082294185, -0.3123765769567327, 0.112516836686828] violation=0e0
+bounded_xyz axis=1 angles=[0.4000000102506229, -0.10000003488901102, 0.20000000815773028] violation=3.4889011013561344e-8
+bounded_xyz axis=2 angles=[0.37049273971590096, -0.30140745912081934, 0.09999989554414092] violation=0e0
+bounded_xyz axis=0 angles=[0.09923048315137335, -1.5679226793865289, -0.10076638230980127] violation=0e0
+bounded_xyz axis=1 angles=[0.39999988248333074, -0.09999999774382881, 0.1999998366515783] violation=0e0
+bounded_xyz axis=2 angles=[0.2999877754781734, -1.5678111328508078, 0.09999146538428941] violation=0e0
+bounded_xyz axis=0 angles=[0.09923369035472766, 1.56792266607078, 0.5007602494242117] violation=0e0
+bounded_xyz axis=1 angles=[0.39999982380000365, 0.1000000791112344, 0.20000014704377775] violation=7.911123439674483e-8
+bounded_xyz axis=2 angles=[0.49999963249921264, 1.5678112239517648, 0.10000041836973132] violation=4.183697313170365e-7
+free_response axis=0 rate=4.999999829783271e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09997910922992967, -0.3123765724549127, 0.11251688906016229] violation=0e0
+free_response axis=0 rate=5.000000050720385e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.0999791085711228, -0.31237662986487313, 0.11251684222233364] violation=0e0
+free_response axis=1 rate=4.999999939550227e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.4000000077044918, -0.1000000060162529, 0.19999995420352776] violation=6.016252898644048e-9
+free_response axis=1 rate=4.99999992725061e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999999439409464, -0.10000000978567906, 0.20000000541343502] violation=9.785679058738062e-9
+free_response axis=2 rate=5.0000001073202585e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.370492734631598, -0.3014074124495656, 0.09999989516843073] violation=0e0
+free_response axis=2 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.3704927080013464, -0.3014074578442409, 0.09999990029973055] violation=0e0
+free_response axis=0 rate=5.000000002951275e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.0992294765015021, -1.5679226791752752, -0.10076738024295578] violation=0e0
+free_response axis=0 rate=4.999999723087215e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09922886363982517, -1.567922673332691, -0.1007676843497283] violation=0e0
+free_response axis=1 rate=5.000000113606168e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999998833422904, -0.09999999741385354, 0.1999997903328599] violation=0e0
+free_response axis=1 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999998198650649, -0.10000000107328541, 0.1999998261031938] violation=1.0732854049955165e-9
+free_response axis=2 rate=5.000000055201645e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.2999982153750381, -1.5678111451744634, 0.0999959672470125] violation=0e0
+free_response axis=2 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.2999858424292569, -1.5678111276750644, 0.0999898342920897] violation=0e0
+free_response axis=0 rate=5.0000001016510004e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09922713112074705, 1.5679226559978874, 0.5007655968913766] violation=0e0
+free_response axis=0 rate=4.9999998053568286e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09923481524993952, 1.5679226538044522, 0.5007565498623691] violation=0e0
+free_response axis=1 rate=5.000000903607081e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999998642673935, 0.09999999960587154, 0.20000011676836643] violation=0e0
+free_response axis=1 rate=5.000000193528519e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999979699928595, 0.09999998815643549, 0.20000016045843985] violation=0e0
+free_response axis=2 rate=4.999999957586271e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.49999963249921264, 1.5678112239517648, 0.10000041836973132] violation=4.183697313170365e-7
+free_response axis=2 rate=5.000000055378003e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.4999988332879108, 1.5678112085327152, 0.09999873763469307] violation=0e0
+ok
+test gpu_d6_contact_rows_satisfy_xyz_bounds_and_keep_free_response ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } route=contact_rows
+direct_contact axis=0 angles=[0.09999996726619595, -0.3131441670224049, 0.10883878358846501] violation=0e0 normal_force=2.010166645050049 torque=DVec3(0.8210243694712411, 0.1648912265232799, 0.6544261047826336)
+direct_contact axis=1 angles=[0.40000003030348275, -0.09999998431199708, 0.20000052123984213] violation=0e0 normal_force=2.010166645050049 torque=DVec3(-0.007396389818879967, -0.1461108630307706, 0.5002860641879484)
+direct_contact axis=2 angles=[0.37035800308901184, -0.30141661353903243, 0.09999999786237634] violation=0e0 normal_force=2.010166645050049 torque=DVec3(0.41450991528477504, -0.1152102080187111, 1.0249930345201972)
+bounded_xyz axis=0 angles=[0.09999995897688109, -0.3131445588314114, 0.10883822092063805] violation=0e0
+bounded_xyz axis=1 angles=[0.39999997912259166, -0.09999999817315974, 0.19999998956370948] violation=0e0
+bounded_xyz axis=2 angles=[0.37035777838201017, -0.30141689240470093, 0.09999999931128878] violation=0e0
+bounded_xyz axis=0 angles=[0.10000297149355047, -1.567930316240075, -0.09999843474959878] violation=2.9714935504687734e-6
+bounded_xyz axis=1 angles=[0.3999994219216155, -0.09999979451565877, 0.19999945565038807] violation=0e0
+bounded_xyz axis=2 angles=[0.3000005786719168, -1.5678112972976337, 0.09999942086019817] violation=0e0
+bounded_xyz axis=0 angles=[0.10000114007059348, 1.5679303996718994, 0.5000002923505978] violation=1.1400705934722088e-6
+bounded_xyz axis=1 angles=[0.3999998101160985, 0.09999991278335862, 0.2000001002304587] violation=0e0
+bounded_xyz axis=2 angles=[0.4999863094907124, 1.5678112539380864, 0.10000080746097509] violation=8.074609750829964e-7
+free_response axis=0 rate=4.9999999526025e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.0999999590234447, -0.31314455436264726, 0.10883827304136909] violation=0e0
+free_response axis=0 rate=4.999999945338684e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09999995960448427, -0.3131446041589884, 0.10883822574138736] violation=0e0
+free_response axis=1 rate=5.0000000591825286e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.4000000081301278, -0.10000000958410103, 0.19999995515796307] violation=9.584101026693936e-9
+free_response axis=1 rate=4.999999956507138e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999997503726215, -0.10000000633702415, 0.2000000102104104] violation=6.337024141545022e-9
+free_response axis=2 rate=5.0000001795759114e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.3703577732966394, -0.3014168457467838, 0.09999999888153296] violation=0e0
+free_response axis=2 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.3703577144689557, -0.30141689278780603, 0.09999999622247122] violation=0e0
+free_response axis=0 rate=5.000000053473924e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.10000297149355047, -1.567930316240075, -0.09999843474959878] violation=2.9714935504687734e-6
+free_response axis=0 rate=5.0000000541980734e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.10000255215824624, -1.5679303075818063, -0.09999839422694852] violation=2.552158246238445e-6
+free_response axis=1 rate=5.000000005330606e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999942278058287, -0.09999979418567478, 0.19999940933167346] violation=0e0
+free_response axis=1 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999993892620778, -0.09999978737075593, 0.19999946342968725] violation=0e0
+free_response axis=2 rate=4.999999989122971e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.30000250643125376, -1.5678112965682556, 0.10000133179245993] violation=1.3317924599243192e-6
+free_response axis=2 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.3000005705453859, -1.567811288440026, 0.09999984045923802] violation=0e0
+free_response axis=0 rate=4.999999883983022e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09999772392890444, 1.5679302157296, 0.5000011755639644] violation=0e0
+free_response axis=0 rate=5.000000122946584e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.10000226437945799, 1.5679303873975872, 0.4999965861081661] violation=2.2643794579807475e-6
+free_response axis=1 rate=4.999999968536587e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999998153926703, 0.09999991643850371, 0.20000005264724055] violation=0e0
+free_response axis=1 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999997481245658, 0.09999990498906916, 0.20000009633731083] violation=0e0
+free_response axis=2 rate=5.0000001006015676e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.5000067705368871, 1.5678114134102965, 0.09999716583242461] violation=0e0
+free_response axis=2 rate=4.9999999817521186e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.5000059712433115, 1.567811397991232, 0.09999548500861181] violation=0e0
+ok
+test gpu_d6_projection_satisfies_xyz_bounds_and_keeps_free_response ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+bounded_xyz axis=0 angles=[0.09999999590913311, -0.2875784227878983, 0.1125560927224715] violation=0e0
+bounded_xyz axis=1 angles=[0.3999999808251362, -0.1000000124445514, 0.19999999338145064] violation=1.2444551389378944e-8
+bounded_xyz axis=2 angles=[0.3704929443690459, -0.29859192335197343, 0.09999999584187591] violation=0e0
+bounded_xyz axis=0 angles=[0.09999917121961678, -1.5676640442752618, -0.09999894476984232] violation=0e0
+bounded_xyz axis=1 angles=[0.3999999784500366, -0.10000002741413895, 0.19999996961830202] violation=2.7414138945025535e-8
+bounded_xyz axis=2 angles=[0.2999972411557142, -1.5677813527029618, 0.09999759104005625] violation=0e0
+bounded_xyz axis=0 angles=[0.10000789913239687, 1.567664170645186, 0.5000028915197704] violation=7.899132396863018e-6
+bounded_xyz axis=1 angles=[0.3999999681895821, 0.10000001940820213, 0.20000003227999957] violation=1.9408202128756713e-8
+bounded_xyz axis=2 angles=[0.4999906221766943, 1.567781299473544, 0.10000057432946213] violation=5.74329462127432e-7
+free_response axis=0 rate=5.0000000831359866e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09999999623771126, -0.2875784182805421, 0.11255614489619259] violation=0e0
+free_response axis=0 rate=4.99999999293394e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09999999553324064, -0.2875784679839459, 0.11255609725105181] violation=0e0
+free_response axis=1 rate=4.9999999585595915e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.4000000081301278, -0.10000000958410103, 0.19999995515796307] violation=9.584101026693936e-9
+free_response axis=1 rate=5.000000203024459e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999997546289845, -0.10000000990487228, 0.20000001116484564] violation=9.904872269594911e-9
+free_response axis=2 rate=5.000000103953084e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.3704929393141388, -0.2985918766896663, 0.09999999553646377] violation=0e0
+free_response axis=2 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.37049288048086576, -0.29859192376919746, 0.09999999272987138] violation=0e0
+free_response axis=0 rate=5.000000018850845e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09999917121961678, -1.5676640442752618, -0.09999894476984232] violation=0e0
+free_response axis=0 rate=5.000000013423027e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.10000063244907449, -1.5676640360347103, -0.0999970742750164] violation=6.324490744863409e-7
+free_response axis=1 rate=5.000000113924159e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999997675517845, -0.10000000567707643, 0.1999999175729709] violation=5.677076420074201e-9
+free_response axis=1 rate=4.999999940324822e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999999125659973, -0.10000000587865418, 0.1999999678284429] violation=5.87865417456257e-9
+free_response axis=2 rate=4.9999999251784395e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.30000200997824444, -1.5677813479270137, 0.1000024594314042] violation=2.4594314042003518e-6
+free_response axis=2 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.2999953269814055, -1.5677813475272082, 0.09999597625520419] violation=0e0
+free_response axis=0 rate=4.9999999018836214e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.10000246244212875, 1.5676640094756185, 0.49999118841010703] violation=2.4624421287450238e-6
+free_response axis=0 rate=5.000000134747787e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.10000290469460929, 1.5676641483079925, 0.5000044063602062] violation=2.9046946092847747e-6
+free_response axis=1 rate=5.000000158885898e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999997422895406, 0.10000000868716924, 0.19999998806338118] violation=8.687169233967396e-9
+free_response axis=1 rate=5.000000231352148e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999993795661243, 0.10000000113488441, 0.20000003370002542] violation=1.1348844086711551e-9
+free_response axis=2 rate=4.999999965748722e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.5000037276912646, 1.567781455666621, 0.10000296242615787] violation=2.9624261578681255e-6
+free_response axis=2 rate=5.000000026138181e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.49998983074655645, 1.5677812840543501, 0.09999891007843967] violation=0e0
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 349.36s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.98s
+     Running tests/runtime_d6_axis_certification.rs (target/debug/deps/runtime_d6_axis_certification-f61d8aa70cb587a9)
+
+running 1 test
+test gpu_d6_each_axis_free_bounded_locked_matches_analytic_motion ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+d6_axis_cases=144 frames=240 substeps=2 masses=1,17,83 full_com_tensor=true peak_pose=0.000002703058439501248 peak_rate=0.00004017618296836422
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 123.76s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.90s
+     Running tests/compliant_loop_rows_gpu.rs (target/debug/deps/compliant_loop_rows_gpu-1d470e05e078ca3c)
+
+running 1 test
+test compliant_loop_rows_match_coordinate_derivatives_and_feedback_in_retained_batches ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.03s
+     Running tests/quaternion_fk_gpu.rs (target/debug/deps/quaternion_fk_gpu-82049d5bd9763968)
+
+running 2 tests
+test retained_fk_pairs_match_all_joint_kinds_and_prescribed_boundaries ... 
+thread 'retained_fk_pairs_match_all_joint_kinds_and_prescribed_boundaries' (653771) panicked at crates/molla-kernels/tests/quaternion_fk_gpu.rs:240:17:
+body=8 lane=3 error=0.000000014762058242467901 expected=0.9898083209991455 actual=GpuQuaternionPair { high: [0.114332415, -0.084336914, -0.009741728, 0.9898083], low: [-1.7051602e-9, 1.2578056e-9, 1.452887e-10, -1.4762058e-8] }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test unjointed_and_fixed_only_models_use_current_pose_without_coordinate_storage ... 
+thread 'unjointed_and_fixed_only_models_use_current_pose_without_coordinate_storage' (653787) panicked at crates/molla-kernels/tests/quaternion_fk_gpu.rs:377:9:
+assertion `left == right` failed
+  left: [0, 0, 0, 0, 0, 0, 0, 0, 134, 55, 129, 177, 155, 92, 159, 178, 0, 0, 0, 0]
+ right: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+FAILED
+
+failures:
+
+failures:
+    retained_fk_pairs_match_all_joint_kinds_and_prescribed_boundaries
+    unjointed_and_fixed_only_models_use_current_pose_without_coordinate_storage
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s
+
+error: test failed, to rerun pass `-p molla-kernels --test quaternion_fk_gpu`
+make[2]: *** [Makefile:172: test-gpu] Error 101
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: *** [Makefile:203: test-primitives-loop-rows-gpu] Error 2
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:149: test-primitives-gpu] Error 2

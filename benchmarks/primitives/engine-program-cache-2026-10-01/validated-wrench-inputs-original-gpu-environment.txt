@@ -1,0 +1,4 @@
+2026-10-01T22:38:32+02:00
+da495a0971c666c7230dd49e0b2a48d0307fc7a4
+NVIDIA GeForce RTX 4080, 595.91.07, 11466 MiB, 16376 MiB, 0 %
+command: CARGO_BUILD_JOBS=6 timeout --kill-after=10s 21600s nix develop --impure -c make -j1 test-primitives-gpu

@@ -1,0 +1,32 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.74s
+     Running tests/runtime_restitution_gpu.rs (target/debug/deps/runtime_restitution_gpu-cc4a760ba63dba28)
+
+running 1 test
+test live_normal_impacts_publish_one_impulse_and_match_cpu_rebound ... 
+thread 'live_normal_impacts_publish_one_impulse_and_match_cpu_rebound' (733537) panicked at crates/molla-solvers/tests/runtime_restitution_gpu.rs:61:29:
+called `Result::unwrap()` on an `Err` value: Solver("GPU rigid runtime solver fault 268435456")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    live_normal_impacts_publish_one_impulse_and_match_cpu_rebound
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 112.27s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_restitution_gpu`
+make[1]: *** [Makefile:85: test-gpu] Error 101
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:149: test-primitives-restitution-gpu] Error 2

@@ -144,32 +144,44 @@ mod gpu {
             let storage_usage = wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC;
-            let buf_in = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_stream_compaction in"),
-                size: bytes_in,
-                usage: storage_usage,
-                mapped_at_creation: false,
-            });
-            let buf_mask = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_stream_compaction mask"),
-                size: bytes_mask,
-                usage: storage_usage,
-                mapped_at_creation: false,
-            });
-            let buf_out = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_stream_compaction out"),
-                size: bytes_out,
-                usage: storage_usage,
-                mapped_at_creation: false,
-            });
-            let buf_count = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_stream_compaction count"),
-                size: bytes_count,
-                usage: storage_usage,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf_in, 0, bytemuck::cast_slice(input));
-            queue.write_buffer(&buf_mask, 0, bytemuck::cast_slice(mask));
+            let buf_in = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_stream_compaction in"),
+                    size: bytes_in,
+                    usage: storage_usage,
+                    mapped_at_creation: false,
+                }
+            );
+            let buf_mask = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_stream_compaction mask"),
+                    size: bytes_mask,
+                    usage: storage_usage,
+                    mapped_at_creation: false,
+                }
+            );
+            let buf_out = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_stream_compaction out"),
+                    size: bytes_out,
+                    usage: storage_usage,
+                    mapped_at_creation: false,
+                }
+            );
+            let buf_count = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_stream_compaction count"),
+                    size: bytes_count,
+                    usage: storage_usage,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &buf_in, 0, bytemuck::cast_slice(input));
+            molla_core::gpu_write_buffer!(queue, &buf_mask, 0, bytemuck::cast_slice(mask));
 
             let uniforms = Uniforms {
                 n: n as u32,
@@ -177,13 +189,16 @@ mod gpu {
                 _pad1: 0,
                 _pad2: 0,
             };
-            let buf_u = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_stream_compaction uniforms"),
-                size: core::mem::size_of::<Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf_u, 0, bytemuck::bytes_of(&uniforms));
+            let buf_u = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_stream_compaction uniforms"),
+                    size: core::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &buf_u, 0, bytemuck::bytes_of(&uniforms));
 
             let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("molla::tile_stream_compaction io bg"),
@@ -230,18 +245,24 @@ mod gpu {
                 pass.dispatch_workgroups(1, 1, 1);
             }
 
-            let stage_out = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_stream_compaction stage out"),
-                size: bytes_out,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-            let stage_count = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_stream_compaction stage count"),
-                size: bytes_count,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
+            let stage_out = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_stream_compaction stage out"),
+                    size: bytes_out,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }
+            );
+            let stage_count = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_stream_compaction stage count"),
+                    size: bytes_count,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }
+            );
             encoder.copy_buffer_to_buffer(&buf_out, 0, &stage_out, 0, bytes_out);
             encoder.copy_buffer_to_buffer(&buf_count, 0, &stage_count, 0, bytes_count);
             queue.submit(std::iter::once(encoder.finish()));
@@ -261,7 +282,7 @@ mod gpu {
                 receiver
                     .recv()
                     .map_err(|e| Error::Gpu(format!("compaction recv: {e:?}")))??;
-                let data = slice.get_mapped_range();
+                let data = molla_core::gpu_readback!(slice);
                 let v = data.to_vec();
                 drop(data);
                 buf.unmap();

@@ -1,0 +1,16 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s
+     Running tests/runtime_cone_configuration.rs (target/debug/deps/runtime_cone_configuration-2a7e7905c39a54cb)
+
+running 3 tests
+test invalid_cone_mutations_are_atomic ... ok
+test rigid_ball_loop_configuration_is_transactional ... ok
+test cone_edits_preserve_tree_and_loop_handles_through_compaction ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

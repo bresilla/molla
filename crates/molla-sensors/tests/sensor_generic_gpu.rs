@@ -39,7 +39,8 @@ fn fixture(engine: &Engine) -> Fixture {
     let mover = body(&mut b, Vec3::new(10.0, 6.0, 1.0));
     b.add_shape_sphere(mover, 0.5, Transform::IDENTITY).unwrap();
     let hidden = body(&mut b, Vec3::new(10.0, 0.0, 1.0));
-    b.add_shape_sphere(hidden, 0.5, Transform::IDENTITY).unwrap();
+    b.add_shape_sphere(hidden, 0.5, Transform::IDENTITY)
+        .unwrap();
     let roof = body(&mut b, Vec3::new(0.0, -6.0, 3.0));
     b.add_shape_box(roof, Vec3::new(1.0, 1.0, 0.1), Transform::IDENTITY)
         .unwrap();
@@ -101,9 +102,19 @@ fn distance_sensors_reduce_their_cones_like_laser_infrared_and_sonar() {
     )
     .unwrap();
     let forward = at(0.0, 0.0, 1.0, Quat::IDENTITY);
-    let skyward = at(0.0, 0.0, 1.0, Quat::from_rotation_y(-std::f64::consts::FRAC_PI_2));
+    let skyward = at(
+        0.0,
+        0.0,
+        1.0,
+        Quat::from_rotation_y(-std::f64::consts::FRAC_PI_2),
+    );
     let readings = sensors
-        .update(&engine, &f.scene, &f.state, &[forward, forward, forward, skyward])
+        .update(
+            &engine,
+            &f.scene,
+            &f.state,
+            &[forward, forward, forward, skyward],
+        )
         .unwrap();
 
     let face = 4.9;
@@ -113,16 +124,31 @@ fn distance_sensors_reduce_their_cones_like_laser_infrared_and_sonar() {
 
     // Each ray from (0, 0, 1) meets the wall face or, if it points down, the ground first.
     let hit = |r: Vec3| {
-        let ground = if r.z < 0.0 { -1.0 / r.z } else { Real::INFINITY };
+        let ground = if r.z < 0.0 {
+            -1.0 / r.z
+        } else {
+            Real::INFINITY
+        };
         (face / r.x).min(ground)
     };
-    let ring: Vec<Real> = cone_rays(5, aperture)[1..].iter().map(|r| hit(*r)).collect();
+    let ring: Vec<Real> = cone_rays(5, aperture)[1..]
+        .iter()
+        .map(|r| hit(*r))
+        .collect();
     let w = (-(0.3f64 / aperture).powi(2)).exp();
     let expected = (face + w * ring.iter().sum::<Real>()) / (1.0 + 4.0 * w);
-    assert!((readings[1].distance - expected).abs() < 2e-3, "{} vs {expected}", readings[1].distance);
+    assert!(
+        (readings[1].distance - expected).abs() < 2e-3,
+        "{} vs {expected}",
+        readings[1].distance
+    );
     let nearest = ring.iter().copied().fold(face, Real::min);
     assert!(nearest < face);
-    assert!((readings[2].distance - nearest).abs() < 1e-3, "{} vs {nearest}", readings[2].distance);
+    assert!(
+        (readings[2].distance - nearest).abs() < 1e-3,
+        "{} vs {nearest}",
+        readings[2].distance
+    );
     assert_eq!(readings[2].body, BodyId::NONE);
 
     assert!(readings[3].distance.is_infinite());
@@ -145,14 +171,24 @@ fn light_sensors_add_unblocked_sun_and_sky_by_facing() {
         sky: 100.0,
         up: Vec3::Z,
     };
-    let mut sensors = LightSensors::new(&engine, vec![Vec::new(), Vec::new(), vec![[0.0, 0.0], [2000.0, 1.0]]], 1).unwrap();
+    let mut sensors = LightSensors::new(
+        &engine,
+        vec![Vec::new(), Vec::new(), vec![[0.0, 0.0], [2000.0, 1.0]]],
+        1,
+    )
+    .unwrap();
     let poses = [
         at(0.0, 0.0, 1.0, up),
         at(0.0, -6.0, 1.0, up),
         at(0.0, 3.0, 1.0, Quat::IDENTITY),
     ];
-    let r = sensors.update(&engine, &f.scene, &f.state, &poses, &environment).unwrap();
-    assert!((r[0].irradiance - 1100.0).abs() < 1e-6 && r[0].visible == 1, "{r:?}");
+    let r = sensors
+        .update(&engine, &f.scene, &f.state, &poses, &environment)
+        .unwrap();
+    assert!(
+        (r[0].irradiance - 1100.0).abs() < 1e-6 && r[0].visible == 1,
+        "{r:?}"
+    );
     assert!((r[1].direct).abs() < 1e-9 && r[1].visible == 0 && (r[1].sky - 100.0).abs() < 1e-9);
     assert!(r[2].direct.abs() < 1e-9 && r[2].visible == 1 && (r[2].sky - 50.0).abs() < 1e-9);
     assert!((r[2].value - 0.025).abs() < 1e-9);
@@ -178,9 +214,21 @@ fn radar_reports_visible_targets_with_bearing_speed_and_power() {
     let mut radars = Radars::new(&engine, targets.len()).unwrap();
     let pose = at(0.0, 0.0, 1.0, Quat::IDENTITY);
     let seen = radars
-        .update(&engine, &f.scene, &f.model, &f.state, &spec, pose, BodyId::NONE, &targets)
+        .update(
+            &engine,
+            &f.scene,
+            &f.model,
+            &f.state,
+            &spec,
+            pose,
+            BodyId::NONE,
+            &targets,
+        )
         .unwrap();
-    assert_eq!(seen.iter().map(|d| d.body).collect::<Vec<_>>(), [f.wall, f.mover]);
+    assert_eq!(
+        seen.iter().map(|d| d.body).collect::<Vec<_>>(),
+        [f.wall, f.mover]
+    );
 
     let wall = seen[0];
     assert!((wall.distance - 26f64.sqrt()).abs() < 1e-9);
@@ -202,7 +250,16 @@ fn radar_reports_visible_targets_with_bearing_speed_and_power() {
         ..spec
     };
     let fast = radars
-        .update(&engine, &f.scene, &f.model, &f.state, &narrow, pose, BodyId::NONE, &targets)
+        .update(
+            &engine,
+            &f.scene,
+            &f.model,
+            &f.state,
+            &narrow,
+            pose,
+            BodyId::NONE,
+            &targets,
+        )
         .unwrap();
     assert!(fast.is_empty(), "{fast:?}");
     let seeing_through = RadarSpec {
@@ -210,7 +267,16 @@ fn radar_reports_visible_targets_with_bearing_speed_and_power() {
         ..spec
     };
     let all = radars
-        .update(&engine, &f.scene, &f.model, &f.state, &seeing_through, pose, BodyId::NONE, &targets)
+        .update(
+            &engine,
+            &f.scene,
+            &f.model,
+            &f.state,
+            &seeing_through,
+            pose,
+            BodyId::NONE,
+            &targets,
+        )
         .unwrap();
     assert_eq!(all.len(), 3);
 }

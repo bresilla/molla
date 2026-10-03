@@ -1,0 +1,39 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on artifact directory
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.49s
+     Running tests/runtime_rigid_loop_drives.rs (target/debug/deps/runtime_rigid_loop_drives-ded95ec92747fef1)
+
+running 1 test
+test gpu_rigid_loop_force_drives_match_independent_implicit_oracle ... rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 60Hz/1 steps
+DRIVE_TRACE frame=58 q=6.9300818054363039e-3 expected=6.9301802082273089e-3 rate=1.9522678814277894e-3 expected_rate=1.9532337124219365e-3
+DRIVE_TRACE frame=58 q=6.9300818054363039e-3 expected=6.9301802082273089e-3 rate=1.9522674915876434e-3 expected_rate=1.9532337124219365e-3
+DRIVE_TRACE frame=59 q=6.9392710653345367e-3 expected=6.9394037514735078e-3 rate=2.3689343843170006e-3 expected_rate=2.3699003790886024e-3
+DRIVE_TRACE frame=59 q=6.9392710653345367e-3 expected=6.9394037514735078e-3 rate=2.3689341604490109e-3 expected_rate=2.3699003790886024e-3
+DRIVE_TRACE frame=60 q=6.9502091222082276e-3 expected=6.9503634058308153e-3 rate=2.7856011307732581e-3 expected_rate=2.7865670457552683e-3
+DRIVE_TRACE frame=60 q=6.9502091222082276e-3 expected=6.9503634058308153e-3 rate=2.7856008860091116e-3 expected_rate=2.7865670457552683e-3
+DRIVE_TRACE frame=61 q=6.9628788761216297e-3 expected=6.9630591712992289e-3 rate=3.2022676359254928e-3 expected_rate=3.2032337124219342e-3
+DRIVE_TRACE frame=61 q=6.9628788761216297e-3 expected=6.9630591712992289e-3 rate=3.2022673980815937e-3 expected_rate=3.2032337124219342e-3
+DRIVE_TRACE frame=62 q=6.9773334162149901e-3 expected=6.9774910478787493e-3 rate=3.6189342595344225e-3 expected_rate=3.6199003790886000e-3
+DRIVE_TRACE frame=62 q=6.9773334162149901e-3 expected=6.9774910478787493e-3 rate=3.6189337351340625e-3 expected_rate=3.6199003790886000e-3
+DRIVE_TRACE frame=63 q=6.9934868371979509e-3 expected=6.9936590355693740e-3 rate=4.0356008723567375e-3 expected_rate=4.0365670457552663e-3
+DRIVE_TRACE frame=63 q=6.9934868371979509e-3 expected=6.9936590355693740e-3 rate=4.0356003514165012e-3 expected_rate=4.0365670457552663e-3
+
+thread 'gpu_rigid_loop_force_drives_match_independent_implicit_oracle' (576266) panicked at crates/molla-solvers/tests/runtime_rigid_loop_drives.rs:273:21:
+torque hz=240 steps=4 frame=63 axis=AngX mass=1: SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24515803158283234, -0.6176921129226685, 1.9520519971847534) } != SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.26231370876262644, -0.6609171943581267, 2.0886537842245434) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_rigid_loop_force_drives_match_independent_implicit_oracle
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 25.26s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_rigid_loop_drives`
+make: *** [Makefile:116: test-gpu] Error 101

@@ -1,0 +1,22 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.41s
+     Running tests/runtime_motor_coupling.rs (target/debug/deps/runtime_motor_coupling-7ceb8bf5f09772a8)
+
+running 1 test
+adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+coupled_motor_feedback_modes=[false]
+coupled_motor_prepare_begin stable=false cases=72
+coupled_motor_prepare_complete stable=false seconds=46.355100
+coupled_motor_complete stable=false cases=72 frames=40 dt=0.0004 substeps=4 peak_coordinate=2.3747113444931578e-8 peak_rate=2.9393905079944105e-6 peak_reaction=7.035145035771961e-5
+test gpu_coupled_motor_models_match_two_body_inverse_mass ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 49.09s
+

@@ -41,12 +41,15 @@ impl LidarScanKernel {
         hits: [&wgpu::Buffer; 4],
         selections: [&wgpu::Buffer; 3],
     ) -> Self {
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::lidar sizes"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::lidar sizes"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let buffers: [&[&wgpu::Buffer]; 4] = [&[descriptors, &uniform], &rays, &hits, &selections];
         let layouts: Vec<_> = buffers
             .iter()
@@ -157,7 +160,8 @@ impl LidarScanKernel {
         rays: u32,
         pulses: u32,
     ) {
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.uniform,
             0,
             bytemuck::cast_slice(&[scans, rays, pulses, 0]),
@@ -182,7 +186,8 @@ impl LidarScanKernel {
         rays: u32,
         pulses: u32,
     ) {
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.uniform,
             0,
             bytemuck::cast_slice(&[scans, rays, pulses, 0]),
@@ -203,7 +208,8 @@ impl LidarScanKernel {
         rays: u32,
         pulses: u32,
     ) {
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.uniform,
             0,
             bytemuck::cast_slice(&[scans, rays, pulses, 0]),

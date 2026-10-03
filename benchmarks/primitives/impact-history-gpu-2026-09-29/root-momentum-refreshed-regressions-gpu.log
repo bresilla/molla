@@ -1,0 +1,66 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.90s
+     Running tests/runtime_com_roots.rs (target/debug/deps/runtime_com_roots-d606b3d019b1a690)
+
+running 4 tests
+test gpu_authored_free_and_d6_frames_preserve_free_system_momentum ... authored root Free frames=60 substeps=4 relative momentum errors=[7.290156115936509e-7, 3.491776378556165e-6]
+authored root Free frames=120 substeps=4 relative momentum errors=[1.1607065866282923e-6, 2.0563968888877016e-6]
+authored root Free frames=240 substeps=4 relative momentum errors=[8.905948512107424e-7, 2.614653937344785e-6]
+authored root D6 frames=60 substeps=4 relative momentum errors=[7.290156115936509e-7, 3.491776378556165e-6]
+authored root D6 frames=120 substeps=4 relative momentum errors=[1.1607065866282923e-6, 2.0563968888877016e-6]
+authored root D6 frames=240 substeps=4 relative momentum errors=[8.905948512107424e-7, 2.614653937344785e-6]
+ok
+test gpu_com_edits_reseed_implicit_roots_and_preserve_physical_state ... ok
+test gpu_floating_branched_trees_preserve_momentum_under_internal_efforts ... moving tree Free frames=60 substeps=4 relative P/L and absolute centroid errors=[1.5622488729502598e-5, 6.900098513407896e-6, 8.706860985705575e-6]
+moving tree Free frames=120 substeps=4 relative P/L and absolute centroid errors=[1.796488545989188e-5, 9.71280949860836e-6, 1.0863037416981662e-5]
+moving tree Free frames=240 substeps=4 relative P/L and absolute centroid errors=[2.0122493360215486e-5, 8.644627385574292e-6, 6.231986224735091e-5]
+moving tree D6 frames=60 substeps=4 relative P/L and absolute centroid errors=[1.5622488729502598e-5, 6.900098513407896e-6, 8.706860985705575e-6]
+moving tree D6 frames=120 substeps=4 relative P/L and absolute centroid errors=[1.796488545989188e-5, 9.71280949860836e-6, 1.0863037416981662e-5]
+moving tree D6 frames=240 substeps=4 relative P/L and absolute centroid errors=[2.0122493360215486e-5, 8.644627385574292e-6, 6.231986224735091e-5]
+ok
+test gpu_floating_roots_integrate_applied_wrenches_and_gravity ... loaded root Free frames=60 substeps=4 absolute P/L/centroid errors=[7.48482991286344e-7, 6.935360833074433e-6, 3.8083336619134256e-7]
+loaded root Free frames=120 substeps=4 absolute P/L/centroid errors=[1.3004964507218604e-6, 5.913301749775854e-6, 4.367029136131944e-7]
+loaded root Free frames=240 substeps=4 absolute P/L/centroid errors=[1.522685318519121e-6, 1.2101264218798253e-5, 1.0220491141312685e-6]
+loaded root D6 frames=60 substeps=4 absolute P/L/centroid errors=[7.48482991286344e-7, 6.935360833074433e-6, 3.8083336619134256e-7]
+loaded root D6 frames=120 substeps=4 absolute P/L/centroid errors=[1.3004964507218604e-6, 5.913301749775854e-6, 4.367029136131944e-7]
+loaded root D6 frames=240 substeps=4 absolute P/L/centroid errors=[1.522685318519121e-6, 1.2101264218798253e-5, 1.0220491141312685e-6]
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 101.93s
+
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.93s
+     Running tests/runtime_restitution_gpu.rs (target/debug/deps/runtime_restitution_gpu-229ebd8fcc10f27b)
+
+running 6 tests
+test failed_impact_frame_restores_history_and_recovers_after_compaction ... ok
+test impact_reactions_break_a_joint_and_continue_without_repeating_the_episode ... ok
+test live_normal_impacts_publish_one_impulse_and_match_cpu_rebound ... ok
+test live_zero_depth_contact_retains_penalty_support_without_repeated_impacts ... ok
+test oblique_impact_reports_final_slip_and_matches_cpu_energy_and_impulse ... ok
+test reaction_capture_does_not_change_contact_momentum_transport ... 
+thread 'reaction_capture_does_not_change_contact_momentum_transport' (1320565) panicked at crates/molla-solvers/tests/runtime_restitution_gpu.rs:86:31:
+called `Result::unwrap()` on an `Err` value: Solver("GPU rigid runtime (impact island=0 code=268435456 iterations=8192 residual=0.00000013120842 detail=0) solver fault 268435456")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    reaction_capture_does_not_change_contact_momentum_transport
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 80.34s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_restitution_gpu`
+make: *** [Makefile:110: test-gpu] Error 101

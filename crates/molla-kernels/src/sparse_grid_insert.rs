@@ -329,54 +329,69 @@ impl<V: Value> SparseGridStorage<V> {
         for i in 0..(root_table_capacity as usize) {
             root_init[i * 4 + 3] = -1;
         }
-        let root_table = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_storage root_table"),
-            contents: bytemuck::cast_slice(&root_init),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
+        let root_table = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_storage root_table"),
+                contents: bytemuck::cast_slice(&root_init),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            }
+        );
 
         let internal_children_size = internal_capacity * INTERNAL_NODE_VOXELS;
         let internal_children_init: Vec<u32> = vec![INVALID_CHILD; internal_children_size as usize];
-        let internal_children = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_storage internal_children"),
-            contents: bytemuck::cast_slice(&internal_children_init),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
+        let internal_children = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_storage internal_children"),
+                contents: bytemuck::cast_slice(&internal_children_init),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            }
+        );
 
         let internal_masks_size = internal_capacity * INTERNAL_NODE_MASK_U32S;
-        let internal_masks = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_grid_storage internal_masks"),
-            size: (internal_masks_size as u64) * 4,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let internal_masks = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_grid_storage internal_masks"),
+                size: (internal_masks_size as u64) * 4,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         let leaf_value_count = leaf_capacity * LEAF_NODE_VOXELS;
         let leaf_value_bytes = (leaf_value_count as u64) * (V::size_bytes() as u64);
-        let leaf_values = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_grid_storage leaf_values"),
-            size: leaf_value_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let leaf_values = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_grid_storage leaf_values"),
+                size: leaf_value_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         let leaf_mask_count = leaf_capacity * LEAF_NODE_MASK_U32S;
-        let leaf_masks = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_grid_storage leaf_masks"),
-            size: (leaf_mask_count as u64) * 4,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let leaf_masks = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_grid_storage leaf_masks"),
+                size: (leaf_mask_count as u64) * 4,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         // Counters layout (Stage 24e.2 expanded to 6 slots):
         //   [0] next_internal — atomicAdd-incremented allocator
@@ -385,13 +400,16 @@ impl<V: Value> SparseGridStorage<V> {
         //   [3] freelist_count — live freelist depth
         //   [4] pending_reclaim_count — pending list depth
         //   [5] reserved (kept for alignment / future use)
-        let counters = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_storage counters"),
-            contents: bytemuck::cast_slice(&[0u32; COUNTER_SLOTS as usize]),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
+        let counters = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_storage counters"),
+                contents: bytemuck::cast_slice(&[0u32; COUNTER_SLOTS as usize]),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            }
+        );
 
         // Freelist + pending_reclaim — sized to the leaf pool because
         // every leaf can in principle be reclaimed at most once
@@ -401,54 +419,72 @@ impl<V: Value> SparseGridStorage<V> {
         // "valid leaf index 0" — leaf index 0 is a perfectly legal
         // entry, so plain zero-init wouldn't work as a sentinel.
         let freelist_init: Vec<u32> = vec![INVALID_CHILD; leaf_capacity as usize];
-        let freelist = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_storage freelist"),
-            contents: bytemuck::cast_slice(&freelist_init),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
+        let freelist = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_storage freelist"),
+                contents: bytemuck::cast_slice(&freelist_init),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            }
+        );
         let pending_init: Vec<u32> = vec![INVALID_CHILD; leaf_capacity as usize];
-        let pending_reclaim = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_storage pending_reclaim"),
-            contents: bytemuck::cast_slice(&pending_init),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
+        let pending_reclaim = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_storage pending_reclaim"),
+                contents: bytemuck::cast_slice(&pending_init),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            }
+        );
         // Stage 24e.3 — internal-node reclamation state. Freelist and
         // parent backrefs carry INVALID_CHILD sentinels (index 0 is
         // legal); live-leaf counters start at zero.
         let internal_invalid: Vec<u32> = vec![INVALID_CHILD; internal_capacity as usize];
-        let internal_freelist = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_storage internal_freelist"),
-            contents: bytemuck::cast_slice(&internal_invalid),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
-        let internal_live = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_storage internal_live"),
-            contents: bytemuck::cast_slice(&vec![0u32; internal_capacity as usize]),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
+        let internal_freelist = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_storage internal_freelist"),
+                contents: bytemuck::cast_slice(&internal_invalid),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+        let internal_live = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_storage internal_live"),
+                contents: bytemuck::cast_slice(&vec![0u32; internal_capacity as usize]),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            }
+        );
         let leaf_invalid: Vec<u32> = vec![INVALID_CHILD; leaf_capacity as usize];
-        let leaf_parent_internal = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_storage leaf_parent_internal"),
-            contents: bytemuck::cast_slice(&leaf_invalid),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
-        let leaf_parent_slot = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_storage leaf_parent_slot"),
-            contents: bytemuck::cast_slice(&leaf_invalid),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
+        let leaf_parent_internal = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_storage leaf_parent_internal"),
+                contents: bytemuck::cast_slice(&leaf_invalid),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+        let leaf_parent_slot = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_storage leaf_parent_slot"),
+                contents: bytemuck::cast_slice(&leaf_invalid),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            }
+        );
 
         Self {
             root_table,
@@ -477,8 +513,9 @@ impl<V: Value> SparseGridStorage<V> {
         for i in 0..(self.root_table_capacity as usize) {
             root_init[i * 4 + 3] = -1;
         }
-        queue.write_buffer(&self.root_table, 0, bytemuck::cast_slice(&root_init));
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(queue, &self.root_table, 0, bytemuck::cast_slice(&root_init));
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.counters,
             0,
             bytemuck::cast_slice(&[0u32; COUNTER_SLOTS as usize]),
@@ -487,14 +524,15 @@ impl<V: Value> SparseGridStorage<V> {
         // gate them; reading an inactive value never returns it).
         let internal_masks_zero =
             vec![0u8; (self.internal_capacity * INTERNAL_NODE_MASK_U32S * 4) as usize];
-        queue.write_buffer(&self.internal_masks, 0, &internal_masks_zero);
+        molla_core::gpu_write_buffer!(queue, &self.internal_masks, 0, &internal_masks_zero);
         let leaf_masks_zero = vec![0u8; (self.leaf_capacity * LEAF_NODE_MASK_U32S * 4) as usize];
-        queue.write_buffer(&self.leaf_masks, 0, &leaf_masks_zero);
+        molla_core::gpu_write_buffer!(queue, &self.leaf_masks, 0, &leaf_masks_zero);
         // Reset internal_children to INVALID_CHILD so the leaf-spin
         // wait condition still works after a reset.
         let internal_children_init: Vec<u32> =
             vec![INVALID_CHILD; (self.internal_capacity * INTERNAL_NODE_VOXELS) as usize];
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.internal_children,
             0,
             bytemuck::cast_slice(&internal_children_init),
@@ -502,30 +540,40 @@ impl<V: Value> SparseGridStorage<V> {
         // Wipe the freelist + pending_reclaim staging back to
         // INVALID_CHILD (matches the constructor-time init).
         let invalid_pool: Vec<u32> = vec![INVALID_CHILD; self.leaf_capacity as usize];
-        queue.write_buffer(&self.freelist, 0, bytemuck::cast_slice(&invalid_pool));
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
+            &self.freelist,
+            0,
+            bytemuck::cast_slice(&invalid_pool)
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.pending_reclaim,
             0,
             bytemuck::cast_slice(&invalid_pool),
         );
         // Stage 24e.3 — internal reclamation state back to pristine.
         let internal_invalid: Vec<u32> = vec![INVALID_CHILD; self.internal_capacity as usize];
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.internal_freelist,
             0,
             bytemuck::cast_slice(&internal_invalid),
         );
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.internal_live,
             0,
             bytemuck::cast_slice(&vec![0u32; self.internal_capacity as usize]),
         );
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.leaf_parent_internal,
             0,
             bytemuck::cast_slice(&invalid_pool),
         );
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.leaf_parent_slot,
             0,
             bytemuck::cast_slice(&invalid_pool),
@@ -549,12 +597,15 @@ impl<V: Value> SparseGridStorage<V> {
         queue: &wgpu::Queue,
     ) -> Result<[u32; COUNTER_SLOTS as usize]> {
         let bytes = (COUNTER_SLOTS as u64) * 4;
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_grid_storage counters stage"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_grid_storage counters stage"),
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::sparse_grid_storage counters encoder"),
         });
@@ -573,7 +624,7 @@ impl<V: Value> SparseGridStorage<V> {
         receiver
             .recv()
             .map_err(|e| Error::Gpu(format!("counters recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = molla_core::gpu_readback!(slice);
         let v: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         stage.unmap();
@@ -681,7 +732,11 @@ impl<V: Value> SparseGridInsertKernel<V> {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::sparse_grid_insert layout"),
-            bind_group_layouts: &[Some(&layout_storage), Some(&layout_io), Some(&layout_uniforms)],
+            bind_group_layouts: &[
+                Some(&layout_storage),
+                Some(&layout_io),
+                Some(&layout_uniforms),
+            ],
             immediate_size: 0,
         });
 
@@ -744,16 +799,22 @@ impl<V: Value> SparseGridInsertKernel<V> {
             padded_coords.push(0);
         }
 
-        let buf_coords = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_insert query_coords"),
-            contents: bytemuck::cast_slice(&padded_coords),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        let buf_values = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_insert query_values"),
-            contents: bytemuck::cast_slice(values),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
+        let buf_coords = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_insert query_coords"),
+                contents: bytemuck::cast_slice(&padded_coords),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+        let buf_values = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_insert query_values"),
+                contents: bytemuck::cast_slice(values),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            }
+        );
 
         let uniforms = InsertUniforms {
             count: coords.len() as u32,
@@ -761,11 +822,14 @@ impl<V: Value> SparseGridInsertKernel<V> {
             internal_capacity: storage.internal_capacity,
             leaf_capacity: storage.leaf_capacity,
         };
-        let buf_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_insert uniforms"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let buf_uniforms = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_insert uniforms"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
 
         let bg_storage = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sparse_grid_insert storage bg"),
@@ -912,27 +976,36 @@ impl<V: Value> SparseGridInsertKernel<V> {
         // values buffer is unused by the alloc kernels but the bind
         // group still requires it — stub a one-element placeholder.
         let dummy_value: V = V::zero();
-        let buf_coords = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_insert alloc query_coords"),
-            contents: bytemuck::cast_slice(&padded_coords),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        let buf_values = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_insert alloc query_values stub"),
-            contents: bytemuck::cast_slice(&[dummy_value; 1]),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
+        let buf_coords = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_insert alloc query_coords"),
+                contents: bytemuck::cast_slice(&padded_coords),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+        let buf_values = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_insert alloc query_values stub"),
+                contents: bytemuck::cast_slice(&[dummy_value; 1]),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            }
+        );
         let uniforms = InsertUniforms {
             count: coords.len() as u32,
             root_table_capacity: storage.root_table_capacity,
             internal_capacity: storage.internal_capacity,
             leaf_capacity: storage.leaf_capacity,
         };
-        let buf_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::sparse_grid_insert alloc uniforms"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let buf_uniforms = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::sparse_grid_insert alloc uniforms"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
 
         let bg_storage = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sparse_grid_insert alloc storage bg"),
@@ -1132,12 +1205,15 @@ fn read_buffer<T: Pod>(
     buf: &wgpu::Buffer,
     bytes: u64,
 ) -> Result<Vec<T>> {
-    let stage = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("molla::sparse_grid_storage stage"),
-        size: bytes,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+    let stage = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("molla::sparse_grid_storage stage"),
+            size: bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }
+    );
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("molla::sparse_grid_storage stage encoder"),
     });
@@ -1156,7 +1232,7 @@ fn read_buffer<T: Pod>(
     receiver
         .recv()
         .map_err(|e| Error::Gpu(format!("readback recv: {e:?}")))??;
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let v: Vec<T> = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     stage.unmap();

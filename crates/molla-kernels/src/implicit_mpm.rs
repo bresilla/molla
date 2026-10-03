@@ -220,14 +220,17 @@ impl GpuStepState {
         let device = kernel.device();
         let g_total = grid_size * grid_size * grid_size;
         let mk_storage = |label: &str, bytes: u64| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(16),
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST
-                    | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(16),
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST
+                        | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let g_mass = mk_storage("molla::implicit_mpm g_mass", g_total as u64 * 4);
         let g_momentum = mk_storage("molla::implicit_mpm g_momentum", g_total as u64 * 3 * 4);
@@ -243,28 +246,37 @@ impl GpuStepState {
         let p_vel = mk_storage("molla::implicit_mpm p_vel", max_particles as u64 * 16);
         let p_c = mk_storage("molla::implicit_mpm p_C", max_particles as u64 * 9 * 4);
 
-        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::implicit_mpm uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniforms = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::implicit_mpm uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         // Persistent v3 readback staging. Sized to `max_particles`
         // with 16-byte vec3 stride to match `p_pos`/`p_vel`.
         let staging_bytes = (max_particles as u64 * 16).max(16);
-        let staging_pos = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::implicit_mpm staging pos"),
-            size: staging_bytes,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let staging_vel = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::implicit_mpm staging vel"),
-            size: staging_bytes,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let staging_pos = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::implicit_mpm staging pos"),
+                size: staging_bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let staging_vel = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::implicit_mpm staging vel"),
+                size: staging_bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         Self {
             grid_size,
@@ -304,23 +316,29 @@ impl GpuStepState {
             } else {
                 bytemuck::cast_slice::<u32, u8>(group).to_vec()
             };
-            let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(&format!("molla::implicit_mpm color {c}")),
-                size: bytes.len() as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf, 0, &bytes);
+            let buf = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(&format!("molla::implicit_mpm color {c}")),
+                    size: bytes.len() as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &buf, 0, &bytes);
             self.color_bufs.push(buf);
             self.color_lens.push(group.len() as u32);
 
             // Per-color uniform (only `color_n` differs).
-            let u = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(&format!("molla::implicit_mpm color-u {c}")),
-                size: core::mem::size_of::<Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            let u = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(&format!("molla::implicit_mpm color-u {c}")),
+                    size: core::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
             self.color_uniforms.push(u);
         }
     }
@@ -351,9 +369,9 @@ impl GpuStepState {
         };
         let pos_padded = pad_vec3(pos);
         let vel_padded = pad_vec3(vel);
-        queue.write_buffer(&self.p_pos, 0, bytemuck::cast_slice(&pos_padded));
-        queue.write_buffer(&self.p_vel, 0, bytemuck::cast_slice(&vel_padded));
-        queue.write_buffer(&self.p_c, 0, bytemuck::cast_slice(c_mat));
+        molla_core::gpu_write_buffer!(queue, &self.p_pos, 0, bytemuck::cast_slice(&pos_padded));
+        molla_core::gpu_write_buffer!(queue, &self.p_vel, 0, bytemuck::cast_slice(&vel_padded));
+        molla_core::gpu_write_buffer!(queue, &self.p_c, 0, bytemuck::cast_slice(c_mat));
     }
 
     /// Stage 40 v3 — upload only `p_pos` and `p_vel`, leaving the
@@ -377,8 +395,8 @@ impl GpuStepState {
         };
         let pos_padded = pad_vec3(pos);
         let vel_padded = pad_vec3(vel);
-        queue.write_buffer(&self.p_pos, 0, bytemuck::cast_slice(&pos_padded));
-        queue.write_buffer(&self.p_vel, 0, bytemuck::cast_slice(&vel_padded));
+        molla_core::gpu_write_buffer!(queue, &self.p_pos, 0, bytemuck::cast_slice(&pos_padded));
+        molla_core::gpu_write_buffer!(queue, &self.p_vel, 0, bytemuck::cast_slice(&vel_padded));
     }
 
     /// Zero the resident `p_C` buffer. Call once before the first
@@ -386,7 +404,7 @@ impl GpuStepState {
     pub fn zero_pc(&self, kernel: &ImplicitMpmKernel) {
         let queue = kernel.queue();
         let zeros = vec![0.0_f32; self.max_particles as usize * 9];
-        queue.write_buffer(&self.p_c, 0, bytemuck::cast_slice(&zeros));
+        molla_core::gpu_write_buffer!(queue, &self.p_c, 0, bytemuck::cast_slice(&zeros));
     }
 
     /// Run one full P2G + predict + GS + floor + G2P pass on the GPU,
@@ -431,11 +449,11 @@ impl GpuStepState {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
+        molla_core::gpu_write_buffer!(queue, &self.uniforms, 0, bytemuck::bytes_of(&u));
         for (i, ucb) in self.color_uniforms.iter().enumerate() {
             let mut uc = u;
             uc.color_n = self.color_lens[i];
-            queue.write_buffer(ucb, 0, bytemuck::bytes_of(&uc));
+            molla_core::gpu_write_buffer!(queue, ucb, 0, bytemuck::bytes_of(&uc));
         }
 
         let bg_io = self.make_io_bind_group(kernel, None);
@@ -603,11 +621,11 @@ impl GpuStepState {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
+        molla_core::gpu_write_buffer!(queue, &self.uniforms, 0, bytemuck::bytes_of(&u));
         for (i, ucb) in self.color_uniforms.iter().enumerate() {
             let mut uc = u;
             uc.color_n = self.color_lens[i];
-            queue.write_buffer(ucb, 0, bytemuck::bytes_of(&uc));
+            molla_core::gpu_write_buffer!(queue, ucb, 0, bytemuck::bytes_of(&uc));
         }
 
         let bg_io = self.make_io_bind_group(kernel, None);
@@ -778,11 +796,11 @@ impl GpuStepState {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
+        molla_core::gpu_write_buffer!(queue, &self.uniforms, 0, bytemuck::bytes_of(&u));
         for (i, ucb) in self.color_uniforms.iter().enumerate() {
             let mut uc = u;
             uc.color_n = self.color_lens[i];
-            queue.write_buffer(ucb, 0, bytemuck::bytes_of(&uc));
+            molla_core::gpu_write_buffer!(queue, ucb, 0, bytemuck::bytes_of(&uc));
         }
 
         let bg_io = self.make_io_bind_group(kernel, None);
@@ -940,8 +958,8 @@ impl GpuStepState {
             .recv()
             .map_err(|e| Error::Gpu(format!("implicit_mpm v3 recv vel: {e}")))?
             .map_err(|e| Error::Gpu(format!("implicit_mpm v3 map vel: {e:?}")))?;
-        let mapped_pos = slice_pos.get_mapped_range();
-        let mapped_vel = slice_vel.get_mapped_range();
+        let mapped_pos = molla_core::gpu_readback!(slice_pos);
+        let mapped_vel = molla_core::gpu_readback!(slice_vel);
         let raw_pos: &[f32] = bytemuck::cast_slice(&mapped_pos);
         let raw_vel: &[f32] = bytemuck::cast_slice(&mapped_vel);
         let mut pos = Vec::with_capacity(n_p);
@@ -973,12 +991,15 @@ impl GpuStepState {
             let i = color_idx.unwrap_or(0).min(self.color_bufs.len() - 1);
             Some(&self.color_bufs[i])
         };
-        let scratch = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::implicit_mpm color-dummy"),
-            size: 16,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
+        let scratch = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::implicit_mpm color-dummy"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }
+        );
         let color = dummy_color.unwrap_or(&scratch);
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::implicit_mpm io bg"),
@@ -1081,12 +1102,15 @@ impl ImplicitMpmKernel {
         // p_C / g_active). They're sized minimally — the GS sweep never
         // touches them.
         let mk_dummy = |label: &str, bytes: u64| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(16),
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                self.device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(16),
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let dummy_mom = mk_dummy("molla::implicit_mpm dummy mom", g_total * 3 * 4);
         let dummy_pp = mk_dummy("molla::implicit_mpm dummy pp", 16);
@@ -1103,13 +1127,16 @@ impl ImplicitMpmKernel {
             } else {
                 bytemuck::cast_slice::<u32, u8>(group).to_vec()
             };
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(&label),
-                size: bytes.len() as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, &bytes);
+            let buf = molla_core::gpu_create_buffer!(
+                self.device,
+                &wgpu::BufferDescriptor {
+                    label: Some(&label),
+                    size: bytes.len() as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(self.queue, &buf, 0, &bytes);
             color_bufs.push(buf);
         }
         let mut uniform_bufs: Vec<wgpu::Buffer> = Vec::with_capacity(color_groups.len());
@@ -1137,13 +1164,16 @@ impl ImplicitMpmKernel {
                 _pad1: 0.0,
                 _pad2: 0.0,
             };
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(&label),
-                size: core::mem::size_of::<Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, bytemuck::bytes_of(&u));
+            let buf = molla_core::gpu_create_buffer!(
+                self.device,
+                &wgpu::BufferDescriptor {
+                    label: Some(&label),
+                    size: core::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(self.queue, &buf, 0, bytemuck::bytes_of(&u));
             uniform_bufs.push(buf);
         }
         for _ in 0..max_iters {
@@ -1239,13 +1269,16 @@ pub fn upload_storage_f32(
     data: &[f32],
 ) -> wgpu::Buffer {
     let bytes: &[u8] = bytemuck::cast_slice(data);
-    let buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: bytes.len().max(16) as u64,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    queue.write_buffer(&buf, 0, bytes);
+    let buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size: bytes.len().max(16) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
+    molla_core::gpu_write_buffer!(queue, &buf, 0, bytes);
     buf
 }
 
@@ -1265,15 +1298,18 @@ pub fn upload_storage_vec3_f32(
         padded.push(0.0);
     }
     let bytes: &[u8] = bytemuck::cast_slice(&padded);
-    let buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: bytes.len().max(16) as u64,
-        usage: wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_DST
-            | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-    queue.write_buffer(&buf, 0, bytes);
+    let buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size: bytes.len().max(16) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }
+    );
+    molla_core::gpu_write_buffer!(queue, &buf, 0, bytes);
     buf
 }
 
@@ -1286,12 +1322,15 @@ pub fn readback_vec3_f32(
     n: usize,
 ) -> Result<Vec<[f32; 3]>> {
     let bytes = (n * 4 * 4) as u64;
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("molla::implicit_mpm staging"),
-        size: bytes.max(16),
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let staging = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("molla::implicit_mpm staging"),
+            size: bytes.max(16),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("molla::implicit_mpm readback enc"),
     });
@@ -1308,7 +1347,7 @@ pub fn readback_vec3_f32(
     rx.recv()
         .map_err(|e| Error::Gpu(format!("implicit_mpm read recv: {e}")))?
         .map_err(|e| Error::Gpu(format!("implicit_mpm read map: {e:?}")))?;
-    let mapped = slice.get_mapped_range();
+    let mapped = molla_core::gpu_readback!(slice);
     let raw: &[f32] = bytemuck::cast_slice(&mapped);
     let mut out: Vec<[f32; 3]> = Vec::with_capacity(n);
     for i in 0..n {
@@ -1385,12 +1424,15 @@ pub fn readback_flat_f32(
     n: usize,
 ) -> Result<Vec<f32>> {
     let bytes = (n * 4) as u64;
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("molla::implicit_mpm staging flat"),
-        size: bytes.max(16),
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let staging = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("molla::implicit_mpm staging flat"),
+            size: bytes.max(16),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("molla::implicit_mpm readback enc flat"),
     });
@@ -1407,7 +1449,7 @@ pub fn readback_flat_f32(
     rx.recv()
         .map_err(|e| Error::Gpu(format!("implicit_mpm read recv: {e}")))?
         .map_err(|e| Error::Gpu(format!("implicit_mpm read map: {e:?}")))?;
-    let mapped = slice.get_mapped_range();
+    let mapped = molla_core::gpu_readback!(slice);
     let raw: &[f32] = bytemuck::cast_slice(&mapped);
     let out = raw[..n].to_vec();
     drop(mapped);

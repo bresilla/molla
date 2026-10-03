@@ -1,0 +1,38 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.06s
+     Running tests/runtime_contact_breakage_gpu.rs (target/debug/deps/runtime_contact_breakage_gpu-7255456fbf074124)
+
+running 3 tests
+test contact_load_breaks_support_and_continues_with_cpu_event_and_state_agreement ... 
+thread 'contact_load_breaks_support_and_continues_with_cpu_event_and_state_agreement' (28944) panicked at crates/molla-solvers/tests/runtime_contact_breakage_gpu.rs:106:9:
+assertion failed: (actual.sample.child.angular.z - 2.0).abs() < 0.002
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test detachment_refreshes_contacts_without_removing_explicit_pair_exclusions ... 
+thread 'detachment_refreshes_contacts_without_removing_explicit_pair_exclusions' (30118) panicked at crates/molla-solvers/tests/runtime_contact_breakage_gpu.rs:175:27:
+called `Result::unwrap()` on an `Err` value: Solver("GPU rigid runtime solver fault 8")
+FAILED
+test post_break_capacity_failure_restores_original_topology_and_precision ... ok
+
+failures:
+
+failures:
+    contact_load_breaks_support_and_continues_with_cpu_event_and_state_agreement
+    detachment_refreshes_contacts_without_removing_explicit_pair_exclusions
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 97.45s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_contact_breakage_gpu`
+make[1]: *** [Makefile:85: test-gpu] Error 101
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:151: test-primitives-contact-breakage-gpu] Error 2

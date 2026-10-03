@@ -40,8 +40,7 @@ pub struct ContactManifold {
     pub restitution: Real,
 }
 
-/// Maximum manifold points returned per pair. Box-box / box-plane can
-/// produce up to 4 (the deepest face-incident vertices).
+/// Maximum retained box-box, box-plane and capsule-capsule contact points.
 pub const MAX_MANIFOLD_POINTS: usize = 4;
 
 /// Generate contacts for one candidate pair. Pushes 0..N manifolds
@@ -55,7 +54,15 @@ pub fn pair_contact(
     default_restitution: Real,
     out: &mut Vec<ContactManifold>,
 ) {
-    pair_contact_cached(model, state, pair, _default_friction, default_restitution, out, None);
+    pair_contact_cached(
+        model,
+        state,
+        pair,
+        _default_friction,
+        default_restitution,
+        out,
+        None,
+    );
 }
 
 pub(crate) fn pair_contact_cached(
@@ -247,9 +254,7 @@ pub(crate) fn pair_contact_cached(
                 radius: rb,
             },
         ) => {
-            if let Some(m) = capsule_capsule(&xf_a, ha, ra, &xf_b, hb, rb, pair.a, pair.b) {
-                out.push(m);
-            }
+            capsule_capsule_manifold(&xf_a, ha, ra, &xf_b, hb, rb, pair.a, pair.b, out);
         }
 
         // ── Ellipsoid fast paths ─────────────────────────────────
@@ -322,10 +327,14 @@ pub(crate) fn pair_contact_cached(
         // these would route e.g. Cone-vs-Heightfield into GJK with a
         // broken Heightfield support function.)
         (ShapeGeometry::TriMesh { mesh_id }, _) => {
-            trimesh_pair(model, mesh_id, &xf_a, geom_b, &xf_b, pair, false, out, mesh_cache);
+            trimesh_pair(
+                model, mesh_id, &xf_a, geom_b, &xf_b, pair, false, out, mesh_cache,
+            );
         }
         (_, ShapeGeometry::TriMesh { mesh_id }) => {
-            trimesh_pair(model, mesh_id, &xf_b, geom_a, &xf_a, pair, true, out, mesh_cache);
+            trimesh_pair(
+                model, mesh_id, &xf_b, geom_a, &xf_a, pair, true, out, mesh_cache,
+            );
         }
         (ShapeGeometry::Heightfield { field_id }, _) => {
             heightfield_pair(model, field_id, &xf_a, geom_b, &xf_b, pair, false, out);
@@ -499,7 +508,7 @@ fn sphere_box(
         let dist = d_sq.sqrt();
         let n_local = delta_local / dist; // points from box → sphere
         let depth = radius - dist;
-        let contact = q_local + n_local * (0.5 * (depth));
+        let contact = q_local - n_local * (0.5 * depth);
         (-n_local, depth, contact) // normal a→b: sphere(a) → box(b) = −n_local
     } else {
         // Sphere centre inside the box — pick the axis with smallest
@@ -516,7 +525,7 @@ fn sphere_box(
         };
         // axis_local points from box centre toward the closest face.
         // Sphere centre is *inside* the box, normal sphere→box = -axis_local.
-        let contact = p_local; // sphere centre — half-buried
+        let contact = p_local + axis_local * (0.5 * depth - radius);
         (-axis_local, depth, contact)
     };
 
@@ -1135,7 +1144,7 @@ fn capsule_plane(
         let signed = (c - plane_p).dot(plane_normal);
         if signed < capsule_r {
             let depth = capsule_r - signed;
-            let point = c + plane_normal * (capsule_r - 0.5 * depth);
+            let point = c + normal * (capsule_r - 0.5 * depth);
             out.push(ContactManifold {
                 a_shape: capsule_shape,
                 b_shape: plane_shape,
@@ -1219,6 +1228,51 @@ fn capsule_capsule(
     // Now sphere-sphere between (pa, a_radius) and (pb, b_radius),
     // but emitting indices from the original capsules.
     sphere_sphere(pa, a_radius, pb, b_radius, a_shape, b_shape)
+}
+
+fn capsule_capsule_manifold(
+    a_xf: &Transform,
+    a_half: Real,
+    a_radius: Real,
+    b_xf: &Transform,
+    b_half: Real,
+    b_radius: Real,
+    a_shape: u32,
+    b_shape: u32,
+    out: &mut Vec<ContactManifold>,
+) {
+    let Some(primary) = capsule_capsule(
+        a_xf, a_half, a_radius, b_xf, b_half, b_radius, a_shape, b_shape,
+    ) else {
+        return;
+    };
+    let start = out.len();
+    out.push(primary);
+    let a_axis = a_xf.rotation * Vec3::Y;
+    let b_axis = b_xf.rotation * Vec3::Y;
+    let a0 = a_xf.position - a_axis * a_half;
+    let a1 = a_xf.position + a_axis * a_half;
+    let b0 = b_xf.position - b_axis * b_half;
+    let b1 = b_xf.position + b_axis * b_half;
+    let tolerance = 64.0 * Real::EPSILON * a_half.max(b_half).max(a_radius).max(b_radius);
+    for (pa, pb) in [
+        (a0, closest_point_on_segment(a0, b0, b1).1),
+        (a1, closest_point_on_segment(a1, b0, b1).1),
+        (closest_point_on_segment(b0, a0, a1).1, b0),
+        (closest_point_on_segment(b1, a0, a1).1, b1),
+    ] {
+        if let Some(contact) = sphere_sphere(pa, a_radius, pb, b_radius, a_shape, b_shape)
+            && !out[start..].iter().any(|other| {
+                (other.point - contact.point).length() <= tolerance
+                    && other.normal.dot(contact.normal) >= 1.0 - 64.0 * Real::EPSILON
+            })
+        {
+            out.push(contact);
+        }
+    }
+    if out.len() - start > MAX_MANIFOLD_POINTS {
+        keep_deepest_range(out, start, MAX_MANIFOLD_POINTS);
+    }
 }
 
 // ─── Ellipsoid fast paths (closed-form) ─────────────────────────────
@@ -1687,11 +1741,22 @@ fn transform_aabb_to_mesh_local(
     (local_min, local_max)
 }
 
-/// Cylinder–plane fallback. Emits up to 6 contact points: the two
-/// disk centres + 4 perimeter samples per disk that lie below the
-/// plane. The 4-perimeter strategy mirrors box-plane: a single
-/// support point creates an off-centre torque that rocks the
-/// cylinder onto its side, which is non-physical.
+fn plane_support_needed(
+    samples: impl IntoIterator<Item = Vec3>,
+    support: Vec3,
+    plane_p: Vec3,
+    normal: Vec3,
+    scale: Real,
+) -> bool {
+    let depth = -(support - plane_p).dot(normal);
+    let sampled_depth = samples
+        .into_iter()
+        .map(|point| -(point - plane_p).dot(normal))
+        .fold(Real::NEG_INFINITY, Real::max);
+    depth > 0.0 && (sampled_depth <= 0.0 || depth - sampled_depth > 1e-6 * scale)
+}
+
+/// Cylinder-plane contacts from disk centres, rim samples and disk support points.
 fn cylinder_plane_fallback(
     geom_a: ShapeGeometry,
     xf_a: &Transform,
@@ -1752,7 +1817,7 @@ fn cylinder_plane_fallback(
 
     // Try a comprehensive set: 2 disk centres + 8 perimeter samples
     // (4 per disk, at ±u, ±v). Push only the points below the plane.
-    let mut candidates: Vec<Vec3> = Vec::with_capacity(10);
+    let mut candidates: Vec<Vec3> = Vec::with_capacity(12);
     candidates.push(top);
     candidates.push(bot);
     for &disk in &[top, bot] {
@@ -1766,15 +1831,30 @@ fn cylinder_plane_fallback(
         for point in &mut candidates {
             *point -= plane_normal_world * border;
         }
-        let lowest = crate::support::support(cyl_geom, cyl_xf, -plane_normal_world);
-        if !candidates
-            .iter()
-            .any(|p| p.distance_squared(lowest) < 1e-24)
-        {
+    }
+    let local_dir = cyl_xf.rotation.conjugate() * -plane_normal_world;
+    let rim = crate::support::support_cylinder(0.0, radius, local_dir);
+    for disk in 0..2 {
+        let local = rim + Vec3::Y * if disk == 0 { half_height } else { -half_height };
+        let lowest = cyl_xf.transform_point(local) - plane_normal_world * border;
+        let start = 2 + disk * 4;
+        let samples = [
+            candidates[disk],
+            candidates[start],
+            candidates[start + 1],
+            candidates[start + 2],
+            candidates[start + 3],
+        ];
+        if plane_support_needed(
+            samples,
+            lowest,
+            plane_p,
+            plane_normal_world,
+            half_height.max(radius).max(border),
+        ) {
             candidates.push(lowest);
         }
     }
-    let mut emitted = 0usize;
     for c in candidates {
         let signed = (c - plane_p).dot(plane_normal_world);
         if signed < 0.0 {
@@ -1792,15 +1872,11 @@ fn cylinder_plane_fallback(
                 restitution: 0.0,
             };
             out.push(if flip { flip_manifold(m) } else { m });
-            emitted += 1;
         }
     }
-    let _ = emitted;
 }
 
-/// Cone-vs-plane: emit a contact for the apex + a few base disc
-/// rim samples that fall below the plane. Same pattern as
-/// `cylinder_plane_fallback`.
+/// Cone-plane contacts from the apex, base rim samples and the lowest support point.
 fn cone_plane_fallback(
     geom_a: ShapeGeometry,
     xf_a: &Transform,
@@ -1847,12 +1923,24 @@ fn cone_plane_fallback(
     let v = axis.cross(u).normalize_or_zero();
 
     let normal = -plane_normal_world; // a→b: cone(a) → plane(b)
-    let mut candidates: Vec<Vec3> = Vec::with_capacity(5);
+    let mut candidates: Vec<Vec3> = Vec::with_capacity(6);
     candidates.push(apex);
     candidates.push(base_centre + u * radius);
     candidates.push(base_centre - u * radius);
     candidates.push(base_centre + v * radius);
     candidates.push(base_centre - v * radius);
+    let local_dir = cone_xf.rotation.conjugate() * -plane_normal_world;
+    let rim = crate::support::support_cylinder(0.0, radius, local_dir) - Vec3::Y * half_height;
+    let lowest = cone_xf.transform_point(rim);
+    if plane_support_needed(
+        candidates[1..].iter().copied(),
+        lowest,
+        plane_p,
+        plane_normal_world,
+        half_height.max(radius),
+    ) {
+        candidates.push(lowest);
+    }
     for c in candidates {
         let signed = (c - plane_p).dot(plane_normal_world);
         if signed < 0.0 {
@@ -2194,6 +2282,24 @@ mod tests {
     }
 
     #[test]
+    fn sphere_box_exact_touch_retains_zero_depth_without_separated_contacts() {
+        for scale in [1. / 1024., 1., 1024.] {
+            let half = Vec3::splat(scale);
+            let radius = 0.5 * scale;
+            let center = Vec3::Y * (scale + radius);
+            let xf = Transform::IDENTITY;
+            let contact = sphere_box(center, radius, &xf, half, 0, 1).unwrap();
+            assert_eq!(contact.depth, 0.);
+            assert_eq!(contact.normal, -Vec3::Y);
+            for offset in [-1e-9, 1e-9] {
+                let contact =
+                    sphere_box(center + Vec3::Y * (offset * scale), radius, &xf, half, 0, 1);
+                assert_eq!(contact.is_some(), offset < 0.);
+            }
+        }
+    }
+
+    #[test]
     fn sphere_box_face_contact() {
         // Sphere at (0, 1.4, 0), r=0.5; box at origin half=(1,1,1).
         // Penetration on +Y face = 1 + 0.5 - 1.4 = 0.1.
@@ -2201,6 +2307,7 @@ mod tests {
         let m = sphere_box(Vec3::new(0.0, 1.4, 0.0), 0.5, &xf, Vec3::splat(1.0), 0, 1).unwrap();
         assert!((m.depth - 0.1).abs() < 1e-9);
         assert!((m.normal + Vec3::Y).length() < 1e-3);
+        assert!((m.point - Vec3::Y * 0.95).length() < 1e-9);
     }
 
     #[test]
@@ -2210,6 +2317,23 @@ mod tests {
         let xf = Transform::IDENTITY;
         let m = sphere_box(Vec3::ZERO, 0.5, &xf, Vec3::splat(1.0), 0, 1).unwrap();
         assert!(m.depth > 1.0);
+        assert!((m.point - Vec3::X * 0.25).length() < 1e-9);
+    }
+
+    #[test]
+    fn sphere_box_contact_is_the_surface_witness_midpoint_in_world_space() {
+        let xf = Transform::new(Vec3::new(2., -3., 4.), Quat::from_rotation_z(0.7));
+        for (center, closest) in [
+            (Vec3::new(0.2, 1.4, -0.3), Vec3::new(0.2, 1., -0.3)),
+            (Vec3::new(1.2, 1.2, 0.1), Vec3::new(1., 1., 0.1)),
+            (Vec3::new(0.2, 0.9, -0.3), Vec3::new(0.2, 1., -0.3)),
+        ] {
+            let center = xf.transform_point(center);
+            let contact = sphere_box(center, 0.5, &xf, Vec3::ONE, 0, 1).unwrap();
+            let sphere_witness = center + contact.normal * 0.5;
+            let box_witness = xf.transform_point(closest);
+            assert!((contact.point - (sphere_witness + box_witness) * 0.5).length() < 1e-12);
+        }
     }
 
     #[test]
@@ -2527,26 +2651,86 @@ mod tests {
     }
 
     #[test]
+    fn curved_plane_grazing_between_rim_samples() {
+        for normal in [Vec3::ONE.normalize(), Vec3::new(1.0, 0.0, 1.0).normalize()] {
+            for geometry in [
+                ShapeGeometry::Cylinder {
+                    half_height: 0.7,
+                    radius: 0.3,
+                },
+                ShapeGeometry::Cone {
+                    half_height: 0.7,
+                    radius: 0.3,
+                },
+                ShapeGeometry::RoundCylinder {
+                    half_height: 0.7,
+                    radius: 0.3,
+                    border_radius: 0.2,
+                },
+            ] {
+                let border = if matches!(geometry, ShapeGeometry::RoundCylinder { .. }) {
+                    0.2
+                } else {
+                    0.0
+                };
+                let support_depth = 0.7 * normal.y
+                    + 0.3 * (normal.x * normal.x + normal.z * normal.z).sqrt()
+                    + border;
+                let shape_xf = Transform::from_translation(normal * (support_depth - 0.01));
+                let mut contacts = Vec::new();
+                let pair = ShapePair { a: 0, b: 1 };
+                let cylinder = matches!(
+                    geometry,
+                    ShapeGeometry::Cylinder { .. } | ShapeGeometry::RoundCylinder { .. }
+                );
+                if cylinder {
+                    cylinder_plane_fallback(
+                        geometry,
+                        &shape_xf,
+                        ShapeGeometry::Plane { normal },
+                        &Transform::IDENTITY,
+                        pair,
+                        &mut contacts,
+                    );
+                } else {
+                    cone_plane_fallback(
+                        geometry,
+                        &shape_xf,
+                        ShapeGeometry::Plane { normal },
+                        &Transform::IDENTITY,
+                        pair,
+                        &mut contacts,
+                    );
+                }
+                let expected = if cylinder && normal.y == 0.0 { 2 } else { 1 };
+                assert_eq!(contacts.len(), expected, "{geometry:?}");
+                for contact in &contacts {
+                    assert!((contact.depth - 0.01).abs() < 1e-12);
+                    assert!((contact.normal + normal).length() < 1e-12);
+                    assert!((contact.point.dot(normal) + 0.005).abs() < 1e-12);
+                }
+                if expected == 2 {
+                    assert!((contacts[0].point.y - contacts[1].point.y - 1.4).abs() < 1e-12);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn capsule_plane_lying_horizontal() {
-        // Capsule lying flat on its side along X above a Y=0 plane.
-        // half_height=1, radius=0.3. Centre at (0, 0.4, 0): both
-        // end-cap centres at y=0.4, both penetrating the plane by
-        // depth=radius-y=-0.4+0.3=−0.1? No: signed = 0.4 < 0.3? No
-        // 0.4 > 0.3. So depth = 0.3 - 0.4 = -0.1 → no contact. Move
-        // capsule lower: centre at (0, 0.2, 0).
         let xf_cap = Transform::new(
             Vec3::new(0.0, 0.2, 0.0),
             Quat::from_rotation_z(std::f64::consts::FRAC_PI_2),
         );
         let mut out = Vec::new();
         capsule_plane(&xf_cap, 1.0, 0.3, Vec3::ZERO, Vec3::Y, 0, 1, &mut out);
-        // Both end-cap centres now sit at y=0.2 (rotation puts them
-        // on the X axis, but the plane signed-distance only cares
-        // about Y). depth = radius - signed = 0.3 - 0.2 = 0.1.
         assert_eq!(out.len(), 2);
         for m in &out {
             assert!((m.depth - 0.1).abs() < 1e-9, "got depth {}", m.depth);
             assert!((m.normal + Vec3::Y).length() < 1e-9);
+            assert!((m.point.y + 0.05).abs() < 1e-9);
+            assert!((m.point.x.abs() - 1.0).abs() < 1e-9);
+            assert!(m.point.z.abs() < 1e-9);
         }
     }
 
@@ -2593,5 +2777,115 @@ mod tests {
         // Distance 0.5, sum radii 0.6, depth 0.1.
         assert!((m.depth - 0.1).abs() < 1e-9, "got {}", m.depth);
         assert!((m.normal - Vec3::X).length() < 1e-9);
+    }
+
+    #[test]
+    fn capsule_manifold_retains_parallel_support_span_under_exchange_and_scale() {
+        for scale in [1e-3, 1.0, 1e3] {
+            for reverse_axis in [false, true] {
+                for shift in [0.0, 0.5] {
+                    let a = Transform::IDENTITY;
+                    let b = Transform::new(
+                        Vec3::new(0.15, shift, 0.0) * scale,
+                        if reverse_axis {
+                            Quat::from_rotation_x(std::f64::consts::PI)
+                        } else {
+                            Quat::IDENTITY
+                        },
+                    );
+                    for exchange in [false, true] {
+                        let (a, b, sign) = if exchange {
+                            (&b, &a, -1.0)
+                        } else {
+                            (&a, &b, 1.0)
+                        };
+                        let mut contacts = Vec::new();
+                        capsule_capsule_manifold(
+                            a,
+                            scale,
+                            0.1 * scale,
+                            b,
+                            scale,
+                            0.1 * scale,
+                            2,
+                            3,
+                            &mut contacts,
+                        );
+                        assert_eq!(
+                            contacts.len(),
+                            2,
+                            "scale={scale} shift={shift} reverse={reverse_axis} exchange={exchange}"
+                        );
+                        contacts.sort_by(|a, b| a.point.y.total_cmp(&b.point.y));
+                        for (contact, expected_y) in contacts.iter().zip([shift - 1.0, 1.0]) {
+                            assert_eq!((contact.a_shape, contact.b_shape), (2, 3));
+                            assert!((contact.normal - Vec3::X * sign).length() < 1e-10);
+                            assert!((contact.depth / scale - 0.05).abs() < 1e-10);
+                            assert!(
+                                (contact.point / scale - Vec3::new(0.075, expected_y, 0.0))
+                                    .length()
+                                    < 1e-10
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn capsule_manifold_keeps_crossing_and_degenerate_pairs_single() {
+        for (half, rotation) in [
+            (1.0, Quat::from_rotation_z(std::f64::consts::FRAC_PI_2)),
+            (0.0, Quat::IDENTITY),
+        ] {
+            let mut contacts = Vec::new();
+            capsule_capsule_manifold(
+                &Transform::IDENTITY,
+                half,
+                0.3,
+                &Transform::new(Vec3::Z * 0.5, rotation),
+                half,
+                0.3,
+                0,
+                1,
+                &mut contacts,
+            );
+            assert_eq!(contacts.len(), 1);
+            assert!((contacts[0].normal - Vec3::Z).length() < 1e-10);
+            assert!((contacts[0].point - Vec3::Z * 0.25).length() < 1e-10);
+            assert!((contacts[0].depth - 0.1).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn capsule_manifold_bounds_near_parallel_candidates_without_losing_span() {
+        let prefix = sphere_sphere(Vec3::ZERO, 1.0, Vec3::X, 1.0, 8, 9).unwrap();
+        for angle in [-0.01, -1e-4, 0.0, 1e-4, 0.01] {
+            let mut contacts = vec![prefix];
+            capsule_capsule_manifold(
+                &Transform::IDENTITY,
+                1.0,
+                0.1,
+                &Transform::new(Vec3::X * 0.15, Quat::from_rotation_z(angle)),
+                1.0,
+                0.1,
+                0,
+                1,
+                &mut contacts,
+            );
+            assert_eq!(contacts[0].point, prefix.point);
+            assert_eq!(contacts[0].a_shape, 8);
+            assert!((2..=MAX_MANIFOLD_POINTS).contains(&(contacts.len() - 1)));
+            let mut range = [Real::INFINITY, Real::NEG_INFINITY];
+            for contact in &contacts[1..] {
+                assert!(contact.point.is_finite() && contact.normal.is_finite());
+                assert!((contact.normal.length() - 1.0).abs() < 1e-10);
+                assert!((0.0..0.07).contains(&contact.depth));
+                range[0] = range[0].min(contact.point.y);
+                range[1] = range[1].max(contact.point.y);
+            }
+            assert!(range[1] - range[0] > 1.9);
+        }
     }
 }

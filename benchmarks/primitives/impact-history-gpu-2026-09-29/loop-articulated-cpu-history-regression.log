@@ -1,0 +1,79 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.28s
+     Running tests/runtime_joint_breakage.rs (target/debug/deps/runtime_joint_breakage-6452204f15aa14c8)
+
+running 13 tests
+test all_supported_constrained_joint_kinds_break_under_the_same_support_load ... ok
+test angular_stop_peak_is_sampled_before_mean_reduction ... ok
+test automatic_break_refreshes_collision_policy_before_the_following_substep ... ok
+test channels_simultaneous_breaks_and_disabled_limits_follow_actual_loads ... ok
+test compliant_loop_break_preserves_boundary_motion_and_legacy_frame_reactions ... ok
+test contact_load_triggers_break_and_all_substep_contact_samples_are_retained ... ok
+test gravity_break_occurs_before_the_next_substep_not_at_frame_end ... ok
+test later_force_failure_rolls_back_state_topology_events_and_input_validity ... ok
+test sequential_break_boundaries_commit_once_or_roll_back_together ... ok
+test sleeping_zero_threshold_joint_waits_for_a_valid_sample_and_readout_is_optional ... ok
+test subthreshold_frames_retain_model_identity_and_match_the_ordinary_cpu_path ... ok
+test surviving_motor_efforts_follow_handles_across_new_root_dof_compaction ... ok
+test transient_peak_triggers_below_frame_mean_threshold_and_repair_starts_a_new_episode ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/runtime_loop_articulated_contacts.rs (target/debug/deps/runtime_loop_articulated_contacts-feb21b03d836e85b)
+
+running 2 tests
+test cpu_articulated_contact_break_channels_preserve_boundary_state_and_explicit_repair ... articulated contact torque/force/both break hz=60 capture=false: 9 assemblies passed
+articulated contact torque/force/both break hz=60 capture=true: 9 assemblies passed
+articulated contact torque/force/both break hz=240 capture=false: 9 assemblies passed
+articulated contact torque/force/both break hz=240 capture=true: 9 assemblies passed
+ok
+test cpu_rotated_loops_and_articulated_contacts_match_motion_and_anchor_wrench_oracle ... articulated rotated loop/contact oracle hz=60 substeps=1: 9 assemblies passed
+articulated rotated loop/contact oracle hz=60 substeps=4: 9 assemblies passed
+articulated rotated loop/contact oracle hz=120 substeps=1: 9 assemblies passed
+articulated rotated loop/contact oracle hz=120 substeps=4: 9 assemblies passed
+articulated rotated loop/contact oracle hz=240 substeps=1: 9 assemblies passed
+articulated rotated loop/contact oracle hz=240 substeps=4: 9 assemblies passed
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+     Running tests/runtime_loop_contacts.rs (target/debug/deps/runtime_loop_contacts-774ca001617e88dc)
+
+running 1 test
+test cpu_compliant_loops_and_capped_effort_preserve_contact_and_horizontal_recurrence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/runtime_restitution.rs (target/debug/deps/runtime_restitution-daf7ed01298d6c08)
+
+running 13 tests
+test a_remote_impact_does_not_change_an_unconnected_contact_trajectory ... ok
+test breaking_a_support_preserves_an_existing_contact_episode ... ok
+test cpu_normal_rebound_consumes_restitution_across_step_sizes ... normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=0, measured=0e0
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=0.5, measured=5e-1
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=1, measured=1e0
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=0, measured=0e0
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=0.5, measured=5e-1
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=1, measured=1e0
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=0, measured=0e0
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=0.5, measured=5e-1
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=1, measured=1e0
+ok
+test explicit_velocity_and_material_edits_start_a_fresh_impact_episode ... ok
+test failed_frame_after_impact_restores_the_episode_and_physical_state ... ok
+test impact_impulse_is_published_once_and_matches_the_velocity_jump ... ok
+test impact_joint_reactions_include_the_impulse_and_can_trigger_breakage ... ok
+test passive_oblique_runtime_impacts_do_not_increase_kinetic_energy ... ok
+test rebound_is_independent_of_onset_penalty_stiffness_damping_and_substeps ... ok
+test resting_exact_touch_retains_the_episode_for_penalty_support ... ok
+test restitution_runs_in_the_sleeping_selection_path ... ok
+test restoring_published_state_after_a_failed_edit_preserves_contact_history ... ok
+test tilted_box_impacts_keep_kinetic_energy_below_the_initial_budget ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+

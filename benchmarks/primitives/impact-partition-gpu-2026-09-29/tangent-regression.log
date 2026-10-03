@@ -1,0 +1,66 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 9 tests
+test contact_response_gpu::tests::articulated_response_matches_cpu_gram_and_generalized_friction ... articulated contact response: peak gram error=5.680281103259688e-7, peak rate error=3.888536544031712e-7
+ok
+test contact_response_gpu::tests::contact_publication_preserves_halted_predictor_and_redrift ... ok
+test contact_response_gpu::tests::contact_response_faults_preserve_status_and_retire_rates_and_impulses ... ok
+test contact_response_gpu::tests::coordinate_null_mass_is_supported_and_oblique_rank_deficiency_fails_closed ... ok
+test contact_response_gpu::tests::device_contact_friction_breakaway_time_refinement ... CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=1763 regimes=[3, 3, 3, 3] vx=4.040414391218885e-3
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=1763 regimes=[3, 3, 3, 3] vx=4.040548112243414e-3, CPU vx=4.040414391218885e-3
+GPU contact trajectory: case=Breakaway substeps=1, peak drift=1.1878119707107544e0, settled creep=1.1877919192938862e0, CPU position error=7.038235820748793e-6, orientation error=2.9802322387695313e-8, velocity error=2.8728850618815036e-5
+integrated published-impulse host KKT peak=9.998230171373792e-8
+GPU breakaway: first sliding step=1763, force=11.815 N
+CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=3526 regimes=[3, 3, 3, 3] vx=2.067650951324468e-3
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=3526 regimes=[3, 3, 3, 3] vx=2.0678399596363306e-3, CPU vx=2.067650951324468e-3
+GPU contact trajectory: case=Breakaway substeps=2, peak drift=1.1869783401489258e0, settled creep=1.1869582807066763e0, CPU position error=8.021341745840067e-6, orientation error=2.9802322387695313e-8, velocity error=9.851026351133728e-5
+integrated published-impulse host KKT peak=9.99930143049456e-8
+GPU breakaway: first sliding step=3526, force=11.815 N
+CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=7052 regimes=[3, 3, 3, 3] vx=1.0815288661214224e-3
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=7052 regimes=[3, 3, 3, 3] vx=1.0815192945301533e-3, CPU vx=1.0815288661214224e-3
+GPU contact trajectory: case=Breakaway substeps=4, peak drift=1.1865683794021606e0, settled creep=1.1865483465408033e0, CPU position error=1.3338194948308414e-5, orientation error=2.9802322387695313e-8, velocity error=8.199145789005466e-5
+integrated published-impulse host KKT peak=9.998650707408202e-8
+GPU breakaway: first sliding step=7052, force=11.815 N
+CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=14105 regimes=[3, 3, 3, 3] vx=5.915495274752033e-4
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=14105 regimes=[3, 3, 3, 3] vx=5.911621847189963e-4, CPU vx=5.915495274752033e-4
+GPU contact trajectory: case=Breakaway substeps=8, peak drift=1.186031460762024e0, settled creep=1.1860114889059332e0, CPU position error=2.0315085560652826e-5, orientation error=4.2146848510894035e-8, velocity error=1.0022252301655631e-4
+integrated published-impulse host KKT peak=9.998844584148552e-8
+GPU breakaway: first sliding step=14105, force=11.815 N
+GPU breakaway refinement [position, orientation, velocity]: [[7.038235820748793e-6, 2.9802322387695313e-8, 2.8728850618815036e-5], [8.021341745840067e-6, 2.9802322387695313e-8, 9.851026351133728e-5], [1.3338194948308414e-5, 2.9802322387695313e-8, 8.199145789005466e-5], [2.0315085560652826e-5, 4.2146848510894035e-8, 0.00010022252301655631]]
+ok
+test contact_response_gpu::tests::device_contact_friction_breaks_away_when_load_crosses_static_bound ... CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=1763 regimes=[3, 3, 3, 3] vx=4.040414391218885e-3
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=1763 regimes=[3, 3, 3, 3] vx=4.040548112243414e-3, CPU vx=4.040414391218885e-3
+GPU contact trajectory: case=Breakaway substeps=1, peak drift=1.1878119707107544e0, settled creep=1.1877919192938862e0, CPU position error=7.038235820748793e-6, orientation error=2.9802322387695313e-8, velocity error=2.8728850618815036e-5
+integrated published-impulse host KKT peak=9.998230171373792e-8
+GPU breakaway: first sliding step=1763, force=11.815 N
+ok
+test contact_response_gpu::tests::device_contact_friction_holds_loaded_box_and_matches_cpu_trajectory ... GPU contact trajectory: case=Hold substeps=1, peak drift=2.2770886062062352e-5, settled creep=5.615338530000398e-7, CPU position error=5.614143341586086e-7, orientation error=1.264405455326821e-7, velocity error=3.306985503323022e-6
+integrated published-impulse host KKT peak=9.977679062022732e-8
+ok
+test contact_response_gpu::tests::device_contact_friction_slide_matches_analytic_acceleration_and_cpu ... GPU contact trajectory: case=Slide substeps=1, peak drift=1.5921634435653687e0, settled creep=0e0, CPU position error=2.6979639559521625e-6, orientation error=2.9802322387695313e-8, velocity error=1.5653863076161172e-5
+integrated published-impulse host KKT peak=9.991699150835559e-8
+GPU kinetic slide: acceleration=2.9813669621944427e0, analytic=2.98134754727832e0
+ok
+test contact_response_gpu::tests::device_contact_friction_stops_resticks_and_reverses_under_load ... GPU contact trajectory: case=StopReverse substeps=1, peak drift=5.021477937698364e-1, settled creep=5.327702667564154e-1, CPU position error=3.1322935400602816e-6, orientation error=2.9802322387695313e-8, velocity error=1.91033198675454e-5
+integrated published-impulse host KKT peak=9.890506284409082e-8
+GPU stop/re-stick: reversal-window displacement=7.817521691322327e-6
+ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 193 filtered out; finished in 486.63s
+

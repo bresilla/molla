@@ -157,152 +157,6 @@ pub(crate) fn checked_storage(
     Ok(usage)
 }
 
-#[cfg(test)]
-mod storage_tests {
-    use super::*;
-
-    #[test]
-    fn storage_estimate_counts_all_array_payloads_without_allocating_them() {
-        for capacity in [0, 1, 64, 1_000_000, u32::MAX] {
-            let usage = RayStorageUsage::for_capacity(capacity).unwrap();
-            let n = capacity.max(1) as u64;
-            assert_eq!(usage.capacity, capacity.max(1));
-            assert_eq!(usage.device_bytes, 96 * n + 32);
-            assert_eq!(
-                usage.host_bytes,
-                n * (5 * size_of::<Vec3>() + 2 * size_of::<Real>() + 2 * size_of::<i32>() + 32)
-                    as u64
-                    + size_of::<Transform>() as u64
-            );
-            assert_eq!(usage.total_bytes, usage.host_bytes + usage.device_bytes);
-        }
-        assert_eq!(
-            RayStorageUsage::for_capacity(0).unwrap(),
-            RayStorageUsage::for_capacity(1).unwrap()
-        );
-    }
-
-    #[test]
-    fn aggregate_budget_rejects_per_buffer_legal_workloads_before_allocation() {
-        let device = wgpu::Limits::default();
-        for rays in [1_000, 10_000, 100_000, 1_000_000, 4 * 1280 * 720] {
-            assert!(checked_storage(rays, RaycasterLimits::default(), &device).is_ok());
-        }
-        let usage = RayStorageUsage::for_capacity(64).unwrap();
-        assert!(
-            checked_storage(
-                64,
-                RaycasterLimits {
-                    max_ray_storage_bytes: usage.total_bytes - 1
-                },
-                &device
-            )
-            .is_err()
-        );
-        assert_eq!(
-            checked_storage(
-                64,
-                RaycasterLimits {
-                    max_ray_storage_bytes: usage.total_bytes
-                },
-                &device
-            )
-            .unwrap(),
-            usage
-        );
-        let device = wgpu::Limits {
-            max_storage_buffer_binding_size: u64::from(u32::MAX),
-            max_buffer_size: u64::MAX,
-            ..device
-        };
-        assert!(checked_storage(4_000_000, RaycasterLimits::default(), &device).is_err());
-        assert!(
-            checked_storage(
-                4_000_000,
-                RaycasterLimits {
-                    max_ray_storage_bytes: u64::MAX
-                },
-                &device
-            )
-            .is_ok()
-        );
-        assert!(
-            checked_storage(
-                u32::MAX,
-                RaycasterLimits {
-                    max_ray_storage_bytes: u64::MAX
-                },
-                &device
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn device_binding_fallback_and_dispatch_limits_are_independent_of_byte_budget() {
-        let limits = RaycasterLimits {
-            max_ray_storage_bytes: u64::MAX,
-        };
-        let mut device = wgpu::Limits {
-            max_compute_workgroups_per_dimension: 1,
-            ..Default::default()
-        };
-        assert!(checked_storage(64, limits, &device).is_ok());
-        assert!(checked_storage(65, limits, &device).is_err());
-        device.max_storage_buffer_binding_size = 31;
-        assert!(checked_storage(1, limits, &device).is_err());
-        device.max_storage_buffer_binding_size = 32;
-        device.max_buffer_size = 31;
-        assert!(checked_storage(1, limits, &device).is_err());
-        device.max_buffer_size = 32;
-        assert!(checked_storage(1, limits, &device).is_ok());
-    }
-
-    #[test]
-    #[ignore = "requires GPU"]
-    fn planned_payload_matches_constructed_host_and_device_arrays() {
-        let engine = Engine::new_gpu().unwrap();
-        let usage = RayStorageUsage::for_capacity(3).unwrap();
-        let sensor = Raycaster::new_with_limits(
-            &engine,
-            3,
-            RaycasterLimits {
-                max_ray_storage_bytes: usage.total_bytes,
-            },
-        )
-        .unwrap();
-        let buffers = [
-            sensor.static_body_q.device_buffer().unwrap(),
-            sensor.ray_origin.device_buffer().unwrap(),
-            sensor.ray_direction.device_buffer().unwrap(),
-            sensor.hit_t.device_buffer().unwrap(),
-            sensor.hit_shape.device_buffer().unwrap(),
-            sensor.hit_point.device_buffer().unwrap(),
-            sensor.hit_normal.device_buffer().unwrap(),
-            sensor.mesh_hit_t.device_buffer().unwrap(),
-            sensor.mesh_hit_tri.device_buffer().unwrap(),
-            sensor.mesh_hit_normal.device_buffer().unwrap(),
-        ];
-        assert_eq!(
-            buffers.iter().map(|b| b.size()).sum::<u64>(),
-            usage.device_bytes
-        );
-        let host_bytes = size_of_val(sensor.static_body_q.host().unwrap())
-            + size_of_val(sensor.ray_origin.host().unwrap())
-            + size_of_val(sensor.ray_direction.host().unwrap())
-            + size_of_val(sensor.hit_t.host().unwrap())
-            + size_of_val(sensor.hit_shape.host().unwrap())
-            + size_of_val(sensor.hit_point.host().unwrap())
-            + size_of_val(sensor.hit_normal.host().unwrap())
-            + size_of_val(sensor.mesh_hit_t.host().unwrap())
-            + size_of_val(sensor.mesh_hit_tri.host().unwrap())
-            + size_of_val(sensor.mesh_hit_normal.host().unwrap())
-            + size_of_val(sensor.upload_origins.as_slice())
-            + size_of_val(sensor.upload_directions.as_slice());
-        assert_eq!(host_bytes as u64, usage.host_bytes);
-    }
-}
-
 /// Reusable fixed-capacity ray sensor with device-side closest-hit reduction.
 /// Local TriMesh BVHs are shared across rigid instances, including body-attached meshes.
 pub struct Raycaster {
@@ -1036,8 +890,8 @@ impl Raycaster {
             self.hit_point.mark_device_dirty();
             self.hit_normal.mark_device_dirty();
             dispatches = 1 + self.run_trimesh_pass(
-                &device,
-                &queue,
+                device,
+                queue,
                 encoder,
                 model,
                 state,
@@ -1288,5 +1142,151 @@ impl Raycaster {
         self.mesh_cache
             .retain(|_, entry| entry.checked_epoch == self.mesh_epoch);
         Ok(dispatches)
+    }
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+
+    #[test]
+    fn storage_estimate_counts_all_array_payloads_without_allocating_them() {
+        for capacity in [0, 1, 64, 1_000_000, u32::MAX] {
+            let usage = RayStorageUsage::for_capacity(capacity).unwrap();
+            let n = capacity.max(1) as u64;
+            assert_eq!(usage.capacity, capacity.max(1));
+            assert_eq!(usage.device_bytes, 96 * n + 32);
+            assert_eq!(
+                usage.host_bytes,
+                n * (5 * size_of::<Vec3>() + 2 * size_of::<Real>() + 2 * size_of::<i32>() + 32)
+                    as u64
+                    + size_of::<Transform>() as u64
+            );
+            assert_eq!(usage.total_bytes, usage.host_bytes + usage.device_bytes);
+        }
+        assert_eq!(
+            RayStorageUsage::for_capacity(0).unwrap(),
+            RayStorageUsage::for_capacity(1).unwrap()
+        );
+    }
+
+    #[test]
+    fn aggregate_budget_rejects_per_buffer_legal_workloads_before_allocation() {
+        let device = wgpu::Limits::default();
+        for rays in [1_000, 10_000, 100_000, 1_000_000, 4 * 1280 * 720] {
+            assert!(checked_storage(rays, RaycasterLimits::default(), &device).is_ok());
+        }
+        let usage = RayStorageUsage::for_capacity(64).unwrap();
+        assert!(
+            checked_storage(
+                64,
+                RaycasterLimits {
+                    max_ray_storage_bytes: usage.total_bytes - 1
+                },
+                &device
+            )
+            .is_err()
+        );
+        assert_eq!(
+            checked_storage(
+                64,
+                RaycasterLimits {
+                    max_ray_storage_bytes: usage.total_bytes
+                },
+                &device
+            )
+            .unwrap(),
+            usage
+        );
+        let device = wgpu::Limits {
+            max_storage_buffer_binding_size: u64::from(u32::MAX),
+            max_buffer_size: u64::MAX,
+            ..device
+        };
+        assert!(checked_storage(4_000_000, RaycasterLimits::default(), &device).is_err());
+        assert!(
+            checked_storage(
+                4_000_000,
+                RaycasterLimits {
+                    max_ray_storage_bytes: u64::MAX
+                },
+                &device
+            )
+            .is_ok()
+        );
+        assert!(
+            checked_storage(
+                u32::MAX,
+                RaycasterLimits {
+                    max_ray_storage_bytes: u64::MAX
+                },
+                &device
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn device_binding_fallback_and_dispatch_limits_are_independent_of_byte_budget() {
+        let limits = RaycasterLimits {
+            max_ray_storage_bytes: u64::MAX,
+        };
+        let mut device = wgpu::Limits {
+            max_compute_workgroups_per_dimension: 1,
+            ..Default::default()
+        };
+        assert!(checked_storage(64, limits, &device).is_ok());
+        assert!(checked_storage(65, limits, &device).is_err());
+        device.max_storage_buffer_binding_size = 31;
+        assert!(checked_storage(1, limits, &device).is_err());
+        device.max_storage_buffer_binding_size = 32;
+        device.max_buffer_size = 31;
+        assert!(checked_storage(1, limits, &device).is_err());
+        device.max_buffer_size = 32;
+        assert!(checked_storage(1, limits, &device).is_ok());
+    }
+
+    #[test]
+    #[ignore = "requires GPU"]
+    fn planned_payload_matches_constructed_host_and_device_arrays() {
+        let engine = Engine::new_gpu().unwrap();
+        let usage = RayStorageUsage::for_capacity(3).unwrap();
+        let sensor = Raycaster::new_with_limits(
+            &engine,
+            3,
+            RaycasterLimits {
+                max_ray_storage_bytes: usage.total_bytes,
+            },
+        )
+        .unwrap();
+        let buffers = [
+            sensor.static_body_q.device_buffer().unwrap(),
+            sensor.ray_origin.device_buffer().unwrap(),
+            sensor.ray_direction.device_buffer().unwrap(),
+            sensor.hit_t.device_buffer().unwrap(),
+            sensor.hit_shape.device_buffer().unwrap(),
+            sensor.hit_point.device_buffer().unwrap(),
+            sensor.hit_normal.device_buffer().unwrap(),
+            sensor.mesh_hit_t.device_buffer().unwrap(),
+            sensor.mesh_hit_tri.device_buffer().unwrap(),
+            sensor.mesh_hit_normal.device_buffer().unwrap(),
+        ];
+        assert_eq!(
+            buffers.iter().map(|b| b.size()).sum::<u64>(),
+            usage.device_bytes
+        );
+        let host_bytes = size_of_val(sensor.static_body_q.host().unwrap())
+            + size_of_val(sensor.ray_origin.host().unwrap())
+            + size_of_val(sensor.ray_direction.host().unwrap())
+            + size_of_val(sensor.hit_t.host().unwrap())
+            + size_of_val(sensor.hit_shape.host().unwrap())
+            + size_of_val(sensor.hit_point.host().unwrap())
+            + size_of_val(sensor.hit_normal.host().unwrap())
+            + size_of_val(sensor.mesh_hit_t.host().unwrap())
+            + size_of_val(sensor.mesh_hit_tri.host().unwrap())
+            + size_of_val(sensor.mesh_hit_normal.host().unwrap())
+            + size_of_val(sensor.upload_origins.as_slice())
+            + size_of_val(sensor.upload_directions.as_slice());
+        assert_eq!(host_bytes as u64, usage.host_bytes);
     }
 }

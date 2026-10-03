@@ -72,11 +72,14 @@ impl SceneBoundsKernel {
         let levels = levels
             .iter()
             .map(|&(start, count)| {
-                let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("molla::scene bounds immutable parameters"),
-                    contents: bytemuck::cast_slice(&[start, count, body_count, 0]),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
+                let buffer = molla_core::gpu_buffer_init!(
+                    device,
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("molla::scene bounds immutable parameters"),
+                        contents: bytemuck::cast_slice(&[start, count, body_count, 0]),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    }
+                );
                 let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("molla::scene bounds level"),
                     layout: &params,

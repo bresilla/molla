@@ -1,0 +1,17 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.55s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 2 tests
+test contact_response_gpu::tests::articulated_response_matches_cpu_gram_and_generalized_friction ... articulated contact response: peak gram error=5.680281103259688e-7, peak rate error=2.741845624036404e-7
+ok
+test contact_response_gpu::tests::device_contact_friction_holds_loaded_box_and_matches_cpu_trajectory ... GPU loaded hold: peak drift=2.277730345667806e-5, settled creep=5.60324225181013e-7, CPU position error=5.646042575191266e-7, velocity error=1.3601685864168703e-5
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 99 filtered out; finished in 32.72s
+

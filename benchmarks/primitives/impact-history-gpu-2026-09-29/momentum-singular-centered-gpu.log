@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.71s
+     Running tests/rigid_singular_forces.rs (target/debug/deps/rigid_singular_forces-3e1b3f9e31520d24)
+
+running 1 test
+test gpu_zero_inertia_roots_keep_com_acceleration_without_artificial_spin ... 
+thread 'gpu_zero_inertia_roots_keep_com_acceleration_without_artificial_spin' (1516870) panicked at crates/molla-solvers/tests/rigid_singular_forces.rs:184:21:
+step=1, scale=0.000001, offset=DVec3(0.0, 0.0, 0.0): solver error: GPU rigid runtime solver fault 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_zero_inertia_roots_keep_com_acceleration_without_artificial_spin
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 4.01s
+
+error: test failed, to rerun pass `-p molla-solvers --test rigid_singular_forces`
+make: *** [Makefile:110: test-gpu] Error 101

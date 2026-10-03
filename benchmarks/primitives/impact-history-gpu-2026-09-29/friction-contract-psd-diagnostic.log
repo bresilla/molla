@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.08s
+     Running tests/runtime_friction_contract.rs (target/debug/deps/runtime_friction_contract-24a8077146f8661b)
+
+running 1 test
+test gpu_loaded_static_friction_holds_ten_seconds_at_three_step_sizes ... 
+thread 'gpu_loaded_static_friction_holds_ten_seconds_at_three_step_sizes' (2068355) panicked at crates/molla-solvers/tests/runtime_friction_contract.rs:86:41:
+hz=60 frame=4: solver error: GPU rigid runtime (friction island=1 code=262144 iterations=0 residual=-0.00035759195 detail=904) solver fault 262144
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_loaded_static_friction_holds_ten_seconds_at_three_step_sizes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 7.82s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_friction_contract`
+make: *** [Makefile:110: test-gpu] Error 101

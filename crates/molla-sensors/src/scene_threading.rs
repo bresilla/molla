@@ -73,10 +73,10 @@ mod tests {
                 let mut expected = Vec::new();
                 while let Some(i) = stack.pop() {
                     expected.push(i);
-                    if accepted(i) {
-                        if let Some([left, right]) = children[i as usize] {
-                            stack.extend([right, left]);
-                        }
+                    if accepted(i)
+                        && let Some([left, right]) = children[i as usize]
+                    {
+                        stack.extend([right, left]);
                     }
                 }
                 let mut actual = Vec::new();

@@ -110,18 +110,17 @@ pub fn eval_body_velocities(model: &Model, state: &mut State) -> Result<()> {
             JointType::Revolute if locked(0) => angular = Vec3::ZERO,
             JointType::Prismatic if locked(0) => linear = Vec3::ZERO,
             JointType::Ball => {
-                for k in 0..3 {
-                    if locked(k) {
-                        angular[k] = 0.0;
-                    }
+                if (0..3).all(locked) {
+                    angular = Vec3::ZERO;
                 }
             }
             JointType::D6 => {
+                let fully_locked = (3..6).all(locked);
                 for k in 0..3 {
                     if locked(k) {
                         linear[k] = 0.0;
                     }
-                    if locked(k + 3) {
+                    if fully_locked {
                         angular[k] = 0.0;
                     }
                 }

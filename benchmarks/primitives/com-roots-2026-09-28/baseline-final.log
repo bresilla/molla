@@ -1,0 +1,123 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running tests/contact_friction_modes.rs (target/debug/deps/contact_friction_modes-5f9948a4f6555558)
+
+running 6 tests
+test torsional_friction_damps_spin_along_normal ... ok
+test rolling_friction_damps_horizontal_axis_spin_when_coulomb_zero ... ok
+test kinematic_conveyor_friction_drags_sphere ... ok
+test equality_contact_recovery_preserves_tangential_slide_when_friction_zero ... ok
+test coulomb_friction_arrests_sliding_box_more_than_zero_friction ... ok
+test static_friction_holds_box_on_subcritical_incline ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/featherstone_polish_cpu.rs (target/debug/deps/featherstone_polish_cpu-63cf282917cc9cec)
+
+running 4 tests
+test distance_joint_length_holds_within_eps_cpu ... ok
+test coupled_d_dense_cholesky_matches_reference_cpu ... ok
+test d6_angular_limit_holds_under_gravity_cpu ... ok
+test distance_joint_lagrange_beats_v1_clamp_cpu ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/joint_control.rs (target/debug/deps/joint_control-292ca5e34a625b35)
+
+running 15 tests
+test invalid_axis_settings_are_atomic ... ok
+test motor_force_cap_does_not_cap_external_joint_force ... ok
+test explicit_motor_feedback_remains_available ... ok
+test low_level_acceleration_controls_survive_dormancy_without_authoring ... ok
+test motor_edits_survive_suspension_and_rebuilds ... ok
+test semantic_axes_and_motor_caps_follow_authored_axes ... ok
+test scalar_equality_limits_resist_effort_and_preserve_authored_motor ... ok
+test acceleration_motor_uses_floating_parent_effective_mass ... ok
+test acceleration_gains_are_mass_and_inertia_independent ... ok
+test locking_a_moving_joint_removes_twist_and_can_be_released ... ok
+test scalar_equality_lock_clears_existing_motion_and_can_be_released ... ok
+test stiff_velocity_motor_converges_without_overshoot ... ok
+test generic_locks_limits_and_position_motor_drive_real_coordinates ... ok
+test generic_translation_position_drive_holds_nonzero_target ... ok
+test ball_motor_holds_nonzero_angle_and_obeys_limits ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/loop_forces.rs (target/debug/deps/loop_forces-bb0d3fd222ac0e34)
+
+running 3 tests
+test closed_four_bar_moves_without_breaking_closure ... ok
+test loop_motor_cap_and_world_anchor_are_applied ... ok
+test loop_joint_does_not_project_and_survives_tree_edits ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/runtime_limit_reactions.rs (target/debug/deps/runtime_limit_reactions-d93b887125190742)
+
+running 2 tests
+test coupled_prismatic_stops_preserve_momentum_and_dissipate_impact ... ok
+test scalar_joint_stops_transfer_load_without_external_momentum ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/runtime_mass.rs (target/debug/deps/runtime_mass-3a889e59fd5cbfdb)
+
+running 1 test
+test recomputed_mass_controls_featherstone_force_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_scene.rs (target/debug/deps/runtime_scene-c580ed7f947ab22d)
+
+running 5 tests
+test fixed_flags_ignore_input_velocity_and_force_on_cpu_solvers ... ok
+test fixed_link_mass_and_forces_reach_the_articulation_root ... ok
+test detach_retains_world_pose_and_velocity_after_stepping ... ok
+test fixed_body_stays_at_current_pose_and_can_resume_dynamics ... ok
+test free_body_dynamics_are_independent_of_world_translation ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_softness.rs (target/debug/deps/runtime_softness-0d7960e735a73d1f)
+
+running 10 tests
+test invalid_softness_and_frames_are_atomic_even_when_suspended ... ok
+test raw_controls_survive_layout_toggles_and_suspension ... ok
+test soft_velocity_and_wrenches_survive_unrelated_rebuilds ... ok
+test all_logical_kinds_lower_without_losing_handles_or_kinematics ... ok
+test semantic_motors_follow_scalar_axes_and_ball_slots ... ok
+test authored_motors_survive_softness_toggles_and_reversed_axis_alignment ... ok
+test suspended_softness_updates_survive_resume_and_body_removal ... ok
+test soft_locks_and_limits_change_rest_bounds_without_projection ... ok
+test reversed_soft_fixed_joint_recovers_without_pose_jump ... ok
+test frame_capture_moves_by_force_and_settles_at_new_rest_frame ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/runtime_tree.rs (target/debug/deps/runtime_tree-fff3d18e1f1c33b9)
+
+running 10 tests
+test rerooted_teleport_moves_solver_descendants_not_authored_children ... ok
+test constraint_loops_remain_atomic_errors ... ok
+test reversed_free_joint_matches_unconstrained_body_motion ... ok
+test reversed_d6_jacobian_and_inverse_dynamics_match_finite_differences ... ok
+test reversed_frame_edits_and_suspension_keep_authored_endpoints ... ok
+test reversed_prismatic_limits_and_impulses_keep_logical_signs ... ok
+test fixing_a_hinge_child_reroots_without_reversing_motor_semantics ... ok
+test world_anchor_can_pin_a_nonroot_and_detach_with_current_velocity ... ok
+test merging_at_two_existing_children_reverses_only_the_needed_branch ... ok
+test reversed_ball_motor_targets_authored_relative_orientation ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

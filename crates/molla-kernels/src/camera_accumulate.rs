@@ -38,9 +38,9 @@ impl CameraAccumulateKernel {
         let limits = device.limits();
         if count == 0
             || bytes > limits.max_buffer_size
-            || bytes > limits.max_storage_buffer_binding_size as u64
+            || bytes > limits.max_storage_buffer_binding_size
             || color.size() < count as u64 * 4
-            || color.size() > limits.max_storage_buffer_binding_size as u64
+            || color.size() > limits.max_storage_buffer_binding_size
             || dimensions[0].div_ceil(8) > limits.max_compute_workgroups_per_dimension
             || dimensions[1].div_ceil(8) > limits.max_compute_workgroups_per_dimension
             || dimensions[2] > limits.max_compute_workgroups_per_dimension
@@ -49,18 +49,24 @@ impl CameraAccumulateKernel {
                 "camera accumulation: dimensions exceed buffer/device limits".into(),
             ));
         }
-        let sums = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::camera aperture sums"),
-            size: bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::camera aperture parameters"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let sums = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::camera aperture sums"),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let uniform = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::camera aperture parameters"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::camera aperture layout"),
             entries: &std::array::from_fn::<_, 3, _>(|binding| wgpu::BindGroupLayoutEntry {
@@ -153,7 +159,7 @@ impl CameraAccumulateKernel {
             });
         }
         if color.size() < self.sums.size() / 4
-            || color.size() > device.limits().max_storage_buffer_binding_size as u64
+            || color.size() > device.limits().max_storage_buffer_binding_size
         {
             return Err(Error::Gpu(
                 "camera accumulation: incompatible color buffer size".into(),
@@ -201,7 +207,7 @@ impl CameraAccumulateKernel {
             self.dimensions[2],
             (1.0 / samples as f32).to_bits(),
         ];
-        queue.write_buffer(&self.uniform, 0, bytemuck::cast_slice(&params));
+        molla_core::gpu_write_buffer!(queue, &self.uniform, 0, bytemuck::cast_slice(&params));
         encoder.clear_buffer(&self.sums, 0, None);
         Ok(())
     }

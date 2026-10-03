@@ -1145,13 +1145,16 @@ mod gpu {
                     0.0,
                 ],
             };
-            let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::hydroelastic uniforms"),
-                size: core::mem::size_of::<HydroUniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&u));
+            let uniform_buf = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::hydroelastic uniforms"),
+                    size: core::mem::size_of::<HydroUniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&u));
 
             let pos_buf = sample_local_pos
                 .device_buffer()

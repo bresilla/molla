@@ -1,0 +1,19 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+error: `<` is interpreted as a start of generic arguments for `usize`, not a comparison
+   --> /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/rigid_world_gpu.rs:172:48
+    |
+172 |                     && d - offsets[j] as usize < 3);
+    |                                                ^ -- interpreted as generic arguments
+    |                                                |
+    |                                                not interpreted as comparison
+    |
+help: try comparing the cast value
+    |
+172 |                     && d - (offsets[j] as usize) < 3);
+    |                            +                   +
+
+make: *** [Makefile:369: fmt-files] Error 1

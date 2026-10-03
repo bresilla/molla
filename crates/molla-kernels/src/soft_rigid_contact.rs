@@ -206,7 +206,8 @@ impl SoftRigidContactKernel {
             .map_err(|_| Error::Build("too many FEM constraint rows".into()))?;
         let kernel = Self::build(device, nodes, shapes, sampled, extra, capacity)?;
         if !rows.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &kernel.output,
                 u64::from(kernel.capacity) * std::mem::size_of::<SoftRigidContactGpu>() as u64,
                 bytemuck::cast_slice(rows),
@@ -241,7 +242,8 @@ impl SoftRigidContactKernel {
             .map_err(|_| Error::Build("too many FEM loop joints".into()))?;
         let kernel = Self::build(device, samples, shapes, true, extra, None)?;
         if !rows.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &kernel.output,
                 u64::from(samples)
                     * u64::from(shapes)
@@ -270,7 +272,8 @@ impl SoftRigidContactKernel {
             .map_err(|_| Error::Build("too many FEM loop joints".into()))?;
         let kernel = Self::build(device, samples, shapes, true, extra, Some(capacity))?;
         if !rows.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &kernel.output,
                 u64::from(capacity) * std::mem::size_of::<SoftRigidContactGpu>() as u64,
                 bytemuck::cast_slice(&rows),
@@ -301,12 +304,12 @@ impl SoftRigidContactKernel {
         let tiles = candidates.div_ceil(64);
         let max_groups = device.limits().max_compute_workgroups_per_dimension;
         let range_bytes = (u64::from(tiles) + 1) * 4;
-        if bytes > device.limits().max_storage_buffer_binding_size as u64
+        if bytes > device.limits().max_storage_buffer_binding_size
             || count.div_ceil(64) > max_groups
             || (compact_capacity.is_none() && tiles > max_groups)
             || u64::from(tiles) > u64::from(max_groups).pow(2)
             || (compact_capacity.is_some()
-                && range_bytes > device.limits().max_storage_buffer_binding_size as u64)
+                && range_bytes > device.limits().max_storage_buffer_binding_size)
         {
             return Err(Error::Build("FEM contact pairs exceed GPU limits".into()));
         }
@@ -352,12 +355,15 @@ impl SoftRigidContactKernel {
             cache: None,
         });
         let compact = compact_capacity.map(|_| CompactGather {
-            ranges: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("FEM compact contact ranges"),
-                size: range_bytes,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            }),
+            ranges: molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("FEM compact contact ranges"),
+                    size: range_bytes,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }
+            ),
             pipelines: ["count_contacts", "offset_contacts", "scatter_contacts"].map(|entry| {
                 device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some(entry),
@@ -369,14 +375,17 @@ impl SoftRigidContactKernel {
                 })
             }),
         });
-        let output = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("FEM contact rows"),
-            size: bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let output = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("FEM contact rows"),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         Ok(Self {
             layout,
             pipeline,
@@ -434,11 +443,14 @@ impl SoftRigidContactKernel {
             capacity: self.capacity,
             tiles: (self.node_count * self.shape_count).div_ceil(64),
         };
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("FEM contact parameters"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("FEM contact parameters"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let mut buffers = vec![
             bindings.positions,
             bindings.radii,

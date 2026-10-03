@@ -156,7 +156,7 @@ fn frame_and_ray_outputs_feed_typed_multistage_gpu_work_in_one_submission() {
                 assert_eq!(p.slice(65..65)?.active_range(), 66..66);
                 assert!(p.slice(65..65)?.is_empty());
                 assert!(p.slice(0..66).is_err());
-                assert!(p.slice(2..1).is_err());
+                assert!(p.slice(std::ops::Range { start: 2, end: 1 }).is_err());
                 assert!(inputs.channel::<u32>(0, 0).is_err());
                 assert!(inputs.channel::<Vec3>(2, 0).is_err());
                 assert!(inputs.channel::<Vec3>(0, 4).is_err());
@@ -205,7 +205,7 @@ fn frame_and_ray_outputs_feed_typed_multistage_gpu_work_in_one_submission() {
             &[&first],
             &mut final_pool,
             &final_specs,
-            &[1..8],
+            std::slice::from_ref(&(1..8)),
             stamp,
             |encoder, inputs, outputs| {
                 let channel = inputs.channel::<Vec3>(0, 0)?;
@@ -318,7 +318,7 @@ fn validation_backpressure_and_callback_failures_do_not_publish_partial_chains()
                     &[&receipt],
                     &mut output,
                     &specs,
-                    &[0..1],
+                    std::slice::from_ref(&(0..1)),
                     Default::default(),
                     |_, _, _| panic!("foreign receipt")
                 )
@@ -341,7 +341,7 @@ fn validation_backpressure_and_callback_failures_do_not_publish_partial_chains()
                     &[&receipt],
                     &mut output,
                     &specs,
-                    &[0..2],
+                    std::slice::from_ref(&(0..2)),
                     Default::default(),
                     |_, _, _| panic!("invalid output")
                 )
@@ -353,7 +353,7 @@ fn validation_backpressure_and_callback_failures_do_not_publish_partial_chains()
                 &[&receipt],
                 &mut output,
                 &specs,
-                &[0..1],
+                std::slice::from_ref(&(0..1)),
                 Default::default(),
                 |encoder, inputs, outputs| {
                     let p = inputs.channel::<Vec3>(0, 0)?;
@@ -370,7 +370,7 @@ fn validation_backpressure_and_callback_failures_do_not_publish_partial_chains()
                     &[&stage],
                     &mut output,
                     &specs,
-                    &[0..1],
+                    std::slice::from_ref(&(0..1)),
                     Default::default(),
                     |_, _, _| panic!("backpressure")
                 )
@@ -454,7 +454,7 @@ fn validation_backpressure_and_callback_failures_do_not_publish_partial_chains()
                 &[&receipt],
                 &mut output,
                 &specs,
-                &[0..1],
+                std::slice::from_ref(&(0..1)),
                 Default::default(),
                 |_, _, _| panic!("lost device")
             )

@@ -36,7 +36,46 @@ use crate::sim::{BodyFlags, JointType, Model, State};
 /// `joint_dof_offset`). Use `model.articulation_count == 0` to fall
 /// back to the implicit "all joints in declaration order" articulation
 /// — matches the convention used by `FeatherstoneSolver`.
+/// Finite equality Ball/D6 axes have zero rows and columns.
 pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<Vec<Real>> {
+    matrix::<true>(model, state, articulation)
+}
+
+/// Mass matrix with partial angular columns retained for coupled constraint response.
+pub fn response_mass_matrix(
+    model: &Model,
+    state: &State,
+    articulation: usize,
+) -> Result<Vec<Real>> {
+    matrix::<false>(model, state, articulation)
+}
+
+pub(crate) fn filter_locked_columns(
+    kind: JointType,
+    offset: usize,
+    lower: &[Real],
+    upper: &[Real],
+    columns: &mut [SpatialVector; MAX_JOINT_DOFS],
+) {
+    let width = match kind {
+        JointType::Ball => 3,
+        JointType::D6 => 6,
+        _ => return,
+    };
+    for (axis, column) in columns.iter_mut().take(width).enumerate() {
+        let lo = lower.get(offset + axis).copied().unwrap_or(Real::NAN);
+        let hi = upper.get(offset + axis).copied().unwrap_or(Real::NAN);
+        if lo.is_finite() && hi.is_finite() && (hi - lo).abs() < 1e-12 {
+            *column = SpatialVector::ZERO;
+        }
+    }
+}
+
+fn matrix<const FILTER_LOCKED: bool>(
+    model: &Model,
+    state: &State,
+    articulation: usize,
+) -> Result<Vec<Real>> {
     let _span = tracing::debug_span!("mass_matrix").entered();
     if model.joint_count == 0 {
         return Ok(Vec::new());
@@ -123,6 +162,15 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
             &mut s_cols_per_joint[k],
             &mut dof_active,
         );
+        if FILTER_LOCKED {
+            filter_locked_columns(
+                jt,
+                joint_dof_offset[j] as usize,
+                limit_lower,
+                limit_upper,
+                &mut s_cols_per_joint[k],
+            );
+        }
         for column in &mut s_cols_per_joint[k] {
             *column = column.scale(direction);
         }

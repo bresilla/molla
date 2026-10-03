@@ -1,0 +1,203 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.69s
+     Running `target/debug/examples/check_primitives_shaders`
+shader_wiring_ok	module=mass_response	entry_points=1
+shader_wiring_ok	module=jacobian_response	entry_points=1
+shader_wiring_ok	module=reaction_response	entry_points=1
+shader_wiring_ok	module=featherstone	entry_points=1
+shader_wiring_ok	module=runtime_distance	entry_points=2
+shader_wiring_ok	module=body_damping	entry_points=1
+shader_wiring_ok	module=scalar_publication	entry_points=1
+shader_wiring_ok	module=floating_momentum	entry_points=1
+shader_wiring_complete	modules=8	device_execution=false
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.81s
+     Running tests/rigid_singular_forces.rs (target/debug/deps/rigid_singular_forces-38d7b334ca477410)
+
+running 5 tests
+test raw_free_root_with_offset_frames_skips_zero_inertia_rotation ... ok
+test locked_singular_d6_roots_keep_supported_spin_under_null_axis_loads ... ok
+test null_mode_motors_preserve_supported_linear_drive ... ok
+test singular_body_keeps_unlocked_spin_and_com_acceleration ... ok
+test continuous_force_respects_singular_angular_modes_at_offset_com ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.41s
+
+     Running tests/runtime_d6_axis_certification.rs (target/debug/deps/runtime_d6_axis_certification-758560f6132c16ec)
+
+running 1 test
+d6_axis_cases=144 frames=240 substeps=2 masses=1,17,83 full_com_tensor=true peak_pose=0.0000001828908405194654 peak_rate=0.00000012413870443328854
+test d6_each_axis_free_bounded_locked_matches_analytic_motion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.46s
+
+     Running tests/runtime_d6_hinge_antipodes.rs (target/debug/deps/runtime_d6_hinge_antipodes-01c4de952539bdb7)
+
+running 2 tests
+hinge_antipode case=0 rate_error=1.201069461e-12 torque_error=4.732484696e-10
+hinge_antipode case=1 rate_error=1.186946700e-12 torque_error=4.641275419e-10
+hinge_antipode case=2 rate_error=2.236630076e-12 torque_error=8.984795001e-10
+hinge_antipode case=3 rate_error=2.236630076e-12 torque_error=8.984795001e-10
+hinge_antipode case=4 rate_error=5.996698655e-12 torque_error=2.493032671e-9
+hinge_antipode case=5 rate_error=6.010372601e-12 torque_error=2.496131719e-9
+hinge_antipode case=6 rate_error=2.244696783e-12 torque_error=9.661321249e-10
+hinge_antipode case=7 rate_error=2.252689607e-12 torque_error=9.705092630e-10
+hinge_antipode case=8 rate_error=1.136128648e-11 torque_error=5.112376750e-9
+hinge_antipode case=9 rate_error=1.136128648e-11 torque_error=5.112376750e-9
+hinge_antipode case=10 rate_error=3.588460655e-13 torque_error=1.685389636e-10
+hinge_antipode case=11 rate_error=3.588460655e-13 torque_error=1.685389636e-10
+hinge_antipode case=12 rate_error=1.854230668e-13 torque_error=1.262331467e-10
+hinge_antipode case=13 rate_error=1.717104108e-13 torque_error=9.465738426e-11
+hinge_antipode case=14 rate_error=4.465521931e-12 torque_error=1.319563669e-9
+hinge_antipode case=15 rate_error=4.465521931e-12 torque_error=1.319563669e-9
+hinge_antipode case=16 rate_error=3.925547665e-13 torque_error=1.407573445e-10
+hinge_antipode case=17 rate_error=3.913189536e-13 torque_error=1.466177675e-10
+hinge_antipode case=18 rate_error=2.796509269e-12 torque_error=1.258977219e-9
+hinge_antipode case=19 rate_error=2.725802061e-12 torque_error=1.269107225e-9
+hinge_antipode case=20 rate_error=1.703588260e-12 torque_error=7.542206564e-10
+hinge_antipode case=21 rate_error=1.703588260e-12 torque_error=7.542206564e-10
+hinge_antipode case=22 rate_error=5.598084796e-12 torque_error=2.515598555e-9
+hinge_antipode case=23 rate_error=5.789959842e-12 torque_error=2.568742805e-9
+hinge_antipode case=24 rate_error=5.400723110e-12 torque_error=2.563378830e-9
+hinge_antipode case=25 rate_error=5.472433906e-12 torque_error=2.561436783e-9
+hinge_antipode case=26 rate_error=3.835353620e-12 torque_error=1.835734344e-9
+hinge_antipode case=27 rate_error=3.835353620e-12 torque_error=1.835734344e-9
+hinge_antipode case=28 rate_error=2.189440334e-12 torque_error=1.057519829e-9
+hinge_antipode case=29 rate_error=2.231149447e-12 torque_error=1.094064289e-9
+hinge_antipode case=30 rate_error=2.943690743e-12 torque_error=1.267359247e-9
+hinge_antipode case=31 rate_error=2.921497361e-12 torque_error=1.276708998e-9
+hinge_antipode case=32 rate_error=4.268215640e-12 torque_error=1.687269607e-9
+hinge_antipode case=33 rate_error=4.268215640e-12 torque_error=1.687269607e-9
+hinge_antipode case=34 rate_error=2.618774152e-12 torque_error=1.117641419e-9
+hinge_antipode case=35 rate_error=2.636661721e-12 torque_error=1.126174171e-9
+hinge_antipode case=36 rate_error=1.192526970e-12 torque_error=5.133547757e-10
+hinge_antipode case=37 rate_error=1.202749690e-12 torque_error=5.104591173e-10
+hinge_antipode case=38 rate_error=2.233603267e-12 torque_error=9.288750917e-10
+hinge_antipode case=39 rate_error=2.216210016e-12 torque_error=9.262282612e-10
+hinge_antipode case=40 rate_error=6.032922086e-12 torque_error=2.526528482e-9
+hinge_antipode case=41 rate_error=6.024145412e-12 torque_error=2.524990552e-9
+hinge_antipode case=42 rate_error=2.264703801e-12 torque_error=9.772832689e-10
+hinge_antipode case=43 rate_error=2.256977234e-12 torque_error=9.964874871e-10
+hinge_antipode case=44 rate_error=1.131459828e-11 torque_error=5.135032538e-9
+hinge_antipode case=45 rate_error=1.131459828e-11 torque_error=5.135032538e-9
+hinge_antipode case=46 rate_error=3.206114960e-13 torque_error=1.900822168e-10
+hinge_antipode case=47 rate_error=3.206114960e-13 torque_error=1.900822168e-10
+hinge_antipode case=48 rate_error=2.420021355e-13 torque_error=1.213144569e-10
+hinge_antipode case=49 rate_error=2.432506501e-13 torque_error=1.145818951e-10
+hinge_antipode case=50 rate_error=4.493552258e-12 torque_error=1.350528279e-9
+hinge_antipode case=51 rate_error=4.493552258e-12 torque_error=1.350528279e-9
+hinge_antipode case=52 rate_error=3.416521190e-13 torque_error=1.106448059e-10
+hinge_antipode case=53 rate_error=2.984279490e-13 torque_error=1.289302974e-10
+hinge_antipode case=54 rate_error=2.746484358e-12 torque_error=1.225820724e-9
+hinge_antipode case=55 rate_error=2.652561765e-12 torque_error=1.159961998e-9
+hinge_antipode case=56 rate_error=1.666128024e-12 torque_error=7.689485917e-10
+hinge_antipode case=57 rate_error=1.666128024e-12 torque_error=7.689485917e-10
+hinge_antipode case=58 rate_error=5.877082979e-12 torque_error=2.554371529e-9
+hinge_antipode case=59 rate_error=5.905324054e-12 torque_error=2.609029455e-9
+hinge_antipode case=60 rate_error=5.512741362e-12 torque_error=2.685116721e-9
+hinge_antipode case=61 rate_error=5.418427647e-12 torque_error=2.672161679e-9
+hinge_antipode case=62 rate_error=3.773463620e-12 torque_error=1.773621939e-9
+hinge_antipode case=63 rate_error=3.799165100e-12 torque_error=1.794600602e-9
+hinge_antipode case=64 rate_error=2.206300985e-12 torque_error=1.092266408e-9
+hinge_antipode case=65 rate_error=2.232551961e-12 torque_error=1.092853920e-9
+hinge_antipode case=66 rate_error=2.873203238e-12 torque_error=1.269128082e-9
+hinge_antipode case=67 rate_error=2.894273534e-12 torque_error=1.264698740e-9
+hinge_antipode case=68 rate_error=4.336109968e-12 torque_error=1.737240365e-9
+hinge_antipode case=69 rate_error=4.336109968e-12 torque_error=1.737240365e-9
+hinge_antipode case=70 rate_error=2.681376375e-12 torque_error=1.125970603e-9
+hinge_antipode case=71 rate_error=2.662670616e-12 torque_error=1.135278196e-9
+
+thread 'cpu_standalone_finite_hinge_antipodes_use_the_mass_response' (1079091) panicked at crates/molla-solvers/tests/runtime_d6_hinge_antipodes.rs:285:10:
+called `Result::unwrap()` on an `Err` value: Solver("projected joint stop response did not converge: row=0 residual=3.495255071050973e-5 target=-8.450099345293718e-1 free=4.291644722097959e-1")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_standalone_finite_hinge_antipodes_use_the_mass_response ... FAILED
+hinge_antipode_recovered case=0 swing=1.795882214e-14 gap=0.000000000e0
+hinge_antipode_recovered case=1 swing=1.801694176e-14 gap=0.000000000e0
+hinge_antipode_recovered case=2 swing=3.122232399e-15 gap=0.000000000e0
+hinge_antipode_recovered case=3 swing=2.996453495e-15 gap=1.665334537e-16
+hinge_antipode_recovered case=4 swing=6.071736612e-15 gap=0.000000000e0
+hinge_antipode_recovered case=5 swing=6.080070914e-15 gap=0.000000000e0
+hinge_antipode_recovered case=6 swing=1.299519970e-14 gap=0.000000000e0
+hinge_antipode_recovered case=7 swing=1.245084310e-14 gap=0.000000000e0
+hinge_antipode_recovered case=8 swing=3.292466770e-15 gap=0.000000000e0
+hinge_antipode_recovered case=9 swing=2.658248505e-15 gap=1.665334537e-16
+hinge_antipode_recovered case=10 swing=3.325576659e-15 gap=0.000000000e0
+hinge_antipode_recovered case=11 swing=4.159963830e-15 gap=0.000000000e0
+hinge_antipode_recovered case=12 swing=2.019184685e-14 gap=0.000000000e0
+hinge_antipode_recovered case=13 swing=2.026493080e-14 gap=0.000000000e0
+hinge_antipode_recovered case=14 swing=6.554396412e-15 gap=0.000000000e0
+hinge_antipode_recovered case=15 swing=6.473090142e-15 gap=0.000000000e0
+hinge_antipode_recovered case=16 swing=1.824875981e-14 gap=0.000000000e0
+hinge_antipode_recovered case=17 swing=1.826358466e-14 gap=0.000000000e0
+hinge_antipode_recovered case=18 swing=1.188833555e-14 gap=0.000000000e0
+hinge_antipode_recovered case=19 swing=1.214508834e-14 gap=0.000000000e0
+hinge_antipode_recovered case=20 swing=3.683868184e-15 gap=0.000000000e0
+hinge_antipode_recovered case=21 swing=4.410383905e-15 gap=0.000000000e0
+hinge_antipode_recovered case=22 swing=4.296039519e-14 gap=0.000000000e0
+hinge_antipode_recovered case=23 swing=4.291927451e-14 gap=0.000000000e0
+hinge_antipode_recovered case=24 swing=1.212381843e-15 gap=0.000000000e0
+hinge_antipode_recovered case=25 swing=1.705119348e-15 gap=0.000000000e0
+hinge_antipode_recovered case=26 swing=1.711976864e-14 gap=0.000000000e0
+hinge_antipode_recovered case=27 swing=1.755258877e-14 gap=0.000000000e0
+hinge_antipode_recovered case=28 swing=6.003935841e-15 gap=0.000000000e0
+hinge_antipode_recovered case=29 swing=6.056823720e-15 gap=0.000000000e0
+hinge_antipode_recovered case=30 swing=1.878955142e-14 gap=0.000000000e0
+hinge_antipode_recovered case=31 swing=1.819404664e-14 gap=0.000000000e0
+hinge_antipode_recovered case=32 swing=8.973831678e-15 gap=0.000000000e0
+hinge_antipode_recovered case=33 swing=9.161676295e-15 gap=0.000000000e0
+hinge_antipode_recovered case=34 swing=2.699183346e-15 gap=0.000000000e0
+hinge_antipode_recovered case=35 swing=3.163459785e-15 gap=0.000000000e0
+hinge_antipode_recovered case=36 swing=1.787727947e-14 gap=0.000000000e0
+hinge_antipode_recovered case=37 swing=1.796393130e-14 gap=0.000000000e0
+hinge_antipode_recovered case=38 swing=3.120853834e-15 gap=0.000000000e0
+hinge_antipode_recovered case=39 swing=2.790665459e-15 gap=1.665334537e-16
+hinge_antipode_recovered case=40 swing=5.616305963e-15 gap=0.000000000e0
+hinge_antipode_recovered case=41 swing=6.141333700e-15 gap=0.000000000e0
+hinge_antipode_recovered case=42 swing=1.290332986e-14 gap=0.000000000e0
+hinge_antipode_recovered case=43 swing=1.268259738e-14 gap=0.000000000e0
+hinge_antipode_recovered case=44 swing=3.311364929e-15 gap=0.000000000e0
+hinge_antipode_recovered case=45 swing=2.772094628e-15 gap=1.665334537e-16
+hinge_antipode_recovered case=46 swing=3.189423918e-15 gap=0.000000000e0
+hinge_antipode_recovered case=47 swing=3.716372076e-15 gap=0.000000000e0
+hinge_antipode_recovered case=48 swing=2.019040831e-14 gap=0.000000000e0
+hinge_antipode_recovered case=49 swing=1.996109452e-14 gap=0.000000000e0
+hinge_antipode_recovered case=50 swing=6.272161351e-15 gap=0.000000000e0
+hinge_antipode_recovered case=51 swing=6.381670205e-15 gap=0.000000000e0
+hinge_antipode_recovered case=52 swing=1.843904749e-14 gap=0.000000000e0
+hinge_antipode_recovered case=53 swing=1.820356362e-14 gap=0.000000000e0
+hinge_antipode_recovered case=54 swing=1.207213252e-14 gap=0.000000000e0
+hinge_antipode_recovered case=55 swing=1.238792075e-14 gap=0.000000000e0
+hinge_antipode_recovered case=56 swing=4.441290864e-15 gap=0.000000000e0
+hinge_antipode_recovered case=57 swing=4.460499976e-15 gap=0.000000000e0
+hinge_antipode_recovered case=58 swing=4.302935743e-14 gap=0.000000000e0
+hinge_antipode_recovered case=59 swing=4.302776288e-14 gap=0.000000000e0
+hinge_antipode_recovered case=60 swing=1.287571550e-15 gap=0.000000000e0
+hinge_antipode_recovered case=61 swing=1.958883054e-15 gap=0.000000000e0
+hinge_antipode_recovered case=62 swing=1.713673750e-14 gap=0.000000000e0
+hinge_antipode_recovered case=63 swing=1.782848159e-14 gap=0.000000000e0
+hinge_antipode_recovered case=64 swing=6.038867181e-15 gap=0.000000000e0
+hinge_antipode_recovered case=65 swing=6.212697495e-15 gap=0.000000000e0
+hinge_antipode_recovered case=66 swing=1.855104968e-14 gap=0.000000000e0
+hinge_antipode_recovered case=67 swing=1.812444256e-14 gap=0.000000000e0
+hinge_antipode_recovered case=68 swing=8.957671284e-15 gap=0.000000000e0
+hinge_antipode_recovered case=69 swing=8.973281041e-15 gap=0.000000000e0
+hinge_antipode_recovered case=70 swing=2.903960259e-15 gap=0.000000000e0
+hinge_antipode_recovered case=71 swing=3.329403931e-15 gap=0.000000000e0
+test cpu_finite_hinges_recover_antipodes_with_mass_coupled_reactions ... ok
+
+failures:
+
+failures:
+    cpu_standalone_finite_hinge_antipodes_use_the_mass_response
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_d6_hinge_antipodes`
+make: *** [Makefile:132: test] Error 101

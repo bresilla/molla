@@ -1,0 +1,385 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.20s
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.19s
+     Running `target/debug/examples/check_primitives_shaders`
+shader_wiring_ok	module=mass_response	entry_points=1
+shader_wiring_ok	module=jacobian_response	entry_points=1
+shader_wiring_ok	module=reaction_response	entry_points=1
+shader_wiring_ok	module=featherstone	entry_points=1
+shader_wiring_ok	module=runtime_distance	entry_points=2
+shader_wiring_ok	module=body_damping	entry_points=1
+shader_wiring_ok	module=scalar_publication	entry_points=1
+shader_wiring_ok	module=floating_momentum	entry_points=1
+shader_wiring_complete	modules=8	device_execution=false
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.71s
+     Running tests/featherstone_disabled_joints.rs (target/debug/deps/featherstone_disabled_joints-1453eccd6bad7d75)
+
+running 1 test
+test cpu_disabled_joints_freeze_relative_motion_and_transmit_child_loads ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.31s
+     Running tests/featherstone_mixed_distance.rs (target/debug/deps/featherstone_mixed_distance-87aebe180fa0741c)
+
+running 1 test
+test cpu_mixed_stops_keep_slack_distance_free_and_react_at_maximum ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_d6_angular_locks.rs (target/debug/deps/runtime_d6_angular_locks-7b9db9cc2c35040c)
+
+running 2 tests
+standalone_d6_lock case=0 step=1 rate_error=3.878959614e-18 rotation_error=8.333340125e-14
+standalone_d6_lock case=1 step=1 rate_error=1.110223025e-18 rotation_error=1.110223025e-20
+standalone_d6_lock case=2 step=1 rate_error=3.878959614e-18 rotation_error=8.333340125e-14
+standalone_d6_lock case=3 step=1 rate_error=2.482534153e-18 rotation_error=2.482534153e-20
+standalone_d6_lock case=4 step=1 rate_error=2.220446049e-18 rotation_error=8.333333825e-14
+standalone_d6_lock case=5 step=1 rate_error=0.000000000e0 rotation_error=0.000000000e0
+standalone_d6_lock case=6 step=1 rate_error=2.220446049e-18 rotation_error=8.333333825e-14
+standalone_d6_lock case=7 step=1 rate_error=0.000000000e0 rotation_error=0.000000000e0
+standalone_d6_lock case=8 step=1 rate_error=3.878959614e-18 rotation_error=8.333340125e-14
+standalone_d6_lock case=9 step=1 rate_error=1.110223025e-18 rotation_error=1.110223025e-20
+standalone_d6_lock case=10 step=1 rate_error=3.878959614e-18 rotation_error=8.333340125e-14
+standalone_d6_lock case=11 step=1 rate_error=2.482534153e-18 rotation_error=2.482534153e-20
+standalone_d6_lock case=12 step=1 rate_error=2.220446049e-18 rotation_error=8.333333825e-14
+standalone_d6_lock case=13 step=1 rate_error=0.000000000e0 rotation_error=0.000000000e0
+standalone_d6_lock case=14 step=1 rate_error=2.220446049e-18 rotation_error=8.333333825e-14
+standalone_d6_lock case=15 step=1 rate_error=0.000000000e0 rotation_error=0.000000000e0
+standalone_d6_lock case=16 step=1 rate_error=3.155635566e-16 rotation_error=8.341044385e-14
+standalone_d6_lock case=17 step=1 rate_error=3.140914005e-16 rotation_error=1.313358674e-16
+standalone_d6_lock case=18 step=1 rate_error=3.164031121e-16 rotation_error=8.341044385e-14
+standalone_d6_lock case=19 step=1 rate_error=3.138005658e-16 rotation_error=1.313358674e-16
+standalone_d6_lock case=20 step=1 rate_error=2.297359809e-14 rotation_error=8.331574640e-14
+standalone_d6_lock case=21 step=1 rate_error=2.297182635e-14 rotation_error=1.244293824e-16
+standalone_d6_lock case=22 step=1 rate_error=2.297359809e-14 rotation_error=8.331574640e-14
+standalone_d6_lock case=23 step=1 rate_error=2.297182635e-14 rotation_error=1.244293824e-16
+standalone_d6_lock case=24 step=1 rate_error=5.046519377e-16 rotation_error=8.338139524e-14
+standalone_d6_lock case=25 step=1 rate_error=5.071827560e-16 rotation_error=2.453269467e-17
+standalone_d6_lock case=26 step=1 rate_error=5.045699508e-16 rotation_error=8.338139524e-14
+standalone_d6_lock case=27 step=1 rate_error=5.059316899e-16 rotation_error=2.453269467e-17
+standalone_d6_lock case=28 step=1 rate_error=2.297160651e-14 rotation_error=8.331741341e-14
+standalone_d6_lock case=29 step=1 rate_error=2.297182637e-14 rotation_error=1.259676831e-16
+standalone_d6_lock case=30 step=1 rate_error=2.297160651e-14 rotation_error=8.331741341e-14
+standalone_d6_lock case=31 step=1 rate_error=2.297182637e-14 rotation_error=1.259676831e-16
+standalone_d6_lock case=32 step=1 rate_error=6.160480698e-16 rotation_error=8.338519565e-14
+standalone_d6_lock case=33 step=1 rate_error=6.183958661e-16 rotation_error=2.903071528e-17
+standalone_d6_lock case=34 step=1 rate_error=4.431361669e-19 rotation_error=8.337741256e-14
+standalone_d6_lock case=35 step=1 rate_error=1.110397822e-18 rotation_error=2.903071528e-17
+standalone_d6_lock case=36 step=1 rate_error=5.551033838e-15 rotation_error=8.338806476e-14
+standalone_d6_lock case=37 step=1 rate_error=5.550572114e-15 rotation_error=6.030659567e-17
+standalone_d6_lock case=38 step=1 rate_error=5.552266202e-15 rotation_error=6.030659567e-17
+standalone_d6_lock case=39 step=1 rate_error=1.258690279e-15 rotation_error=8.351537659e-14
+standalone_d6_lock case=40 step=1 rate_error=1.259405647e-15 rotation_error=5.003707553e-17
+standalone_d6_lock case=41 step=1 rate_error=1.158593210e-18 rotation_error=8.351537659e-14
+standalone_d6_lock case=42 step=1 rate_error=2.989850399e-18 rotation_error=5.003707553e-17
+standalone_d6_lock case=43 step=1 rate_error=1.000738144e-14 rotation_error=8.351695134e-14
+standalone_d6_lock case=44 step=1 rate_error=1.000744554e-14 rotation_error=6.546139417e-17
+standalone_d6_lock case=45 step=1 rate_error=1.000650637e-14 rotation_error=6.546139417e-17
+standalone_d6_lock case=46 step=1 rate_error=9.952978901e-15 rotation_error=8.325825873e-14
+standalone_d6_lock case=47 step=1 rate_error=9.951514282e-15 rotation_error=1.560961981e-16
+standalone_d6_lock case=48 step=1 rate_error=9.715104791e-15 rotation_error=8.325825873e-14
+standalone_d6_lock case=49 step=1 rate_error=9.714146494e-15 rotation_error=1.560961981e-16
+standalone_d6_lock case=50 step=1 rate_error=1.241354384e-14 rotation_error=8.326631161e-14
+standalone_d6_lock case=51 step=1 rate_error=1.241381498e-14 rotation_error=1.685652323e-16
+standalone_d6_lock case=52 step=1 rate_error=1.241283441e-14 rotation_error=1.685652323e-16
+standalone_d6_lock case=53 step=1 rate_error=6.578103958e-16 rotation_error=8.340930573e-14
+standalone_d6_lock case=54 step=1 rate_error=6.579082634e-16 rotation_error=1.559322467e-16
+standalone_d6_lock case=55 step=1 rate_error=3.576224061e-18 rotation_error=8.340930573e-14
+standalone_d6_lock case=56 step=1 rate_error=1.245148747e-18 rotation_error=1.559322467e-16
+standalone_d6_lock case=57 step=1 rate_error=5.551437732e-15 rotation_error=8.343023198e-14
+standalone_d6_lock case=58 step=1 rate_error=5.550572114e-15 rotation_error=1.559322467e-16
+standalone_d6_lock case=59 step=1 rate_error=5.550696015e-15 rotation_error=1.559322467e-16
+standalone_d6_lock case=60 step=1 rate_error=1.474514962e-15 rotation_error=8.330142976e-14
+standalone_d6_lock case=61 step=1 rate_error=1.474514956e-15 rotation_error=2.903071528e-17
+standalone_d6_lock case=62 step=1 rate_error=5.550640660e-15 rotation_error=8.343929422e-14
+standalone_d6_lock case=63 step=1 rate_error=5.551674346e-15 rotation_error=6.030659567e-17
+standalone_d6_lock case=64 step=1 rate_error=3.925247793e-15 rotation_error=8.334306517e-14
+standalone_d6_lock case=65 step=1 rate_error=6.800460707e-15 rotation_error=6.529021913e-17
+standalone_d6_lock case=66 step=1 rate_error=1.040847101e-15 rotation_error=8.332224522e-14
+standalone_d6_lock case=67 step=1 rate_error=1.668583973e-14 rotation_error=1.430489625e-16
+standalone_d6_lock case=68 step=1 rate_error=1.000732152e-14 rotation_error=8.354194069e-14
+standalone_d6_lock case=69 step=1 rate_error=1.000704390e-14 rotation_error=6.546139417e-17
+standalone_d6_lock case=70 step=1 rate_error=5.003539746e-15 rotation_error=8.326674564e-14
+standalone_d6_lock case=71 step=1 rate_error=5.722145781e-15 rotation_error=7.110250420e-17
+standalone_d6_lock case=72 step=1 rate_error=1.426927692e-14 rotation_error=8.332405369e-14
+standalone_d6_lock case=73 step=1 rate_error=1.531108452e-14 rotation_error=1.822450651e-16
+standalone_d6_lock case=74 step=1 rate_error=1.241263339e-14 rotation_error=8.345569609e-14
+standalone_d6_lock case=75 step=1 rate_error=1.241208340e-14 rotation_error=1.685652323e-16
+standalone_d6_lock case=76 step=1 rate_error=2.185353474e-14 rotation_error=8.332386004e-14
+standalone_d6_lock case=77 step=1 rate_error=2.202754761e-14 rotation_error=3.131163861e-16
+standalone_d6_lock case=78 step=1 rate_error=2.272139407e-14 rotation_error=8.321105368e-14
+standalone_d6_lock case=79 step=1 rate_error=2.272156678e-14 rotation_error=3.469446952e-17
+standalone_d6_lock case=80 step=1 rate_error=5.551604568e-15 rotation_error=8.314443850e-14
+standalone_d6_lock case=81 step=1 rate_error=2.288709551e-14 rotation_error=3.469446952e-17
+standalone_d6_lock case=82 step=1 rate_error=1.483250210e-14 rotation_error=8.330735572e-14
+standalone_d6_lock case=83 step=1 rate_error=1.701122895e-14 rotation_error=3.188872858e-16
+mixed_d6_lock case=0 step=1 rate_error=5.275955480e-18 rotation_error=8.333339389e-14
+mixed_d6_lock case=1 step=1 rate_error=1.939479807e-18 rotation_error=1.939479807e-20
+mixed_d6_lock case=2 step=1 rate_error=3.878959614e-18 rotation_error=8.333340125e-14
+mixed_d6_lock case=3 step=1 rate_error=1.939479807e-18 rotation_error=1.939479807e-20
+mixed_d6_lock case=4 step=1 rate_error=2.220446049e-18 rotation_error=8.333333825e-14
+mixed_d6_lock case=5 step=1 rate_error=0.000000000e0 rotation_error=0.000000000e0
+mixed_d6_lock case=6 step=1 rate_error=2.220446049e-18 rotation_error=8.333333825e-14
+mixed_d6_lock case=7 step=1 rate_error=0.000000000e0 rotation_error=0.000000000e0
+mixed_d6_lock case=8 step=1 rate_error=5.275955480e-18 rotation_error=8.333339389e-14
+mixed_d6_lock case=9 step=1 rate_error=1.939479807e-18 rotation_error=1.939479807e-20
+mixed_d6_lock case=10 step=1 rate_error=3.878959614e-18 rotation_error=8.333340125e-14
+mixed_d6_lock case=11 step=1 rate_error=1.939479807e-18 rotation_error=1.939479807e-20
+mixed_d6_lock case=12 step=1 rate_error=2.220446049e-18 rotation_error=8.333333825e-14
+mixed_d6_lock case=13 step=1 rate_error=0.000000000e0 rotation_error=0.000000000e0
+mixed_d6_lock case=14 step=1 rate_error=2.220446049e-18 rotation_error=8.333333825e-14
+mixed_d6_lock case=15 step=1 rate_error=0.000000000e0 rotation_error=0.000000000e0
+mixed_d6_lock case=16 step=1 rate_error=3.124477289e-16 rotation_error=8.341044385e-14
+mixed_d6_lock case=17 step=1 rate_error=3.156212505e-16 rotation_error=1.313358674e-16
+mixed_d6_lock case=18 step=1 rate_error=3.147641885e-16 rotation_error=8.341044385e-14
+mixed_d6_lock case=19 step=1 rate_error=3.151580321e-16 rotation_error=1.313358674e-16
+mixed_d6_lock case=20 step=1 rate_error=2.297359809e-14 rotation_error=8.331574640e-14
+mixed_d6_lock case=21 step=1 rate_error=2.297014957e-14 rotation_error=1.244293824e-16
+mixed_d6_lock case=22 step=1 rate_error=2.297359809e-14 rotation_error=8.331574640e-14
+mixed_d6_lock case=23 step=1 rate_error=2.297014957e-14 rotation_error=1.244293824e-16
+mixed_d6_lock case=24 step=1 rate_error=5.046519377e-16 rotation_error=8.338139524e-14
+mixed_d6_lock case=25 step=1 rate_error=5.042528145e-16 rotation_error=2.453269467e-17
+mixed_d6_lock case=26 step=1 rate_error=5.047431572e-16 rotation_error=8.338139524e-14
+mixed_d6_lock case=27 step=1 rate_error=5.056872898e-16 rotation_error=2.453269467e-17
+mixed_d6_lock case=28 step=1 rate_error=2.297172298e-14 rotation_error=8.331741341e-14
+mixed_d6_lock case=29 step=1 rate_error=2.297014958e-14 rotation_error=1.259676831e-16
+mixed_d6_lock case=30 step=1 rate_error=2.297172298e-14 rotation_error=8.331741341e-14
+mixed_d6_lock case=31 step=1 rate_error=2.297014958e-14 rotation_error=1.259676831e-16
+mixed_d6_lock case=32 step=1 rate_error=6.152195408e-16 rotation_error=8.338519565e-14
+mixed_d6_lock case=33 step=1 rate_error=6.175491915e-16 rotation_error=2.903071528e-17
+mixed_d6_lock case=34 step=1 rate_error=4.431361669e-19 rotation_error=8.337741256e-14
+mixed_d6_lock case=35 step=1 rate_error=1.970173703e-20 rotation_error=2.903071528e-17
+mixed_d6_lock case=36 step=1 rate_error=5.551326823e-15 rotation_error=8.338806476e-14
+mixed_d6_lock case=37 step=1 rate_error=5.550251286e-15 rotation_error=6.030659567e-17
+mixed_d6_lock case=38 step=1 rate_error=5.552658821e-15 rotation_error=6.030659567e-17
+mixed_d6_lock case=39 step=1 rate_error=1.258177350e-15 rotation_error=8.351537659e-14
+mixed_d6_lock case=40 step=1 rate_error=1.259206908e-15 rotation_error=5.003707553e-17
+mixed_d6_lock case=41 step=1 rate_error=1.158593210e-18 rotation_error=8.351537659e-14
+mixed_d6_lock case=42 step=1 rate_error=3.036242114e-18 rotation_error=5.003707553e-17
+mixed_d6_lock case=43 step=1 rate_error=1.000738144e-14 rotation_error=8.351695134e-14
+mixed_d6_lock case=44 step=1 rate_error=1.000768472e-14 rotation_error=6.546139417e-17
+mixed_d6_lock case=45 step=1 rate_error=1.000596204e-14 rotation_error=6.546139417e-17
+mixed_d6_lock case=46 step=1 rate_error=9.953774498e-15 rotation_error=8.325825873e-14
+mixed_d6_lock case=47 step=1 rate_error=9.952292680e-15 rotation_error=1.560961981e-16
+mixed_d6_lock case=48 step=1 rate_error=9.715468829e-15 rotation_error=8.325825873e-14
+mixed_d6_lock case=49 step=1 rate_error=9.714431476e-15 rotation_error=1.560961981e-16
+mixed_d6_lock case=50 step=1 rate_error=1.241354384e-14 rotation_error=8.326631161e-14
+mixed_d6_lock case=51 step=1 rate_error=1.241235405e-14 rotation_error=1.685652323e-16
+mixed_d6_lock case=52 step=1 rate_error=1.241281247e-14 rotation_error=1.685652323e-16
+mixed_d6_lock case=53 step=1 rate_error=6.581741245e-16 rotation_error=8.340930573e-14
+mixed_d6_lock case=54 step=1 rate_error=6.554316855e-16 rotation_error=1.559322467e-16
+mixed_d6_lock case=55 step=1 rate_error=3.576224061e-18 rotation_error=8.340930573e-14
+mixed_d6_lock case=56 step=1 rate_error=1.903737153e-18 rotation_error=1.559322467e-16
+mixed_d6_lock case=57 step=1 rate_error=5.551906009e-15 rotation_error=8.343023198e-14
+mixed_d6_lock case=58 step=1 rate_error=5.551859111e-15 rotation_error=1.559322467e-16
+mixed_d6_lock case=59 step=1 rate_error=5.550205408e-15 rotation_error=1.559322467e-16
+mixed_d6_lock case=60 step=1 rate_error=1.474514962e-15 rotation_error=8.330142976e-14
+mixed_d6_lock case=61 step=1 rate_error=1.474514956e-15 rotation_error=2.903071528e-17
+mixed_d6_lock case=62 step=1 rate_error=5.550933598e-15 rotation_error=8.343929422e-14
+mixed_d6_lock case=63 step=1 rate_error=5.551758580e-15 rotation_error=6.030659567e-17
+mixed_d6_lock case=64 step=1 rate_error=3.925247793e-15 rotation_error=8.334306517e-14
+mixed_d6_lock case=65 step=1 rate_error=6.800064066e-15 rotation_error=6.529021913e-17
+mixed_d6_lock case=66 step=1 rate_error=1.040847101e-15 rotation_error=8.332224522e-14
+mixed_d6_lock case=67 step=1 rate_error=1.668583973e-14 rotation_error=1.430489625e-16
+mixed_d6_lock case=68 step=1 rate_error=1.000732152e-14 rotation_error=8.354194069e-14
+mixed_d6_lock case=69 step=1 rate_error=1.000702254e-14 rotation_error=6.546139417e-17
+mixed_d6_lock case=70 step=1 rate_error=5.003539746e-15 rotation_error=8.326674564e-14
+mixed_d6_lock case=71 step=1 rate_error=5.722145781e-15 rotation_error=7.110250420e-17
+mixed_d6_lock case=72 step=1 rate_error=1.426968962e-14 rotation_error=8.332405369e-14
+mixed_d6_lock case=73 step=1 rate_error=1.531078853e-14 rotation_error=1.822450651e-16
+mixed_d6_lock case=74 step=1 rate_error=1.241205850e-14 rotation_error=8.345569609e-14
+mixed_d6_lock case=75 step=1 rate_error=1.241228023e-14 rotation_error=1.685652323e-16
+mixed_d6_lock case=76 step=1 rate_error=2.185311568e-14 rotation_error=8.332386004e-14
+mixed_d6_lock case=77 step=1 rate_error=2.202881674e-14 rotation_error=3.131163861e-16
+mixed_d6_lock case=78 step=1 rate_error=2.272180768e-14 rotation_error=8.321105368e-14
+mixed_d6_lock case=79 step=1 rate_error=2.272111181e-14 rotation_error=3.469446952e-17
+mixed_d6_lock case=80 step=1 rate_error=5.551245260e-15 rotation_error=8.314443850e-14
+mixed_d6_lock case=81 step=1 rate_error=2.288770978e-14 rotation_error=3.469446952e-17
+mixed_d6_lock case=82 step=1 rate_error=1.483273179e-14 rotation_error=8.330735572e-14
+mixed_d6_lock case=83 step=1 rate_error=1.700980968e-14 rotation_error=3.188872858e-16
+standalone_d6_lock case=0 step=2 rate_error=4.336808690e-18 rotation_error=1.666666652e-13
+standalone_d6_lock case=1 step=2 rate_error=1.110223025e-18 rotation_error=1.253758149e-20
+standalone_d6_lock case=2 step=2 rate_error=1.110223111e-14 rotation_error=1.666667197e-13
+standalone_d6_lock case=3 step=2 rate_error=2.482534153e-18 rotation_error=6.749030931e-21
+standalone_d6_lock case=4 step=2 rate_error=8.651933660e-19 rotation_error=1.666666355e-13
+standalone_d6_lock case=5 step=2 rate_error=0.000000000e0 rotation_error=0.000000000e0
+standalone_d6_lock case=6 step=2 rate_error=8.651933660e-19 rotation_error=1.666666355e-13
+standalone_d6_lock case=7 step=2 rate_error=0.000000000e0 rotation_error=0.000000000e0
+standalone_d6_lock case=8 step=2 rate_error=4.336808690e-18 rotation_error=1.666666652e-13
+standalone_d6_lock case=9 step=2 rate_error=1.110223025e-18 rotation_error=1.253758149e-20
+standalone_d6_lock case=10 step=2 rate_error=1.110223111e-14 rotation_error=1.666667197e-13
+standalone_d6_lock case=11 step=2 rate_error=2.482534153e-18 rotation_error=6.749030931e-21
+standalone_d6_lock case=12 step=2 rate_error=8.651933660e-19 rotation_error=1.666666355e-13
+standalone_d6_lock case=13 step=2 rate_error=0.000000000e0 rotation_error=0.000000000e0
+standalone_d6_lock case=14 step=2 rate_error=8.651933660e-19 rotation_error=1.666666355e-13
+standalone_d6_lock case=15 step=2 rate_error=0.000000000e0 rotation_error=0.000000000e0
+standalone_d6_lock case=16 step=2 rate_error=5.553824967e-18 rotation_error=1.667161252e-13
+standalone_d6_lock case=17 step=2 rate_error=1.233180435e-18 rotation_error=1.313358674e-16
+standalone_d6_lock case=18 step=2 rate_error=1.110259820e-14 rotation_error=1.667122973e-13
+standalone_d6_lock case=19 step=2 rate_error=1.028016856e-18 rotation_error=1.313358674e-16
+standalone_d6_lock case=20 step=2 rate_error=2.220388728e-14 rotation_error=1.666193739e-13
+standalone_d6_lock case=21 step=2 rate_error=2.220446052e-14 rotation_error=2.298492240e-16
+standalone_d6_lock case=22 step=2 rate_error=2.220388728e-14 rotation_error=1.666193739e-13
+standalone_d6_lock case=23 step=2 rate_error=2.220446052e-14 rotation_error=2.298492240e-16
+standalone_d6_lock case=24 step=2 rate_error=7.003182352e-18 rotation_error=1.665856007e-13
+standalone_d6_lock case=25 step=2 rate_error=1.730671371e-18 rotation_error=2.453269467e-17
+standalone_d6_lock case=26 step=2 rate_error=1.110187964e-14 rotation_error=1.665768324e-13
+standalone_d6_lock case=27 step=2 rate_error=1.796651077e-18 rotation_error=2.453269467e-17
+standalone_d6_lock case=28 step=2 rate_error=2.220471518e-14 rotation_error=1.666151191e-13
+standalone_d6_lock case=29 step=2 rate_error=2.220446054e-14 rotation_error=1.096175045e-16
+standalone_d6_lock case=30 step=2 rate_error=2.220471518e-14 rotation_error=1.666151191e-13
+standalone_d6_lock case=31 step=2 rate_error=2.220446054e-14 rotation_error=1.096175045e-16
+standalone_d6_lock case=32 step=2 rate_error=4.597450276e-19 rotation_error=1.666150691e-13
+standalone_d6_lock case=33 step=2 rate_error=6.160169524e-16 rotation_error=2.903071528e-17
+standalone_d6_lock case=34 step=2 rate_error=6.400571405e-16 rotation_error=1.666015415e-13
+standalone_d6_lock case=35 step=2 rate_error=3.286843420e-19 rotation_error=2.903071528e-17
+standalone_d6_lock case=36 step=2 rate_error=3.925231218e-15 rotation_error=1.666162920e-13
+standalone_d6_lock case=37 step=2 rate_error=1.363076359e-19 rotation_error=6.030659567e-17
+standalone_d6_lock case=38 step=2 rate_error=3.014705677e-19 rotation_error=6.030659567e-17
+standalone_d6_lock case=39 step=2 rate_error=2.153584893e-18 rotation_error=1.666112299e-13
+standalone_d6_lock case=40 step=2 rate_error=1.258688667e-15 rotation_error=5.003707553e-17
+standalone_d6_lock case=41 step=2 rate_error=5.005067585e-15 rotation_error=1.665998412e-13
+standalone_d6_lock case=42 step=2 rate_error=2.324120002e-18 rotation_error=5.003707553e-17
+standalone_d6_lock case=43 step=2 rate_error=3.925231146e-15 rotation_error=1.665799337e-13
+standalone_d6_lock case=44 step=2 rate_error=2.775559823e-15 rotation_error=6.546139417e-17
+standalone_d6_lock case=45 step=2 rate_error=2.775557700e-15 rotation_error=6.546139417e-17
+standalone_d6_lock case=46 step=2 rate_error=5.553824967e-18 rotation_error=1.664324331e-13
+standalone_d6_lock case=47 step=2 rate_error=1.445238329e-16 rotation_error=1.560961981e-16
+standalone_d6_lock case=48 step=2 rate_error=1.297648603e-15 rotation_error=1.664324331e-13
+standalone_d6_lock case=49 step=2 rate_error=6.938909384e-16 rotation_error=1.560961981e-16
+standalone_d6_lock case=50 step=2 rate_error=2.775898861e-15 rotation_error=1.664404911e-13
+standalone_d6_lock case=51 step=2 rate_error=3.325663542e-19 rotation_error=1.685652323e-16
+standalone_d6_lock case=52 step=2 rate_error=7.522539999e-20 rotation_error=1.685652323e-16
+standalone_d6_lock case=53 step=2 rate_error=3.523240035e-18 rotation_error=1.671031362e-13
+standalone_d6_lock case=54 step=2 rate_error=6.576834540e-16 rotation_error=1.559322467e-16
+standalone_d6_lock case=55 step=2 rate_error=1.329839020e-15 rotation_error=1.671031362e-13
+standalone_d6_lock case=56 step=2 rate_error=8.640150212e-19 rotation_error=1.559322467e-16
+standalone_d6_lock case=57 step=2 rate_error=6.206213877e-15 rotation_error=1.670023814e-13
+standalone_d6_lock case=58 step=2 rate_error=1.363076359e-19 rotation_error=1.559322467e-16
+standalone_d6_lock case=59 step=2 rate_error=4.273458020e-19 rotation_error=1.559322467e-16
+standalone_d6_lock case=60 step=2 rate_error=1.127570265e-15 rotation_error=1.666167221e-13
+standalone_d6_lock case=61 step=2 rate_error=1.474514955e-15 rotation_error=2.903071528e-17
+standalone_d6_lock case=62 step=2 rate_error=6.206176903e-15 rotation_error=1.666312715e-13
+standalone_d6_lock case=63 step=2 rate_error=9.812935917e-20 rotation_error=6.030659567e-17
+standalone_d6_lock case=64 step=2 rate_error=7.789414257e-15 rotation_error=1.666652947e-13
+standalone_d6_lock case=65 step=2 rate_error=6.287790816e-15 rotation_error=1.190056971e-16
+standalone_d6_lock case=66 step=2 rate_error=5.551117590e-15 rotation_error=1.667277463e-13
+standalone_d6_lock case=67 step=2 rate_error=1.688662199e-14 rotation_error=3.103943387e-16
+standalone_d6_lock case=68 step=2 rate_error=3.925231338e-15 rotation_error=1.665534186e-13
+standalone_d6_lock case=69 step=2 rate_error=2.775557708e-15 rotation_error=6.546139417e-17
+standalone_d6_lock case=70 step=2 rate_error=6.546176017e-15 rotation_error=1.667277463e-13
+standalone_d6_lock case=71 step=2 rate_error=5.003707553e-15 rotation_error=7.110250420e-17
+standalone_d6_lock case=72 step=2 rate_error=1.397974637e-15 rotation_error=1.666673707e-13
+standalone_d6_lock case=73 step=2 rate_error=1.334525600e-14 rotation_error=1.865150448e-16
+standalone_d6_lock case=74 step=2 rate_error=2.774936312e-15 rotation_error=1.664853171e-13
+standalone_d6_lock case=75 step=2 rate_error=1.626278418e-30 rotation_error=1.685652323e-16
+standalone_d6_lock case=76 step=2 rate_error=6.128199378e-15 rotation_error=1.667003848e-13
+standalone_d6_lock case=77 step=2 rate_error=2.545791663e-14 rotation_error=1.685652323e-16
+standalone_d6_lock case=78 step=2 rate_error=1.722526092e-14 rotation_error=1.667607441e-13
+standalone_d6_lock case=79 step=2 rate_error=2.371437420e-14 rotation_error=1.559322467e-16
+standalone_d6_lock case=80 step=2 rate_error=5.550258419e-15 rotation_error=1.665912772e-13
+standalone_d6_lock case=81 step=2 rate_error=5.551115123e-15 rotation_error=6.546139417e-17
+standalone_d6_lock case=82 step=2 rate_error=7.471967586e-15 rotation_error=1.667130859e-13
+standalone_d6_lock case=83 step=2 rate_error=5.721958498e-15 rotation_error=2.118352372e-16
+test cpu_standalone_mixed_locks_and_drift_preserve_physical_tangents ... ok
+mixed_d6_lock case=0 step=2 rate_error=5.485677295e-18 rotation_error=1.666666013e-13
+mixed_d6_lock case=1 step=2 rate_error=1.939479807e-18 rotation_error=3.390726175e-20
+mixed_d6_lock case=2 step=2 rate_error=1.110223111e-14 rotation_error=1.666667197e-13
+mixed_d6_lock case=3 step=2 rate_error=1.939479807e-18 rotation_error=5.272680415e-21
+mixed_d6_lock case=4 step=2 rate_error=8.651933660e-19 rotation_error=1.666666355e-13
+mixed_d6_lock case=5 step=2 rate_error=0.000000000e0 rotation_error=0.000000000e0
+mixed_d6_lock case=6 step=2 rate_error=8.651933660e-19 rotation_error=1.666666355e-13
+mixed_d6_lock case=7 step=2 rate_error=0.000000000e0 rotation_error=0.000000000e0
+mixed_d6_lock case=8 step=2 rate_error=5.485677295e-18 rotation_error=1.666666013e-13
+mixed_d6_lock case=9 step=2 rate_error=1.939479807e-18 rotation_error=3.390726175e-20
+mixed_d6_lock case=10 step=2 rate_error=1.110223111e-14 rotation_error=1.666667197e-13
+mixed_d6_lock case=11 step=2 rate_error=1.939479807e-18 rotation_error=5.272680415e-21
+mixed_d6_lock case=12 step=2 rate_error=8.651933660e-19 rotation_error=1.666666355e-13
+mixed_d6_lock case=13 step=2 rate_error=0.000000000e0 rotation_error=0.000000000e0
+mixed_d6_lock case=14 step=2 rate_error=8.651933660e-19 rotation_error=1.666666355e-13
+mixed_d6_lock case=15 step=2 rate_error=0.000000000e0 rotation_error=0.000000000e0
+mixed_d6_lock case=16 step=2 rate_error=8.940560153e-18 rotation_error=1.667161252e-13
+mixed_d6_lock case=17 step=2 rate_error=2.803994152e-18 rotation_error=1.313358674e-16
+mixed_d6_lock case=18 step=2 rate_error=1.110259820e-14 rotation_error=1.667122973e-13
+mixed_d6_lock case=19 step=2 rate_error=5.166486472e-19 rotation_error=1.313358674e-16
+mixed_d6_lock case=20 step=2 rate_error=2.220407770e-14 rotation_error=1.666193739e-13
+mixed_d6_lock case=21 step=2 rate_error=2.220446050e-14 rotation_error=2.298492240e-16
+mixed_d6_lock case=22 step=2 rate_error=2.220407770e-14 rotation_error=1.666193739e-13
+mixed_d6_lock case=23 step=2 rate_error=2.220446050e-14 rotation_error=2.298492240e-16
+mixed_d6_lock case=24 step=2 rate_error=7.003182352e-18 rotation_error=1.665856007e-13
+mixed_d6_lock case=25 step=2 rate_error=1.338413000e-18 rotation_error=2.453269467e-17
+mixed_d6_lock case=26 step=2 rate_error=1.110187964e-14 rotation_error=1.665768324e-13
+mixed_d6_lock case=27 step=2 rate_error=1.261507861e-18 rotation_error=2.453269467e-17
+mixed_d6_lock case=28 step=2 rate_error=2.220389393e-14 rotation_error=1.666151191e-13
+mixed_d6_lock case=29 step=2 rate_error=2.220446052e-14 rotation_error=1.096175045e-16
+mixed_d6_lock case=30 step=2 rate_error=2.220389393e-14 rotation_error=1.666151191e-13
+mixed_d6_lock case=31 step=2 rate_error=2.220446052e-14 rotation_error=1.096175045e-16
+mixed_d6_lock case=32 step=2 rate_error=1.524876708e-19 rotation_error=1.666150691e-13
+mixed_d6_lock case=33 step=2 rate_error=6.160170176e-16 rotation_error=2.903071528e-17
+mixed_d6_lock case=34 step=2 rate_error=6.400571405e-16 rotation_error=1.666015415e-13
+mixed_d6_lock case=35 step=2 rate_error=1.970173703e-20 rotation_error=2.903071528e-17
+mixed_d6_lock case=36 step=2 rate_error=3.925231218e-15 rotation_error=1.666162920e-13
+mixed_d6_lock case=37 step=2 rate_error=4.037809204e-20 rotation_error=6.030659567e-17
+mixed_d6_lock case=38 step=2 rate_error=3.014705677e-19 rotation_error=6.030659567e-17
+mixed_d6_lock case=39 step=2 rate_error=1.200199631e-18 rotation_error=1.666112299e-13
+mixed_d6_lock case=40 step=2 rate_error=1.258688798e-15 rotation_error=5.003707553e-17
+mixed_d6_lock case=41 step=2 rate_error=5.005067585e-15 rotation_error=1.665998412e-13
+mixed_d6_lock case=42 step=2 rate_error=2.900676394e-18 rotation_error=5.003707553e-17
+mixed_d6_lock case=43 step=2 rate_error=3.925231146e-15 rotation_error=1.665799337e-13
+mixed_d6_lock case=44 step=2 rate_error=2.775559759e-15 rotation_error=6.546139417e-17
+mixed_d6_lock case=45 step=2 rate_error=2.775557700e-15 rotation_error=6.546139417e-17
+mixed_d6_lock case=46 step=2 rate_error=5.485677295e-18 rotation_error=1.664324331e-13
+mixed_d6_lock case=47 step=2 rate_error=1.445286659e-16 rotation_error=1.560961981e-16
+mixed_d6_lock case=48 step=2 rate_error=1.296795432e-15 rotation_error=1.664324331e-13
+mixed_d6_lock case=49 step=2 rate_error=6.938912899e-16 rotation_error=1.560961981e-16
+mixed_d6_lock case=50 step=2 rate_error=2.775511788e-15 rotation_error=1.664404911e-13
+mixed_d6_lock case=51 step=2 rate_error=1.318468563e-18 rotation_error=1.685652323e-16
+mixed_d6_lock case=52 step=2 rate_error=2.370476329e-19 rotation_error=1.685652323e-16
+mixed_d6_lock case=53 step=2 rate_error=3.496446946e-18 rotation_error=1.671031362e-13
+mixed_d6_lock case=54 step=2 rate_error=6.576822046e-16 rotation_error=1.559322467e-16
+mixed_d6_lock case=55 step=2 rate_error=1.329839020e-15 rotation_error=1.671031362e-13
+mixed_d6_lock case=56 step=2 rate_error=1.134072217e-18 rotation_error=1.559322467e-16
+mixed_d6_lock case=57 step=2 rate_error=6.206356975e-15 rotation_error=1.670023814e-13
+mixed_d6_lock case=58 step=2 rate_error=4.722677481e-19 rotation_error=1.559322467e-16
+mixed_d6_lock case=59 step=2 rate_error=2.336920436e-19 rotation_error=1.559322467e-16
+mixed_d6_lock case=60 step=2 rate_error=1.127570265e-15 rotation_error=1.666167221e-13
+mixed_d6_lock case=61 step=2 rate_error=1.474514955e-15 rotation_error=2.903071528e-17
+mixed_d6_lock case=62 step=2 rate_error=6.206663463e-15 rotation_error=1.666312715e-13
+mixed_d6_lock case=63 step=2 rate_error=1.115617791e-30 rotation_error=6.030659567e-17
+mixed_d6_lock case=64 step=2 rate_error=7.789414257e-15 rotation_error=1.666652947e-13
+mixed_d6_lock case=65 step=2 rate_error=6.287361833e-15 rotation_error=1.190056971e-16
+mixed_d6_lock case=66 step=2 rate_error=5.551117590e-15 rotation_error=1.667277463e-13
+mixed_d6_lock case=67 step=2 rate_error=1.688662199e-14 rotation_error=3.103943387e-16
+mixed_d6_lock case=68 step=2 rate_error=3.925231338e-15 rotation_error=1.665534186e-13
+mixed_d6_lock case=69 step=2 rate_error=2.775558062e-15 rotation_error=6.546139417e-17
+mixed_d6_lock case=70 step=2 rate_error=6.546176017e-15 rotation_error=1.667277463e-13
+mixed_d6_lock case=71 step=2 rate_error=5.003707553e-15 rotation_error=7.110250420e-17
+mixed_d6_lock case=72 step=2 rate_error=1.397697396e-15 rotation_error=1.666673707e-13
+mixed_d6_lock case=73 step=2 rate_error=1.334525600e-14 rotation_error=1.865150448e-16
+mixed_d6_lock case=74 step=2 rate_error=2.774831763e-15 rotation_error=1.664853171e-13
+mixed_d6_lock case=75 step=2 rate_error=1.860941182e-18 rotation_error=1.685652323e-16
+mixed_d6_lock case=76 step=2 rate_error=6.128765643e-15 rotation_error=1.667003848e-13
+mixed_d6_lock case=77 step=2 rate_error=2.545810581e-14 rotation_error=1.685652323e-16
+mixed_d6_lock case=78 step=2 rate_error=1.722520342e-14 rotation_error=1.667607441e-13
+mixed_d6_lock case=79 step=2 rate_error=2.371437420e-14 rotation_error=1.559322467e-16
+mixed_d6_lock case=80 step=2 rate_error=5.549483854e-15 rotation_error=1.665912772e-13
+mixed_d6_lock case=81 step=2 rate_error=5.551115123e-15 rotation_error=6.546139417e-17
+mixed_d6_lock case=82 step=2 rate_error=7.473045393e-15 rotation_error=1.667130859e-13
+mixed_d6_lock case=83 step=2 rate_error=5.721958498e-15 rotation_error=2.118352372e-16
+test cpu_mixed_euler_locks_preserve_physical_tangent_response ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+

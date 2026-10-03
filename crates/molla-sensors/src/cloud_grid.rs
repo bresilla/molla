@@ -461,7 +461,7 @@ impl CloudGrid {
         if !Arc::ptr_eq(&self.device, &source.device)
             || source.channel.kind != TypeId::of::<CloudPoint>()
             || source.channel.element_size != 112
-            || source.channel.bytes % 112 != 0
+            || !source.channel.bytes.is_multiple_of(112)
             || (source.channel.bytes != 0 && source.buffer.is_none())
         {
             return Err(Error::Solver(
@@ -564,9 +564,7 @@ pub(crate) fn checked_budget(config: CloudGridConfig, limits: &wgpu::Limits) -> 
         || bytes > config.max_buffer_bytes
         || [112 * n, 4 * n, 64 * c, 12 * c, 8 * blocks, 24, 80]
             .into_iter()
-            .any(|b| {
-                b > limits.max_buffer_size || b > limits.max_storage_buffer_binding_size as u64
-            })
+            .any(|b| b > limits.max_buffer_size || b > limits.max_storage_buffer_binding_size)
     {
         return Err(Error::Gpu(
             "cloud grid: memory or device budget exceeded".into(),

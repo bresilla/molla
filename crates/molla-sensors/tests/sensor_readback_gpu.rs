@@ -155,7 +155,11 @@ fn empty_batches_and_invalid_ranges_do_not_submit_or_allocate() {
     let empty = upload::<u32>(&engine, vec![]);
     let mut ring = ring(&engine, 1, 8);
     assert!(source.readback_source(3..5).is_err());
-    assert!(source.readback_source(3..2).is_err());
+    assert!(
+        source
+            .readback_source(std::ops::Range { start: 3, end: 2 })
+            .is_err()
+    );
     assert!(
         ring.try_enqueue(
             &[source.readback_source(0..4).unwrap()],

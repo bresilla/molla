@@ -1,0 +1,68 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.42s
+     Running tests/belt_graded_geometry.rs (target/debug/deps/belt_graded_geometry-a619de744225a038)
+
+running 2 tests
+test paired_guides_share_base_nodes_and_preserve_positive_installed_volume ... ok
+test graded_width_preserves_mass_cord_energy_and_exact_guide_columns ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/belt_surface_lugs.rs (target/debug/deps/belt_surface_lugs-f80730b175bd1e76)
+
+running 3 tests
+test rejects_invalid_phase_grids_and_surface_rows ... ok
+test outer_phases_preserve_cord_rest_lengths_stiffness_and_mass ... ok
+test phased_chevrons_are_bonded_closed_and_positive_when_installed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+   Compiling molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+   Compiling molla-autograd v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-autograd)
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.10s
+     Running unittests src/lib.rs (target/debug/deps/molla_kernels-b2e39e4486d7d50f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/molla_kernels-b2e39e4486d7d50f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running unittests src/lib.rs (target/debug/deps/molla_storage-88a9aabbf5ed39b3)
+
+running 3 tests
+test buffer::tests::from_vec_round_trips ... ok
+test buffer::tests::host_mut_marks_dirty ... ok
+test buffer::tests::zeros_uses_default ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

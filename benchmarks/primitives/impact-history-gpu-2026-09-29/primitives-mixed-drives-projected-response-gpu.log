@@ -1,0 +1,30 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.08s
+     Running tests/runtime_mixed_drives.rs (target/debug/deps/runtime_mixed_drives-4786607d524db39d)
+
+running 1 test
+test gpu_mixed_linear_angular_drives_with_contact_match_oracles_and_cpu ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+mixed_drives cases=24 frames=240 dt=0.004166666666666667 substeps=2 peak_pose=1.1368683772161603e-13 peak_rate=9.826499507345568e-12 peak_reaction=1.6620038678638593e-12 peak_parity=0e0
+mixed_drives_prepare_begin
+
+thread 'gpu_mixed_linear_angular_drives_with_contact_match_oracles_and_cpu' (849996) panicked at crates/molla-solvers/tests/runtime_mixed_drives.rs:324:6:
+called `Result::unwrap()` on an `Err` value: Gpu("GPU runtime pipeline validation: Validation Error\n\nCaused by:\n  In Device::create_shader_module, label = 'molla::featherstone'\n    \nShader 'molla::featherstone' parsing error: name `target` is a reserved keyword\n     ┌─ wgsl:2144:5\n     │\n2144 │     target: array<f32,6>,\n     │     ^^^^^^ definition of `target`\n\n\n")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_mixed_linear_angular_drives_with_contact_match_oracles_and_cpu
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.61s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_mixed_drives`
+make: *** [Makefile:324: test-primitives-mixed-drives-gpu] Error 101

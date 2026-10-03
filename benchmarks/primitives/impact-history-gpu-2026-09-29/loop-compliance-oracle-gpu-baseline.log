@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.53s
+     Running tests/runtime_loop_compliance.rs (target/debug/deps/runtime_loop_compliance-2817011fbcfa4c19)
+
+running 1 test
+test gpu_general_compliant_loops_match_independent_loaded_recurrence_and_edits ... 
+thread 'gpu_general_compliant_loops_match_independent_loaded_recurrence_and_edits' (3599018) panicked at crates/molla-solvers/tests/runtime_loop_compliance.rs:274:67:
+called `Result::unwrap()` on an `Err` value: Solver("GPU rigid runtime does not yet support loop constraints")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_general_compliant_loops_match_independent_loaded_recurrence_and_edits
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.31s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_loop_compliance`
+make: *** [Makefile:110: test-gpu] Error 101

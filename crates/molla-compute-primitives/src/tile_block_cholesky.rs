@@ -199,15 +199,18 @@ mod gpu {
             }
 
             let bytes = (a.len() * 4) as u64;
-            let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_block_cholesky buf"),
-                size: bytes,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST
-                    | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf, 0, bytemuck::cast_slice(a));
+            let buf = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_block_cholesky buf"),
+                    size: bytes,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST
+                        | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &buf, 0, bytemuck::cast_slice(a));
 
             let uniforms = Uniforms {
                 n: n as u32,
@@ -215,13 +218,16 @@ mod gpu {
                 _pad1: 0,
                 _pad2: 0,
             };
-            let buf_u = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_block_cholesky uniforms"),
-                size: core::mem::size_of::<Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf_u, 0, bytemuck::bytes_of(&uniforms));
+            let buf_u = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_block_cholesky uniforms"),
+                    size: core::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &buf_u, 0, bytemuck::bytes_of(&uniforms));
 
             let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("molla::tile_block_cholesky io bg"),
@@ -253,12 +259,15 @@ mod gpu {
                 pass.set_bind_group(1, &bg_u, &[]);
                 pass.dispatch_workgroups(1, 1, 1);
             }
-            let stage = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_block_cholesky stage"),
-                size: bytes,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
+            let stage = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_block_cholesky stage"),
+                    size: bytes,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }
+            );
             encoder.copy_buffer_to_buffer(&buf, 0, &stage, 0, bytes);
             queue.submit(std::iter::once(encoder.finish()));
 
@@ -275,7 +284,7 @@ mod gpu {
             receiver
                 .recv()
                 .map_err(|e| Error::Gpu(format!("cholesky recv: {e:?}")))??;
-            let data = slice.get_mapped_range();
+            let data = molla_core::gpu_readback!(slice);
             let read: &[f32] = bytemuck::cast_slice(&data);
             a.copy_from_slice(read);
             drop(data);

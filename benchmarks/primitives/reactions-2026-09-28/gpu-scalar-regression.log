@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.52s
+     Running tests/articulation_gpu.rs (target/debug/deps/articulation_gpu-b0fc9da9aaf29182)
+
+running 2 tests
+test gpu_rnea_decomposition_matches_cpu ... RNEA full: cpu=[-0.8222438774660967, 0.6943140236883094] gpu=[-0.8222440481185913, 0.6943135857582092]
+RNEA bias: cpu=[-4.827670419777171, -0.5054092341434131] gpu=[-4.827670574188232, -0.5054094791412354]
+CRBA M: cpu=[2.6467332445079097, 0.8233666222539544, 0.8233666222539544, 0.33333333333333326] gpu=[2.646733, 0.8233665, 0.8233665, 0.33333328]
+i=0: lhs=-0.82224405 rhs=-0.82224417 |Δ|=0.00000011920929
+i=1: lhs=0.6943136 rhs=0.69431376 |Δ|=0.00000017881393
+ok
+test gpu_rnea_pendulum_gravity_torque_matches_cpu ... RNEA pendulum: cpu=[-4.160609229433835] gpu=[-4.160609245300293]
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.96s
+

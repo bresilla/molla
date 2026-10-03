@@ -1,0 +1,5 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make: *** [Makefile:287: test-primitives-friction-ten-second-gpu] Error 1

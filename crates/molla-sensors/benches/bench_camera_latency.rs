@@ -1,7 +1,11 @@
 //! Completed camera and camera/image/annotation chains with per-frame latency records.
 
+#[path = "support/camera_latency_smoke.rs"]
+mod camera_latency_smoke;
 #[path = "support/metrics.rs"]
 mod metrics;
+#[path = "support/run_mode.rs"]
+mod run_mode;
 #[path = "support/timing.rs"]
 mod timing;
 
@@ -579,9 +583,7 @@ fn run(
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mut full = false;
-    let mut samples = 64usize;
-    let mut warmup = 8usize;
-    let mut repeats = 3usize;
+    let (mut samples, mut warmup, mut repeats) = run_mode::defaults(&args);
     let mut timestamps = true;
     let mut filter = String::new();
     let mut destination = None;
@@ -602,10 +604,10 @@ fn main() {
                     _ => destination = Some(value.clone()),
                 }
             }
-            "--bench" => {}
+            "--bench" | "--smoke" | "--test" => {}
             "--help" => {
                 println!(
-                    "--camera-matrix --samples N --warmup N --repeats N --filter SUBSTRING --output NEW.tsv --no-timestamps"
+                    "--bench selects original resolutions, 64 samples, 8 warmup and 3 repeats; otherwise smoke uses one-tenth image dimensions and 2/1/1 sampling, retaining camera counts, aperture and processing cases. --smoke | --test --camera-matrix --samples N --warmup N --repeats N --filter SUBSTRING --output NEW.tsv --no-timestamps"
                 );
                 return;
             }
@@ -616,6 +618,14 @@ fn main() {
     assert!((1..=10000).contains(&samples) && warmup <= 10000 && (1..=20).contains(&repeats));
     let selected: Vec<_> = cases(full)
         .into_iter()
+        .map(|mut case| {
+            (case.width, case.height) = camera_latency_smoke::dimensions(
+                case.width,
+                case.height,
+                run_mode::is_smoke(&args),
+            );
+            case
+        })
         .flat_map(|case| [false, true].map(|host| (case, host)))
         .filter(|(case, host)| case.id(*host).contains(&filter))
         .collect();
@@ -634,7 +644,7 @@ fn main() {
     writeln!(output, "case\trepeat\tphase\tindex\tpixels\tencode_us\tsubmit_elapsed_us\tcomplete_us\tgpu_us\tpose_upload_bytes\tresult_download_bytes\tsubmissions\twaits\tallocations\treallocations\trequested_bytes\tdispatches").unwrap();
     let engine = timing::engine(timestamps);
     eprintln!(
-        "adapter={:?} profile={} cases={} samples={samples} warmup={warmup} repeats={repeats} pid={}",
+        "adapter={:?} profile={} cases={} samples={samples} warmup={warmup} repeats={repeats} pid={} smoke={}",
         engine.adapter_info(),
         if cfg!(debug_assertions) {
             "debug"
@@ -642,7 +652,8 @@ fn main() {
             "release"
         },
         selected.len(),
-        std::process::id()
+        std::process::id(),
+        run_mode::is_smoke(&args)
     );
     for repeat in 0..repeats {
         for (case, host) in selected

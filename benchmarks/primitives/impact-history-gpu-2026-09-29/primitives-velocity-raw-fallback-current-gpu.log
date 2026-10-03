@@ -1,0 +1,16 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running tests/runtime_velocity_coupling.rs (target/debug/deps/runtime_velocity_coupling-e95b060d1cb3edf5)
+
+running 1 test
+adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } coordinate_compensation=false
+raw_coupled_roots cases=18 steps=1 peak_rate=4.269676746273872e-5
+test gpu_raw_coupled_roots_work_without_coordinate_compensation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 47.14s
+

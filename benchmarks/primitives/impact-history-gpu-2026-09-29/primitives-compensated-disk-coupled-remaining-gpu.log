@@ -1,0 +1,11 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+error: unexpected argument 'coupled_constraint_gpu::tests::rotated_' found
+
+Usage: cargo test [OPTIONS] [TESTNAME] [-- [ARGS]...]
+
+For more information, try '--help'.
+make: *** [Makefile:132: test] Error 1

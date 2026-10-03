@@ -1,0 +1,74 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.27s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 3 tests
+test impact_constraints_gpu::tests::faults_are_sticky_and_counts_clear_old_solutions ... 
+thread 'impact_constraints_gpu::tests::faults_are_sticky_and_counts_clear_old_solutions' (617280) panicked at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-29.0.4/src/backend/wgpu_core.rs:1081:30:
+wgpu error: Validation Error
+
+Caused by:
+  In Device::create_shader_module, label = 'midpoint impact constraints'
+    
+Shader 'midpoint impact constraints' parsing error: identifier `read` resolves to a declaration
+  ┌─ wgsl:4:36
+  │
+4 │ @group(0) @binding(0) var<storage, read> gram: array<f32>;
+  │                                    ^^^^ needs to resolve to a predeclared enumerant
+
+
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test impact_constraints_gpu::tests::midpoint_oblique_mass_friction_restitution_sweep ... 
+thread 'impact_constraints_gpu::tests::midpoint_oblique_mass_friction_restitution_sweep' (617291) panicked at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-29.0.4/src/backend/wgpu_core.rs:1081:30:
+wgpu error: Validation Error
+
+Caused by:
+  In Device::create_shader_module, label = 'midpoint impact constraints'
+    
+Shader 'midpoint impact constraints' parsing error: identifier `read` resolves to a declaration
+  ┌─ wgsl:4:36
+  │
+4 │ @group(0) @binding(0) var<storage, read> gram: array<f32>;
+  │                                    ^^^^ needs to resolve to a predeclared enumerant
+
+
+
+
+FAILED
+test impact_constraints_gpu::tests::mixed_joint_rows_and_global_mode_promotion ... 
+thread 'impact_constraints_gpu::tests::mixed_joint_rows_and_global_mode_promotion' (617301) panicked at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-29.0.4/src/backend/wgpu_core.rs:1081:30:
+wgpu error: Validation Error
+
+Caused by:
+  In Device::create_shader_module, label = 'midpoint impact constraints'
+    
+Shader 'midpoint impact constraints' parsing error: identifier `read` resolves to a declaration
+  ┌─ wgsl:4:36
+  │
+4 │ @group(0) @binding(0) var<storage, read> gram: array<f32>;
+  │                                    ^^^^ needs to resolve to a predeclared enumerant
+
+
+
+
+FAILED
+
+failures:
+
+failures:
+    impact_constraints_gpu::tests::faults_are_sticky_and_counts_clear_old_solutions
+    impact_constraints_gpu::tests::midpoint_oblique_mass_friction_restitution_sweep
+    impact_constraints_gpu::tests::mixed_joint_rows_and_global_mode_promotion
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 168 filtered out; finished in 0.48s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:152: test-primitives-impact-gpu] Error 101

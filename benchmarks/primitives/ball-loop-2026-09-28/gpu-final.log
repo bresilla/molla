@@ -1,0 +1,27 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.28s
+     Running tests/runtime_ball_loop.rs (target/debug/deps/runtime_ball_loop-bc729795ada132e3)
+
+running 5 tests
+test gpu_rigid_ball_loop_closed_chain_matches_cpu_trajectory ... rigid ball closed-chain CPU/GPU: position=4.802961827952687e-6 rotation=9.076271942688802e-4
+ok
+test gpu_rigid_ball_loop_pendulum_ten_seconds_three_step_sizes ... rigid ball pendulum: dt=0.016666666666666666 duration=10s anchor=8.528042247445212e-6 cone=0e0
+rigid ball pendulum: dt=0.008333333333333333 duration=10s anchor=2.2693959720115853e-6 cone=0e0
+rigid ball pendulum: dt=0.004166666666666667 duration=10s anchor=7.748604607863464e-7 cone=0e0
+ok
+test gpu_rigid_ball_loop_retains_resources_and_rebuilds_only_on_mutation ... rigid ball warm [buffers, bytes, groups, pipelines, shaders]=[92, 529424, 28, 6, 6]
+ok
+test gpu_rigid_ball_loop_shares_two_articulation_impulses_and_preserves_twist ... ok
+test gpu_rigid_ball_loop_transmits_loaded_anchor_and_cone_reactions ... rigid ball loaded: peak_anchor=9.816294386663452e-8, force_error=2.3214985559447383e-6, torque_error=3.441472274915131e-6
+ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 72.83s
+

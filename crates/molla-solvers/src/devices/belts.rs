@@ -44,8 +44,13 @@ pub struct Belts {
 }
 
 impl Belts {
+    pub(super) fn is_empty(&self) -> bool {
+        self.belts.is_empty()
+    }
+
     pub fn insert(&mut self, scene: &RigidScene, mut spec: BeltSpec) -> Result<BeltId> {
-        if spec.colliders.is_empty() || spec.colliders.iter().any(|&c| scene.collider(c).is_none()) {
+        if spec.colliders.is_empty() || spec.colliders.iter().any(|&c| scene.collider(c).is_none())
+        {
             return Err(Error::Build("belt colliders are missing".into()));
         }
         spec.direction = spec
@@ -55,11 +60,14 @@ impl Belts {
         self.next += 1;
         let id = BeltId(self.next);
         let controller = MotorController::new(spec.limits);
-        self.belts.insert(id, Belt {
-            spec,
-            controller,
-            reading: BeltReading::default(),
-        });
+        self.belts.insert(
+            id,
+            Belt {
+                spec,
+                controller,
+                reading: BeltReading::default(),
+            },
+        );
         Ok(id)
     }
 
@@ -77,13 +85,17 @@ impl Belts {
     }
 
     fn belt(&mut self, id: BeltId) -> Result<&mut Belt> {
-        self.belts.get_mut(&id).ok_or_else(|| Error::Build("no such belt".into()))
+        self.belts
+            .get_mut(&id)
+            .ok_or_else(|| Error::Build("no such belt".into()))
     }
 
     /// Position (travel, m) or velocity control; belts take no force command.
     pub fn command(&mut self, id: BeltId, command: MotorCommand) -> Result<()> {
         match command {
-            MotorCommand::Force(_) => Err(Error::Build("belts take position or velocity commands".into())),
+            MotorCommand::Force(_) => Err(Error::Build(
+                "belts take position or velocity commands".into(),
+            )),
             MotorCommand::Position(v) | MotorCommand::Velocity(v) if !v.is_finite() => {
                 Err(Error::Build("belt command must be finite".into()))
             }
@@ -112,12 +124,16 @@ impl Belts {
 
     pub(crate) fn before_step(&mut self, scene: &mut RigidScene, dt: Real) -> Result<()> {
         for belt in self.belts.values_mut() {
-            let velocity = belt.controller.velocity(belt.reading.position, dt).unwrap_or(0.0);
+            let velocity = belt
+                .controller
+                .velocity(belt.reading.position, dt)
+                .unwrap_or(0.0);
             belt.reading.velocity = velocity;
             belt.reading.position += velocity * dt;
             for &collider in &belt.spec.colliders {
                 if scene.collider(collider).is_some() {
-                    scene.set_collider_surface_velocity(collider, belt.spec.direction * velocity)?;
+                    scene
+                        .set_collider_surface_velocity(collider, belt.spec.direction * velocity)?;
                 }
             }
         }

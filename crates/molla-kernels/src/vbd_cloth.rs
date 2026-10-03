@@ -267,12 +267,15 @@ impl VbdClothKernel {
             vec![0.0_f64; sn]
         };
         let mut spring_stiffness = Buffer::from_vec(stiffness_init, BufferUsage::Storage);
-        let particle_delta = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::vbd_cloth displacement and gradient scratch"),
-            size: (pn as u64) * 16,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
+        let particle_delta = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::vbd_cloth displacement and gradient scratch"),
+                size: (pn as u64) * 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }
+        );
         let mut inertia_y = Buffer::from_vec(vec![Vec3::ZERO; pn], BufferUsage::StorageReadWrite);
         let mut contact_lambda = Buffer::from_vec(vec![0.0_f64; pn], BufferUsage::StorageReadWrite);
         let _ = spring_stiffness.ensure_device(device);
@@ -808,26 +811,22 @@ impl VbdClothKernel {
             mode,
             DispatchMode::ContinueMaterial | DispatchMode::PolishMaterial
         );
-        if mode == DispatchMode::PolishMaterial {
-            if let Some(patch) = self
+        if mode == DispatchMode::PolishMaterial
+            && let Some(patch) = self
                 .coupled_patch
                 .as_ref()
                 .filter(|patch| patch.group().is_some())
-            {
-                if model.shape_count != 0
-                    || !model.vertex_cable_bending_entries.is_empty()
-                    || !state_in
-                        .particle_qd
-                        .device_buffer()
-                        .zip(model.particle_inv_mass.device_buffer())
-                        .is_some_and(|(input, mass)| patch.matches_target(input, mass))
-                {
-                    return Err(Error::Build(
-                        "material patch requires matching targets and no shape or cable penalties"
-                            .into(),
-                    ));
-                }
-            }
+            && (model.shape_count != 0
+                || !model.vertex_cable_bending_entries.is_empty()
+                || !state_in
+                    .particle_qd
+                    .device_buffer()
+                    .zip(model.particle_inv_mass.device_buffer())
+                    .is_some_and(|(input, mass)| patch.matches_target(input, mass)))
+        {
+            return Err(Error::Build(
+                "material patch requires matching targets and no shape or cable penalties".into(),
+            ));
         }
         if model.particle_count == 0 {
             return Ok(());
@@ -846,16 +845,21 @@ impl VbdClothKernel {
         let scratch_bytes = gradient_scratch_bytes(
             model.particle_count,
             model.tet_count,
-            u64::from(device.limits().max_storage_buffer_binding_size)
+            device
+                .limits()
+                .max_storage_buffer_binding_size
                 .min(device.limits().max_buffer_size),
         )?;
         if self.particle_delta.size() < scratch_bytes {
-            self.particle_delta = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::vbd_cloth displacement and gradient scratch"),
-                size: scratch_bytes,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            });
+            self.particle_delta = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::vbd_cloth displacement and gradient scratch"),
+                    size: scratch_bytes,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                }
+            );
         }
         let particle_count_u = model.particle_count as u32;
         let spring_count_u = model.spring_count as u32;
@@ -1466,13 +1470,12 @@ impl VbdClothKernel {
                 }
             }
         }
-        if mode == DispatchMode::PolishMaterial {
-            if let Some(patch) = &mut self.coupled_patch {
-                if patch.group().is_some() {
-                    patch.encode_state(&mut encoder, 2);
-                    patch.select_pending = false;
-                }
-            }
+        if mode == DispatchMode::PolishMaterial
+            && let Some(patch) = &mut self.coupled_patch
+            && patch.group().is_some()
+        {
+            patch.encode_state(&mut encoder, 2);
+            patch.select_pending = false;
         }
         queue.submit(std::iter::once(encoder.finish()));
         self.continuation = continuation;
@@ -1543,25 +1546,6 @@ fn gradient_scratch_bytes(particles: usize, tets: usize, limit: u64) -> Result<u
     Ok(bytes)
 }
 
-#[cfg(test)]
-mod gradient_scratch_tests {
-    use super::gradient_scratch_bytes;
-
-    #[test]
-    fn checks_binding_capacity_and_shader_indices() {
-        assert_eq!(gradient_scratch_bytes(0, 0, 16).unwrap(), 16);
-        assert_eq!(
-            gradient_scratch_bytes(29_568, 102_144, 16 << 20).unwrap(),
-            10_278_912
-        );
-        assert_eq!(gradient_scratch_bytes(4, 1, 160).unwrap(), 160);
-        assert!(gradient_scratch_bytes(4, 1, 159).is_err());
-        assert!(gradient_scratch_bytes(usize::MAX, 1, u64::MAX).is_err());
-        assert!(gradient_scratch_bytes(1, usize::MAX, u64::MAX).is_err());
-        assert!(gradient_scratch_bytes(u32::MAX as usize, 1, u64::MAX).is_err());
-    }
-}
-
 fn buffer_entry<'a>(
     binding: u32,
     buf: Option<&'a wgpu::Buffer>,
@@ -1587,4 +1571,23 @@ fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntr
             count: None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod gradient_scratch_tests {
+    use super::gradient_scratch_bytes;
+
+    #[test]
+    fn checks_binding_capacity_and_shader_indices() {
+        assert_eq!(gradient_scratch_bytes(0, 0, 16).unwrap(), 16);
+        assert_eq!(
+            gradient_scratch_bytes(29_568, 102_144, 16 << 20).unwrap(),
+            10_278_912
+        );
+        assert_eq!(gradient_scratch_bytes(4, 1, 160).unwrap(), 160);
+        assert!(gradient_scratch_bytes(4, 1, 159).is_err());
+        assert!(gradient_scratch_bytes(usize::MAX, 1, u64::MAX).is_err());
+        assert!(gradient_scratch_bytes(1, usize::MAX, u64::MAX).is_err());
+        assert!(gradient_scratch_bytes(u32::MAX as usize, 1, u64::MAX).is_err());
+    }
 }

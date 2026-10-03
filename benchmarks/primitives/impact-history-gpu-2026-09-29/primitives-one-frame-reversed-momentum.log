@@ -1,0 +1,33 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-core v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-core)
+    Checking molla-math v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-math)
+    Checking molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+    Checking molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+    Checking molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+    Checking molla-autograd v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-autograd)
+    Checking molla-optim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-optim)
+    Checking molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Checking molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.02s
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.48s
+     Running `target/debug/examples/prepare_primitives_gpu --step`
+adapter	AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+gpu_wiring_ok	compliant_tree=false	reversed_tree=true	soft_loop=true	axis_caps=true	brakes=true	body_damping=true	break_thresholds=true	physics_steps=0	diagnostics=GpuRuntimeDiagnostics { model_compilations: 1, current_model_bind_groups_created: 51, completed_frames: 0, last_substeps: 0, last_state_upload_bytes: 0, last_state_readback_bytes: 0 }
+gpu_frame_body	compliant_tree=false	body=BodyHandle(1)	gpu_velocity=SpatialVector { linear: DVec3(0.07935628294944763, -0.020818058401346207, -0.0299622043967247), angular: DVec3(0.0511142835021019, 0.01556178368628025, 0.0307469479739666) }	cpu_velocity=SpatialVector { linear: DVec3(0.07935630328648648, -0.020818060803478085, -0.029962203615683514), angular: DVec3(0.05111414225316953, 0.015562040980517054, 0.03074698333200772) }
+gpu_frame_body	compliant_tree=false	body=BodyHandle(2)	gpu_velocity=SpatialVector { linear: DVec3(-0.05939043313264847, -0.017933716997504234, -0.03101280890405178), angular: DVec3(-0.011154922656714916, 0.004418924916535616, 0.02922593057155609) }	cpu_velocity=SpatialVector { linear: DVec3(-0.059390459705014595, -0.017933714117425843, -0.03101281082724293), angular: DVec3(-0.011154790606658235, 0.004418674706625483, 0.029225901513886463) }
+gpu_frame_probe	compliant_tree=false	dt=0.004166666666666667	position_error=2.249274057e-8	orientation_error=0.000000000e0	linear_rate_error=2.679709233e-8	angular_rate_error=2.956379141e-7	tolerance=0.001	physics_steps=1
+gpu_frame_coordinates	gpu_qd=[0.08043821901082993, -0.022658696398139, -0.03082924149930477, 0.0511142835021019, 0.01556178368628025, 0.0307469479739666, 0.13207796216011047, -0.04478731006383896, 0.0008360873907804489, 0.0627799928188324, -0.007764328271150589, 0.0015226665418595076]	cpu_qd=[0.08043824748433824, -0.022658694051976163, -0.03082923630334251, 0.05111414225316953, 0.015562040980517054, 0.03074698333200772, 0.1320780406411391, -0.04478732677671581, 0.0008361245280743301, 0.06277988189472522, -0.00776376351153952, 0.001522730026793579]
+gpu_wiring_ok	compliant_tree=true	reversed_tree=true	soft_loop=true	axis_caps=true	brakes=true	body_damping=true	break_thresholds=true	physics_steps=0	diagnostics=GpuRuntimeDiagnostics { model_compilations: 1, current_model_bind_groups_created: 51, completed_frames: 0, last_substeps: 0, last_state_upload_bytes: 0, last_state_readback_bytes: 0 }
+gpu_frame_body	compliant_tree=true	body=BodyHandle(1)	gpu_velocity=SpatialVector { linear: DVec3(0.07935628294944763, -0.020818058401346207, -0.0299622043967247), angular: DVec3(0.0511142835021019, 0.01556178368628025, 0.0307469479739666) }	cpu_velocity=SpatialVector { linear: DVec3(0.07935630328648648, -0.020818060803478085, -0.029962203615683514), angular: DVec3(0.05111414225316953, 0.015562040980517054, 0.03074698333200772) }
+gpu_frame_body	compliant_tree=true	body=BodyHandle(2)	gpu_velocity=SpatialVector { linear: DVec3(-0.05939043313264847, -0.017933716997504234, -0.03101280890405178), angular: DVec3(-0.011154922656714916, 0.004418924916535616, 0.02922593057155609) }	cpu_velocity=SpatialVector { linear: DVec3(-0.059390459705014595, -0.017933714117425843, -0.03101281082724293), angular: DVec3(-0.011154790606658235, 0.004418674706625483, 0.029225901513886463) }
+gpu_frame_probe	compliant_tree=true	dt=0.004166666666666667	position_error=2.249274057e-8	orientation_error=0.000000000e0	linear_rate_error=2.679709233e-8	angular_rate_error=2.956379141e-7	tolerance=0.001	physics_steps=1
+gpu_frame_coordinates	gpu_qd=[0.08043821901082993, -0.022658696398139, -0.03082924149930477, 0.0511142835021019, 0.01556178368628025, 0.0307469479739666, 0.13207796216011047, -0.04478731006383896, 0.0008360873907804489, 0.0627799928188324, -0.007764328271150589, 0.0015226665418595076]	cpu_qd=[0.08043824748433824, -0.022658694051976163, -0.03082923630334251, 0.05111414225316953, 0.015562040980517054, 0.03074698333200772, 0.1320780406411391, -0.04478732677671581, 0.0008361245280743301, 0.06277988189472522, -0.00776376351153952, 0.001522730026793579]
+gpu_wiring_complete	fixtures=2	physics_steps=1	full_plan_acceptance=false

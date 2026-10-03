@@ -1,0 +1,22 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.45s
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.96s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running `target/debug/examples/check_primitives_shaders`
+shader_wiring_ok	module=mass_response	entry_points=1
+shader_wiring_ok	module=jacobian_response	entry_points=1
+shader_wiring_ok	module=reaction_response	entry_points=1
+shader_wiring_ok	module=featherstone	entry_points=1
+shader_wiring_ok	module=runtime_distance	entry_points=3
+shader_wiring_ok	module=body_damping	entry_points=1
+shader_wiring_ok	module=scalar_publication	entry_points=1
+shader_wiring_ok	module=coulomb_disk	entry_points=1
+shader_wiring_ok	module=contact_response	entry_points=6
+shader_wiring_ok	module=floating_momentum	entry_points=1
+shader_wiring_complete	modules=10	device_execution=false

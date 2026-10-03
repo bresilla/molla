@@ -1,0 +1,30 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.46s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 4 tests
+test coulomb_disk_gpu::tests::coupled_disk_gpu_device_sequence_regimes_and_contact_retirement ... ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_matches_cpu_and_retires_batched_island_slots ... coupled disk batch: peak iterations=24
+ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_rotations_permutations_and_reciprocal_scales ... contact=0 host slip=[-0.11434549646401615, -0.2909361373701973] gpu slip=[-0.11434553, -0.2909361] host KKT=1.1218600603374719e-7
+
+thread 'coulomb_disk_gpu::tests::coupled_disk_gpu_rotations_permutations_and_reciprocal_scales' (3889428) panicked at crates/molla-solvers/src/coulomb_disk_gpu_tests.rs:401:9:
+step=7 host KKT=1.1218600603374719e-7 rows=[CoulombDiskSolution { impulse: [1.4631557e-16, 3.7227913e-16], slip: [-0.11434553, -0.2909361], applied_cap: 4e-16, regime: 3, iterations: 21, residual: 7.353061e-8 }, CoulombDiskSolution { impulse: [2.680367e-16, -2.2506965e-16], slip: [-0.25327745, 0.21267639], applied_cap: 3.5000002e-16, regime: 3, iterations: 21, residual: 7.353061e-8 }, CoulombDiskSolution { impulse: [-2.95423e-16, -5.220409e-17], slip: [0.21344578, 0.03771789], applied_cap: 3e-16, regime: 3, iterations: 21, residual: 7.353061e-8 }, CoulombDiskSolution { impulse: [-6.972418e-17, 2.400803e-16], slip: [0.053491972, -0.18418801], applied_cap: 2.5e-16, regime: 3, iterations: 21, residual: 7.353061e-8 }, CoulombDiskSolution { impulse: [8.826402e-17, -1.7946996e-16], slip: [-0.1874917, 0.38123274], applied_cap: 2e-16, regime: 3, iterations: 21, residual: 7.353061e-8 }, CoulombDiskSolution { impulse: [1.3433166e-16, -6.6745865e-17], slip: [-0.3025899, 0.15034892], applied_cap: 1.5e-16, regime: 3, iterations: 21, residual: 7.353061e-8 }, CoulombDiskSolution { impulse: [0.0, 0.0], slip: [0.0, 0.0], applied_cap: 0.0, regime: 0, iterations: 0, residual: 0.0 }, CoulombDiskSolution { impulse: [0.0, 0.0], slip: [0.0, 0.0], applied_cap: 0.0, regime: 0, iterations: 0, residual: 0.0 }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test coulomb_disk_gpu::tests::coupled_disk_gpu_validation_sticky_faults_and_reset ... ok
+
+failures:
+
+failures:
+    coulomb_disk_gpu::tests::coupled_disk_gpu_rotations_permutations_and_reciprocal_scales
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 95 filtered out; finished in 1.32s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:127: test-primitives-friction-gpu] Error 101

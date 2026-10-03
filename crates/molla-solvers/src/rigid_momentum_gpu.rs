@@ -1,0 +1,280 @@
+//! Retained world-momentum transport for unrestricted floating articulations.
+
+use crate::FeatherstoneSolver;
+use molla_compute::Engine;
+use molla_core::{Error, Result};
+use molla_math::{GpuMat3, GpuTransform, Real};
+use molla_sim::{BodyFlags, JointType, Model, State};
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Joint {
+    parent: i32,
+    child: u32,
+    kind: u32,
+    dof: u32,
+    coordinate: u32,
+    columns: u32,
+    reversed: u32,
+    padding: u32,
+    parent_frame: GpuTransform,
+    child_frame: GpuTransform,
+    axis: [f32; 4],
+    mass: [f32; 4],
+    inertia: GpuMat3,
+    com: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<Joint>() == 192);
+
+pub(super) struct MomentumGpu {
+    pipeline: wgpu::ComputePipeline,
+    groups: [wgpu::BindGroup; 2],
+    params: wgpu::Buffer,
+    articulations: u32,
+    correction: bool,
+}
+
+impl MomentumGpu {
+    pub fn new(
+        engine: &Engine,
+        model: &Model,
+        states: &[State; 2],
+        projected: Option<&State>,
+        delta: &wgpu::Buffer,
+        correction: Option<&wgpu::Buffer>,
+        solver: &FeatherstoneSolver,
+    ) -> Result<Option<Self>> {
+        let count = model
+            .articulation_count
+            .max(usize::from(model.joint_count > 0));
+        let starts = model.articulation_start.host()?;
+        let children = model.joint_child.host()?;
+        let parents = model.joint_parent.host()?;
+        let kinds = model.joint_type.host()?;
+        let dofs = model.joint_dof_offset.host()?;
+        let lower = model.joint_limit_lower.host()?;
+        let upper = model.joint_limit_upper.host()?;
+        let caps = model.joint_velocity_limit.host()?;
+        let flags = model.body_flags.host()?;
+        let enabled = model.joint_enabled.host()?;
+        let mut records = Vec::with_capacity(model.joint_count);
+        let mut arts = Vec::with_capacity(count);
+        let mut width = 1;
+        for art in 0..count {
+            let range = if model.articulation_count == 0 {
+                0..model.joint_count
+            } else {
+                starts[art] as usize..starts[art + 1] as usize
+            };
+            let root = range.start;
+            let eligible = !range.is_empty()
+                && [JointType::Free as u32, JointType::D6 as u32].contains(&kinds[root])
+                && parents[root] < 0
+                && enabled[root] != 0
+                && children[range.clone()]
+                    .iter()
+                    .all(|&body| flags[body as usize] & BodyFlags::IMMOVABLE == 0)
+                && (dofs[root] as usize..dofs[root] as usize + 6).all(|d| {
+                    !lower[d].is_finite() && !upper[d].is_finite() && !caps[d].is_finite()
+                });
+            arts.push([root as u32, range.end as u32, u32::from(eligible), 0]);
+            width = width.max(range.len());
+            for j in range.clone() {
+                let child = children[j] as usize;
+                let mut columns = 0;
+                let first = dofs[j] as usize;
+                let angular = if kinds[j] == JointType::Ball as u32 {
+                    0
+                } else {
+                    3
+                };
+                let partial = (kinds[j] == JointType::D6 as u32
+                    || kinds[j] == JointType::Ball as u32)
+                    && molla_sim::joint_control::partial_angular_lock(
+                        &lower[first + angular..first + angular + 3],
+                        &upper[first + angular..first + angular + 3],
+                    );
+                for d in dofs[j]..dofs[j + 1] {
+                    let locked = (kinds[j] <= 2 || kinds[j] == JointType::D6 as u32)
+                        && lower[d as usize].is_finite()
+                        && upper[d as usize].is_finite()
+                        && (upper[d as usize] - lower[d as usize]).abs() < 1e-12
+                        && !(partial && d - dofs[j] >= angular as u32);
+                    if enabled[j] != 0 && !locked {
+                        columns |= 1 << (d - dofs[j]);
+                    }
+                }
+                let axis = model.joint_axis.host()?[j];
+                let com = model.body_com.host()?[child];
+                records.push(Joint {
+                    parent: children[root..j]
+                        .iter()
+                        .position(|&body| body == parents[j])
+                        .map_or(-1, |p| p as i32),
+                    child: child as u32,
+                    kind: kinds[j],
+                    dof: dofs[j],
+                    coordinate: model.joint_coord_offset.host()?[j],
+                    columns,
+                    reversed: model.joint_reversed.host()?[j],
+                    padding: 0,
+                    parent_frame: model.joint_x_p.host()?[j].into(),
+                    child_frame: model.joint_x_c.host()?[j].into(),
+                    axis: [axis.x as f32, axis.y as f32, axis.z as f32, 0.0],
+                    mass: [model.body_mass.host()?[child] as f32, 0.0, 0.0, 0.0],
+                    inertia: model.body_inertia.host()?[child].into(),
+                    com: [com.x as f32, com.y as f32, com.z as f32, 0.0],
+                });
+            }
+        }
+        if !arts.iter().any(|a| a[2] != 0) {
+            return Ok(None);
+        }
+        if width > 32 {
+            return Err(Error::Gpu(
+                "floating momentum articulation exceeds 32 joints".into(),
+            ));
+        }
+        let device = engine.device().unwrap();
+        let queue = engine.queue().unwrap();
+        let data = |label, bytes: &[u8]| {
+            let buffer = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.len() as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &buffer, 0, bytes);
+            buffer
+        };
+        let arts_buffer = data(
+            "floating momentum articulations",
+            bytemuck::cast_slice(&arts),
+        );
+        let joints = data("floating momentum joints", bytemuck::cast_slice(&records));
+        let params = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("floating momentum params"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let entries: Vec<_> = (0..19)
+            .map(|binding| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                count: None,
+                ty: wgpu::BindingType::Buffer {
+                    ty: if binding == 17 {
+                        wgpu::BufferBindingType::Uniform
+                    } else {
+                        wgpu::BufferBindingType::Storage {
+                            read_only: ![6, 7, 8, 9, 10, 11, 16].contains(&binding),
+                        }
+                    },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+            })
+            .collect();
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("floating momentum layout"),
+            entries: &entries,
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("floating momentum pipeline layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("floating momentum"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../shaders/rigid_momentum.wgsl")
+                    .replace("__ART_WIDTH__", &width.to_string())
+                    .into(),
+            ),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("floating momentum"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("transport"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let group = |i: usize| -> Result<_> {
+            let input = &states[i];
+            let output = &states[1 - i];
+            let reference = projected.unwrap_or(input);
+            let buffers = [
+                &arts_buffer,
+                &joints,
+                input.body_q.device_buffer_current()?,
+                input.body_qd.device_buffer_current()?,
+                input.joint_qd.device_buffer_current()?,
+                solver.gpu_position_compensation_buffer(input)?,
+                output.body_q.device_buffer_current()?,
+                output.body_qd.device_buffer_current()?,
+                output.joint_qd.device_buffer_current()?,
+                output.joint_q.device_buffer_current()?,
+                solver.gpu_position_compensation_buffer(output)?,
+                solver.gpu_coordinate_compensation_buffer(output)?,
+                reference.body_q.device_buffer_current()?,
+                solver.gpu_position_compensation_buffer(reference)?,
+                delta,
+                solver.gpu_active_articulations_buffer()?,
+                solver.gpu_status_buffer().unwrap(),
+                &params,
+                correction.unwrap_or(delta),
+            ];
+            Ok(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("floating momentum group"),
+                layout: &layout,
+                entries: &buffers
+                    .iter()
+                    .enumerate()
+                    .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                        binding: binding as u32,
+                        resource: buffer.as_entire_binding(),
+                    })
+                    .collect::<Vec<_>>(),
+            }))
+        };
+        let groups = [group(0)?, group(1)?];
+        Ok(Some(Self {
+            pipeline,
+            groups,
+            params,
+            articulations: count as u32,
+            correction: correction.is_some(),
+        }))
+    }
+
+    pub fn prepare(&self, engine: &Engine, dt: Real) {
+        molla_core::gpu_write_buffer!(
+            engine.queue().unwrap(),
+            &self.params,
+            0,
+            bytemuck::cast_slice(&[
+                (dt as f32).to_bits(),
+                self.articulations,
+                u32::from(self.correction),
+                0,
+            ]),
+        );
+    }
+
+    pub fn encode(&self, encoder: &mut wgpu::CommandEncoder, input: usize) {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.groups[input], &[]);
+        pass.dispatch_workgroups(self.articulations.div_ceil(32), 1, 1);
+        molla_core::gpu_metrics::record_dispatch();
+    }
+}

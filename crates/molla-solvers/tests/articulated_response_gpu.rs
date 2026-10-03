@@ -107,7 +107,7 @@ fn gpu_mass_and_jacobian_cover_floating_locked_and_reversed_joints() {
     for reversed in [false, true] {
         for offset in [Vec3::ZERO, Vec3::new(8.0, -3.0, 5.0)] {
             let (mut model, mut state) = fixture(reversed, offset);
-            let expected_mass = molla_solvers::mass_matrix(&model, &state, 0).unwrap();
+            let expected_mass = molla_solvers::response_mass_matrix(&model, &state, 0).unwrap();
             let point = Vec3::new(0.1, -0.04, 0.13);
             let expected_j: Vec<_> = (0..model.body_count)
                 .map(|body| molla_solvers::jacobian(&model, &state, 0, body, point).unwrap())

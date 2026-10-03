@@ -1,0 +1,30 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.94s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 1 test
+test contact_response_gpu::coupled_tests::scalar_impulse_residue_survives_mass_response_and_rate_cancellation ... mass_response_probe impulse=[1229.7384, -2.4414063e-5] delta=[1229.7384, 614.8692, 0.0, 0.0, 0.0, 0.0] rates=[-307.43457, 614.8692, 0.0, 0.0, 0.0, 0.0] exact=1229.73837890625
+scalar_arithmetic_probe=[1229.7384, -2.4414063e-5, 1229.7384, -2.4414063e-5, -307.4346, 6.1035153e-6, -307.4346, 0.0]
+mass_response_low_probe=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.4414063e-5, 1.0, 0.0, 1.0, -2.4414063e-5, -2.4414063e-5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+thread 'contact_response_gpu::coupled_tests::scalar_impulse_residue_survives_mass_response_and_rate_cancellation' (1254280) panicked at crates/molla-solvers/src/coupled_response_gpu_tests.rs:321:5:
+assertion `left == right` failed
+  left: -307.43457
+ right: -307.4346
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    contact_response_gpu::coupled_tests::scalar_impulse_residue_survives_mass_response_and_rate_cancellation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 242 filtered out; finished in 2.11s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:132: test] Error 101

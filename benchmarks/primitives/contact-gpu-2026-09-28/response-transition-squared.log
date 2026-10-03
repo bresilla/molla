@@ -1,0 +1,46 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.54s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 7 tests
+test contact_response_gpu::tests::articulated_response_matches_cpu_gram_and_generalized_friction ... articulated contact response: peak gram error=5.680281103259688e-7, peak rate error=3.888536544031712e-7
+ok
+test contact_response_gpu::tests::contact_response_faults_preserve_status_and_retire_rates_and_impulses ... ok
+test contact_response_gpu::tests::coordinate_null_mass_is_supported_and_oblique_rank_deficiency_fails_closed ... ok
+test contact_response_gpu::tests::device_contact_friction_breaks_away_when_load_crosses_static_bound ... GPU contact trajectory: case=Breakaway, peak drift=1.1907216310501099e0, settled creep=1.1907015154065448e0, CPU position error=2.9166793914340064e-3, orientation error=1.3646730415870492e-5, velocity error=4.708086026111094e-3
+integrated published-impulse host KKT peak=9.998402195816574e-8
+GPU breakaway: first sliding step=1762, force=11.81 N
+
+thread 'contact_response_gpu::tests::device_contact_friction_breaks_away_when_load_crosses_static_bound' (3929458) panicked at crates/molla-solvers/src/contact_response_gpu_tests.rs:847:13:
+assertion failed: rate.x.abs() < 1e-5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test contact_response_gpu::tests::device_contact_friction_holds_loaded_box_and_matches_cpu_trajectory ... GPU contact trajectory: case=Hold, peak drift=2.2777468984713778e-5, settled creep=5.64266884328959e-7, CPU position error=5.668846621358381e-7, orientation error=1.2990531157078367e-7, velocity error=1.3944007833321154e-5
+integrated published-impulse host KKT peak=9.989676738694049e-8
+ok
+test contact_response_gpu::tests::device_contact_friction_slide_matches_analytic_acceleration_and_cpu ... GPU contact trajectory: case=Slide, peak drift=1.592165470123291e0, settled creep=0e0, CPU position error=1.8055059244565705e-6, orientation error=2.9802322387695313e-8, velocity error=2.2755989213957053e-5
+integrated published-impulse host KKT peak=9.991741676619817e-8
+GPU kinetic slide: acceleration=2.981366813182831e0, analytic=2.98134754727832e0
+ok
+test contact_response_gpu::tests::device_contact_friction_stops_resticks_and_reverses_under_load ... GPU contact trajectory: case=StopReverse, peak drift=5.021466612815857e-1, settled creep=5.327696111053228e-1, CPU position error=2.0124735876108605e-6, orientation error=5.960464477539063e-8, velocity error=1.8094133011957338e-5
+integrated published-impulse host KKT peak=9.826727717226071e-8
+
+thread 'contact_response_gpu::tests::device_contact_friction_stops_resticks_and_reverses_under_load' (3929566) panicked at crates/molla-solvers/src/contact_response_gpu_tests.rs:860:13:
+rest speed=-6.007928750477731e-4
+FAILED
+
+failures:
+
+failures:
+    contact_response_gpu::tests::device_contact_friction_breaks_away_when_load_crosses_static_bound
+    contact_response_gpu::tests::device_contact_friction_stops_resticks_and_reverses_under_load
+
+test result: FAILED. 5 passed; 2 failed; 0 ignored; 0 measured; 100 filtered out; finished in 72.45s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:134: test-primitives-contact-response-gpu] Error 101

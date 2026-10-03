@@ -1,0 +1,31 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.47s
+     Running tests/runtime_primitives_contract_gpu.rs (target/debug/deps/runtime_primitives_contract_gpu-a9107b5ca6b36412)
+
+running 4 tests
+test runtime_gpu_free_body_matches_cpu_and_publishes_velocity ... ok
+test runtime_gpu_mutations_rebuild_and_preserve_handles ... ok
+test runtime_gpu_rejects_unsupported_mutation_without_advancing ... ok
+test runtime_gpu_world_anchor_uses_authored_frames ... 
+thread 'runtime_gpu_world_anchor_uses_authored_frames' (2803024) panicked at crates/molla-solvers/tests/runtime_primitives_contract_gpu.rs:128:22:
+called `Result::unwrap()` on an `Err` value: Gpu("copy_buffer: src has no device mirror")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    runtime_gpu_world_anchor_uses_authored_frames
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.08s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_primitives_contract_gpu`
+make: *** [Makefile:74: test-gpu] Error 101

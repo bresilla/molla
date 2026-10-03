@@ -1,0 +1,26 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.35s
+     Running tests/compliant_loop_rows_gpu.rs (target/debug/deps/compliant_loop_rows_gpu-1d470e05e078ca3c)
+
+running 1 test
+test compliant_loop_rows_match_coordinate_derivatives_and_feedback_in_retained_batches ... 
+thread 'compliant_loop_rows_match_coordinate_derivatives_and_feedback_in_retained_batches' (161507) panicked at crates/molla-kernels/tests/compliant_loop_rows_gpu.rs:331:17:
+packed small rotation case=70 expected=-0.00000007288679093608866 row=CompliantLoopRow { metadata: [140, 141, 5, 1], child_linear: [0.0, 0.0, 0.0, -2.6647253e-8], child_angular: [-0.0136390785, 0.47492018, 0.87992316, -0.37140837], parent_linear: [0.0, 0.0, 0.0, -inf], parent_angular: [0.0136390785, -0.47492018, -0.87992316, inf], feedback: [1934.4425, 52.778755, 0.0, 1.0] }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    compliant_loop_rows_match_coordinate_derivatives_and_feedback_in_retained_batches
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+error: test failed, to rerun pass `-p molla-kernels --test compliant_loop_rows_gpu`
+make: *** [Makefile:112: test-gpu] Error 101

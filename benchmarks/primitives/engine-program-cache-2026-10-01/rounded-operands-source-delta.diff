@@ -1,0 +1,20 @@
+--- benchmarks/primitives/engine-program-cache-2026-10-01/fixed-reaction-source-sha256.txt	2026-10-02 16:12:27.260314889 +0200
++++ benchmarks/primitives/engine-program-cache-2026-10-01/rounded-operands-source-sha256.txt	2026-10-02 16:53:43.633658382 +0200
+@@ -485,7 +485,7 @@
+ 80fd174b4cd07ccc7b36e5df82998cc58db521f3e62808f8d56862e278942fc8  crates/molla-kernels/shaders/dense3_adj.wgsl
+ 1a4c9479e3774e4d6fb8579861f7a682c0f5f1e0c81cfc39af2c3938e9b68822  crates/molla-kernels/shaders/dense3_svd.wgsl
+ 7cca591a45dec6623357d6067c99db662af34e601236db9739b1a9384f46dd20  crates/molla-kernels/shaders/euler_bound_precision.wgsl
+-755be6f83b131af6c16969f477297bd70b107c15a27c05bd5c724f606a14b0e2  crates/molla-kernels/shaders/featherstone.wgsl
++9ca19b9383128796d66e0bd4b2111ac605afb15c74346b1233353154a82da1e5  crates/molla-kernels/shaders/featherstone.wgsl
+ fcfe0c2c2b4811135e882eca0b46e954faef24eab13d157467a36a08fdb9e903  crates/molla-kernels/shaders/featherstone_adjoint_jacobians.wgsl
+ f330e9be197ae386c46af6d56bca34428d22e58fa41c4228102b6848de30c804  crates/molla-kernels/shaders/featherstone_feedback.wgsl
+ dc15ec14c6513bd070edb03f5dd5c7e12bcc65912b64e736f3fd18cc26378bc4  crates/molla-kernels/shaders/featherstone_mass_inverse.wgsl
+@@ -1191,7 +1191,7 @@
+ 7398f07c9e15d7730dd21255819e4884784bf23baa1478801d1a15882c1ce83e  crates/molla-solvers/tests/runtime_cone_capability.rs
+ 1398924b3ee3dec5701847b1250ca5da658aa73133a6992ad18f861204448121  crates/molla-solvers/tests/runtime_cone_limits.rs
+ 9b397411a8bae288467f0bca1f75cd672af77ae98878a1475a5f6ece1fce6654  crates/molla-solvers/tests/runtime_constraint_readout.rs
+-037c01608c00c7fe86a1c10e2ae388ea25f1a2e3b707fe8ed92a6c01d366ac62  crates/molla-solvers/tests/runtime_contact_breakage_gpu.rs
++e1ef836e4046091a384e7cb9b097db320411f5523164431d1408dfbda38a0ab0  crates/molla-solvers/tests/runtime_contact_breakage_gpu.rs
+ 6ba3e5a5549850cfc38ba024cef09fa5b349fb09111b95b9c8abd6345f85b178  crates/molla-solvers/tests/runtime_contact_reactions_gpu.rs
+ 4c9e5de39e1c5366a8f93d3b256029c55a411fc7dc94fecfa857db67873c3ecb  crates/molla-solvers/tests/runtime_contact_sleep.rs
+ a24591f9bc7f91041bda0a336833b5d0e2f42a014c9d24349d39f49ca838276a  crates/molla-solvers/tests/runtime_contacts_gpu.rs

@@ -1,0 +1,20 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.43s
+     Running tests/runtime_capsule_manifold.rs (target/debug/deps/runtime_capsule_manifold-fe5a449919b4106b)
+
+running 1 test
+test gpu_capsule_support_span_preserves_loaded_equilibrium ... capsule span hz=60 peak_position=3.8444372367230535e-6 peak_angle=3.5146252041789777e-7
+capsule span hz=120 peak_position=2.0217895357887983e-8 peak_angle=3.645298586939037e-7
+capsule span hz=240 peak_position=1.9661539222114955e-6 peak_angle=4.574553210137038e-7
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 48.53s
+

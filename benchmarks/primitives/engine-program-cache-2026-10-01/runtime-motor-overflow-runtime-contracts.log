@@ -1,0 +1,71 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.47s
+     Running tests/runtime_primitives_contract_gpu.rs (target/debug/deps/runtime_primitives_contract_gpu-17b111111ba5223d)
+
+running 12 tests
+test runtime_gpu_distance_mutation_is_solved_and_can_be_removed ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_gpu_empty_reaction_readout_stays_on_device ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_gpu_empty_scene_and_invalid_step_are_safe ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_gpu_fault_is_atomic_and_corrected_inputs_can_resume ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_gpu_free_body_matches_cpu_and_publishes_velocity ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_gpu_mutations_rebuild_and_preserve_handles ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_gpu_rejects_unsupported_mutation_without_advancing ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_gpu_rotated_frames_com_inertia_and_motor_parity ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+Ball initial corrected CPU=Transform { position: DVec3(1.4556717229510796e-5, 1.9996536584861737, 4.6270310653753755e-5), rotation: DQuat(9.14594682279149e-6, 2.7015441916329066e-6, 0.14943460461713154, 0.9887716110669718) } GPU=Transform { position: DVec3(1.4552991383087743e-5, 1.999653539268806, 4.6247961962286865e-5), rotation: DQuat(9.145946023636498e-6, 2.701544644878595e-6, 0.14943461120128632, 0.9887716174125671) }
+Ball initial corrected CPU=Transform { position: DVec3(-0.14773567552225875, 2.4773249563404263, 6.791368316477335e-5), rotation: DQuat(-2.2811818695817054e-6, -3.3049327144030888e-6, 0.1494412932575955, 0.9887706002169416) } GPU=Transform { position: DVec3(-0.14773567924768827, 2.4773248371231915, 6.789133485432843e-5), rotation: DQuat(-2.281183014929411e-6, -3.3049329886125633e-6, 0.14944128692150116, 0.988770604133606) }
+Ball: max position=3.012512901798743e-6 rotation=2.3084779657169695e-7 velocity=1.4971456177152582e-5
+Revolute initial corrected CPU=Transform { position: DVec3(1.535690633937964e-5, 1.9996540102678337, 5.874544961763373e-5), rotation: DQuat(1.4666239186180257e-6, -2.4215932833075277e-6, 0.14943489913601343, 0.988771566597763) } GPU=Transform { position: DVec3(1.5356910757269304e-5, 1.9996540102522395, 5.8760354662457104e-5), rotation: DQuat(1.466624212298484e-6, -2.4215923986048438e-6, 0.149434894323349, 0.9887715578079224) }
+Revolute initial corrected CPU=Transform { position: DVec3(-0.2700277326912218, 2.4561353945734754, -0.022140225153922617), rotation: DQuat(0.01925857762774892, 0.11054738051005215, 0.02778614146082332, 0.9932956831643038) } GPU=Transform { position: DVec3(-0.27002773268878677, 2.4561353945571867, -0.02214021024761839), rotation: DQuat(0.01925857737660408, 0.11054737865924835, 0.027786141261458397, 0.9932956695556641) }
+Revolute: max position=2.9600710338999404e-6 rotation=3.63783705703429e-7 velocity=1.1585941557405077e-5
+Prismatic initial corrected CPU=Transform { position: DVec3(-2.043210501036924e-5, 1.999582876447949, -9.805651467229004e-6), rotation: DQuat(-1.4717731160928271e-6, -5.749888687714923e-7, 0.14944025712486225, 0.9887707568228131) } GPU=Transform { position: DVec3(-2.0372480921238e-5, 1.9995829359621737, -9.865258418839673e-6), rotation: DQuat(-1.4717727481183829e-6, -5.749897695750406e-7, 0.14944025874137878, 0.9887707829475403) }
+Prismatic initial corrected CPU=Transform { position: DVec3(-0.2879536323052181, 2.294908329625199, -0.2609197458461301), rotation: DQuat(0.06720239034499334, 0.21007820287038995, 0.1261183506757062, 0.9671841339856161) } GPU=Transform { position: DVec3(-0.2879535726708733, 2.294908389157577, -0.26091980543625226), rotation: DQuat(0.06720238924026489, 0.21007820963859558, 0.12611834704875946, 0.9671841263771057) }
+Prismatic: max position=6.100640906880424e-6 rotation=8.101628553311991e-7 velocity=1.4676404120432816e-5
+ok
+test runtime_gpu_setup_capacity_rejection_preserves_world_and_can_resume ... 
+thread 'runtime_gpu_setup_capacity_rejection_preserves_world_and_can_resume' (645888) panicked at crates/molla-solvers/tests/runtime_primitives_contract_gpu.rs:117:6:
+called `Result::unwrap()` on an `Err` value: Gpu("invalid GPU contact island capacity")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test runtime_gpu_shared_engine_keeps_world_gravity_state_and_mutations_isolated ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_gpu_warm_resources_are_retained ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+
+thread 'runtime_gpu_warm_resources_are_retained' (648042) panicked at crates/molla-solvers/tests/runtime_primitives_contract_gpu.rs:512:5:
+assertion `left == right` failed
+  left: 15
+ right: 13
+FAILED
+test runtime_gpu_world_anchor_uses_authored_frames ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+
+failures:
+
+failures:
+    runtime_gpu_setup_capacity_rejection_preserves_world_and_can_resume
+    runtime_gpu_warm_resources_are_retained
+
+test result: FAILED. 10 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 286.04s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_primitives_contract_gpu`
+make[1]: *** [Makefile:172: test-gpu] Error 101
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:199: test-primitives-runtime-gpu] Error 2

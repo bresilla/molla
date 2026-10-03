@@ -55,20 +55,34 @@ pub struct Propellers {
 }
 
 impl Propellers {
+    pub(super) fn is_empty(&self) -> bool {
+        self.propellers.is_empty()
+    }
+
     pub fn insert(&mut self, scene: &RigidScene, spec: PropellerSpec) -> Result<PropellerId> {
         if scene.body(spec.body).is_none() {
             return Err(Error::Build("propeller body is missing".into()));
         }
-        if spec.thrust.iter().chain(&spec.torque).any(|c| !c.is_finite()) || !(spec.max_torque >= 0.0) {
+        if spec
+            .thrust
+            .iter()
+            .chain(&spec.torque)
+            .any(|c| !c.is_finite())
+            || spec.max_torque.is_nan()
+            || spec.max_torque < 0.0
+        {
             return Err(Error::Build("propeller constants must be finite".into()));
         }
         self.next += 1;
         let id = PropellerId(self.next);
-        self.propellers.insert(id, Propeller {
-            spec,
-            controller: MotorController::new(spec.limits),
-            reading: PropellerReading::default(),
-        });
+        self.propellers.insert(
+            id,
+            Propeller {
+                spec,
+                controller: MotorController::new(spec.limits),
+                reading: PropellerReading::default(),
+            },
+        );
         Ok(id)
     }
 
@@ -133,7 +147,8 @@ impl Propellers {
         for propeller in self.propellers.values_mut() {
             let spec = propeller.spec;
             let omega = propeller.reading.omega;
-            let (Some(body), Some(desc)) = (scene.body_index(spec.body), scene.body(spec.body)) else {
+            let (Some(body), Some(desc)) = (scene.body_index(spec.body), scene.body(spec.body))
+            else {
                 continue;
             };
             if omega == 0.0 || !desc.enabled || desc.kind != BodyKind::Dynamic {

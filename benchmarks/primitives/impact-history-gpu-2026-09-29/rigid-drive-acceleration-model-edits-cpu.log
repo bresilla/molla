@@ -1,0 +1,38 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.74s
+     Running tests/runtime_acceleration_drives.rs (target/debug/deps/runtime_acceleration_drives-604923b906406ebe)
+
+running 2 tests
+zero conditional mobility: locked D6 and redundant Fixed/D6 rows, masses .01/1/100, controls retire while hard support remains physical
+test cpu_zero_acceleration_mobility_retires_drives_and_preserves_redundant_hard_support ... ok
+144 rotated off-centre/full-inertia hinge/slider/D6 closures: Force/Acceleration, masses .01/1/100, uncapped/capped/zero, independent pivot inertia and both-anchor reactions
+test cpu_acceleration_drives_use_locked_pivot_inertia_and_physical_force_caps ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+     Running tests/runtime_rigid_loop_drives.rs (target/debug/deps/runtime_rigid_loop_drives-bd8716cd0497e2f6)
+
+running 7 tests
+test cpu_rigid_loop_acceleration_feedback_is_applied_once_during_mass_scaled_impacts ... ok
+test cpu_rigid_loop_controls_are_applied_once_during_live_oblique_impacts ... ok
+D6 Force controls with live friction: 96 frames, masses .01/1/100, static hold/capped slide/brake/reversal, independent impulse/rate/reaction oracle
+test cpu_rigid_loop_force_drives_share_live_friction_response ... ok
+Force motor + brake breaking/repair: 24 rotated axis closures, capture=false, event oracle, broken-row retirement and live-control repair verified
+D6 Force controls with live friction: 96 frames, masses .01/1/100, static hold/capped slide/brake/reversal, independent impulse/rate/reaction oracle
+test cpu_rigid_loop_acceleration_drives_share_live_friction_response ... ok
+Force motor + brake breaking/repair: 24 rotated axis closures, capture=true, event oracle, broken-row retirement and live-control repair verified
+test cpu_rigid_loop_motor_brake_breaking_and_repair_retire_and_restore_controls ... ok
+rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 60Hz/1 steps
+rigid-loop Acceleration controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 60Hz/1 steps
+rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 240Hz/4 steps
+test cpu_rigid_loop_force_drives_match_independent_implicit_oracle ... ok
+rigid-loop Acceleration controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 240Hz/4 steps
+test cpu_rigid_loop_acceleration_drives_match_independent_implicit_oracle ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s
+

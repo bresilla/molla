@@ -38,7 +38,7 @@ pub mod contact;
 pub mod dataset;
 pub mod environment;
 pub use environment::{
-    CompassReading, Geodetic, GeoReference, Gps, GpsReading, InertialReading, WorldFrame, compass,
+    CompassReading, GeoReference, Geodetic, Gps, GpsReading, InertialReading, WorldFrame, compass,
     inertial_unit,
 };
 pub mod radio;
@@ -46,13 +46,13 @@ pub use radio::{ALL_CHANNELS, Delivery, RadioEndpoint, RadioKind, RadioMedium};
 #[cfg(feature = "gpu")]
 pub mod ray_sensors;
 #[cfg(feature = "gpu")]
+pub use molla_geometry::raycast_cpu::CpuRaycaster;
+#[cfg(feature = "gpu")]
 pub use ray_sensors::{
     DistanceKind, DistanceReading, DistanceSensors, DistanceSpec, JointReading, LightEnvironment,
     LightReading, LightSensors, LightSource, NearestHit, RadarDetection, RadarSpec, RadarTarget,
     Radars, RayQuery, RigidRays, SceneRays, cone_rays, joint_reading, lookup, range_finder,
 };
-#[cfg(feature = "gpu")]
-pub use molla_geometry::raycast_cpu::CpuRaycaster;
 pub mod recognition;
 pub use recognition::{RecognizedObject, recognize};
 pub mod touch;

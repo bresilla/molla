@@ -23,6 +23,28 @@ struct Uniforms {
 
 const WORKGROUP_SIZE: u32 = 64;
 
+/// Retained CRBA bindings for one model, state and output buffer.
+pub struct MassMatrixDispatch {
+    pipeline: wgpu::ComputePipeline,
+    groups: [wgpu::BindGroup; 3],
+    count: u32,
+}
+
+impl MassMatrixDispatch {
+    pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+        if self.count == 0 {
+            return;
+        }
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+        pass.set_pipeline(&self.pipeline);
+        for (i, group) in self.groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, group, &[]);
+        }
+        pass.dispatch_workgroups(self.count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        molla_core::gpu_metrics::record_dispatch();
+    }
+}
+
 /// GPU CRBA mass-matrix kernel. Holds the pipeline + cached
 /// articulation CSR / mass-offset CSR for `model`.
 pub struct MassMatrixKernel {
@@ -58,7 +80,6 @@ impl MassMatrixKernel {
         queue: &wgpu::Queue,
         model: &Model,
     ) -> Result<Self> {
-
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::crba"),
             source: wgpu::ShaderSource::Wgsl(
@@ -97,7 +118,11 @@ impl MassMatrixKernel {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("molla::crba layout"),
-            bind_group_layouts: &[Some(&layout_model), Some(&layout_arts), Some(&layout_uniforms)],
+            bind_group_layouts: &[
+                Some(&layout_model),
+                Some(&layout_arts),
+                Some(&layout_uniforms),
+            ],
             immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -148,21 +173,33 @@ impl MassMatrixKernel {
         }
         mass_offsets_host.push(acc);
 
-        let art_offsets_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::crba art_offsets"),
-            size: (art_offsets.len() * core::mem::size_of::<u32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&art_offsets_buf, 0, bytemuck::cast_slice(&art_offsets));
+        let art_offsets_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::crba art_offsets"),
+                size: (art_offsets.len() * core::mem::size_of::<u32>()) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &art_offsets_buf,
+            0,
+            bytemuck::cast_slice(&art_offsets)
+        );
 
-        let mass_offsets_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::crba mass_offsets"),
-            size: (mass_offsets_host.len() * core::mem::size_of::<u32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(
+        let mass_offsets_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::crba mass_offsets"),
+                size: (mass_offsets_host.len() * core::mem::size_of::<u32>()) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
             &mass_offsets_buf,
             0,
             bytemuck::cast_slice(&mass_offsets_host),
@@ -202,14 +239,17 @@ impl MassMatrixKernel {
     /// mass matrix output.
     pub fn create_output_buffer(&self, device: &wgpu::Device) -> wgpu::Buffer {
         let len = self.output_len().max(1);
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::crba mass_matrix"),
-            size: (len * core::mem::size_of::<f32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
+        molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::crba mass_matrix"),
+                size: (len * core::mem::size_of::<f32>()) as u64,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        )
     }
 
     /// Dispatch CRBA over every articulation. Caller's responsibility:
@@ -244,10 +284,25 @@ impl MassMatrixKernel {
         state: &State,
         mass_out: &wgpu::Buffer,
     ) -> Result<()> {
-
         if self.articulation_count == 0 {
             return Ok(());
         }
+        let prepared = self.prepare_on_device(device, queue, model, state, mass_out)?;
+        let mut encoder = device.create_command_encoder(&Default::default());
+        prepared.encode(&mut encoder);
+        queue.submit([encoder.finish()]);
+        Ok(())
+    }
+
+    /// Retain bindings; recreate after replacing any model, pose or output buffer.
+    pub fn prepare_on_device(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state: &State,
+        mass_out: &wgpu::Buffer,
+    ) -> Result<MassMatrixDispatch> {
         if mass_out.size() < self.output_len().max(1) as u64 * 4 {
             return Err(Error::Gpu("CRBA output buffer is undersized".into()));
         }
@@ -268,7 +323,7 @@ impl MassMatrixKernel {
                 buffer_entry(9, state.body_q.device_buffer())?,
                 buffer_entry(10, model.joint_x_c.device_buffer())?,
                 buffer_entry(11, model.joint_reversed.device_buffer())?,
-                buffer_entry(12, model.joint_enabled.device_buffer())?,
+                buffer_entry(12, model.joint_motion_flags.device_buffer())?,
                 buffer_entry(13, model.body_flags.device_buffer())?,
                 buffer_entry(14, model.joint_limit_lower.device_buffer())?,
                 buffer_entry(15, model.joint_limit_upper.device_buffer())?,
@@ -300,13 +355,16 @@ impl MassMatrixKernel {
             _pad1: 0,
             _pad2: 0,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::crba uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::crba uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::crba uniforms bg"),
             layout: &self.layout_uniforms,
@@ -316,23 +374,11 @@ impl MassMatrixKernel {
             }],
         });
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("molla::crba encoder"),
-        });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("molla::crba pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bg_model, &[]);
-            pass.set_bind_group(1, &bg_arts, &[]);
-            pass.set_bind_group(2, &bg_uniforms, &[]);
-            let groups = self.articulation_count.div_ceil(WORKGROUP_SIZE).max(1);
-            pass.dispatch_workgroups(groups, 1, 1);
-        }
-        queue.submit(std::iter::once(encoder.finish()));
-        Ok(())
+        Ok(MassMatrixDispatch {
+            pipeline: self.pipeline.clone(),
+            groups: [bg_model, bg_arts, bg_uniforms],
+            count: self.articulation_count,
+        })
     }
 
     /// Read back the full multi-articulation mass matrix as a flat
@@ -349,12 +395,15 @@ impl MassMatrixKernel {
             .clone();
         let len = self.output_len().max(1);
         let byte_size = (len * core::mem::size_of::<f32>()) as u64;
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::crba staging"),
-            size: byte_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let staging = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::crba staging"),
+                size: byte_size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::crba readback encoder"),
         });
@@ -371,7 +420,7 @@ impl MassMatrixKernel {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("crba recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("crba map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = molla_core::gpu_readback!(slice);
         let out: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&mapped).to_vec();
         drop(mapped);
         staging.unmap();

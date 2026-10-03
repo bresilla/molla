@@ -1,0 +1,15 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `release` profile [optimized] target(s) in 0.10s
+     Running benches/runtime_primitives.rs (target/release/deps/runtime_primitives-c87dd9596ff6fd06)
+benchmark_schema=6	run_mode=benchmark	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=process_rust_allocator_layouts_in_measured_frames_and_observed_device_totals	device_counter_scope=orchestrator_buffer_allocation_events_and_frame_boundaries_excluding_timestamp_harness	transfer_scope=orchestrator_queue_writes_and_mapped_view_footprints_excluding_timestamp_harness	frame_trace=false	build_profile=release
+case_process_start	primitive=distance	instances=10000	backend=gpu	timeout_seconds=360
+benchmark_schema=6	run_mode=benchmark	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=process_rust_allocator_layouts_in_measured_frames_and_observed_device_totals	device_counter_scope=orchestrator_buffer_allocation_events_and_frame_boundaries_excluding_timestamp_harness	transfer_scope=orchestrator_queue_writes_and_mapped_view_footprints_excluding_timestamp_harness	frame_trace=false	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=distance	instances=10000	backend=gpu
+case_setup_complete	primitive=distance	instances=10000	backend=gpu	seconds=120.916713553
+case_warmup_complete	primitive=distance	instances=10000	backend=gpu	steps=20
+case_ok	primitive=distance	instances=10000	backend=gpu	bodies=10000	articulations=10000	warmup=20	steps=1000	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=20000	contact_width=8	setup_seconds=120.916713553	wall_seconds=55.796242803	max_step_seconds=0.218352099	device_timeline_seconds=Some(55.795588096)	state_upload_bytes=1480000000	state_readout_bytes=6760004000	boundary_buffer_bytes=51045776	boundary_buffers=Some(144)	boundary_allocations=None	model_compilations=Some(2)	break_events=0	encoded_dispatches=49000	all_transfer_bytes=13520672000	all_upload_bytes=5640668000	all_readback_bytes=7880004000	host_allocations=156599001	host_reallocations=401000	host_requested_bytes=76321676088	host_initial_live_bytes=92823619	host_peak_live_bytes=124953327	host_peak_extra_bytes=32133116	host_peak_live_allocations=105879	host_peak_extra_allocations=28503	observed_device_buffer_bytes=Some(51045776)	observed_device_buffers=Some(144)	observed_device_native_allocations=None	device_counter_observations=Some(1001)	device_transient_peak_allocations=unavailable

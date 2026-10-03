@@ -67,14 +67,17 @@ impl SoftMaterialIterationKernel {
                 cache: None,
             })
         });
-        let diagnostics = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("FEM material contact residuals"),
-            size: 12,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
+        let diagnostics = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("FEM material contact residuals"),
+                size: 12,
+                mapped_at_creation: false,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            }
+        );
         let entries = (0..4)
             .map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
@@ -117,14 +120,17 @@ impl SoftMaterialIterationKernel {
             compilation_options: Default::default(),
             cache: None,
         });
-        let force_diagnostics = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("FEM maximum force residual"),
-            size: 4,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        });
+        let force_diagnostics = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("FEM maximum force residual"),
+                size: 4,
+                mapped_at_creation: false,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            }
+        );
         Self {
             layout,
             pipelines,
@@ -163,11 +169,14 @@ impl SoftMaterialIterationKernel {
         {
             return Err(Error::Build("invalid FEM force residual inputs".into()));
         }
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&[count, tolerance.to_bits(), 0, 0]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&[count, tolerance.to_bits(), 0, 0]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let entries = [values, status, &self.force_diagnostics, &uniform]
             .iter()
             .enumerate()
@@ -259,20 +268,23 @@ impl SoftMaterialIterationKernel {
                 "invalid FEM material contact iteration inputs".into(),
             ));
         }
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&[
-                b.particles,
-                b.bodies,
-                u32::from(final_iteration),
-                0,
-                linear_tolerance.to_bits(),
-                angular_tolerance.to_bits(),
-                0,
-                0,
-            ]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&[
+                    b.particles,
+                    b.bodies,
+                    u32::from(final_iteration),
+                    0,
+                    linear_tolerance.to_bits(),
+                    angular_tolerance.to_bits(),
+                    0,
+                    0,
+                ]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let buffers = [
             b.input_velocity,
             b.predicted_velocity,

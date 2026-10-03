@@ -1,0 +1,17 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/rigid_singular_forces.rs (target/debug/deps/rigid_singular_forces-38d7b334ca477410)
+
+running 5 tests
+test raw_free_root_with_offset_frames_skips_zero_inertia_rotation ... ok
+test locked_singular_d6_roots_keep_supported_spin_under_null_axis_loads ... ok
+test null_mode_motors_preserve_supported_linear_drive ... ok
+test singular_body_keeps_unlocked_spin_and_com_acceleration ... ok
+test continuous_force_respects_singular_angular_modes_at_offset_com ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s
+

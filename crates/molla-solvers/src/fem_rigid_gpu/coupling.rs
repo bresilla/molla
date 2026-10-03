@@ -65,12 +65,15 @@ impl MaterialContactState {
         let mut input = model.state()?;
         input.upload_to_device(device, queue)?;
         let allocate = |label, size| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                mapped_at_creation: false,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    mapped_at_creation: false,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                }
+            )
         };
         Ok(Self {
             input,
@@ -81,12 +84,15 @@ impl MaterialContactState {
             polish_cycles: 1,
             polish_contact_sweeps: None,
             coupled_patch: false,
-            pre_polish: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("material pre-polish diagnostics"),
-                size: 16,
-                mapped_at_creation: false,
-                usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-            }),
+            pre_polish: molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("material pre-polish diagnostics"),
+                    size: 16,
+                    mapped_at_creation: false,
+                    usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                }
+            ),
             kernel: SoftMaterialIterationKernel::new(device),
             predicted: allocate(
                 "material predictor velocities",

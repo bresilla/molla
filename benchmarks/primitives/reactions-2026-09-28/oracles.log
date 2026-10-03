@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/reaction_wrenches.rs (target/debug/deps/reaction_wrenches-4016a88d12324db2)
+
+running 5 tests
+test joint_wrench_indices_are_local_to_the_requested_articulation ... ok
+test ball_wrench_matches_offset_com_full_inertia_newton_euler_oracle ... ok
+test free_body_requires_no_joint_wrench_at_its_applied_acceleration ... ok
+test fixed_chain_reports_anchor_wrenches_including_external_com_loads ... ok
+test solved_scalar_stop_reports_transmission_without_a_motor_command ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

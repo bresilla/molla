@@ -1,0 +1,27 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.72s
+     Running tests/runtime_density_mass.rs (target/debug/deps/runtime_density_mass-7a79c632b63ab792)
+
+running 1 test
+
+thread 'density_aggregation_and_edits_drive_cpu_force_response' (629939) panicked at crates/molla-solvers/tests/runtime_density_mass.rs:102:9:
+assertion `left == right` failed
+  left: SpatialVector { linear: DVec3(0.006243334411391758, -0.003153484351849032, 0.0015581705215335564), angular: DVec3(0.0003291505151889816, -0.00011691230827093158, 0.0002624310084084881) }
+ right: SpatialVector { linear: DVec3(0.006249999999999999, -0.0031249999999999993, 0.0015624999999999997), angular: DVec3(0.0003291505151889816, -0.00011691230827093158, 0.0002624310084084881) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test density_aggregation_and_edits_drive_cpu_force_response ... FAILED
+
+failures:
+
+failures:
+    density_aggregation_and_edits_drive_cpu_force_response
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_density_mass`
+make: *** [Makefile:139: test] Error 101

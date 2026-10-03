@@ -1,0 +1,14 @@
+gate_start=static-shaders date=2026-10-02T18:17:41+02:00
+gate_end=static-shaders exit=0 date=2026-10-02T18:17:48+02:00
+gate_start=remaining-production date=2026-10-02T18:17:48+02:00
+gate_end=remaining-production exit=0 date=2026-10-02T18:19:36+02:00
+gate_start=examples date=2026-10-02T18:19:36+02:00
+gate_end=examples exit=0 date=2026-10-02T18:22:12+02:00
+gate_start=cpu-primitives date=2026-10-02T18:22:12+02:00
+gate_end=cpu-primitives exit=0 date=2026-10-02T18:25:57+02:00
+gate_start=test-all date=2026-10-02T18:25:57+02:00
+gate_end=test-all exit=0 date=2026-10-02T19:40:21+02:00
+gate_start=harden date=2026-10-02T19:40:21+02:00
+gate_end=harden exit=0 date=2026-10-02T21:48:41+02:00
+gate_start=original-full-gpu date=2026-10-02T21:48:41+02:00
+gate_end=original-full-gpu exit=2 date=2026-10-03T04:22:06+02:00

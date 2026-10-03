@@ -1,0 +1,30 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.97s
+     Running tests/runtime_distance_contract.rs (target/debug/deps/runtime_distance_contract-02148aa89a97722d)
+
+running 2 tests
+test gpu_distance_endpoint_exchange_including_coincident_positive_bounds ... 
+thread 'gpu_distance_endpoint_exchange_including_coincident_positive_bounds' (3004938) panicked at crates/molla-solvers/tests/runtime_distance_contract.rs:62:17:
+case=0 frame=0 body=0 dp=4.799999713897705, v0=SpatialVector { linear: DVec3(-287.9999694824219, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }, v1=SpatialVector { linear: DVec3(287.9999694824219, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test gpu_distance_runtime_mutation_and_unrelated_compaction ... 
+thread 'gpu_distance_runtime_mutation_and_unrelated_compaction' (3005240) panicked at crates/molla-solvers/tests/runtime_distance_contract.rs:160:13:
+stage=1 momentum before=[DVec3(0.020028607919812202, 0.0, 0.0), DVec3(0.01998092420399189, 0.0, 0.0)] after=DVec3(0.2999999560415745, 0.0, 0.0)
+FAILED
+
+failures:
+
+failures:
+    gpu_distance_endpoint_exchange_including_coincident_positive_bounds
+    gpu_distance_runtime_mutation_and_unrelated_compaction
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2 filtered out; finished in 10.79s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_distance_contract`
+make: *** [Makefile:75: test-gpu] Error 101

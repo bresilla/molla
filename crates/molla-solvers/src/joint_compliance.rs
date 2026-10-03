@@ -61,13 +61,36 @@ pub(crate) fn apply(
         }
         let c = coords[j] as usize;
         let rotation = Quat::from_xyzw(q[c + 3], q[c + 4], q[c + 5], q[c + 6]);
-        let (x, y, z) = rotation.to_euler(glam::EulerRot::XYZ);
-        let positions = [q[c], q[c + 1], q[c + 2], x, y, z];
-        let mut efforts = [0.0; 6];
-        for (axis, dof) in range.enumerate() {
-            compliance[dof]
+        for record in &compliance[range.clone()] {
+            record
                 .validate()
                 .map_err(|_| Error::Solver("invalid joint compliance parameters".into()))?;
+        }
+        let lower = std::array::from_fn(|axis| {
+            let record = compliance[range.start + 3 + axis];
+            if record.enabled != 0 {
+                record.lower
+            } else {
+                Real::NEG_INFINITY
+            }
+        });
+        let upper = std::array::from_fn(|axis| {
+            let record = compliance[range.start + 3 + axis];
+            if record.enabled != 0 {
+                record.upper
+            } else {
+                Real::INFINITY
+            }
+        });
+        let geometry = crate::joint_angles::geometry(
+            rotation,
+            Vec3::from_array(lower),
+            Vec3::from_array(upper),
+        );
+        let angles = geometry.angles.to_array();
+        let positions = [q[c], q[c + 1], q[c + 2], angles[0], angles[1], angles[2]];
+        let mut efforts = [0.0; 6];
+        for (axis, dof) in range.enumerate() {
             efforts[axis] = effort(compliance[dof], positions[axis], qd[dof], inertias[dof], dt);
         }
         if efforts.iter().any(|v| !v.is_finite()) {

@@ -1,0 +1,21 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.74s
+     Running tests/articulated_response_gpu.rs (target/debug/deps/articulated_response_gpu-3cab485b081d5760)
+
+running 3 tests
+test gpu_free_body_mass_matches_analytic_inertia ... ok
+test gpu_mass_and_jacobian_cover_floating_locked_and_reversed_joints ... GPU response parity: 25 DOFs, 8 bodies, reversed=false, offset=DVec3(0.0, 0.0, 0.0)
+GPU response parity: 25 DOFs, 8 bodies, reversed=false, offset=DVec3(8.0, -3.0, 5.0)
+GPU response parity: 25 DOFs, 8 bodies, reversed=true, offset=DVec3(0.0, 0.0, 0.0)
+GPU response parity: 25 DOFs, 8 bodies, reversed=true, offset=DVec3(8.0, -3.0, 5.0)
+ok
+test gpu_response_rejects_oversized_trees_and_invalid_buffers ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s
+

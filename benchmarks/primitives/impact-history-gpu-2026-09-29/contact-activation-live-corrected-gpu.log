@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.04s
+     Running tests/runtime_contact_sleep.rs (target/debug/deps/runtime_contact_sleep-7be46659d55a2907)
+
+running 5 tests
+test gpu_automatic_contact_groups_sleep_and_wake_together ... ok
+test gpu_contact_sleep_retains_geometry_and_nonwaking_state ... ok
+test gpu_contact_wake_fault_rolls_back_and_same_layout_retry_recovers ... ok
+test gpu_moving_boundaries_wake_new_contact_components ... ok
+test gpu_new_substep_contacts_wake_only_eligible_components ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 22.26s
+

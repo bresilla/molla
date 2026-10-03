@@ -1,0 +1,24 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 1 test
+
+thread 'rigid_world::bounds_tests::retained_bounds_match_rebuilt_bounds_through_edits_sleep_and_failure' (594329) panicked at crates/molla-solvers/src/rigid_bounds_tests.rs:90:33:
+retained tick=93: solver error: runtime impact position correction: solver error: coupled impact response did not converge
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test rigid_world::bounds_tests::retained_bounds_match_rebuilt_bounds_through_edits_sleep_and_failure ... FAILED
+
+failures:
+
+failures:
+    rigid_world::bounds_tests::retained_bounds_match_rebuilt_bounds_through_edits_sleep_and_failure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 119 filtered out; finished in 2.75s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:74: test] Error 101

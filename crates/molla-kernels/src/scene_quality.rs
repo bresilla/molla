@@ -24,26 +24,32 @@ impl SceneQualityKernel {
     ) -> Self {
         let blocks = (leaves - 1).div_ceil(256);
         let alloc = |size, extra| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::scene quality"),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | extra,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::scene quality"),
+                    size,
+                    usage: wgpu::BufferUsages::STORAGE | extra,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let partial = alloc(u64::from(blocks) * 4, wgpu::BufferUsages::empty());
         let state = alloc(32, wgpu::BufferUsages::COPY_SRC);
         let args = alloc(36, wgpu::BufferUsages::INDIRECT);
-        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::scene quality parameters"),
-            contents: bytemuck::cast_slice(&[
-                leaves,
-                leaves * 2 - 1,
-                blocks,
-                (ratio_percent as f32 / 100.0).to_bits(),
-            ]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let params = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::scene quality parameters"),
+                contents: bytemuck::cast_slice(&[
+                    leaves,
+                    leaves * 2 - 1,
+                    blocks,
+                    (ratio_percent as f32 / 100.0).to_bits(),
+                ]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let mut entries: Vec<_> = (0..5).map(|i| storage(i, i < 2)).collect();
         entries.push(wgpu::BindGroupLayoutEntry {
             binding: 5,

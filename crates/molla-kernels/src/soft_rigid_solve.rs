@@ -75,12 +75,15 @@ impl SoftRigidSolveProfile {
                 ty: wgpu::QueryType::Timestamp,
                 count: 14,
             }),
-            resolved: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("FEM contact pass ticks"),
-                size: 14 * 8,
-                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            }),
+            resolved: molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("FEM contact pass ticks"),
+                    size: 14 * 8,
+                    usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }
+            ),
         })
     }
 
@@ -228,9 +231,9 @@ impl SoftRigidSolveKernel {
             + row_count.div_ceil(64) as u64
             + particles.map_or(0, |n| 132 + n as u64 + 3 * row_count as u64)
             + if blocked { 3 * row_count as u64 } else { 0 };
-        if response_size > device.limits().max_storage_buffer_binding_size as u64
-            || row_count.max(1) as u64 * 32 > device.limits().max_storage_buffer_binding_size as u64
-            || active_words * 4 > device.limits().max_storage_buffer_binding_size as u64
+        if response_size > device.limits().max_storage_buffer_binding_size
+            || row_count.max(1) as u64 * 32 > device.limits().max_storage_buffer_binding_size
+            || active_words * 4 > device.limits().max_storage_buffer_binding_size
             || active_words > u32::MAX as u64
         {
             return Err(Error::Build(
@@ -238,12 +241,15 @@ impl SoftRigidSolveKernel {
             ));
         }
         let allocate = |label, size| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                mapped_at_creation: false,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    mapped_at_creation: false,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                }
+            )
         };
         let entries: Vec<_> = (0..17)
             .map(|binding| wgpu::BindGroupLayoutEntry {
@@ -604,11 +610,14 @@ impl SoftRigidSolveKernel {
             base_row: 0,
             pad: [residual_tolerance.unwrap_or(0.0).to_bits(), 0, 0],
         };
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("FEM solve parameters"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("FEM solve parameters"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let buffers = [
             b.positions,
             b.velocities,
@@ -678,14 +687,17 @@ impl SoftRigidSolveKernel {
             pass.set_bind_group(0, &group, &[]);
             if index == 1 {
                 for base in (0..count).step_by(PREPARE_BATCH_GROUPS as usize) {
-                    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("FEM response batch parameters"),
-                        contents: bytemuck::bytes_of(&Params {
-                            base_row: base * 64,
-                            ..params
-                        }),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
+                    let uniform = molla_core::gpu_buffer_init!(
+                        device,
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("FEM response batch parameters"),
+                            contents: bytemuck::bytes_of(&Params {
+                                base_row: base * 64,
+                                ..params
+                            }),
+                            usage: wgpu::BufferUsages::UNIFORM,
+                        }
+                    );
                     let group = bind(&uniform);
                     pass.set_bind_group(0, &group, &[]);
                     pass.dispatch_workgroups((count - base).min(PREPARE_BATCH_GROUPS), 1, 1);
@@ -704,16 +716,16 @@ impl SoftRigidSolveKernel {
                     pass.dispatch_workgroups(1, 1, 1);
                 }
             }
-            if index == 4 {
-                if let Some(pipelines) = &self.block_schedule {
-                    for (pipeline, groups) in pipelines.iter().zip([
-                        self.row_count.div_ceil(64),
-                        1,
-                        self.row_count.div_ceil(64),
-                    ]) {
-                        pass.set_pipeline(pipeline);
-                        pass.dispatch_workgroups(groups, 1, 1);
-                    }
+            if index == 4
+                && let Some(pipelines) = &self.block_schedule
+            {
+                for (pipeline, groups) in pipelines.iter().zip([
+                    self.row_count.div_ceil(64),
+                    1,
+                    self.row_count.div_ceil(64),
+                ]) {
+                    pass.set_pipeline(pipeline);
+                    pass.dispatch_workgroups(groups, 1, 1);
                 }
             }
             drop(pass);
@@ -802,11 +814,14 @@ impl SoftParticleDriftKernel {
         {
             return Err(Error::Build("invalid GPU particle drift input".into()));
         }
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("FEM drift parameters"),
-            contents: bytemuck::cast_slice(&[count, dt.to_bits(), 0, 0]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("FEM drift parameters"),
+                contents: bytemuck::cast_slice(&[count, dt.to_bits(), 0, 0]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let buffers = [input, velocities, output, status, &uniform];
         let entries: Vec<_> = buffers
             .iter()

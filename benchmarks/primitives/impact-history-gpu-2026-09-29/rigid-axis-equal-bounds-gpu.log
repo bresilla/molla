@@ -1,0 +1,23 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.44s
+     Running tests/runtime_rigid_axis_loops.rs (target/debug/deps/runtime_rigid_axis_loops-39fcc59d278367ac)
+
+running 2 tests
+test gpu_rigid_axis_loops_match_independent_hard_bound_motion_and_wrenches ... rigid-axis loops hz=60 substeps=1 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=60 substeps=4 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=1 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=4 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+ok
+test gpu_rigid_axis_loops_match_nonzero_equal_bound_motion_and_wrenches ... rigid-axis loops hz=60 substeps=1 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=60 substeps=4 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=1 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=4 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 90.52s
+

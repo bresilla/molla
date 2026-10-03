@@ -1,0 +1,50 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.10s
+     Running benches/featherstone_cpu_vs_gpu.rs (target/debug/deps/featherstone_cpu_vs_gpu-87dfb61c8cc7a40e)
+Gnuplot not found, using plotters backend
+Testing featherstone/chain_length/cpu/M=1
+Success
+Testing featherstone/chain_length/gpu/M=1
+Success
+Testing featherstone/chain_length/cpu/M=4
+Success
+Testing featherstone/chain_length/gpu/M=4
+Success
+Testing featherstone/chain_length/cpu/M=16
+Success
+Testing featherstone/chain_length/gpu/M=16
+Success
+Testing featherstone/chain_length/cpu/M=32
+Success
+Testing featherstone/chain_length/gpu/M=32
+Success
+
+Testing featherstone/batch/cpu/N=1
+Success
+Testing featherstone/batch/gpu/N=1
+Success
+Testing featherstone/batch/cpu/N=8
+Success
+Testing featherstone/batch/gpu/N=8
+Success
+Testing featherstone/batch/cpu/N=64
+Success
+Testing featherstone/batch/gpu/N=64
+Success
+Testing featherstone/batch/cpu/N=256
+Success
+Testing featherstone/batch/gpu/N=256
+Success
+Testing featherstone/batch/cpu/N=1024
+Success
+Testing featherstone/batch/gpu/N=1024
+error: test failed, to rerun pass `-p molla-solvers --bench featherstone_cpu_vs_gpu`
+
+Caused by:
+  process didn't exit successfully: `/home/bresilla/data/code/OUSD/molla/target/debug/deps/featherstone_cpu_vs_gpu-87dfb61c8cc7a40e` (signal: 2, SIGINT: terminal interrupt signal)
+make: *** [Makefile:67: test] Error 101

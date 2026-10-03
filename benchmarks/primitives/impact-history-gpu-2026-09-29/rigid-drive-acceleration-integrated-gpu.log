@@ -1,0 +1,19 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.96s
+     Running tests/runtime_rigid_loop_drives.rs (target/debug/deps/runtime_rigid_loop_drives-ded95ec92747fef1)
+
+running 3 tests
+test gpu_rigid_loop_acceleration_drives_match_independent_implicit_oracle ... rigid-loop Acceleration controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 60Hz/1 steps
+rigid-loop Acceleration controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 240Hz/4 steps
+ok
+test gpu_rigid_loop_acceleration_drives_share_live_friction_response ... D6 Force controls with live friction: 96 frames, masses .01/1/100, static hold/capped slide/brake/reversal, independent impulse/rate/reaction oracle
+ok
+test gpu_rigid_loop_acceleration_feedback_is_applied_once_during_mass_scaled_impacts ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 86.51s
+

@@ -1,0 +1,155 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.57s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 1 test
+test rigid_world::gpu::scale_tests::distance_thousand_first_frame_stages ... distance_scale_stage_wait stage=compile
+distance_scale_stage_complete stage=compile
+distance_scale_stage_wait stage=prepare
+distance_scale_stage_complete stage=prepare
+distance_scale_substep index=0
+distance_scale_stage_wait stage=predictor
+
+thread 'rigid_world::gpu::scale_tests::distance_thousand_first_frame_stages' (1067631) panicked at crates/molla-solvers/src/rigid_distance_scale_gpu_tests.rs:16:33:
+distance scale stage predictor: The requested Wait timed out before the submission was completed.
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'rigid_world::gpu::scale_tests::distance_thousand_first_frame_stages' (1067631) panicked at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-core-29.0.4/src/device/queue.rs:208:29:
+We timed out while waiting on the last successful submission to complete!
+stack backtrace:
+   0:     0x555556fa4a82 - std::backtrace_rs::backtrace::libunwind::trace::h650f3484750cac6f
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:     0x555556fa4a82 - std::backtrace_rs::backtrace::trace_unsynchronized::hee951f78e969ac04
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:     0x555556fa4a82 - std::sys::backtrace::_print_fmt::hb210b023f6e87be7
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/sys/backtrace.rs:74:9
+   3:     0x555556fa4a82 - <std::sys::backtrace::BacktraceLock::print::DisplayBacktrace as core::fmt::Display>::fmt::hdadc7c28d26d7ce3
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/sys/backtrace.rs:44:26
+   4:     0x555556fb6eda - core::fmt::rt::Argument::fmt::hca43ba1468fa0a13
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/core/src/fmt/rt.rs:152:76
+   5:     0x555556fb6eda - core::fmt::write::h469843d235cc4241
+   6:     0x555556f722b6 - std::io::default_write_fmt::h2cd531246bd479c8
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/io/mod.rs:639:11
+   7:     0x555556f722b6 - std::io::Write::write_fmt::h384251ddb7f1467c
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/io/mod.rs:1994:13
+   8:     0x555556f83589 - std::sys::backtrace::BacktraceLock::print::hb91bd19c9b07a6b2
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/sys/backtrace.rs:47:9
+   9:     0x555556f83589 - std::panicking::default_hook::{{closure}}::hd9d92b9a46805102
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/panicking.rs:292:27
+  10:     0x555556f833e9 - std::panicking::default_hook::hedb2be0819bbe276
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/panicking.rs:319:9
+  11:     0x555556f837cb - std::panicking::panic_with_hook::h0fc23abecf35c6bd
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/panicking.rs:825:13
+  12:     0x555556f8367a - std::panicking::panic_handler::{{closure}}::ha111c1a3ccf85d19
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/panicking.rs:691:13
+  13:     0x555556f7e069 - std::sys::backtrace::__rust_end_short_backtrace::h41d63216e1ba5fa4
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/sys/backtrace.rs:182:18
+  14:     0x555556f66fcd - __rustc[16f1505adc47261a]::rust_begin_unwind
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/panicking.rs:689:5
+  15:     0x555556fc0edc - core::panicking::panic_fmt::hc13412975f563dde
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/core/src/panicking.rs:80:14
+  16:     0x55555689c98e - <wgpu_core::device::queue::Queue as core::ops::drop::Drop>::drop::h7b9284049dfe193c
+                               at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-core-29.0.4/src/device/queue.rs:208:29
+  17:     0x555556a041f7 - core::ptr::drop_in_place<wgpu_core::device::queue::Queue>::hc1eaa10bb1ba9121
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:805:1
+  18:     0x555556821a52 - alloc::sync::Arc<T,A>::drop_slow::hf11abe1ff9708957
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/alloc/src/sync.rs:2120:18
+  19:     0x5555568251d0 - <alloc::sync::Arc<T,A> as core::ops::drop::Drop>::drop::h714e7360b1d48452
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/alloc/src/sync.rs:2854:18
+  20:     0x555556a0baab - core::ptr::drop_in_place<alloc::sync::Arc<wgpu_core::device::queue::Queue>>::h522d9d5b772ba2ef
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:805:1
+  21:     0x55555690b598 - wgpu_core::device::global::<impl wgpu_core::global::Global>::queue_drop::hc9d63f444db8d27e
+                               at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-core-29.0.4/src/device/global.rs:2062:41
+  22:     0x55555674dc46 - <wgpu::backend::wgpu_core::CoreQueue as core::ops::drop::Drop>::drop::hdf6f8465041b26b5
+                               at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-29.0.4/src/backend/wgpu_core.rs:2144:24
+  23:     0x55555679b367 - core::ptr::drop_in_place<wgpu::backend::wgpu_core::CoreQueue>::hb5cd21569385fcea
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:805:1
+  24:     0x55555675c5e2 - alloc::sync::Arc<T,A>::drop_slow::he03316adebae7762
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/alloc/src/sync.rs:2120:18
+  25:     0x55555675cf20 - <alloc::sync::Arc<T,A> as core::ops::drop::Drop>::drop::h1b6c5c905243dcab
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/alloc/src/sync.rs:2854:18
+  26:     0x55555679ccbb - core::ptr::drop_in_place<alloc::sync::Arc<wgpu::backend::wgpu_core::CoreQueue>>::h4bb9c11b973315f6
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:805:1
+  27:     0x55555679af79 - core::ptr::drop_in_place<wgpu::dispatch::DispatchQueue>::hfbfb3a87954a4d94
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:805:1
+  28:     0x55555679abdb - core::ptr::drop_in_place<wgpu::api::queue::Queue>::h3cc96592faafa49b
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:805:1
+  29:     0x555556741a32 - alloc::sync::Arc<T,A>::drop_slow::ha328abd0caf929d6
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/alloc/src/sync.rs:2120:18
+  30:     0x555556743a80 - <alloc::sync::Arc<T,A> as core::ops::drop::Drop>::drop::hc1a4430e6064c7ab
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/alloc/src/sync.rs:2854:18
+  31:     0x55555674365b - core::ptr::drop_in_place<alloc::sync::Arc<wgpu::api::queue::Queue>>::ha94ff90ccfa3da13
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:805:1
+  32:     0x555556743856 - core::ptr::drop_in_place<core::option::Option<alloc::sync::Arc<wgpu::api::queue::Queue>>>::h6aa0c3209809661f
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:805:1
+  33:     0x5555562399f7 - core::ptr::drop_in_place<molla_compute::engine::Engine>::h5f872eb84ca7741b
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:805:1
+  34:     0x555555ce8b5e - alloc::sync::Arc<T,A>::drop_slow::h9dbe18a948aa2fec
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/alloc/src/sync.rs:2120:18
+  35:     0x5555562486ef - <alloc::sync::Arc<T,A> as core::ops::drop::Drop>::drop::haa8f0b8bb6fc1a59
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/alloc/src/sync.rs:2854:18
+  36:     0x555556240c2a - core::ptr::drop_in_place<alloc::sync::Arc<molla_compute::engine::Engine>>::h8510de9ee5699263
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:805:1
+  37:     0x55555601c695 - molla_solvers::rigid_world::gpu::scale_tests::distance_thousand_first_frame_stages::h0fc1bafc23078b4e
+                               at /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/rigid_distance_scale_gpu_tests.rs:96:1
+  38:     0x55555621a9d7 - molla_solvers::rigid_world::gpu::scale_tests::distance_thousand_first_frame_stages::{{closure}}::h32639b14238b695a
+                               at /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/rigid_distance_scale_gpu_tests.rs:23:42
+  39:     0x55555622df56 - core::ops::function::FnOnce::call_once::h862cb0732b2f3bda
+                               at /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+  40:     0x55555633e64b - core::ops::function::FnOnce::call_once::hcedf29067db45234
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/core/src/ops/function.rs:250:5
+  41:     0x55555633e64b - test::__rust_begin_short_backtrace::h253a2097187731c8
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/test/src/lib.rs:663:18
+  42:     0x55555635201a - test::run_test_in_process::{{closure}}::h9f29dfec2aca52f7
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/test/src/lib.rs:686:74
+  43:     0x55555635201a - <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once::hd73326fdd719e811
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/core/src/panic/unwind_safe.rs:274:9
+  44:     0x55555635201a - std::panicking::catch_unwind::do_call::h4acd66bf04832c2e
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/panicking.rs:581:40
+  45:     0x55555635201a - std::panicking::catch_unwind::h145e182474d2aec9
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/panicking.rs:544:19
+  46:     0x55555635201a - std::panic::catch_unwind::h13b3eeaad06e07e2
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/panic.rs:359:14
+  47:     0x55555635201a - test::run_test_in_process::h8630a98bbeca471b
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/test/src/lib.rs:686:27
+  48:     0x55555635201a - test::run_test::{{closure}}::h1a5d6d0603e1925c
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/test/src/lib.rs:607:43
+  49:     0x55555632c434 - test::run_test::{{closure}}::h179c37d8042186f7
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/test/src/lib.rs:637:41
+  50:     0x55555632c434 - std::sys::backtrace::__rust_begin_short_backtrace::hb67b3f617d02f8cc
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/sys/backtrace.rs:166:18
+  51:     0x55555632fdd2 - std::thread::lifecycle::spawn_unchecked::{{closure}}::{{closure}}::h97f549af76bb89d9
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/thread/lifecycle.rs:91:13
+  52:     0x55555632fdd2 - <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once::h572411d6447c3318
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/core/src/panic/unwind_safe.rs:274:9
+  53:     0x55555632fdd2 - std::panicking::catch_unwind::do_call::h561e21b3bae62d2d
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/panicking.rs:581:40
+  54:     0x55555632fdd2 - std::panicking::catch_unwind::hb9c2999cbf1df339
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/panicking.rs:544:19
+  55:     0x55555632fdd2 - std::panic::catch_unwind::h831cfbf01bfc7230
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/panic.rs:359:14
+  56:     0x55555632fdd2 - std::thread::lifecycle::spawn_unchecked::{{closure}}::hd4fd692d2bb5f73a
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/thread/lifecycle.rs:89:26
+  57:     0x55555632fdd2 - core::ops::function::FnOnce::call_once{{vtable.shim}}::h920ca148ba3af64d
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/core/src/ops/function.rs:250:5
+  58:     0x555556f792ff - <alloc::boxed::Box<F,A> as core::ops::function::FnOnce<Args>>::call_once::hf477931d93d2e366
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/alloc/src/boxed.rs:2206:9
+  59:     0x555556f792ff - std::sys::thread::unix::Thread::new::thread_start::h96f969bf98c6e59d
+                               at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/std/src/sys/thread/unix.rs:130:17
+  60:     0x7ffff7c9dd53 - start_thread
+  61:     0x7ffff7d2563c - __clone3
+  62:                0x0 - <unknown>
+
+thread 'rigid_world::gpu::scale_tests::distance_thousand_first_frame_stages' (1067631) panicked at /rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library/core/src/panicking.rs:233:5:
+panic in a destructor during cleanup
+thread caused non-unwinding panic. aborting.
+error: test failed, to rerun pass `-p molla-solvers --lib`
+
+Caused by:
+  process didn't exit successfully: `/home/bresilla/data/code/OUSD/molla/target/debug/deps/molla_solvers-6a2d90588238e86c distance_thousand_first_frame_stages --ignored --nocapture --test-threads=1` (signal: 6, SIGABRT: process abort signal)
+make: *** [Makefile:87: test] Error 101

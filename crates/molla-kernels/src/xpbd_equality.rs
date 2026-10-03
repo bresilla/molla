@@ -170,12 +170,15 @@ impl XpbdEqualityKernel {
         if needed <= self.body_q_capacity && self.body_q_pre_eq.is_some() {
             return;
         }
-        self.body_q_pre_eq = Some(device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::xpbd_equality body_q_pre_eq"),
-            size: 32u64 * needed as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
+        self.body_q_pre_eq = Some(molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::xpbd_equality body_q_pre_eq"),
+                size: 32u64 * needed as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        ));
         self.body_q_capacity = needed;
     }
 
@@ -267,13 +270,16 @@ impl XpbdEqualityKernel {
             iterations,
             dt,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::xpbd_equality uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::xpbd_equality uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::xpbd_equality uniforms bg"),
             layout: &self.layout_uniforms,

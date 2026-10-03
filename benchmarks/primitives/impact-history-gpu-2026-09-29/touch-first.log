@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.87s
+     Running unittests src/lib.rs (target/debug/deps/molla_geometry-ab204e33ce70f222)
+
+running 1 test
+
+thread 'narrow_phase::tests::sphere_box_exact_touch_matches_other_sphere_pairs' (779901) panicked at crates/molla-geometry/src/narrow_phase.rs:2250:13:
+assertion failed: sphere_box(center, radius, &xf, half, 0, 1).is_none()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test narrow_phase::tests::sphere_box_exact_touch_matches_other_sphere_pairs ... FAILED
+
+failures:
+
+failures:
+    narrow_phase::tests::sphere_box_exact_touch_matches_other_sphere_pairs
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 124 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p molla-geometry --lib`
+make: *** [Makefile:86: test] Error 101

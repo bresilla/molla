@@ -487,13 +487,16 @@ impl SplatRaytraceKernel {
             max_distance,
             min_alpha,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::splat_raytrace uniforms bg"),
             layout: &self.layout_uniforms,
@@ -591,44 +594,59 @@ impl SplatRaytraceKernel {
         let storage_usage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_SRC
             | wgpu::BufferUsages::COPY_DST;
-        let grad_pos = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace::grad_pos"),
-            size: pad4_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
-        let grad_scale = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace::grad_scale"),
-            size: pad4_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
-        let grad_rot = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace::grad_rot"),
-            size: pad4_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
-        let grad_color = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace::grad_color"),
-            size: pad4_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
-        let grad_opacity = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace::grad_opacity"),
-            size: s_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
+        let grad_pos = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace::grad_pos"),
+                size: pad4_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
+        let grad_scale = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace::grad_scale"),
+                size: pad4_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
+        let grad_rot = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace::grad_rot"),
+                size: pad4_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
+        let grad_color = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace::grad_color"),
+                size: pad4_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
+        let grad_opacity = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace::grad_opacity"),
+                size: s_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
         // Zero-init each gradient buffer.
         let zeros_pad4 = vec![0u32; splat_count * 4];
         let zeros_s = vec![0u32; splat_count];
-        queue.write_buffer(&grad_pos, 0, bytemuck::cast_slice(&zeros_pad4));
-        queue.write_buffer(&grad_scale, 0, bytemuck::cast_slice(&zeros_pad4));
-        queue.write_buffer(&grad_rot, 0, bytemuck::cast_slice(&zeros_pad4));
-        queue.write_buffer(&grad_color, 0, bytemuck::cast_slice(&zeros_pad4));
-        queue.write_buffer(&grad_opacity, 0, bytemuck::cast_slice(&zeros_s));
+        molla_core::gpu_write_buffer!(queue, &grad_pos, 0, bytemuck::cast_slice(&zeros_pad4));
+        molla_core::gpu_write_buffer!(queue, &grad_scale, 0, bytemuck::cast_slice(&zeros_pad4));
+        molla_core::gpu_write_buffer!(queue, &grad_rot, 0, bytemuck::cast_slice(&zeros_pad4));
+        molla_core::gpu_write_buffer!(queue, &grad_color, 0, bytemuck::cast_slice(&zeros_pad4));
+        molla_core::gpu_write_buffer!(queue, &grad_opacity, 0, bytemuck::cast_slice(&zeros_s));
 
         let groups = pixel_count.div_ceil(WORKGROUP_SIZE);
 
@@ -684,13 +702,16 @@ impl SplatRaytraceKernel {
             max_distance,
             min_alpha,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace::backward uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace::backward uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::splat_raytrace::backward uniforms bg"),
             layout: &self.layout_uniforms,
@@ -720,20 +741,26 @@ impl SplatRaytraceKernel {
         // back to host. One readback per buffer (each blocking on
         // its own staging buffer).
         let stage_pad4 = |label: &str| -> wgpu::Buffer {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: pad4_bytes,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: pad4_bytes,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let stage_s = |label: &str| -> wgpu::Buffer {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: s_bytes,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: s_bytes,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let staging_pos = stage_pad4("molla::splat_raytrace::backward grad_pos staging");
         let staging_scale = stage_pad4("molla::splat_raytrace::backward grad_scale staging");
@@ -759,7 +786,7 @@ impl SplatRaytraceKernel {
             rx.recv()
                 .map_err(|e| Error::Gpu(format!("recv: {e}")))?
                 .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-            let mapped = slice.get_mapped_range();
+            let mapped = molla_core::gpu_readback!(slice);
             let f: &[f32] = bytemuck::cast_slice(&mapped);
             let n = splat_count;
             let mut out = Vec::with_capacity(n);
@@ -783,7 +810,7 @@ impl SplatRaytraceKernel {
             rx.recv()
                 .map_err(|e| Error::Gpu(format!("recv: {e}")))?
                 .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-            let mapped = slice.get_mapped_range();
+            let mapped = molla_core::gpu_readback!(slice);
             let f: &[f32] = bytemuck::cast_slice(&mapped);
             let n = splat_count;
             let mut out = Vec::with_capacity(n);
@@ -812,7 +839,7 @@ impl SplatRaytraceKernel {
             rx.recv()
                 .map_err(|e| Error::Gpu(format!("recv: {e}")))?
                 .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-            let mapped = slice.get_mapped_range();
+            let mapped = molla_core::gpu_readback!(slice);
             let f: &[f32] = bytemuck::cast_slice(&mapped);
             let out = f.iter().map(|x| *x as Real).collect::<Vec<_>>();
             drop(mapped);
@@ -939,13 +966,16 @@ impl SplatRaytraceKernel {
             max_distance,
             min_alpha,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::splat_raytrace_sh uniforms bg"),
             layout: &self.layout_uniforms,
@@ -1042,44 +1072,59 @@ impl SplatRaytraceKernel {
         let storage_usage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_SRC
             | wgpu::BufferUsages::COPY_DST;
-        let grad_pos = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh::grad_pos"),
-            size: pad4_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
-        let grad_scale = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh::grad_scale"),
-            size: pad4_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
-        let grad_rot = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh::grad_rot"),
-            size: pad4_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
-        let grad_sh = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh::grad_sh"),
-            size: sh_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
-        let grad_opacity = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh::grad_opacity"),
-            size: s_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
+        let grad_pos = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh::grad_pos"),
+                size: pad4_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
+        let grad_scale = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh::grad_scale"),
+                size: pad4_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
+        let grad_rot = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh::grad_rot"),
+                size: pad4_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
+        let grad_sh = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh::grad_sh"),
+                size: sh_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
+        let grad_opacity = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh::grad_opacity"),
+                size: s_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
         let zeros_pad4 = vec![0u32; splat_count * 4];
         let zeros_s = vec![0u32; splat_count];
         let zeros_sh = vec![0u32; splat_count * SH_BAND_2_COUNT * 4];
-        queue.write_buffer(&grad_pos, 0, bytemuck::cast_slice(&zeros_pad4));
-        queue.write_buffer(&grad_scale, 0, bytemuck::cast_slice(&zeros_pad4));
-        queue.write_buffer(&grad_rot, 0, bytemuck::cast_slice(&zeros_pad4));
-        queue.write_buffer(&grad_sh, 0, bytemuck::cast_slice(&zeros_sh));
-        queue.write_buffer(&grad_opacity, 0, bytemuck::cast_slice(&zeros_s));
+        molla_core::gpu_write_buffer!(queue, &grad_pos, 0, bytemuck::cast_slice(&zeros_pad4));
+        molla_core::gpu_write_buffer!(queue, &grad_scale, 0, bytemuck::cast_slice(&zeros_pad4));
+        molla_core::gpu_write_buffer!(queue, &grad_rot, 0, bytemuck::cast_slice(&zeros_pad4));
+        molla_core::gpu_write_buffer!(queue, &grad_sh, 0, bytemuck::cast_slice(&zeros_sh));
+        molla_core::gpu_write_buffer!(queue, &grad_opacity, 0, bytemuck::cast_slice(&zeros_s));
 
         let groups = pixel_count.div_ceil(WORKGROUP_SIZE);
 
@@ -1135,13 +1180,16 @@ impl SplatRaytraceKernel {
             max_distance,
             min_alpha,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh::backward uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh::backward uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::splat_raytrace_sh::backward uniforms bg"),
             layout: &self.layout_uniforms,
@@ -1168,28 +1216,37 @@ impl SplatRaytraceKernel {
         }
 
         let stage_pad4 = |label: &str| -> wgpu::Buffer {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: pad4_bytes,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: pad4_bytes,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let stage_s = |label: &str| -> wgpu::Buffer {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: s_bytes,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: s_bytes,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let stage_sh = |label: &str| -> wgpu::Buffer {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: sh_bytes,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: sh_bytes,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let staging_pos = stage_pad4("molla::splat_raytrace_sh::backward grad_pos staging");
         let staging_scale = stage_pad4("molla::splat_raytrace_sh::backward grad_scale staging");
@@ -1215,7 +1272,7 @@ impl SplatRaytraceKernel {
             rx.recv()
                 .map_err(|e| Error::Gpu(format!("recv: {e}")))?
                 .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-            let mapped = slice.get_mapped_range();
+            let mapped = molla_core::gpu_readback!(slice);
             let f: &[f32] = bytemuck::cast_slice(&mapped);
             let n = splat_count;
             let mut out = Vec::with_capacity(n);
@@ -1239,7 +1296,7 @@ impl SplatRaytraceKernel {
             rx.recv()
                 .map_err(|e| Error::Gpu(format!("recv: {e}")))?
                 .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-            let mapped = slice.get_mapped_range();
+            let mapped = molla_core::gpu_readback!(slice);
             let f: &[f32] = bytemuck::cast_slice(&mapped);
             let n = splat_count;
             let mut out = Vec::with_capacity(n);
@@ -1268,7 +1325,7 @@ impl SplatRaytraceKernel {
             rx.recv()
                 .map_err(|e| Error::Gpu(format!("recv: {e}")))?
                 .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-            let mapped = slice.get_mapped_range();
+            let mapped = molla_core::gpu_readback!(slice);
             let f: &[f32] = bytemuck::cast_slice(&mapped);
             let out = f.iter().map(|x| *x as Real).collect::<Vec<_>>();
             drop(mapped);
@@ -1287,7 +1344,7 @@ impl SplatRaytraceKernel {
             rx.recv()
                 .map_err(|e| Error::Gpu(format!("recv: {e}")))?
                 .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-            let mapped = slice.get_mapped_range();
+            let mapped = molla_core::gpu_readback!(slice);
             let f: &[f32] = bytemuck::cast_slice(&mapped);
             let n = splat_count;
             let mut out: Vec<[Vec3; SH_BAND_2_COUNT]> = Vec::with_capacity(n);
@@ -1414,13 +1471,16 @@ impl SplatRaytraceKernel {
             max_distance,
             min_alpha,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh_band3 uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh_band3 uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::splat_raytrace_sh_band3 uniforms bg"),
             layout: &self.layout_uniforms,
@@ -1560,13 +1620,16 @@ impl SplatRaytraceKernel {
             max_distance,
             min_alpha,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh_diffuse_view uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh_diffuse_view uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::splat_raytrace_sh_diffuse_view uniforms bg"),
             layout: &self.layout_uniforms,
@@ -1660,44 +1723,59 @@ impl SplatRaytraceKernel {
         let storage_usage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_SRC
             | wgpu::BufferUsages::COPY_DST;
-        let grad_pos = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh_band3::grad_pos"),
-            size: pad4_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
-        let grad_scale = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh_band3::grad_scale"),
-            size: pad4_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
-        let grad_rot = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh_band3::grad_rot"),
-            size: pad4_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
-        let grad_sh = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh_band3::grad_sh"),
-            size: sh_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
-        let grad_opacity = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh_band3::grad_opacity"),
-            size: s_bytes,
-            usage: storage_usage,
-            mapped_at_creation: false,
-        });
+        let grad_pos = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh_band3::grad_pos"),
+                size: pad4_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
+        let grad_scale = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh_band3::grad_scale"),
+                size: pad4_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
+        let grad_rot = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh_band3::grad_rot"),
+                size: pad4_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
+        let grad_sh = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh_band3::grad_sh"),
+                size: sh_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
+        let grad_opacity = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh_band3::grad_opacity"),
+                size: s_bytes,
+                usage: storage_usage,
+                mapped_at_creation: false,
+            }
+        );
         let zeros_pad4 = vec![0u32; splat_count * 4];
         let zeros_s = vec![0u32; splat_count];
         let zeros_sh = vec![0u32; splat_count * SH_BAND_3_COUNT * 4];
-        queue.write_buffer(&grad_pos, 0, bytemuck::cast_slice(&zeros_pad4));
-        queue.write_buffer(&grad_scale, 0, bytemuck::cast_slice(&zeros_pad4));
-        queue.write_buffer(&grad_rot, 0, bytemuck::cast_slice(&zeros_pad4));
-        queue.write_buffer(&grad_sh, 0, bytemuck::cast_slice(&zeros_sh));
-        queue.write_buffer(&grad_opacity, 0, bytemuck::cast_slice(&zeros_s));
+        molla_core::gpu_write_buffer!(queue, &grad_pos, 0, bytemuck::cast_slice(&zeros_pad4));
+        molla_core::gpu_write_buffer!(queue, &grad_scale, 0, bytemuck::cast_slice(&zeros_pad4));
+        molla_core::gpu_write_buffer!(queue, &grad_rot, 0, bytemuck::cast_slice(&zeros_pad4));
+        molla_core::gpu_write_buffer!(queue, &grad_sh, 0, bytemuck::cast_slice(&zeros_sh));
+        molla_core::gpu_write_buffer!(queue, &grad_opacity, 0, bytemuck::cast_slice(&zeros_s));
 
         let groups = pixel_count.div_ceil(WORKGROUP_SIZE);
 
@@ -1753,13 +1831,16 @@ impl SplatRaytraceKernel {
             max_distance,
             min_alpha,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::splat_raytrace_sh_band3::backward uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::splat_raytrace_sh_band3::backward uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::splat_raytrace_sh_band3::backward uniforms bg"),
             layout: &self.layout_uniforms,
@@ -1786,28 +1867,37 @@ impl SplatRaytraceKernel {
         }
 
         let stage_pad4 = |label: &str| -> wgpu::Buffer {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: pad4_bytes,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: pad4_bytes,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let stage_s = |label: &str| -> wgpu::Buffer {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: s_bytes,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: s_bytes,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let stage_sh = |label: &str| -> wgpu::Buffer {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: sh_bytes,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: sh_bytes,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let staging_pos = stage_pad4("molla::splat_raytrace_sh_band3::backward grad_pos staging");
         let staging_scale =
@@ -1835,7 +1925,7 @@ impl SplatRaytraceKernel {
             rx.recv()
                 .map_err(|e| Error::Gpu(format!("recv: {e}")))?
                 .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-            let mapped = slice.get_mapped_range();
+            let mapped = molla_core::gpu_readback!(slice);
             let f: &[f32] = bytemuck::cast_slice(&mapped);
             let n = splat_count;
             let mut out = Vec::with_capacity(n);
@@ -1859,7 +1949,7 @@ impl SplatRaytraceKernel {
             rx.recv()
                 .map_err(|e| Error::Gpu(format!("recv: {e}")))?
                 .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-            let mapped = slice.get_mapped_range();
+            let mapped = molla_core::gpu_readback!(slice);
             let f: &[f32] = bytemuck::cast_slice(&mapped);
             let n = splat_count;
             let mut out = Vec::with_capacity(n);
@@ -1888,7 +1978,7 @@ impl SplatRaytraceKernel {
             rx.recv()
                 .map_err(|e| Error::Gpu(format!("recv: {e}")))?
                 .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-            let mapped = slice.get_mapped_range();
+            let mapped = molla_core::gpu_readback!(slice);
             let f: &[f32] = bytemuck::cast_slice(&mapped);
             let out = f.iter().map(|x| *x as Real).collect::<Vec<_>>();
             drop(mapped);
@@ -1907,7 +1997,7 @@ impl SplatRaytraceKernel {
             rx.recv()
                 .map_err(|e| Error::Gpu(format!("recv: {e}")))?
                 .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-            let mapped = slice.get_mapped_range();
+            let mapped = molla_core::gpu_readback!(slice);
             let f: &[f32] = bytemuck::cast_slice(&mapped);
             let n = splat_count;
             let mut out: Vec<[Vec3; SH_BAND_3_COUNT]> = Vec::with_capacity(n);

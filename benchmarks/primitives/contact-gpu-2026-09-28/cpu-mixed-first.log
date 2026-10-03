@@ -1,0 +1,22 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.48s
+     Running tests/runtime_mixed_contacts_cpu.rs (target/debug/deps/runtime_mixed_contacts_cpu-8c046ec7274fc43a)
+
+running 3 tests
+test mixed_cpu_distance_break_uses_common_reaction_and_continues ... ok
+test distance_between_two_contacts_transfers_friction_and_preserves_endpoint_exchange ... ok
+test distance_and_contact_share_one_cpu_impulse_solution ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

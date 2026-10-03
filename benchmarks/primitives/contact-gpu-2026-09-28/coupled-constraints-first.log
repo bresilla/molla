@@ -1,0 +1,40 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.33s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 4 tests
+test coupled_constraint_gpu::tests::bilateral_coupling_prevents_premature_sliding ... ok
+test coupled_constraint_gpu::tests::mixed_constraints_match_analytic_impulses_across_scales ... ok
+test coupled_constraint_gpu::tests::sticky_faults_retire_and_recover_mixed_outputs ... 
+thread 'coupled_constraint_gpu::tests::sticky_faults_retire_and_recover_mixed_outputs' (114467) panicked at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-29.0.4/src/backend/wgpu_core.rs:1952:22:
+wgpu error: Validation Error
+
+Caused by:
+  In Queue::write_buffer
+    Copy at offset 0 for 32 bytes would end up overrunning the bounds of the Destination buffer of size 16
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test coupled_constraint_gpu::tests::zero_response_scalar_domains_fail_only_when_unbounded ... 
+thread 'coupled_constraint_gpu::tests::zero_response_scalar_domains_fail_only_when_unbounded' (114492) panicked at crates/molla-solvers/src/coupled_constraint_gpu_tests.rs:382:9:
+assertion `left == right` failed: kind=1 free=0
+  left: 524288
+ right: 0
+FAILED
+
+failures:
+
+failures:
+    coupled_constraint_gpu::tests::sticky_faults_retire_and_recover_mixed_outputs
+    coupled_constraint_gpu::tests::zero_response_scalar_domains_fail_only_when_unbounded
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 114 filtered out; finished in 2.23s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:135: test-primitives-coupled-constraints-gpu] Error 101

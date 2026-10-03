@@ -1,0 +1,31 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0369]: binary operation `==` cannot be applied to type `[ColliderDesc; 2]`
+   --> crates/molla-solvers/src/rigid_impact.rs:16:5
+    |
+ 14 | #[derive(Clone, PartialEq)]
+    |                 --------- in this derive macro expansion
+ 15 | struct Identity {
+ 16 |     colliders: [ColliderDesc; 2],
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: `ColliderDesc` does not implement `PartialEq`
+   --> crates/molla-sim/src/runtime.rs:187:1
+    |
+187 | pub struct ColliderDesc {
+    | ^^^^^^^^^^^^^^^^^^^^^^^ `ColliderDesc` is defined in another crate
+
+For more information about this error, try `rustc --explain E0369`.
+error: could not compile `molla-solvers` (lib) due to 1 previous error
+make[1]: *** [Makefile:74: test] Error 101
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:145: test-primitives-restitution-cpu] Error 2

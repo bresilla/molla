@@ -1,0 +1,63 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.85s
+     Running tests/runtime_d6_axis_certification.rs (target/debug/deps/runtime_d6_axis_certification-758560f6132c16ec)
+
+running 1 test
+d6_axis_cases=144 frames=240 substeps=2 masses=1,17,83 full_com_tensor=true peak_pose=0.0000001828908405194654 peak_rate=0.00000012413870443328854
+test d6_each_axis_free_bounded_locked_matches_analytic_motion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.54s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.52s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 1 test
+test rigid_world::gpu::scale_tests::paired_fk_chains_retain_frames_after_model_upload_edits ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } paired_fk_frame_mutation=true
+distance_scale_stage_wait stage=paired-chain-refresh
+distance_scale_stage_complete stage=paired-chain-refresh
+distance_scale_stage_wait stage=paired-chain-poses
+distance_scale_stage_complete stage=paired-chain-poses
+distance_scale_stage_wait stage=paired-chain-position-tails
+distance_scale_stage_complete stage=paired-chain-position-tails
+distance_scale_stage_wait stage=paired-chain-quaternions
+distance_scale_stage_complete stage=paired-chain-quaternions
+distance_scale_stage_wait stage=paired-chain-coordinate-high
+distance_scale_stage_complete stage=paired-chain-coordinate-high
+distance_scale_stage_wait stage=paired-chain-coordinate-low
+distance_scale_stage_complete stage=paired-chain-coordinate-low
+paired_chain_fault body=2 kind=Revolute same=1.951341533e-9 flipped=1.243243307e0 expected=[0.27119798757897035, -0.46114248025148874, 0.5721763572006313, 0.6216216539835446] paired=[0.27119797, -0.46114248, 0.57217634, 0.62162167, 1.2345373e-8, 1.4219355e-9, 2.1909846e-8, -1.4946227e-8]
+paired_chain_fault body=3 kind=Ball same=1.864606025e-9 flipped=1.240920510e0 expected=[-0.31377280433534116, 0.5157414940352867, -0.6204602540029713, -0.5005860683162832] paired=[-0.3137728, 0.51574147, -0.6204603, -0.5005861, -6.4952386e-9, 2.5063514e-8, 1.596775e-8, 2.4765546e-8]
+paired_chain_fault body=4 kind=Free same=1.894886248e-9 flipped=1.407811919e0 expected=[-0.38557150487288405, 0.5902794874963001, -0.7039059586273121, -0.08614605435032711] paired=[-0.3855715, 0.59027946, -0.70390594, -0.08614606, 4.128312e-9, 2.5648106e-8, -1.9910885e-8, 2.9410412e-9]
+paired_chain_fault body=5 kind=Distance same=1.949707951e-9 flipped=1.390255547e0 expected=[0.4010697702194479, -0.5935522256754169, 0.6951277728373161, -0.06030069852092198] paired=[0.40106976, -0.59355223, 0.6951278, -0.0603007, 1.0770948e-8, 8.062926e-9, -1.1259868e-8, 1.2480474e-9]
+paired_chain_fault body=6 kind=D6 same=1.857128118e-9 flipped=1.201280892e0 expected=[0.371224106012968, -0.5223549498471586, 0.6006404456963614, -0.4780889294668111] paired=[0.3712241, -0.52235496, 0.6006405, -0.47808892, 2.203763e-9, 1.2451559e-8, -2.9773267e-8, -1.45929375e-8]
+paired_chain_fault body=9 kind=Revolute same=2.141509470e-9 flipped=1.300500648e0 expected=[0.30139617083731185, -0.5342938333664082, 0.4481796114670285, 0.6502503238726592] paired=[0.30139616, -0.53429383, 0.4481796, 0.6502503, 9.9645145e-9, -4.086182e-9, 6.702533e-9, 8.560433e-9]
+paired_chain_fault body=10 kind=Ball same=1.776180314e-9 flipped=1.343817615e0 expected=[0.34701933875451474, -0.6719088068022471, 0.5969928612397066, 0.2677977921880396] paired=[0.34701934, -0.6719088, 0.59699285, 0.2677978, -6.248158e-9, -1.2548508e-8, 9.159876e-9, -5.171629e-9]
+paired_chain_fault body=11 kind=Free same=1.667425864e-9 flipped=1.388763585e0 expected=[-0.353567589157092, 0.6943817915518137, -0.6145360201590098, -0.123163985750952] paired=[-0.3535676, 0.6943818, -0.61453605, -0.12316398, 1.1823368e-8, 1.9747407e-8, 2.8403509e-8, -3.1077052e-9]
+paired_chain_fault body=12 kind=Distance same=1.715430242e-9 flipped=1.325260790e0 expected=[-0.30760654329916937, 0.6626303939961453, -0.6092299378344413, 0.3084445790061682] paired=[-0.30760655, 0.6626304, -0.6092299, 0.3084446, 6.239515e-9, 1.6511594e-8, -1.47431765e-8, -1.1018228e-8]
+paired_chain_fault body=13 kind=D6 same=1.663676530e-9 flipped=1.245308454e0 expected=[0.2877024217244937, -0.622654225925223, 0.5757329745742148, -0.4450399683840199] paired=[0.2877024, -0.6226542, 0.57573295, -0.44503996, 8.649619e-9, -2.798868e-8, 2.7686148e-8, -1.0005567e-8]
+paired_chain_coordinates expected=[0.150000001, 0.150000001, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408, 0.300000001, -0.2, 0.1, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.300000001, -0.2, 0.1, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408, 0.300000001, -0.2, 0.1, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.150000001, 0.150000001, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.300000001, -0.2, 0.1, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408, 0.300000001, -0.2, 0.1, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.300000001, -0.2, 0.1, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408] high=[0.15, 0.15, -0.055484198, 0.09103491, -0.09872416, -0.9893875, 0.3, -0.2, 0.1, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.3, -0.2, 0.1, -0.055484198, 0.09103491, -0.09872416, -0.9893875, 0.3, -0.2, 0.1, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.15, 0.15, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.3, -0.2, 0.1, -0.055484198, 0.09103491, -0.09872416, -0.9893875, 0.3, -0.2, 0.1, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.3, -0.2, 0.1, -0.055484198, 0.09103491, -0.09872416, -0.9893875] low=[-4.9604645e-9, -4.9604645e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -4.9604645e-9, -4.9604645e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8]
+paired_chain fixed_only=false edit=0 bodies=14 position_error=9.237055565e-14 rotation_error=2.141509470e-9
+
+thread 'rigid_world::gpu::scale_tests::paired_fk_chains_retain_frames_after_model_upload_edits' (402927) panicked at crates/molla-solvers/src/rigid_distance_scale_gpu_tests.rs:266:13:
+assertion failed: rotation_error <= 1e-12
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    rigid_world::gpu::scale_tests::paired_fk_chains_retain_frames_after_model_upload_edits
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 239 filtered out; finished in 45.39s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:538: test-primitives-frame-reference-gpu] Error 101

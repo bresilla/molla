@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.33s
+     Running tests/narrow_resident_gpu.rs (target/debug/deps/narrow_resident_gpu-c0617498070c6087)
+
+running 1 test
+test resident_plane_manifolds_match_cpu_with_transforms_and_endpoint_exchange ... 
+thread 'resident_plane_manifolds_match_cpu_with_transforms_and_endpoint_exchange' (3839438) panicked at crates/molla-geometry/tests/narrow_resident_gpu.rs:259:17:
+frame=1, case=1, kind=1, pair=45,37 point=0: DVec3(2.6712446212768555, -3.8335704803466797, 0.031965479254722595) vs DVec3(2.013852765919668, -4.233403537042053, 0.2509847693881458)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    resident_plane_manifolds_match_cpu_with_transforms_and_endpoint_exchange
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.65s
+
+error: test failed, to rerun pass `-p molla-geometry --test narrow_resident_gpu`
+make: *** [Makefile:81: test-gpu] Error 101

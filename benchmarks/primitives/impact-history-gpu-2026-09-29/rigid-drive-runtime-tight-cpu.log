@@ -1,0 +1,38 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.40s
+     Running tests/runtime_rigid_loop_drives.rs (target/debug/deps/runtime_rigid_loop_drives-bd8716cd0497e2f6)
+
+running 1 test
+rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 60Hz/1 steps
+DRIVE_TRACE frame=58 q=6.9301802082572207e-3 expected=6.9301802082273089e-3 rate=1.9532337126434971e-3 expected_rate=1.9532337124219365e-3
+DRIVE_TRACE frame=58 q=6.9301802082120433e-3 expected=6.9301802082273089e-3 rate=1.9532337123155281e-3 expected_rate=1.9532337124219365e-3
+DRIVE_TRACE frame=59 q=6.9394037515045906e-3 expected=6.9394037514735078e-3 rate=2.3699003793101608e-3 expected_rate=2.3699003790886024e-3
+DRIVE_TRACE frame=59 q=6.9394037514578580e-3 expected=6.9394037514735078e-3 rate=2.3699003789821932e-3 expected_rate=2.3699003790886024e-3
+DRIVE_TRACE frame=60 q=6.9503634058624862e-3 expected=6.9503634058308153e-3 rate=2.7865670459768276e-3 expected_rate=2.7865670457552683e-3
+DRIVE_TRACE frame=60 q=6.9503634058146798e-3 expected=6.9503634058308153e-3 rate=2.7865670456488616e-3 expected_rate=2.7865670457552683e-3
+DRIVE_TRACE frame=61 q=6.9630591713318946e-3 expected=6.9630591712992289e-3 rate=3.2032337126434961e-3 expected_rate=3.2032337124219342e-3
+DRIVE_TRACE frame=61 q=6.9630591712828791e-3 expected=6.9630591712992289e-3 rate=3.2032337123155293e-3 expected_rate=3.2032337124219342e-3
+DRIVE_TRACE frame=62 q=6.9774910479123691e-3 expected=6.9774910478787493e-3 rate=3.6199003793101615e-3 expected_rate=3.6199003790886000e-3
+DRIVE_TRACE frame=62 q=6.9774910478618288e-3 expected=6.9774910478787493e-3 rate=3.6199003789821947e-3 expected_rate=3.6199003790886000e-3
+DRIVE_TRACE frame=63 q=6.9936590356038230e-3 expected=6.9936590355693740e-3 rate=4.0365670459768296e-3 expected_rate=4.0365670457552663e-3
+DRIVE_TRACE frame=63 q=6.9936590355520372e-3 expected=6.9936590355693740e-3 rate=4.0365670456488619e-3 expected_rate=4.0365670457552663e-3
+
+thread 'cpu_rigid_loop_force_drives_match_independent_implicit_oracle' (575669) panicked at crates/molla-solvers/tests/runtime_rigid_loop_drives.rs:273:21:
+torque hz=240 steps=4 frame=63 axis=AngX mass=100: SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-26.23137126649503, -66.09172041713688, 208.86538146102401) } != SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-26.231370876262655, -66.09171943581269, 208.86537842245446) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_rigid_loop_force_drives_match_independent_implicit_oracle ... FAILED
+
+failures:
+
+failures:
+    cpu_rigid_loop_force_drives_match_independent_implicit_oracle
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_rigid_loop_drives`
+make: *** [Makefile:93: test] Error 101

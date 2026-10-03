@@ -1,0 +1,21 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.61s
+     Running tests/runtime_distance_contract.rs (target/debug/deps/runtime_distance_contract-2ac2510fe3e9089e)
+
+running 1 test
+distance scale sweep: cases=40 dt=0.016666666666666666 substeps=8 duration=10s peak relative length=0.000000000000004683753385137379, 1s analytic position=0.000000000000017763568394002505, quasi-static relative reaction=0.0000000000000004440892098500626
+distance scale sweep: cases=40 dt=0.008333333333333333 substeps=8 duration=10s peak relative length=0.000000000000003642919299551295, 1s analytic position=0.00000000000003064215547965432, quasi-static relative reaction=0.0000000000000004440892098500626
+test cpu_distance_length_mass_scales_and_analytic_reactions has been running for over 60 seconds
+distance scale sweep: cases=40 dt=0.004166666666666667 substeps=8 duration=10s peak relative length=0.000000000000003642919299551295, 1s analytic position=0.00000000000003730349362740526, quasi-static relative reaction=0.0000000000000004440892098500626
+test cpu_distance_length_mass_scales_and_analytic_reactions ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 69.35s
+

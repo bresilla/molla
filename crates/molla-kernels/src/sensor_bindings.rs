@@ -42,12 +42,15 @@ impl<const N: usize, const G: usize> SensorBindings<N, G> {
                 entries: &entries,
             })
         });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some(label),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let uniform_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
             layout: uniform_layout,
@@ -79,7 +82,7 @@ impl<const N: usize, const G: usize> SensorBindings<N, G> {
         uniforms: &[u8; 16],
         workgroups: u32,
     ) {
-        queue.write_buffer(&self.uniform, 0, uniforms);
+        molla_core::gpu_write_buffer!(queue, &self.uniform, 0, uniforms);
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("molla::sensor prepared"),
             timestamp_writes: None,

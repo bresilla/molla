@@ -1,0 +1,42 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-fem v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-fem)
+    Checking molla-sensors v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sensors)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0599]: no method named `dispatch` found for reference `&ReactionGpu` in the current scope
+   --> crates/molla-solvers/src/rigid_distance_scale_gpu_tests.rs:146:14
+    |
+142 | /         compiled
+143 | |             .reactions
+144 | |             .as_ref()
+145 | |             .unwrap()
+146 | |             .dispatch(&engine, substep % 2, dt, substep);
+    | |             -^^^^^^^^ method not found in `&ReactionGpu`
+    | |_____________|
+    |
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `dispatch`, perhaps you need to implement one of them:
+            candidate #1: `DynCommandEncoder`
+            candidate #2: `wgpu::wgpu_hal::CommandEncoder`
+
+    Checking molla v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla)
+    Checking molla_viewer v0.0.1 (/home/bresilla/data/code/OUSD/molla/bin/molla_viewer)
+warning: function `body_poses` is never used
+  --> crates/molla-solvers/tests/common/gpu_readback.rs:27:8
+   |
+27 | pub fn body_poses(engine: &Engine, system: &FemRigidGpuSystem, count: usize) -> Vec<Transform> {
+   |        ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (test "featherstone_stop_momentum") generated 1 warning
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `molla-solvers` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+make: *** [Makefile:334: check-all] Error 101

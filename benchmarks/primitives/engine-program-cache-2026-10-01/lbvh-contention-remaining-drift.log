@@ -1,0 +1,19 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.89s
+     Running tests/featherstone_drift_gpu.rs (target/debug/deps/featherstone_drift_gpu-01e9a04a0014a011)
+
+running 5 tests
+test compensated_drift_accumulates_sub_ulp_motion_without_double_redrift ... ok
+test compensated_drift_preserves_coordinates_across_large_reversals ... ok
+test compensated_fk_preserves_sub_ulp_translation_through_fixed_frames ... compensated authored-frame FK peak_relative_error=8.470329472543003e-16
+ok
+test compensated_free_quaternions_retain_euler_integration_tails ... ok
+test corrected_velocity_drift_matches_cpu_without_reapplying_forces ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 587.37s
+

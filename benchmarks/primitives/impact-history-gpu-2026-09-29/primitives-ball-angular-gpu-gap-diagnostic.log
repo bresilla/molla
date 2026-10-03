@@ -1,0 +1,30 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.38s
+     Running tests/standalone_ball_limits.rs (target/debug/deps/standalone_ball_limits-f75d209ebdbb3d7a)
+
+running 1 test
+test gpu_raw_ball_partial_points_intervals_and_caps_use_physical_angular_rows ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } dt=0.00001 cases=384 width=1e-9
+ball_gap_diagnostic [2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10, 1.6369498e-8, 1.6369498e-8, 1.6369498e-8, 1.6369498e-8, 2.605134e-10, 2.605134e-10, 2.605134e-10, 2.605134e-10]
+ball_angular_response case=0 angular_error=1.751927301e0 linear_error=1.551760813e0 rotation_error=1.751923257e-10 anchor_error=9.405924036e-8 violation=1.999962973e-10 cap_error=0.000000000e0
+
+thread 'gpu_raw_ball_partial_points_intervals_and_caps_use_physical_angular_rows' (4186757) panicked at crates/molla-solvers/tests/standalone_ball_limits.rs:236:9:
+assertion failed: angular_error <= 0.01 * case.acceleration.length().max(1.)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_raw_ball_partial_points_intervals_and_caps_use_physical_angular_rows
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 17.08s
+
+error: test failed, to rerun pass `-p molla-solvers --test standalone_ball_limits`
+make: *** [Makefile:507: test-primitives-ball-angular-gpu] Error 101

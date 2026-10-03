@@ -800,12 +800,15 @@ impl IkSolver {
         // transforms; each seed owns `body_q[seed*n_bodies .. (seed+1)*n_bodies]`.
         let bq_size =
             (n_seeds * n_bodies * core::mem::size_of::<crate::math::GpuTransform>()) as u64;
-        let bq_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::ik multi-seed body_q"),
-            size: bq_size.max(32),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let bq_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::ik multi-seed body_q"),
+                size: bq_size.max(32),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         // Per-seed working state.
         struct SeedState {
@@ -853,7 +856,7 @@ impl IkSolver {
                     body_q_pack[si * n_bodies + bi] = (*t).into();
                 }
             }
-            queue.write_buffer(&bq_buf, 0, bytemuck::cast_slice(&body_q_pack));
+            molla_core::gpu_write_buffer!(queue, &bq_buf, 0, bytemuck::cast_slice(&body_q_pack));
 
             // 2) Build batched requests.
             let mut requests: Vec<crate::kernels::JacobianRequest> = Vec::new();

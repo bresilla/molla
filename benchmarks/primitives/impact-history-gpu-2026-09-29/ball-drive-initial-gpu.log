@@ -1,0 +1,34 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.41s
+     Running tests/runtime_ball_drives.rs (target/debug/deps/runtime_ball_drives-4bf32a6b87444375)
+
+running 2 tests
+test gpu_ball_drives_and_brakes_share_cone_constraints_and_reactions ... 
+thread 'gpu_ball_drives_and_brakes_share_cone_constraints_and_reactions' (713032) panicked at crates/molla-solvers/tests/runtime_ball_drives.rs:329:13:
+total reaction frame=1 mass=1 model=Force: SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(0.1547461897134781, -0.07189542055130005, -0.1045377254486084) } != DVec3(0.15203688837093815, -0.07788366846173012, -0.10401403156029576)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test gpu_ball_drives_use_full_pivot_response_and_physical_caps ... 
+thread 'gpu_ball_drives_use_full_pivot_response_and_physical_caps' (713177) panicked at crates/molla-solvers/tests/runtime_ball_drives.rs:167:9:
+child force 0.01 AngX Acceleration Velocity cap=0 brake=0.006999999999999999: SpatialVector { linear: DVec3(-0.003419073997065425, 5.242539555183612e-5, -0.00011606680345721543), angular: DVec3(-3.921254076999503e-8, -1.1405540512043899e-8, 3.01037594852005e-8) } != SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(0.0, 0.0, -0.0) }
+FAILED
+
+failures:
+
+failures:
+    gpu_ball_drives_and_brakes_share_cone_constraints_and_reactions
+    gpu_ball_drives_use_full_pivot_response_and_physical_caps
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2 filtered out; finished in 27.05s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_ball_drives`
+make: *** [Makefile:120: test-gpu] Error 101

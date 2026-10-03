@@ -85,8 +85,12 @@ fn retained_bounds_match_rebuilt_bounds_through_edits_sleep_and_failure() {
             }
         }
         rebuilt.bounds = molla_geometry::shape_world::SceneShapeBounds::default();
-        retained.step(1.0 / 120.0).unwrap();
-        rebuilt.step(1.0 / 120.0).unwrap();
+        retained
+            .step(1.0 / 120.0)
+            .unwrap_or_else(|e| panic!("retained tick={tick}: {e}"));
+        rebuilt
+            .step(1.0 / 120.0)
+            .unwrap_or_else(|e| panic!("rebuilt tick={tick}: {e}"));
         same(&retained, &rebuilt);
         assert_eq!(retained.is_sleeping(a_body), rebuilt.is_sleeping(b_body));
         sleeping_steps += usize::from(retained.is_sleeping(a_body));

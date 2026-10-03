@@ -1,0 +1,20 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.34s
+     Running tests/runtime_kinematic_reactions.rs (target/debug/deps/runtime_kinematic_reactions-2288fee48f251a9c)
+
+running 3 tests
+test gpu_driven_motion_is_explicitly_rejected_until_resident_integration_exists ... ok
+test gpu_moving_kinematic_tree_reactions_match_centripetal_support_loads ... ok
+test gpu_translating_rotating_kinematic_root_matches_zero_hinge_acceleration ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 256.99s
+

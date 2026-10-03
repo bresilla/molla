@@ -1,0 +1,32 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s
+     Running tests/runtime_distance.rs (target/debug/deps/runtime_distance-fc9eb91b71251f3a)
+
+running 11 tests
+test offset_anchor_uses_full_inertia_and_com_moment_arm ... ok
+test zero_maximum_alone_locks_all_translation ... ok
+test zero_minimum_without_maximum_is_free_at_coincident_anchors ... ok
+test coincident_equality_blocks_translation_but_not_rotation ... ok
+test infeasible_fixed_constraint_fails_atomically_and_invalidates_readout ... ok
+test distance_and_scalar_stop_share_the_articulated_response ... ok
+test invalid_bounds_are_atomic_and_mutation_invalidates_readings ... ok
+test equality_transfers_load_between_unequal_masses ... ok
+test independent_bounds_remain_slack_and_stop_only_at_their_bound ... ok
+test closed_triangle_and_redundant_link_preserve_linear_momentum ... ok
+distance pendulum: dt=0.016666666666666666, substeps=8, duration=10s, peak=0.00004367498082613608
+distance pendulum: dt=0.008333333333333333, substeps=8, duration=10s, peak=0.000010919132098718975
+distance pendulum: dt=0.004166666666666667, substeps=8, duration=10s, peak=0.000002729806060086659
+test world_pendulum_holds_length_for_ten_seconds ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

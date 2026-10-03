@@ -1,0 +1,131 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-geometry/src/narrow_resident_gpu.rs:126:
+         checked(Some(count), 4)?;
+         let (permissions, exclusions) = collision_data(model, options)?;
+         if permissions.len() as u64 * 16 > limits.max_storage_buffer_binding_size
+-            || exclusions.len().max(1) as u64 * 8
+-                > limits.max_storage_buffer_binding_size
++            || exclusions.len().max(1) as u64 * 8 > limits.max_storage_buffer_binding_size
+         {
+             return Err(Error::Gpu(
+                 "resident collision filter exceeds storage limits".into(),
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-kernels/src/cloud_grid.rs:59:
+             || limits.max_compute_workgroup_storage_size < 13_312
+             || limits.max_storage_buffers_per_shader_stage < 7
+             || buffers.iter().zip(required).any(|(buffer, bytes)| {
+-                buffer.size() < bytes
+-                    || buffer.size() > limits.max_storage_buffer_binding_size
++                buffer.size() < bytes || buffer.size() > limits.max_storage_buffer_binding_size
+             })
+         {
+             return Err(Error::Gpu(
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-kernels/src/cloud_process.rs:163:
+             (1 + 5 * self.max_jobs as u64) * 4,
+         ];
+         if buffers.iter().zip(sizes).any(|(buffer, size)| {
+-            buffer.size() < size
+-                || buffer.size() > device.limits().max_storage_buffer_binding_size
++            buffer.size() < size || buffer.size() > device.limits().max_storage_buffer_binding_size
+         }) {
+             return Err(Error::Gpu(
+                 "cloud processing: invalid output capacity".into(),
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-kernels/src/gmres.rs:95:
+             || n.div_ceil(64) > limits.max_compute_workgroups_per_dimension
+             || restart > limits.max_compute_workgroups_per_dimension
+             || u64::from(n) * (u64::from(restart) + 1) > u64::from(u32::MAX)
+-            || sizes.iter().any(|&s| {
+-                s > limits.max_buffer_size || s > limits.max_storage_buffer_binding_size
+-            })
++            || sizes
++                .iter()
++                .any(|&s| s > limits.max_buffer_size || s > limits.max_storage_buffer_binding_size)
+         {
+             return Err(Error::Build(
+                 "invalid GPU GMRES dimensions or device limits".into(),
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-kernels/src/image_process.rs:51:
+             ]
+             .into_iter()
+             .any(|size| {
+-                size > limits.max_storage_buffer_binding_size
+-                    || size > limits.max_buffer_size
++                size > limits.max_storage_buffer_binding_size || size > limits.max_buffer_size
+             })
+             || bytes > limits.max_buffer_size
+             || bytes > u32::MAX as u64
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-kernels/src/soft_rigid_solve/linearization.rs:78:
+             || rows.div_ceil(64) > limits.max_compute_workgroups_per_dimension
+             || particles.div_ceil(64) > limits.max_compute_workgroups_per_dimension
+             || sizes.iter().any(|size| {
+-                *size > limits.max_storage_buffer_binding_size
+-                    || *size > limits.max_buffer_size
++                *size > limits.max_storage_buffer_binding_size || *size > limits.max_buffer_size
+             })
+         {
+             return Err(Error::Build(
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-kernels/src/vbd_cloth.rs:846:
+         let scratch_bytes = gradient_scratch_bytes(
+             model.particle_count,
+             model.tet_count,
+-            device.limits().max_storage_buffer_binding_size
++            device
++                .limits()
++                .max_storage_buffer_binding_size
+                 .min(device.limits().max_buffer_size),
+         )?;
+         if self.particle_delta.size() < scratch_bytes {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/cloud_grid.rs:564:
+         || bytes > config.max_buffer_bytes
+         || [112 * n, 4 * n, 64 * c, 12 * c, 8 * blocks, 24, 80]
+             .into_iter()
+-            .any(|b| {
+-                b > limits.max_buffer_size || b > limits.max_storage_buffer_binding_size
+-            })
++            .any(|b| b > limits.max_buffer_size || b > limits.max_storage_buffer_binding_size)
+     {
+         return Err(Error::Gpu(
+             "cloud grid: memory or device budget exceeded".into(),
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:308:
+             };
+             let (distance, body) = match spec.kind {
+                 DistanceKind::Laser => (in_range(own[0].t), own[0].body),
+-                DistanceKind::Sonar => own
+-                    .iter()
+-                    .map(|h| (in_range(h.t), h.body))
+-                    .fold((Real::INFINITY, BodyId::NONE), |a, b| {
++                DistanceKind::Sonar => own.iter().map(|h| (in_range(h.t), h.body)).fold(
++                    (Real::INFINITY, BodyId::NONE),
++                    |a, b| {
+                         if b.0 < a.0 { b } else { a }
+-                    }),
++                    },
++                ),
+                 DistanceKind::InfraRed => {
+                     let width = (spec.gaussian_width * spec.aperture).max(1e-9);
+                     let (mut sum, mut weights) = (0.0, 0.0);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/snapshot.rs:230:
+             if !Arc::ptr_eq(&self.device, &source.device) {
+                 return Err(Error::Gpu("snapshot: foreign source device".into()));
+             }
+-            if source.channel.bytes as u64
+-                > self.device.limits().max_storage_buffer_binding_size
+-            {
++            if source.channel.bytes as u64 > self.device.limits().max_storage_buffer_binding_size {
+                 return Err(Error::Storage(
+                     "snapshot: channel exceeds storage binding limit".into(),
+                 ));
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/impact_episodes_gpu.rs:163:
+             u64::from(config.row_capacity) * 128,
+             u64::from(config.shape_capacity) * 4,
+         ] {
+-            if bytes > limits.max_storage_buffer_binding_size
+-                || bytes > limits.max_buffer_size
+-            {
++            if bytes > limits.max_storage_buffer_binding_size || bytes > limits.max_buffer_size {
+                 return Err(invalid());
+             }
+         }
+make: *** [Makefile:341: fmt-check] Error 1

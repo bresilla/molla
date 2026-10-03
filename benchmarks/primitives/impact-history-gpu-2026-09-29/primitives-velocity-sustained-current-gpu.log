@@ -1,0 +1,30 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.99s
+     Running tests/runtime_velocity_coupling.rs (target/debug/deps/runtime_velocity_coupling-e95b060d1cb3edf5)
+
+running 1 test
+adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+coupled_velocity_sustained_prepare_begin cases=18
+coupled_velocity_sustained_prepare_complete seconds=23.991881
+coupled_velocity_sustained frames=25 cases=18 target=1 enabled=true peak_rate=3.865825796859372e-4 peak_rotation=1.1026995222931712e-5
+coupled_velocity_sustained frames=50 cases=18 target=1 enabled=true peak_rate=5.45512121865537e-4 peak_rotation=2.7007010033402224e-5
+
+thread 'gpu_coupled_velocity_drives_preserve_one_second_motion_and_control_edits' (742711) panicked at crates/molla-solvers/tests/runtime_velocity_coupling.rs:213:13:
+frame=55 kind=D6 cap=20 rate_error=1.1616879608768122e-3 rotation_error=5.1474862754683676e-5 actual=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(0.025140658020973206, 0.5429733395576477, 0.15518388152122498) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test gpu_coupled_velocity_drives_preserve_one_second_motion_and_control_edits ... FAILED
+
+failures:
+
+failures:
+    gpu_coupled_velocity_drives_preserve_one_second_motion_and_control_edits
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 24.48s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_velocity_coupling`
+make: *** [Makefile:697: test-primitives-velocity-sustained-gpu] Error 101

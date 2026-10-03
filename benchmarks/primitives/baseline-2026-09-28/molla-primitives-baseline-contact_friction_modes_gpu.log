@@ -1,0 +1,16 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.78s
+     Running tests/contact_friction_modes_gpu.rs (target/debug/deps/contact_friction_modes_gpu-c06d9ec1a96c1936)
+
+running 2 tests
+test rolling_friction_damps_horizontal_axis_spin_gpu ... GPU horizontal spin |ω| after 0.3 s: roll=0 → 13.7689, roll=0.5 → 0.0000
+ok
+test torsional_friction_damps_normal_axis_spin_gpu ... GPU normal-axis spin |ω.y| after 0.3 s: tors=0 → 9.8175, tors=2.0 → 0.0000
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.42s
+

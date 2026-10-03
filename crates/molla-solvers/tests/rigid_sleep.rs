@@ -292,16 +292,51 @@ fn tree_motor_restoring_a_raw_override_counts_as_a_change() {
 #[test]
 fn non_waking_motor_edits_take_effect_on_explicit_resume() {
     let (mut world, a, b) = two();
-    let joint = world.scene.insert_joint(JointDesc {
-        parent: Some(a), child: b, kind: JointType::Revolute,
-        frame_parent: Transform::from_translation(Vec3::X * 3.0), frame_child: Transform::IDENTITY, axis: Vec3::Z,
-    }).unwrap();
-    let motor = JointMotor { mode: JointTargetMode::Velocity, target_velocity: 2.0, damping: 5.0, ..Default::default() };
+    let joint = world
+        .scene
+        .insert_joint(JointDesc {
+            parent: Some(a),
+            child: b,
+            kind: JointType::Revolute,
+            frame_parent: Transform::from_translation(Vec3::X * 3.0),
+            frame_child: Transform::IDENTITY,
+            axis: Vec3::Z,
+        })
+        .unwrap();
+    let motor = JointMotor {
+        mode: JointTargetMode::Velocity,
+        target_velocity: 2.0,
+        damping: 5.0,
+        ..Default::default()
+    };
     world.sleep_body(a).unwrap();
-    world.scene.set_joint_motor_with_wake(joint, JointAxis::AngX, motor, false).unwrap();
+    world
+        .scene
+        .set_joint_motor_with_wake(joint, JointAxis::AngX, motor, false)
+        .unwrap();
     assert!(world.is_sleeping(a) && world.is_sleeping(b));
-    assert!(world.scene.set_joint_motor_with_wake(joint, JointAxis::AngX, JointMotor { damping: f64::NAN, ..motor }, false).is_err());
-    assert_eq!(world.scene.joint_axis_settings(joint, JointAxis::AngX).unwrap().motor, Some(motor));
+    assert!(
+        world
+            .scene
+            .set_joint_motor_with_wake(
+                joint,
+                JointAxis::AngX,
+                JointMotor {
+                    damping: f64::NAN,
+                    ..motor
+                },
+                false
+            )
+            .is_err()
+    );
+    assert_eq!(
+        world
+            .scene
+            .joint_axis_settings(joint, JointAxis::AngX)
+            .unwrap()
+            .motor,
+        Some(motor)
+    );
     world.step(0.001).unwrap();
     assert_eq!(world.scene.body_velocity(b).unwrap(), SpatialVector::ZERO);
     world.wake_body(a).unwrap();

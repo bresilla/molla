@@ -95,9 +95,9 @@ impl GpuGmres {
             || n.div_ceil(64) > limits.max_compute_workgroups_per_dimension
             || restart > limits.max_compute_workgroups_per_dimension
             || u64::from(n) * (u64::from(restart) + 1) > u64::from(u32::MAX)
-            || sizes.iter().any(|&s| {
-                s > limits.max_buffer_size || s > u64::from(limits.max_storage_buffer_binding_size)
-            })
+            || sizes
+                .iter()
+                .any(|&s| s > limits.max_buffer_size || s > limits.max_storage_buffer_binding_size)
         {
             return Err(Error::Build(
                 "invalid GPU GMRES dimensions or device limits".into(),
@@ -163,14 +163,17 @@ impl GpuGmres {
             })
         });
         let allocate = |label, size| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                mapped_at_creation: false,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    mapped_at_creation: false,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                }
+            )
         };
         Ok(Self {
             n,
@@ -252,11 +255,14 @@ impl GpuGmres {
             bytes[(slot * stride) as usize..(slot * stride + 32) as usize]
                 .copy_from_slice(bytemuck::bytes_of(&params));
         }
-        let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("GMRES dispatch parameters"),
-            contents: &bytes,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniforms = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("GMRES dispatch parameters"),
+                contents: &bytes,
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let mut entries: Vec<_> = [rhs, inverse_diagonal]
             .into_iter()
             .chain(owned)

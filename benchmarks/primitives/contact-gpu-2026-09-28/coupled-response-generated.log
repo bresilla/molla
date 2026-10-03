@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0560]: struct `NormalContactRow` has no field named `point`
+   --> crates/molla-solvers/src/coupled_response_gpu_tests.rs:402:17
+    |
+402 |                 point: [-1., 1., 0., 0.],
+    |                 ^^^^^ `NormalContactRow` does not have this field
+    |
+    = note: available fields are: `point_depth`, `surface_velocity`, `force_on_b`, `penalty`
+
+error[E0560]: struct `NormalContactRow` has no field named `point`
+   --> crates/molla-solvers/src/coupled_response_gpu_tests.rs:533:13
+    |
+533 |             point: [1., 0., 0., 0.],
+    |             ^^^^^ `NormalContactRow` does not have this field
+    |
+    = note: available fields are: `point_depth`, `surface_velocity`, `force_on_b`, `penalty`
+
+For more information about this error, try `rustc --explain E0560`.
+error: could not compile `molla-solvers` (lib test) due to 2 previous errors
+make: *** [Makefile:139: test-primitives-coupled-response-gpu] Error 101

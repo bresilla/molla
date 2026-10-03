@@ -8,9 +8,91 @@ use crate::rigid_impulse::MassFactor;
 mod seed;
 pub(crate) use seed::MassSeed;
 
+#[path = "joint_mass/drive_locks.rs"]
+mod drive_locks;
+
 struct Entry {
     matrix: Vec<Real>,
     factor: Option<MassFactor>,
+    drive_locks: Option<drive_locks::Projection>,
+}
+
+/// Lazy articulation mass responses at one immutable post-FK state.
+pub(crate) struct JointMass<'a> {
+    model: &'a Model,
+    state: &'a State,
+    entries: Vec<Option<Entry>>,
+}
+
+impl<'a> JointMass<'a> {
+    pub(crate) fn new(model: &'a Model, state: &'a State) -> Self {
+        Self {
+            model,
+            state,
+            entries: (0..model.articulation_count.max(1)).map(|_| None).collect(),
+        }
+    }
+
+    pub(crate) fn with_seed(
+        model: &'a Model,
+        state: &'a State,
+        seed: Option<MassSeed<'_>>,
+    ) -> Result<Self> {
+        let mut result = Self::new(model, state);
+        if let Some(seed) = seed {
+            for (art, (matrix, factor)) in seed.into_matrices(model, state)? {
+                result.entries[art] = Some(Entry {
+                    matrix,
+                    factor,
+                    drive_locks: None,
+                });
+            }
+        }
+        Ok(result)
+    }
+
+    fn entry(&mut self, articulation: usize) -> Result<&mut Entry> {
+        if self.entries[articulation].is_none() {
+            self.entries[articulation] = Some(Entry {
+                matrix: crate::response_mass_matrix(self.model, self.state, articulation)?,
+                factor: None,
+                drive_locks: None,
+            });
+        }
+        Ok(self.entries[articulation].as_mut().unwrap())
+    }
+
+    pub(crate) fn matrix(&mut self, articulation: usize) -> Result<&[Real]> {
+        Ok(&self.entry(articulation)?.matrix)
+    }
+
+    pub(crate) fn cached_cholesky(&self, articulation: usize, n: usize) -> Option<(Real, &[Real])> {
+        self.entries
+            .get(articulation)?
+            .as_ref()?
+            .factor
+            .as_ref()?
+            .full_rank_cholesky(n)
+    }
+
+    pub(crate) fn retain_cholesky(
+        &mut self,
+        articulation: usize,
+        factor: Vec<Real>,
+        n: usize,
+        scale: Real,
+    ) -> Result<()> {
+        self.entry(articulation)?.factor = MassFactor::from_cholesky(factor, n, scale);
+        Ok(())
+    }
+
+    pub(crate) fn factor(&mut self, articulation: usize, n: usize) -> Result<&MassFactor> {
+        let entry = self.entry(articulation)?;
+        if entry.factor.is_none() {
+            entry.factor = Some(MassFactor::new(&entry.matrix, n)?);
+        }
+        Ok(entry.factor.as_ref().unwrap())
+    }
 }
 
 #[cfg(test)]
@@ -79,71 +161,5 @@ mod tests {
         unit[0] = 1.0;
         let response = cache.factor(0, 6).unwrap().solve(&unit).unwrap();
         assert!((response[0] - 0.2).abs() < 1e-14);
-    }
-}
-
-/// Lazy articulation mass responses at one immutable post-FK state.
-pub(crate) struct JointMass<'a> {
-    model: &'a Model,
-    state: &'a State,
-    entries: Vec<Option<Entry>>,
-}
-
-impl<'a> JointMass<'a> {
-    pub(crate) fn new(model: &'a Model, state: &'a State) -> Self {
-        Self {
-            model,
-            state,
-            entries: (0..model.articulation_count.max(1)).map(|_| None).collect(),
-        }
-    }
-
-    pub(crate) fn with_seed(
-        model: &'a Model, state: &'a State, seed: Option<MassSeed<'_>>,
-    ) -> Result<Self> {
-        let mut result = Self::new(model, state);
-        if let Some(seed) = seed {
-            for (art, (matrix, factor)) in seed.into_matrices(model, state)? {
-                result.entries[art] = Some(Entry { matrix, factor });
-            }
-        }
-        Ok(result)
-    }
-
-    fn entry(&mut self, articulation: usize) -> Result<&mut Entry> {
-        if self.entries[articulation].is_none() {
-            self.entries[articulation] = Some(Entry {
-                matrix: crate::mass_matrix(self.model, self.state, articulation)?,
-                factor: None,
-            });
-        }
-        Ok(self.entries[articulation].as_mut().unwrap())
-    }
-
-    pub(crate) fn matrix(&mut self, articulation: usize) -> Result<&[Real]> {
-        Ok(&self.entry(articulation)?.matrix)
-    }
-
-    pub(crate) fn cached_cholesky(&self, articulation: usize, n: usize) -> Option<(Real, &[Real])> {
-        self.entries.get(articulation)?.as_ref()?.factor.as_ref()?.full_rank_cholesky(n)
-    }
-
-    pub(crate) fn retain_cholesky(
-        &mut self,
-        articulation: usize,
-        factor: Vec<Real>,
-        n: usize,
-        scale: Real,
-    ) -> Result<()> {
-        self.entry(articulation)?.factor = MassFactor::from_cholesky(factor, n, scale);
-        Ok(())
-    }
-
-    pub(crate) fn factor(&mut self, articulation: usize, n: usize) -> Result<&MassFactor> {
-        let entry = self.entry(articulation)?;
-        if entry.factor.is_none() {
-            entry.factor = Some(MassFactor::new(&entry.matrix, n)?);
-        }
-        Ok(entry.factor.as_ref().unwrap())
     }
 }

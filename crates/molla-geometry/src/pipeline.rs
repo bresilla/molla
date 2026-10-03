@@ -475,8 +475,12 @@ impl CollisionPipeline {
         let used_gpu_broad = false;
         if !used_gpu_broad {
             if let Some(bounds) = bounds {
-                self.broad
-                    .sap_pairs_prepared(bounds, state, model.contact_margin, &mut self.pair_buf);
+                self.broad.sap_pairs_prepared(
+                    bounds,
+                    state,
+                    model.contact_margin,
+                    &mut self.pair_buf,
+                );
             } else {
                 self.broad
                     .sap_pairs(model, state, model.contact_margin, &mut self.pair_buf);
@@ -500,6 +504,9 @@ impl CollisionPipeline {
         });
         self.last_broad_phase_pairs = self.pair_buf.len();
         drop(filter_span);
+        for pair in &self.pair_buf {
+            model.combined_shape_friction_coefficients(pair.a as usize, pair.b as usize)?;
+        }
 
         // Full GPU narrow phase takes precedence over the prefilter.
         #[cfg(feature = "gpu")]
@@ -543,10 +550,19 @@ impl CollisionPipeline {
                 continue;
             }
             let pair = self.pair_buf[i];
-            if !used_gpu_broad && bounds.is_some_and(|bounds| {
-                !bounds.heightfield_may_contact(state, pair.a as usize, self.broad.shape_aabb(pair.b as usize))
-                    || !bounds.heightfield_may_contact(state, pair.b as usize, self.broad.shape_aabb(pair.a as usize))
-            }) {
+            if !used_gpu_broad
+                && bounds.is_some_and(|bounds| {
+                    !bounds.heightfield_may_contact(
+                        state,
+                        pair.a as usize,
+                        self.broad.shape_aabb(pair.b as usize),
+                    ) || !bounds.heightfield_may_contact(
+                        state,
+                        pair.b as usize,
+                        self.broad.shape_aabb(pair.a as usize),
+                    )
+                })
+            {
                 continue;
             }
             self.dispatch_pair_cpu(model, state, pair);
@@ -1132,6 +1148,7 @@ pub fn collide(
     // manifolds (boxes can give up to 4).
     let mut manifolds: Vec<ContactManifold> = Vec::with_capacity(pair_buf.len());
     for &pair in pair_buf.iter() {
+        model.combined_shape_friction_coefficients(pair.a as usize, pair.b as usize)?;
         pair_contact(
             model,
             state,
@@ -1177,6 +1194,10 @@ fn push_contacts_into(
             molla_storage::Buffer::from_vec(vec![0.0; cap], BufferUsage::StorageReadWrite);
         contacts.friction =
             molla_storage::Buffer::from_vec(vec![0.0; cap], BufferUsage::StorageReadWrite);
+        contacts.static_friction = molla_storage::Buffer::from_vec(
+            vec![molla_math::Real::NAN; cap],
+            BufferUsage::StorageReadWrite,
+        );
         contacts.rolling_friction =
             molla_storage::Buffer::from_vec(vec![0.0; cap], BufferUsage::StorageReadWrite);
         contacts.torsional_friction =
@@ -1215,6 +1236,12 @@ fn push_contacts_into(
     let fric = contacts.friction.host_mut()?;
     for (i, m) in manifolds.iter().enumerate() {
         fric[i] = model.combined_shape_friction(m.a_shape as usize, m.b_shape as usize)?;
+    }
+    let stat = contacts.static_friction.host_mut()?;
+    for (i, m) in manifolds.iter().enumerate() {
+        stat[i] = model
+            .combined_shape_friction_coefficients(m.a_shape as usize, m.b_shape as usize)?
+            .mu_static;
     }
     let roll = contacts.rolling_friction.host_mut()?;
     for (i, m) in manifolds.iter().enumerate() {

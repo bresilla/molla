@@ -1,0 +1,90 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Checking molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.69s
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.57s
+     Running `target/debug/examples/check_primitives_shaders`
+shader_wiring_ok	module=featherstone	entry_points=1
+shader_wiring_ok	module=runtime_distance	entry_points=2
+shader_wiring_ok	module=body_damping	entry_points=1
+shader_wiring_ok	module=scalar_publication	entry_points=1
+shader_wiring_ok	module=floating_momentum	entry_points=1
+shader_wiring_complete	modules=5	device_execution=false
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.17s
+     Running tests/spherical_cone.rs (target/debug/deps/spherical_cone-33a1f1f6155cfccf)
+
+running 6 tests
+test antipodal_limiting_rows_are_finite_and_invalid_inputs_fail_explicitly ... ok
+test asymmetric_diagonal_swing_is_elliptical_not_rectangular ... ok
+test zero_and_disabled_extents_have_distinct_rows ... ok
+test antipodal_limits_preserve_twist_and_choose_the_widest_admissible_chart ... ok
+test circular_cones_equal_primary_direction_angle_for_all_axes ... ok
+test cone_rows_match_angular_derivatives_and_do_not_oppose_twist ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.58s
+     Running tests/runtime_cone_configuration.rs (target/debug/deps/runtime_cone_configuration-2a7e7905c39a54cb)
+
+running 5 tests
+test rigid_fixed_loop_insertion_and_failed_controls_preserve_authored_state ... ok
+test invalid_cone_mutations_are_atomic ... ok
+test rigid_ball_loop_configuration_is_transactional ... ok
+test rigid_axis_loops_author_limits_and_both_motor_models_atomically ... ok
+test cone_edits_preserve_tree_and_loop_handles_through_compaction ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/spherical_cone.rs (target/debug/deps/spherical_cone-33a1f1f6155cfccf)
+
+running 6 tests
+test antipodal_limiting_rows_are_finite_and_invalid_inputs_fail_explicitly ... ok
+test asymmetric_diagonal_swing_is_elliptical_not_rectangular ... ok
+test zero_and_disabled_extents_have_distinct_rows ... ok
+test antipodal_limits_preserve_twist_and_choose_the_widest_admissible_chart ... ok
+test circular_cones_equal_primary_direction_angle_for_all_axes ... ok
+test cone_rows_match_angular_derivatives_and_do_not_oppose_twist ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.16s
+     Running tests/runtime_cone_capability.rs (target/debug/deps/runtime_cone_capability-d670634b2df45446)
+
+running 1 test
+antipodal_cone route=0 frames=32 residual=0.000000000e0
+antipodal_cone route=1 frames=32 residual=0.000000000e0
+antipodal_cone route=2 frames=32 residual=0.000000000e0
+test cpu_antipodal_cones_recover_through_tree_rigid_and_compliant_routes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

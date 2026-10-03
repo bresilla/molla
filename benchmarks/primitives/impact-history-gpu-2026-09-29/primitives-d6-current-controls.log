@@ -1,0 +1,39 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.40s
+     Running tests/joint_compliance.rs (target/debug/deps/joint_compliance-4e8ff749336a2a62)
+
+running 8 tests
+test builder_validates_atomically_and_hard_limits_replace_springs ... ok
+test invalid_mutated_parameters_return_errors_without_corrupting_input ... ok
+test spring_interval_is_unilateral_and_free_inside ... ok
+test compliance_is_a_force_not_a_position_projection ... ok
+test zero_frequency_releases_axes_and_does_not_damp ... ok
+test critically_damped_response_converges_for_hitch_frequencies ... ok
+test external_load_produces_mass_invariant_compliant_deflection ... ok
+test floating_pair_uses_reduced_mass_and_preserves_linear_momentum ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+     Running tests/runtime_d6_axis_certification.rs (target/debug/deps/runtime_d6_axis_certification-758560f6132c16ec)
+
+running 1 test
+d6_axis_cases=36 peak_pose=0.00000008940696716308595 peak_rate=0.000000000000003031560182263186
+test d6_each_axis_free_bounded_locked_matches_analytic_motion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.97s
+     Running tests/runtime_d6_axis_certification.rs (target/debug/deps/runtime_d6_axis_certification-f61d8aa70cb587a9)
+
+running 1 test
+d6_axis_cases=36 peak_pose=0.000001736658284289374 peak_rate=0.000006223128200321472
+test gpu_d6_each_axis_free_bounded_locked_matches_analytic_motion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 9.69s
+

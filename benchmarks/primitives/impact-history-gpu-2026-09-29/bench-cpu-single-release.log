@@ -1,0 +1,38 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling wgpu-core v29.0.4
+   Compiling wgpu v29.0.4
+   Compiling wgpu-types v29.0.4
+   Compiling naga v29.0.4
+   Compiling parry3d-f64 v0.26.1
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling wgpu-hal v29.0.4
+   Compiling wgpu-core-deps-windows-linux-android v29.0.4
+   Compiling molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+   Compiling molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `release` profile [optimized] target(s) in 22.95s
+     Running benches/runtime_primitives.rs (target/release/deps/runtime_primitives-fec4336174b03ab8)
+benchmark_schema=1	timing_scope=device_timeline_including_host_queue_idle	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	build_profile=release
+case_start	primitive=distance	instances=1	backend=cpu
+case_ok	primitive=distance	instances=1	backend=cpu	bodies=1	articulations=1	warmup=20	steps=1000	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000140668	wall_seconds=0.022786131	max_step_seconds=0.000085490	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=0	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_start	primitive=cone	instances=1	backend=cpu
+case_ok	primitive=cone	instances=1	backend=cpu	bodies=1	articulations=1	warmup=20	steps=1000	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000054549	wall_seconds=0.016190898	max_step_seconds=0.000019426	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=0	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_start	primitive=d6	instances=1	backend=cpu
+case_ok	primitive=d6	instances=1	backend=cpu	bodies=1	articulations=1	warmup=20	steps=1000	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000056838	wall_seconds=0.012333467	max_step_seconds=0.000014758	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=0	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_start	primitive=reaction	instances=1	backend=cpu
+case_ok	primitive=reaction	instances=1	backend=cpu	bodies=1	articulations=1	warmup=20	steps=1000	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000017241	wall_seconds=0.006934302	max_step_seconds=0.000008822	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=0	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_start	primitive=break	instances=1	backend=cpu
+case_ok	primitive=break	instances=1	backend=cpu	bodies=1	articulations=1	warmup=20	steps=1000	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000015896	wall_seconds=0.008081782	max_step_seconds=0.000061387	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=1	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_start	primitive=friction	instances=1	backend=cpu
+case_ok	primitive=friction	instances=1	backend=cpu	bodies=1	articulations=1	warmup=20	steps=1000	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000030846	wall_seconds=0.017069233	max_step_seconds=0.000027815	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=0	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_start	primitive=mixed	instances=1	backend=cpu
+case_ok	primitive=mixed	instances=1	backend=cpu	bodies=6	articulations=6	warmup=20	steps=1000	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000249266	wall_seconds=0.063451472	max_step_seconds=0.000353035	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=1	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable

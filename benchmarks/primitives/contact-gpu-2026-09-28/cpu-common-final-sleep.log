@@ -1,0 +1,62 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.63s
+     Running tests/rigid_sleep.rs (target/debug/deps/rigid_sleep-93bddf5f66bfae51)
+
+running 49 tests
+test explicit_sleep_fleet_timings ... ignored, CPU explicit-sleep fleet benchmark; run without concurrent builds
+test mass::nonwaking_mass_is_used_by_the_next_awake_impulse_and_recomputes_without_spurious_wake ... ok
+test global_and_raw_mutations_wake_sleepers_but_noop_gravity_does_not ... ok
+test kind::changing_watched_boundary_to_moving_kinematic_wakes_only_dependents ... ok
+test pose::invalid_and_unchanged_poses_do_not_activate_or_invalidate_state ... ok
+test nonwaking::nonwaking_edits_never_erase_an_existing_wake ... ok
+test kind::newly_dynamic_boundary_joins_awake_dependencies_even_without_explicit_wake ... ok
+test non_waking_motor_edits_take_effect_on_explicit_resume ... ok
+test failed_steps_preserve_sleep_and_custom_forces_wake_conservatively_on_success ... ok
+test nonwaking::nonwaking_force_edits_do_not_disable_future_contact_wakes ... ok
+test nonwaking::sleeping_tree_preserves_projected_joint_rates_and_resumes_them ... ok
+test pose::a_nonwaking_teleport_does_not_acknowledge_an_earlier_force_edit ... ok
+test moving_kinematic_contact_wakes_a_previously_unconnected_sleeper ... ok
+test nonwaking::reset_wrench_can_preserve_sleep_or_wake_the_dependency_group ... ok
+test settling::batch_sleep_rejects_unknown_handles_without_partial_sleep ... ok
+test replacing_a_scene_with_matching_handles_and_edit_counts_does_not_reuse_sleep ... ok
+test loop_coupling_and_motor_changes_wake_the_complete_group ... ok
+test settling::wake::invalid_wakes_and_failed_steps_preserve_weak_wake_eligibility ... ok
+test kind::nonwaking_kind_edit_does_not_erase_an_earlier_wake_or_reset_other_quiet_windows ... ok
+test body_edits_wake_only_their_dependency_group_and_invalid_edits_are_atomic ... ok
+test fresh_substep_contact_wakes_sleeping_body_but_filtered_or_sensor_contacts_do_not ... ok
+test mass::mass_edit_preserves_prior_wakes_and_unrelated_quiet_windows ... ok
+test settling::failed_steps_and_settings_do_not_consume_or_reset_quiet_time ... ok
+test nonwaking::nonwaking_velocity_edit_preserves_an_awake_quiet_window ... ok
+test mass::additional_mass_wake_policy_covers_trees_and_loops_without_waking_other_groups ... ok
+test settling::topology_change_restarts_quiet_time_for_merged_groups ... ok
+test settling::wake::retained_eligibility_still_requires_quiet_inputs_and_motion ... ok
+test tree_motor_restoring_a_raw_override_counts_as_a_change ... ok
+test kind::sleeping_kind_roundtrip_preserves_sleep_and_unrelated_bodies ... ok
+test changed_pair_filters_wake_on_lost_support_and_new_contacts ... ok
+test topology_edits_invalidate_sleep_without_stale_handle_aliasing ... ok
+test settling::wake::weak_wake_does_not_restore_eligibility_after_input_edits ... ok
+test settling::moving_boundary_blocks_automatic_sleep ... ok
+test nonwaking::latent_velocity_and_wrench_are_retained_until_explicit_wake ... ok
+test kind::kind_wake_policy_covers_rerooted_trees_and_loop_dependents ... ok
+test settling::wake::weak_wake_does_not_enable_automatic_sleep ... ok
+test settling::wake::weak_wake_preserves_awake_quiet_time_but_strong_wake_restarts_it ... ok
+test settling::arbitrary_force_steps_clear_quiet_history ... ok
+test settling::input_edits_and_explicit_wakes_restart_only_affected_quiet_windows ... ok
+test settling::wake::weak_wake_of_explicit_or_automatic_sleeper_can_resleep_next_step ... ok
+test sleeping_contacts_report_no_impulse_and_static_boundary_edits_wake ... ok
+test settling::wake::weak_wake_propagates_through_trees_loops_and_boundaries_only ... ok
+test pose::nonwaking_teleport_updates_subtree_and_queries_without_moving_sleepers ... ok
+test settling::freefall_and_moving_groups_do_not_sleep ... ok
+test settling::persistent_wrenches_and_joint_feedforward_keep_quiet_bodies_awake ... ok
+test settling::tiny_motor_commands_keep_tree_and_loop_groups_awake ... ok
+test explicit_sleep_skips_gravity_and_preserves_independent_groups ... ok
+test a_sleeping_remote_body_does_not_change_active_damping_or_motion ... ok
+test settling::automatic_sleep_is_opt_in_and_disabling_preserves_sleepers ... ok
+
+test result: ok. 48 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.07s
+

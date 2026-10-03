@@ -1,0 +1,43 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.24s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 5 tests
+test rigid_contact_activation_gpu::tests::activation_faults_guard_publication_and_recover_without_replacing_masks ... ok
+test rigid_contact_activation_gpu::tests::boundary_only_layout_has_no_dynamic_group_or_response ... ok
+test rigid_contact_activation_gpu::tests::contact_components_wake_in_one_dispatch_and_dormant_rows_retire ... ok
+test rigid_contact_activation_gpu::tests::support_loss_motion_surface_and_sleep_dependencies_wake_components ... ok
+test rigid_contact_activation_gpu::tests::watched_colliders_retain_support_across_compiled_pieces ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 228 filtered out; finished in 0.24s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.05s
+     Running tests/runtime_contact_sleep.rs (target/debug/deps/runtime_contact_sleep-7be46659d55a2907)
+
+running 6 tests
+test gpu_automatic_contact_groups_sleep_and_wake_together ... ok
+test gpu_collision_wake_activates_tree_hard_soft_drives_and_reactions ... 
+thread 'gpu_collision_wake_activates_tree_hard_soft_drives_and_reactions' (850183) panicked at crates/molla-solvers/tests/runtime_contact_sleep.rs:20:60:
+called `Result::unwrap()` on an `Err` value: Solver("GPU rigid runtime does not yet support joint brakes")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test gpu_contact_sleep_retains_geometry_and_nonwaking_state ... ok
+test gpu_contact_wake_fault_rolls_back_and_same_layout_retry_recovers ... ok
+test gpu_moving_boundaries_wake_new_contact_components ... ok
+test gpu_new_substep_contacts_wake_only_eligible_components ... ok
+
+failures:
+
+failures:
+    gpu_collision_wake_activates_tree_hard_soft_drives_and_reactions
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 11.22s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_contact_sleep`
+make: *** [Makefile:126: test-gpu] Error 101

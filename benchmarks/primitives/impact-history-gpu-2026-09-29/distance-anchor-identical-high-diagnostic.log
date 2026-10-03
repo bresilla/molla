@@ -1,0 +1,27 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.83s
+     Running tests/runtime_distance_gpu.rs (target/debug/deps/runtime_distance_gpu-5313068753ba1220)
+
+running 1 test
+test runtime_distance_gpu_resolves_anchors_with_identical_position_high_parts ... identical-high input coordinates=[4096.0, -4096.0, 8192.0, 0.0, 0.0, 0.0, 1.0, 4096.0001, -4096.0, 8192.0, 0.0, 0.0, 0.0, 1.0] poses=[Transform { position: DVec3(4096.0, -4096.0, 8192.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }, Transform { position: DVec3(4096.0001, -4096.0, 8192.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }]
+identical-high output coordinates=[4096.0, -4096.0, 8192.0, 0.0, 0.0, 0.0, 1.0, 4096.0, -4096.0, 8192.0, 0.0, 0.0, 0.0, 1.0] poses=[Transform { position: DVec3(4096.0, -4096.0, 8192.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }, Transform { position: DVec3(4096.0, -4096.0, 8192.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }]
+
+thread 'runtime_distance_gpu_resolves_anchors_with_identical_position_high_parts' (1555289) panicked at crates/molla-solvers/tests/runtime_distance_gpu.rs:347:13:
+axis=DVec3(1.0, 0.0, 0.0) sign=-1: force=DVec3(59.999996185302734, 0.0, 0.0), expected=DVec3(-6.66666668015144, -0.0, -0.0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    runtime_distance_gpu_resolves_anchors_with_identical_position_high_parts
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 4.78s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_distance_gpu`
+make: *** [Makefile:110: test-gpu] Error 101

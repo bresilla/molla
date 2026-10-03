@@ -1,0 +1,23 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Checking molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.37s
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.44s
+     Running `target/debug/examples/prepare_primitives_gpu --step`
+adapter	AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+gpu_wiring_ok	compliant_tree=false	reversed_tree=true	soft_loop=true	axis_caps=true	brakes=true	body_damping=true	break_thresholds=true	physics_steps=0	diagnostics=GpuRuntimeDiagnostics { model_compilations: 1, current_model_bind_groups_created: 51, completed_frames: 0, last_substeps: 0, last_state_upload_bytes: 0, last_state_readback_bytes: 0 }
+gpu_frame_probe	compliant_tree=false	dt=0.004166666666666667	position_error=3.272554774e-4	orientation_error=6.769745635e-4	linear_rate_error=1.371159189e-1	angular_rate_error=6.266095080e-2	tolerance=0.001	physics_steps=1
+Error: "one-frame CPU/GPU wiring comparison exceeded its declared tolerance"
+make: *** [Makefile:392: check-primitives-gpu-step-wiring] Error 1

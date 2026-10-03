@@ -3,7 +3,6 @@ use wgpu::util::DeviceExt;
 
 #[allow(dead_code)]
 mod readback {
-    use crate as molla_solvers;
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/common/gpu_readback.rs"
@@ -83,17 +82,23 @@ fn green_viscosity_gpu_matches_independent_double_precision_blocks() {
         compilation_options: Default::default(),
         cache: None,
     });
-    let source = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: None,
-        contents: bytemuck::cast_slice(&input),
-        usage: wgpu::BufferUsages::STORAGE,
-    });
-    let target = device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: expected.len() as u64 * 80,
-        mapped_at_creation: false,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-    });
+    let source = molla_core::gpu_buffer_init!(
+        device,
+        &wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&input),
+            usage: wgpu::BufferUsages::STORAGE,
+        }
+    );
+    let target = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: None,
+            size: expected.len() as u64 * 80,
+            mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        }
+    );
     let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &pipeline.get_bind_group_layout(0),

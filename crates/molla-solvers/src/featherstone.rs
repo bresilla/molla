@@ -90,6 +90,8 @@ pub struct JointEffort {
 }
 
 /// Forward-dynamics solver for articulated rigid bodies.
+/// State and control body wrenches add once per substep, in world axes at COM.
+/// Control wrenches are not accumulated into the output state's force buffer.
 pub struct FeatherstoneSolver {
     contact_forces: Vec<crate::penalty_contact::ContactForce>,
     /// Per-DOF efforts of the last step, averaged over its substeps.
@@ -113,11 +115,8 @@ pub struct FeatherstoneSolver {
     /// the two paths agree to roundoff. Default `false` for backwards
     /// compatibility.
     pub rigorous_d_solve: bool,
-    /// Stage 17.1 polish: when `true`, Distance joints enforce their
-    /// length constraint via a velocity-level Lagrange multiplier
-    /// (force-level projection) instead of the v1 hard
-    /// `p ← p · L_target / |p|` clamp. Default `true` — the v1 clamp
-    /// stays only as a fallback when the multiplier is degenerate.
+    /// Solve radial bounds and caps through coupled anchor effective mass.
+    /// Enabled by default; false selects the standalone position-clamp path.
     pub rigorous_distance: bool,
     backend: FeatherstoneBackend,
 }
@@ -163,7 +162,9 @@ impl FeatherstoneSolver {
             .queue()
             .ok_or_else(|| Error::Gpu("engine has no GPU queue".into()))?
             .clone();
-        Self::new_gpu_on_device(device, queue, model)
+        crate::kinematic_motion::validate_gpu_layout(model)?;
+        let kernel = crate::kernels::FeatherstoneKernel::new_cached(engine, model)?;
+        Ok(Self::from_gpu_kernel(device, queue, model, kernel))
     }
 
     /// Construct articulated dynamics on the caller's matching device and queue.
@@ -173,13 +174,24 @@ impl FeatherstoneSolver {
         queue: std::sync::Arc<wgpu::Queue>,
         model: &Model,
     ) -> Result<Self> {
+        crate::kinematic_motion::validate_gpu_layout(model)?;
         let kernel = crate::kernels::FeatherstoneKernel::new(&device, &queue, model);
+        Ok(Self::from_gpu_kernel(device, queue, model, kernel))
+    }
+
+    #[cfg(feature = "gpu")]
+    fn from_gpu_kernel(
+        device: std::sync::Arc<wgpu::Device>,
+        queue: std::sync::Arc<wgpu::Queue>,
+        model: &Model,
+        kernel: crate::kernels::FeatherstoneKernel,
+    ) -> Self {
         let muscle_kernel = if model.muscle_count > 0 {
             Some(crate::kernels::MuscleKernel::new(&device, model))
         } else {
             None
         };
-        Ok(Self {
+        Self {
             joint_damping: 0.0,
             substeps: 1,
             stable_motor_feedback: false,
@@ -194,7 +206,7 @@ impl FeatherstoneSolver {
             contact_forces: Vec::new(),
             joint_efforts: Vec::new(),
             substep_efforts: Vec::new(),
-        })
+        }
     }
 
     /// Integrate input coordinates using output velocities without evaluating dynamics.
@@ -205,33 +217,140 @@ impl FeatherstoneSolver {
         dt: Real,
         state_out: &mut State,
     ) -> Result<()> {
+        self.drift_cpu_selected(model, state_in, dt, state_out, None)
+    }
+
+    pub(crate) fn drift_cpu_selected(
+        &self,
+        model: &Model,
+        state_in: &State,
+        dt: Real,
+        state_out: &mut State,
+        selected: Option<&[bool]>,
+    ) -> Result<()> {
+        self.drift_cpu_mode(model, state_in, dt, state_out, selected, false)
+    }
+
+    fn drift_cpu_mode(
+        &self,
+        model: &Model,
+        state_in: &State,
+        dt: Real,
+        state_out: &mut State,
+        selected: Option<&[bool]>,
+        external_scalar_bounds: bool,
+    ) -> Result<()> {
         if !dt.is_finite() || dt <= 0.0 {
             return Err(Error::Solver("invalid articulated drift timestep".into()));
+        }
+        let count = model
+            .articulation_count
+            .max(usize::from(model.joint_count > 0));
+        if selected.is_some_and(|mask| mask.len() != count) {
+            return Err(Error::Solver("invalid drift articulation selection".into()));
         }
         let q_in = state_in.joint_q.host()?;
         let qd_in = state_out.joint_qd.host()?.to_vec();
         let mut q = q_in.to_vec();
         let mut qd = qd_in.clone();
         let mut acceleration = vec![0.0; model.joint_dof_total];
-        if model.joint_count > 0 {
+        for (body, &flags) in model.body_flags.host()?.iter().enumerate() {
+            if flags & BodyFlags::KINEMATIC_DRIVEN != 0 {
+                state_out.body_q.host_mut()?[body] = state_in.body_q.host()?[body];
+                state_out.body_qd.host_mut()?[body] = state_in.body_qd.host()?[body];
+            }
+        }
+        if model.joint_count > 0 && !external_scalar_bounds {
             state_out.joint_q.host_mut()?.copy_from_slice(q_in);
             eval_fk(model, state_out)?;
             let mut mass = crate::joint_mass::JointMass::new(model, state_out);
-            for art in 0..model.articulation_count.max(1) {
+            for art in 0..count {
+                if selected.is_some_and(|mask| !mask[art]) {
+                    continue;
+                }
                 crate::joint_limits::react_scalar_stops(
-                    model, state_out, art, &mut acceleration, dt, 0.0, &mut mass,
+                    model,
+                    state_out,
+                    art,
+                    &mut acceleration,
+                    dt,
+                    0.0,
+                    self.rigorous_distance,
+                    &mut mass,
                 )?;
             }
         }
-        integration::integrate(
-            model, 0..model.joint_count, q_in, &qd_in,
-            &acceleration, dt, 0.0,
-            self.rigorous_distance, &mut q, &mut qd,
-        )?;
+        let starts = model.articulation_start.host()?;
+        for art in 0..count {
+            if selected.is_some_and(|mask| !mask[art]) {
+                continue;
+            }
+            let range = if model.articulation_count == 0 {
+                0..model.joint_count
+            } else {
+                starts[art] as usize..starts[art + 1] as usize
+            };
+            let mixed =
+                crate::joint_limits::has_mixed_stops(model, range.clone(), self.rigorous_distance)?;
+            integration::integrate(
+                model,
+                range,
+                q_in,
+                &qd_in,
+                &acceleration,
+                dt,
+                0.0,
+                self.rigorous_distance,
+                external_scalar_bounds || mixed,
+                true,
+                &mut q,
+                &mut qd,
+            )?;
+        }
         state_out.joint_q.host_mut()?.copy_from_slice(&q);
         state_out.joint_qd.host_mut()?.copy_from_slice(&qd);
+        drift_kinematic(model, state_in, dt, state_out)?;
         eval_fk(model, state_out)?;
-        eval_body_velocities(model, state_out)
+        eval_body_velocities(model, state_out)?;
+        if let Some(selected) = selected {
+            let children = model.joint_child.host()?;
+            for (art, &active) in selected.iter().enumerate() {
+                if active {
+                    continue;
+                }
+                let range = if model.articulation_count == 0 {
+                    0..model.joint_count
+                } else {
+                    starts[art] as usize..starts[art + 1] as usize
+                };
+                for &body in &children[range] {
+                    let body = body as usize;
+                    state_out.body_q.host_mut()?[body] = state_in.body_q.host()?[body];
+                    state_out.body_qd.host_mut()?[body] = state_in.body_qd.host()?[body];
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_active_articulations_buffer(&self) -> Result<&wgpu::Buffer> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => Ok(gpu.kernel.active_articulations_buffer()),
+            _ => Err(Error::Solver(
+                "GPU active mask requested from CPU solver".into(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub(crate) fn set_gpu_active_articulations(&mut self, active: &[bool]) -> Result<()> {
+        match &mut self.backend {
+            FeatherstoneBackend::Gpu(gpu) => {
+                gpu.kernel.set_active_articulations(&gpu.queue, active)
+            }
+            _ => Err(Error::Gpu("GPU activation requires a GPU backend".into())),
+        }
     }
 
     #[cfg(feature = "gpu")]
@@ -241,7 +360,122 @@ impl FeatherstoneSolver {
                 gpu.kernel.set_external_scalar_bounds(enabled);
                 Ok(())
             }
-            _ => Err(Error::Gpu("external scalar bounds require a GPU backend".into())),
+            _ => Err(Error::Gpu(
+                "external scalar bounds require a GPU backend".into(),
+            )),
+        }
+    }
+
+    /// Prepare coordinate and FK translation residues for a fixed set of device states.
+    /// Reset after coordinate/pose edits or foreign writes; rebuild after topology changes.
+    /// Empty state lists disable compensation. Zero-coordinate bodies retain pose residues.
+    /// Free quaternion integration retains normalized high/low coordinates.
+    #[cfg(feature = "gpu")]
+    pub fn prepare_gpu_coordinate_compensation(&mut self, states: &[&State]) -> Result<()> {
+        match &mut self.backend {
+            FeatherstoneBackend::Gpu(gpu) => gpu
+                .kernel
+                .prepare_coordinate_compensation(&gpu.device, states),
+            _ => Err(Error::Gpu(
+                "coordinate compensation requires a GPU backend".into(),
+            )),
+        }
+    }
+
+    /// Seed prepared GPU low parts from current uploaded host coordinates and translations.
+    #[cfg(feature = "gpu")]
+    pub fn seed_gpu_coordinate_compensation(&self, state: &State) -> Result<()> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => {
+                gpu.kernel.seed_coordinate_compensation(&gpu.queue, state)
+            }
+            _ => Err(Error::Gpu(
+                "coordinate compensation requires a GPU backend".into(),
+            )),
+        }
+    }
+
+    /// Per-coordinate f32 residues; checkpoint and restore together with coordinates.
+    #[cfg(feature = "gpu")]
+    pub fn gpu_coordinate_compensation_buffer(&self, state: &State) -> Result<&wgpu::Buffer> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => gpu.kernel.coordinate_compensation_buffer(state),
+            _ => Err(Error::Gpu(
+                "coordinate compensation requires a GPU backend".into(),
+            )),
+        }
+    }
+
+    /// Per-body xyz translation residues in vec4<f32>; checkpoint with body poses.
+    #[cfg(feature = "gpu")]
+    pub fn gpu_position_compensation_buffer(&self, state: &State) -> Result<&wgpu::Buffer> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => gpu.kernel.position_compensation_buffer(state),
+            _ => Err(Error::Gpu(
+                "position compensation requires a GPU backend".into(),
+            )),
+        }
+    }
+
+    /// Clear prepared rounding residues after host edits or external coordinate writes.
+    #[cfg(feature = "gpu")]
+    pub fn encode_reset_gpu_coordinate_compensation(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => {
+                gpu.kernel.encode_reset_coordinate_compensation(encoder);
+                Ok(())
+            }
+            _ => Err(Error::Gpu(
+                "coordinate compensation requires a GPU backend".into(),
+            )),
+        }
+    }
+
+    /// Apply generalized position displacements without advancing physical time.
+    #[cfg(feature = "gpu")]
+    pub fn apply_position_displacement_gpu(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        displacement: &wgpu::Buffer,
+        state_out: &mut State,
+    ) -> Result<()> {
+        match &mut self.backend {
+            FeatherstoneBackend::Gpu(gpu) => gpu.kernel.apply_position_displacement(
+                &gpu.device,
+                &gpu.queue,
+                model,
+                state_in,
+                control,
+                displacement,
+                state_out,
+            ),
+            _ => Err(Error::Gpu(
+                "position displacement requires a GPU backend".into(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub(crate) fn refresh_gpu(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        state_out: &mut State,
+    ) -> Result<()> {
+        match &mut self.backend {
+            FeatherstoneBackend::Gpu(gpu) => {
+                gpu.kernel
+                    .refresh(&gpu.device, &gpu.queue, model, state_in, control, state_out)
+            }
+            _ => Err(Error::Gpu(
+                "GPU state refresh requires a GPU backend".into(),
+            )),
         }
     }
 
@@ -283,7 +517,7 @@ impl FeatherstoneSolver {
         self
     }
 
-    /// Enable effective-inertia stabilization; GPU scalar drives require rigorous dynamics.
+    /// Enable effective-inertia stabilization; GPU drives require rigorous dynamics.
     #[must_use]
     pub fn with_stable_motor_feedback(mut self, enabled: bool) -> Self {
         self.stable_motor_feedback = enabled;
@@ -310,11 +544,7 @@ impl FeatherstoneSolver {
         self
     }
 
-    /// Stage 17.1: toggle the velocity-level Lagrange-multiplier
-    /// projection for Distance joints. Default `true`; when `false`
-    /// the v1 hard-clamp (`p ← p · L_target / |p|` + radial-velocity
-    /// zeroing) is used instead. The `false` setting is preserved for
-    /// A/B parity tests.
+    /// Select coupled radial response or standalone position clamping.
     #[must_use]
     pub fn with_rigorous_distance(mut self, on: bool) -> Self {
         self.rigorous_distance = on;
@@ -370,6 +600,22 @@ impl FeatherstoneSolver {
     pub fn gpu_status_buffer(&self) -> Option<&wgpu::Buffer> {
         match &self.backend {
             FeatherstoneBackend::Gpu(gpu) => Some(gpu.kernel.status_buffer()),
+            FeatherstoneBackend::Cpu => None,
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_velocity_delta_buffer(&self) -> Option<&wgpu::Buffer> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => Some(gpu.kernel.velocity_delta_buffer()),
+            FeatherstoneBackend::Cpu => None,
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_bind_groups_created(&self) -> Option<u64> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => Some(gpu.kernel.bind_groups_created()),
             FeatherstoneBackend::Cpu => None,
         }
     }
@@ -453,17 +699,6 @@ impl Solver for FeatherstoneSolver {
         state_out: &mut State,
     ) -> Result<()> {
         self.contact_forces.clear();
-        if self.is_gpu()
-            && model
-                .joint_compliance
-                .host()?
-                .iter()
-                .any(|c| c.enabled != 0)
-        {
-            return Err(crate::core::Error::Solver(
-                "joint compliance requires CPU Featherstone".into(),
-            ));
-        }
         if !dt.is_finite() || dt <= 0.0 {
             return Err(crate::core::Error::Solver(
                 "step dt must be positive and finite".into(),
@@ -499,9 +734,18 @@ impl Solver for FeatherstoneSolver {
 }
 
 impl FeatherstoneSolver {
-    /// CPU contact samples from every substep of the latest step; impulses sum over time.
+    /// Contact samples from every substep of the latest step; impulses sum over time.
     pub fn contact_forces(&self) -> &[crate::penalty_contact::ContactForce] {
         &self.contact_forces
+    }
+
+    pub(crate) fn publish_frame_readouts(
+        &mut self,
+        contacts: Vec<crate::penalty_contact::ContactForce>,
+        efforts: Vec<JointEffort>,
+    ) {
+        self.contact_forces = contacts;
+        self.joint_efforts = efforts;
     }
 
     /// Per-DOF drive and brake efforts of the last CPU step, averaged over
@@ -575,10 +819,18 @@ impl FeatherstoneSolver {
         mut forces: impl FnMut(&Model, &State, Real, &mut [SpatialVector]) -> Result<()>,
         bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
     ) -> Result<()> {
-        self.step_with_collision_response(model, state_in, control, pipeline, contacts, dt,
-            state_out, excluded, |model, state, dt, wrenches, _, _| {
-                forces(model, state, dt, wrenches)
-            }, bounds)
+        self.step_with_collision_response(
+            model,
+            state_in,
+            control,
+            pipeline,
+            contacts,
+            dt,
+            state_out,
+            excluded,
+            |model, state, dt, wrenches, _, _| forces(model, state, dt, wrenches),
+            bounds,
+        )
     }
 
     pub(crate) fn step_with_collision_response(
@@ -590,9 +842,54 @@ impl FeatherstoneSolver {
         contacts: &mut Contacts,
         dt: Real,
         state_out: &mut State,
-        mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
-        mut forces: impl FnMut(&Model, &State, Real, &mut [SpatialVector], &mut crate::joint_mass::MassSeed<'_>, &mut Contacts) -> Result<()>,
+        excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+        forces: impl FnMut(
+            &Model,
+            &State,
+            Real,
+            &mut [SpatialVector],
+            &mut crate::joint_mass::MassSeed<'_>,
+            &mut Contacts,
+        ) -> Result<()>,
         bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
+    ) -> Result<()> {
+        self.step_with_collision_constraints(
+            model,
+            state_in,
+            control,
+            pipeline,
+            contacts,
+            dt,
+            state_out,
+            excluded,
+            forces,
+            bounds,
+            false,
+            |_, _, _, _| Ok(()),
+        )
+    }
+
+    pub(crate) fn step_with_collision_constraints(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        control: &Control,
+        pipeline: &mut crate::geometry::CollisionPipeline,
+        contacts: &mut Contacts,
+        dt: Real,
+        state_out: &mut State,
+        mut excluded: impl FnMut(Option<molla_core::BodyId>, Option<molla_core::BodyId>) -> bool,
+        mut forces: impl FnMut(
+            &Model,
+            &State,
+            Real,
+            &mut [SpatialVector],
+            &mut crate::joint_mass::MassSeed<'_>,
+            &mut Contacts,
+        ) -> Result<()>,
+        bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
+        defer_constraints: bool,
+        mut constraints: impl FnMut(&mut Self, &State, &mut State, Real) -> Result<()>,
     ) -> Result<()> {
         self.contact_forces.clear();
         if !dt.is_finite() || dt <= 0.0 {
@@ -629,8 +926,16 @@ impl FeatherstoneSolver {
             })?;
             applied.copy_from_slice(&persistent);
             let mut mass_seed = crate::joint_mass::MassSeed::new(model);
-            tracing::debug_span!("external_forces")
-                .in_scope(|| forces(model, &scratch, sub_dt, &mut applied, &mut mass_seed, contacts))?;
+            tracing::debug_span!("external_forces").in_scope(|| {
+                forces(
+                    model,
+                    &scratch,
+                    sub_dt,
+                    &mut applied,
+                    &mut mass_seed,
+                    contacts,
+                )
+            })?;
             if applied
                 .iter()
                 .any(|f| !f.linear.is_finite() || !f.angular.is_finite())
@@ -641,8 +946,18 @@ impl FeatherstoneSolver {
             }
             scratch.body_f.host_mut()?.copy_from_slice(&applied);
             tracing::debug_span!("featherstone_substep").in_scope(|| {
-                self.step_inner_seeded(model, &scratch, control, contacts, sub_dt, state_out, Some(mass_seed))
+                self.step_inner_seeded(
+                    model,
+                    &scratch,
+                    control,
+                    contacts,
+                    sub_dt,
+                    state_out,
+                    Some(mass_seed),
+                    defer_constraints,
+                )
             })?;
+            constraints(self, &scratch, state_out, sub_dt)?;
             state_out.body_f.host_mut()?.copy_from_slice(&persistent);
             samples.append(&mut self.contact_forces);
             self.accumulate_efforts(&mut efforts, 1.0 / n as Real);
@@ -655,6 +970,94 @@ impl FeatherstoneSolver {
         Ok(())
     }
 
+    pub(crate) fn correct_mixed_cpu(
+        &mut self,
+        scene: &molla_sim::runtime::RigidScene,
+        input: &State,
+        output: &mut State,
+        dt: Real,
+        selected: Option<&[bool]>,
+    ) -> Result<crate::distance_constraints::ConstraintReadings> {
+        let mut readings = crate::mixed_constraints::apply(
+            scene,
+            input,
+            output,
+            dt,
+            &mut self.contact_forces,
+            selected,
+        )?;
+        self.drift_cpu_mode(scene.model(), input, dt, output, selected, true)?;
+        crate::distance_constraints::refresh_readings(scene, output, &mut readings)?;
+        Ok(readings)
+    }
+
+    pub(crate) fn correct_impact_cpu(
+        &mut self,
+        cache: &mut crate::rigid_impact::ImpactCache,
+        scene: &molla_sim::runtime::RigidScene,
+        input: &State,
+        output: &mut State,
+        dt: Real,
+        readings: &mut crate::distance_constraints::ConstraintReadings,
+        selected: Option<&[bool]>,
+    ) -> Result<Option<State>> {
+        if cache.apply(
+            scene,
+            input,
+            output,
+            dt,
+            &mut self.contact_forces,
+            readings,
+            selected,
+        )? {
+            let model = scene.model();
+            let mut projected = input.clone_host()?;
+            projected.joint_qd.host_mut()?.fill(0.);
+            projected.body_qd.host_mut()?.fill(SpatialVector::ZERO);
+            let rows = cache.position_rows(scene, &projected, selected)?;
+            crate::rigid_impulse::apply_impact(model, &mut projected, &rows)
+                .map_err(|e| Error::Solver(format!("runtime impact position correction: {e}")))?;
+            let mut q = input.joint_q.host()?.to_vec();
+            let mut rates = projected.joint_qd.host()?.to_vec();
+            let acceleration = vec![0.; model.joint_dof_total];
+            let starts = model.articulation_start.host()?;
+            for art in 0..model.articulation_count {
+                if !cache.selection()[art] {
+                    continue;
+                }
+                integration::integrate(
+                    model,
+                    starts[art] as usize..starts[art + 1] as usize,
+                    input.joint_q.host()?,
+                    projected.joint_qd.host()?,
+                    &acceleration,
+                    1.,
+                    0.,
+                    self.rigorous_distance,
+                    true,
+                    false,
+                    &mut q,
+                    &mut rates,
+                )?;
+            }
+            projected.joint_q.host_mut()?.copy_from_slice(&q);
+            projected
+                .joint_qd
+                .host_mut()?
+                .copy_from_slice(input.joint_qd.host()?);
+            projected
+                .body_qd
+                .host_mut()?
+                .copy_from_slice(input.body_qd.host()?);
+            eval_fk(model, &mut projected)?;
+            eval_body_velocities(model, &mut projected)?;
+            self.drift_cpu_mode(model, &projected, dt, output, selected, true)?;
+            crate::distance_constraints::refresh_readings(scene, output, readings)?;
+            return Ok(Some(projected));
+        }
+        Ok(None)
+    }
+
     fn step_inner(
         &mut self,
         model: &Model,
@@ -664,7 +1067,9 @@ impl FeatherstoneSolver {
         dt: Real,
         state_out: &mut State,
     ) -> Result<()> {
-        self.step_inner_seeded(model, state_in, control, contacts, dt, state_out, None)
+        self.step_inner_seeded(
+            model, state_in, control, contacts, dt, state_out, None, false,
+        )
     }
 
     fn step_inner_seeded(
@@ -676,16 +1081,23 @@ impl FeatherstoneSolver {
         dt: Real,
         state_out: &mut State,
         mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
+        defer_constraints: bool,
     ) -> Result<()> {
         self.contact_forces.clear();
-        if self.is_gpu() && model.joint_reversed.host()?.iter().any(|&r| r != 0) {
-            return Err(crate::core::Error::Solver(
-                "reversed joints require CPU Featherstone".into(),
-            ));
+        if self.is_gpu() && control.joint_motor_model.host()?.iter().any(|&m| m > 1) {
+            return Err(crate::core::Error::Solver("unknown GPU motor model".into()));
         }
-        if self.is_gpu() && control.joint_motor_model.host()?.iter().any(|&m| m != 0) {
+        if self.is_gpu()
+            && !self.rigorous_d_solve
+            && control
+                .joint_motor_model
+                .host()?
+                .iter()
+                .zip(control.joint_target_mode.host()?)
+                .any(|(&model, &mode)| model == 1 && (1..=3).contains(&mode))
+        {
             return Err(crate::core::Error::Solver(
-                "acceleration motors require CPU Featherstone".into(),
+                "GPU acceleration motors require rigorous dynamics".into(),
             ));
         }
         if self.is_gpu()
@@ -716,6 +1128,7 @@ impl FeatherstoneSolver {
                     &mut self.substep_efforts,
                     None,
                     mass_seed,
+                    defer_constraints,
                 )?;
                 for reading in &mut self.contact_forces {
                     reading.sample_dt = dt;
@@ -779,8 +1192,8 @@ impl FeatherstoneSolver {
 /// - Ball: 3 angular columns, joint_world rotation columns ex/ey/ez
 /// - Free / Distance: 6 columns = ex/ey/ez (linear) + ex/ey/ez (angular)
 ///   in the joint-world frame
-/// - D6: same as Free, but axes with `lower == upper == 0` (locked)
-///   set their column to ZERO and `dof_active[k] = false`.
+/// - D6: linear locks and fully locked angular motion have zero columns;
+///   partial Euler angular locks retain Cartesian response columns.
 /// - Cable (Stage 39E): 2 columns — col 0 = (ez; 0) linear stretch along
 ///   the joint-world +z (cable axis), col 1 = (0; ex) bend about the
 ///   joint-world +x (bend axis).
@@ -844,8 +1257,9 @@ pub(crate) fn build_motion_subspace(
             1
         }
         JointType::Ball => {
+            let fixed = (0..3).all(locked);
             for (k, axis) in [ex, ey, ez].into_iter().enumerate() {
-                if !locked(k) {
+                if !fixed {
                     s_cols[k] = twist(axis);
                     dof_active[k] = true;
                 }
@@ -866,7 +1280,7 @@ pub(crate) fn build_motion_subspace(
             6
         }
         JointType::D6 => {
-            // 6 columns; axes locked when lower == upper (== 0 conventionally).
+            let angular_locks = (3..6).filter(|&k| locked(k)).count();
             let columns = [
                 SpatialVector::new(ex, Vec3::ZERO),
                 SpatialVector::new(ey, Vec3::ZERO),
@@ -878,7 +1292,10 @@ pub(crate) fn build_motion_subspace(
             for k in 0..6 {
                 let lo = limit_lower.get(dof_idx + k).copied().unwrap_or(Real::NAN);
                 let hi = limit_upper.get(dof_idx + k).copied().unwrap_or(Real::NAN);
-                let locked = lo.is_finite() && hi.is_finite() && (hi - lo).abs() < 1e-12;
+                let locked = lo.is_finite()
+                    && hi.is_finite()
+                    && (hi - lo).abs() < 1e-12
+                    && (k < 3 || angular_locks == 3);
                 if locked {
                     s_cols[k] = SpatialVector::ZERO;
                     dof_active[k] = false;
@@ -922,17 +1339,46 @@ fn cpu_step(
     efforts: &mut Vec<JointEffort>,
     activation: Option<&activation::ActiveSet>,
     mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
+    defer_constraints: bool,
 ) -> Result<()> {
     efforts.clear();
     efforts.resize(model.joint_dof_total, JointEffort::default());
     if model.articulation_count <= 1 {
-        cpu_step_inner::<false>(model, state_in, control, contacts, dt, state_out,
-            joint_damping, stable_motor_feedback, rigorous_d_solve, rigorous_distance,
-            contact_forces, efforts, activation, mass_seed)
+        cpu_step_inner::<false>(
+            model,
+            state_in,
+            control,
+            contacts,
+            dt,
+            state_out,
+            joint_damping,
+            stable_motor_feedback,
+            rigorous_d_solve,
+            rigorous_distance,
+            contact_forces,
+            efforts,
+            activation,
+            mass_seed,
+            defer_constraints,
+        )
     } else {
-        cpu_step_inner::<true>(model, state_in, control, contacts, dt, state_out,
-            joint_damping, stable_motor_feedback, rigorous_d_solve, rigorous_distance,
-            contact_forces, efforts, activation, mass_seed)
+        cpu_step_inner::<true>(
+            model,
+            state_in,
+            control,
+            contacts,
+            dt,
+            state_out,
+            joint_damping,
+            stable_motor_feedback,
+            rigorous_d_solve,
+            rigorous_distance,
+            contact_forces,
+            efforts,
+            activation,
+            mass_seed,
+            defer_constraints,
+        )
     }
 }
 
@@ -951,6 +1397,7 @@ fn cpu_step_inner<const LOCAL: bool>(
     efforts: &mut [JointEffort],
     activation: Option<&activation::ActiveSet>,
     mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
+    defer_constraints: bool,
 ) -> Result<()> {
     let setup_span = tracing::debug_span!("aba_setup").entered();
     if model.joint_count == 0 {
@@ -960,6 +1407,7 @@ fn cpu_step_inner<const LOCAL: bool>(
                 state_out.body_qd.host_mut()?[i] = SpatialVector::ZERO;
             }
         }
+        drift_kinematic(model, state_in, dt, state_out)?;
         return Ok(());
     }
 
@@ -1012,7 +1460,10 @@ fn cpu_step_inner<const LOCAL: bool>(
 
     let mut joint_mass = crate::joint_mass::JointMass::with_seed(model, state_out, mass_seed)?;
     let motor_inertias = effective_drive_inertias(
-        model, control, stable_motor_feedback, &mut joint_mass,
+        model,
+        control,
+        stable_motor_feedback,
+        &mut joint_mass,
         activation.map(|active| active.articulations.as_slice()),
     )?;
 
@@ -1028,14 +1479,19 @@ fn cpu_step_inner<const LOCAL: bool>(
 
     let body_q = state_out.body_q.host()?.to_vec();
     let mut body_f_in = state_in.body_f.host()?.to_vec();
+    crate::body_wrenches::add_control(control, &mut body_f_in)?;
     crate::joint_compliance::apply(model, state_out, &motor_inertias, dt, &mut body_f_in)?;
     *contact_forces =
-        crate::penalty_contact::eval_penalty_contacts(model, state_out, contacts, &mut body_f_in)?;
+        crate::penalty_contact::eval_normal_contacts(model, state_out, contacts, &mut body_f_in)?;
     if let Some(active) = activation {
         active.filter_readings(model, contact_forces)?;
         if !active.joints.iter().any(|&selected| selected) {
             active.restore(model, state_in, state_out)?;
-            state_out.body_f.host_mut()?.copy_from_slice(state_in.body_f.host()?);
+            drift_kinematic(model, state_in, dt, state_out)?;
+            state_out
+                .body_f
+                .host_mut()?
+                .copy_from_slice(state_in.body_f.host()?);
             return Ok(());
         }
     }
@@ -1090,13 +1546,16 @@ fn cpu_step_inner<const LOCAL: bool>(
     let mut c_term = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
     let mut i_a = JointScratch::<_, LOCAL>::new(scratch_len, SpatialMatrix6::ZERO);
     let mut p_a = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
-    let mut s_cols = JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
+    let mut s_cols =
+        JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
     let mut dof_active = JointScratch::<_, LOCAL>::new(scratch_len, [false; MAX_JOINT_DOFS]);
     let mut dof_count = JointScratch::<_, LOCAL>::new(scratch_len, 0usize);
-    let mut u_per_dof = JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
+    let mut u_per_dof =
+        JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
     let mut d_inv_per_dof = JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS]);
     let mut u_tau_per_dof = JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS]);
-    let mut l_chol_per_joint = JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS * MAX_JOINT_DOFS]);
+    let mut l_chol_per_joint =
+        JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS * MAX_JOINT_DOFS]);
 
     // ── Per-articulation outer loop ─────────────────────────────────
     let mut q_new: Vec<Real> = q_in.clone();
@@ -1113,6 +1572,9 @@ fn cpu_step_inner<const LOCAL: bool>(
         if j_begin == j_end {
             continue;
         }
+        let rigorous_d_solve = rigorous_d_solve
+            || crate::joint_limits::has_mixed_stops(model, j_begin..j_end, rigorous_distance)?;
+        let spatial_origin = body_q[joint_child[j_begin] as usize].position;
 
         v_body.reset(j_begin, j_end);
         c_term.reset(j_begin, j_end);
@@ -1135,7 +1597,8 @@ fn cpu_step_inner<const LOCAL: bool>(
             let parent = joint_parent[j];
             let child = joint_child[j] as usize;
 
-            let (motion_frame, direction) = model.joint_motion_frame(&body_q, &q_in, j)?;
+            let (mut motion_frame, direction) = model.joint_motion_frame(&body_q, &q_in, j)?;
+            motion_frame.position -= spatial_origin;
 
             // Build motion subspace (per-DOF).
             let dof_idx = joint_dof_offset[j] as usize;
@@ -1187,7 +1650,8 @@ fn cpu_step_inner<const LOCAL: bool>(
                 SpatialVector::ZERO
             } else if body_flags[child] & BodyFlags::KINEMATIC != 0 {
                 let velocity = state_in.body_qd.host()?[child];
-                let com = body_q[child].position + body_q[child].rotation * body_com[child];
+                let com = body_q[child].position - spatial_origin
+                    + body_q[child].rotation * body_com[child];
                 SpatialVector::new(
                     velocity.linear - velocity.angular.cross(com),
                     velocity.angular,
@@ -1203,16 +1667,16 @@ fn cpu_step_inner<const LOCAL: bool>(
                 c_term[j].linear -= v_j.angular.cross(translation);
             }
 
-            // Body spatial inertia in WORLD frame, expressed at world origin.
+            // World-axis spatial inertia about the articulation origin.
             let cw = body_q[child];
-            let com_world = cw.position + cw.rotation * body_com[child];
+            let com_world = cw.position - spatial_origin + cw.rotation * body_com[child];
             let i_local_world = rotate_inertia(cw.rotation, body_inertia[child]);
             let i_s = SpatialMatrix6::from_body(body_mass[child], com_world, i_local_world);
 
             // Initial articulated inertia and bias.
             // Bias = v ×* (I·v) − f_grav − f_ext, where f_ext is the
             // user-applied wrench at COM (state.body_f, world frame),
-            // re-expressed at the world origin.
+            // re-expressed at the articulation origin.
             let world_idx = body_world[child].max(0) as usize;
             let g = gravity[world_idx];
             let f_g_lin = g * body_mass[child];
@@ -1220,7 +1684,7 @@ fn cpu_step_inner<const LOCAL: bool>(
             let f_grav = SpatialVector::new(f_g_lin, f_g_ang);
             // External wrench at COM: caller fills `body_f[child]` with
             // (force, torque_at_COM) in world frame. Re-express at world
-            // origin: linear unchanged, angular gets +r_com × F.
+            // articulation origin: linear unchanged, angular gets +r_com × F.
             let ext_com = body_f_in.get(child).copied().unwrap_or(SpatialVector::ZERO);
             let f_ext_lin = ext_com.linear;
             let f_ext_ang = ext_com.angular + com_world.cross(ext_com.linear);
@@ -1245,6 +1709,25 @@ fn cpu_step_inner<const LOCAL: bool>(
             let coord_idx = joint_coord_offset[j] as usize;
 
             if supported && n_dof > 0 {
+                let angular_bounds = if jt == JointType::D6 {
+                    let records = model.joint_compliance.host()?;
+                    let bound = |axis: usize, upper: bool| {
+                        let dof = dof_idx + 3 + axis;
+                        if let Some(c) = records.get(dof).filter(|c| c.enabled != 0) {
+                            if upper { c.upper } else { c.lower }
+                        } else if upper {
+                            limit_upper[dof]
+                        } else {
+                            limit_lower[dof]
+                        }
+                    };
+                    Some((
+                        Vec3::from_array(std::array::from_fn(|k| bound(k, false))),
+                        Vec3::from_array(std::array::from_fn(|k| bound(k, true))),
+                    ))
+                } else {
+                    None
+                };
                 // Compute per-DOF generalised force `u_tau_k = tau_k − S_k^T · p_a[j]`
                 // from drives + friction + effort first; this is
                 // independent of the deflation strategy below.
@@ -1256,7 +1739,7 @@ fn cpu_step_inner<const LOCAL: bool>(
                     let s_k = s_cols[j][k];
                     let dof_g = dof_idx + k;
                     let qd_now = qd_in.get(dof_g).copied().unwrap_or(0.0);
-                    let q_now = motor_coordinate(jt, &q_in[coord_idx..], k);
+                    let q_now = motor_coordinate(jt, &q_in[coord_idx..], k, angular_bounds);
                     let mode =
                         JointTargetMode::from_u32(target_mode.get(dof_g).copied().unwrap_or(0));
                     let kp = target_kp.get(dof_g).copied().unwrap_or(0.0);
@@ -1586,6 +2069,19 @@ fn cpu_step_inner<const LOCAL: bool>(
             let supported = enabled && !matches!(jt, JointType::Fixed);
 
             if body_flags[joint_child[j] as usize] & BodyFlags::IMMOVABLE != 0 {
+                let child = joint_child[j] as usize;
+                if body_flags[child] & BodyFlags::FIXED == 0 {
+                    let velocity = state_in.body_qd.host()?[child];
+                    let prescribed = model.body_kinematic_acceleration.host()?[child];
+                    let center = body_q[child].position - spatial_origin
+                        + body_q[child].rotation * body_com[child];
+                    a_body[j] = SpatialVector::new(
+                        prescribed.linear
+                            - prescribed.angular.cross(center)
+                            - velocity.angular.cross(velocity.linear),
+                        prescribed.angular,
+                    );
+                }
                 continue;
             }
 
@@ -1678,8 +2174,13 @@ fn cpu_step_inner<const LOCAL: bool>(
         let limits_span = tracing::debug_span!("aba_constraints").entered();
         if j_end == j_begin + 1
             && let Some(acceleration) = singular_root::acceleration(
-                model, state_out, art, j_begin, &root_applied_tau,
-                &body_f_in, &mut joint_mass,
+                model,
+                state_out,
+                art,
+                j_begin,
+                &root_applied_tau,
+                &body_f_in,
+                &mut joint_mass,
             )?
         {
             let first = joint_dof_offset[j_begin] as usize;
@@ -1688,32 +2189,100 @@ fn cpu_step_inner<const LOCAL: bool>(
 
         if stable_motor_feedback {
             crate::joint_drives::react_velocity_drives(
-                model, control, state_out, art, &mut q_dd, efforts, dt, &mut joint_mass,
+                model,
+                control,
+                state_out,
+                art,
+                &mut q_dd,
+                efforts,
+                dt,
+                &mut joint_mass,
             )?;
         }
-        crate::joint_limits::react_scalar_stops(
-            model,
-            state_out,
-            art,
-            &mut q_dd,
-            dt,
-            joint_damping,
-            &mut joint_mass,
-        )?;
+        if !defer_constraints {
+            crate::joint_limits::react_scalar_stops(
+                model,
+                state_out,
+                art,
+                &mut q_dd,
+                dt,
+                joint_damping,
+                rigorous_distance,
+                &mut joint_mass,
+            )?;
+        }
 
         // ── Integrate q, q̇ for joints in this articulation ──────────────
         drop(limits_span);
         let integration_span = tracing::debug_span!("aba_integration").entered();
         integration::integrate(
-            model, j_begin..j_end, &q_in, &qd_in, &q_dd, dt,
-            joint_damping, rigorous_distance, &mut q_new, &mut qd_new,
+            model,
+            j_begin..j_end,
+            &q_in,
+            &qd_in,
+            &q_dd,
+            dt,
+            joint_damping,
+            rigorous_distance,
+            defer_constraints
+                || crate::joint_limits::has_mixed_stops(model, j_begin..j_end, rigorous_distance)?,
+            true,
+            &mut q_new,
+            &mut qd_new,
         )?;
         drop(integration_span);
     } // end per-articulation outer loop
 
+    if !defer_constraints
+        && crate::contact_friction::apply(model, state_out, &mut qd_new, dt, contact_forces)?
+    {
+        let corrected = qd_new.clone();
+        let mut post_acceleration = vec![0.0; corrected.len()];
+        if crate::joint_limits::has_mixed_stops(model, 0..model.joint_count, rigorous_distance)? {
+            state_out.joint_qd.host_mut()?.copy_from_slice(&corrected);
+            let mut mass = crate::joint_mass::JointMass::new(model, state_out);
+            for art in 0..model.articulation_count.max(1) {
+                crate::joint_limits::react_scalar_stops(
+                    model,
+                    state_out,
+                    art,
+                    &mut post_acceleration,
+                    dt,
+                    0.,
+                    rigorous_distance,
+                    &mut mass,
+                )?;
+            }
+        }
+        for art in 0..model.articulation_count.max(1) {
+            let range = if model.articulation_count == 0 {
+                0..model.joint_count
+            } else {
+                art_start[art] as usize..art_start[art + 1] as usize
+            };
+            let mixed =
+                crate::joint_limits::has_mixed_stops(model, range.clone(), rigorous_distance)?;
+            integration::integrate(
+                model,
+                range,
+                &q_in,
+                &corrected,
+                &post_acceleration,
+                dt,
+                0.0,
+                rigorous_distance,
+                mixed,
+                true,
+                &mut q_new,
+                &mut qd_new,
+            )?;
+        }
+    }
+
     let _finalize_span = tracing::debug_span!("aba_finalize").entered();
     state_out.joint_q.host_mut()?.copy_from_slice(&q_new);
     state_out.joint_qd.host_mut()?.copy_from_slice(&qd_new);
+    drift_kinematic(model, state_in, dt, state_out)?;
     eval_fk(model, state_out)?;
     eval_body_velocities(model, state_out)?;
 
@@ -1731,6 +2300,34 @@ fn cpu_step_inner<const LOCAL: bool>(
     Ok(())
 }
 
+fn drift_kinematic(model: &Model, input: &State, dt: Real, output: &mut State) -> Result<()> {
+    for (body, &flags) in model.body_flags.host()?.iter().enumerate() {
+        if flags & BodyFlags::KINEMATIC_DRIVEN == 0 {
+            continue;
+        }
+        let acceleration = model.body_kinematic_acceleration.host()?[body];
+        let velocity = input.body_qd.host()?[body];
+        let pose = input.body_q.host()?[body];
+        let local_com = model.body_com.host()?[body];
+        let center = pose.transform_point(local_com)
+            + velocity.linear * dt
+            + acceleration.linear * (0.5 * dt * dt);
+        let rotation =
+            (Quat::from_scaled_axis((velocity.angular + acceleration.angular * (0.5 * dt)) * dt)
+                * pose.rotation)
+                .normalize();
+        output.body_q.host_mut()?[body] = Transform {
+            position: center - rotation * local_com,
+            rotation,
+        };
+        output.body_qd.host_mut()?[body] = SpatialVector::new(
+            velocity.linear + acceleration.linear * dt,
+            velocity.angular + acceleration.angular * dt,
+        );
+    }
+    Ok(())
+}
+
 fn sv_dot(a: SpatialVector, b: SpatialVector) -> Real {
     a.linear.dot(b.linear) + a.angular.dot(b.angular)
 }
@@ -1738,9 +2335,17 @@ fn sv_dot(a: SpatialVector, b: SpatialVector) -> Real {
 /// Index a spatial vector by its 6-dim component index `[lin.x, lin.y,
 /// lin.z, ang.x, ang.y, ang.z]`.
 #[inline]
-fn motor_coordinate(kind: JointType, q: &[Real], axis: usize) -> Real {
+fn motor_coordinate(
+    kind: JointType,
+    q: &[Real],
+    axis: usize,
+    bounds: Option<(Vec3, Vec3)>,
+) -> Real {
     let angular = |offset: usize, axis: usize| {
         let r = Quat::from_xyzw(q[offset], q[offset + 1], q[offset + 2], q[offset + 3]);
+        if let Some((lower, upper)) = bounds {
+            return crate::joint_angles::geometry(r, lower, upper).angles[axis];
+        }
         let (x, y, z) = r.to_euler(glam::EulerRot::XYZ);
         [x, y, z][axis]
     };
@@ -1759,9 +2364,32 @@ fn project_angular_limits(
     offset: usize,
     lower: &[Real],
     upper: &[Real],
+    chart: Option<(Vec3, Vec3)>,
 ) -> (Quat, Vec3) {
-    let (x, y, z) = rotation.to_euler(glam::EulerRot::XYZ);
-    let mut angles = [x, y, z];
+    if (0..3).all(|axis| {
+        let lo = lower[offset + axis];
+        let hi = upper[offset + axis];
+        lo.is_finite() && hi.is_finite() && (hi - lo).abs() < 1e-12
+    }) {
+        return (
+            Quat::from_euler(
+                glam::EulerRot::XYZ,
+                lower[offset],
+                lower[offset + 1],
+                lower[offset + 2],
+            )
+            .normalize(),
+            Vec3::ZERO,
+        );
+    }
+    let (chart_lower, chart_upper) = chart.unwrap_or_else(|| {
+        (
+            Vec3::from_slice(&lower[offset..offset + 3]),
+            Vec3::from_slice(&upper[offset..offset + 3]),
+        )
+    });
+    let geometry = crate::joint_angles::geometry(rotation, chart_lower, chart_upper);
+    let mut angles = geometry.angles.to_array();
     let mut changed = false;
     for k in 0..3 {
         let (angle, rate) =
@@ -1821,6 +2449,25 @@ fn effective_drive_inertias(
             continue;
         }
         if !(first..first + count).any(requested) {
+            continue;
+        }
+        if joint_mass.has_drive_locks(articulation, count)? {
+            let dofs: Vec<_> = (0..count).filter(|&dof| requested(first + dof)).collect();
+            let units: Vec<_> = dofs
+                .iter()
+                .map(|&dof| {
+                    let mut unit = vec![0.; count];
+                    unit[dof] = 1.;
+                    unit
+                })
+                .collect();
+            for (&dof, response) in
+                dofs.iter()
+                    .zip(joint_mass.drive_responses(articulation, count, &units)?)
+            {
+                let inverse = response[dof];
+                result[first + dof] = if inverse > 0. { 1. / inverse } else { 0. };
+            }
             continue;
         }
         if let Some((scale, factor)) = joint_mass.cached_cholesky(articulation, count) {
@@ -1896,10 +2543,7 @@ fn effective_drive_inertias(
 fn unit_inverse_diagonal(l: &[Real], n: usize, index: usize, work: &mut [Real]) -> Real {
     for i in index..n {
         let mut value = if i == index { 1.0 } else { 0.0 };
-        for (&coefficient, &previous) in l[i * n + index..i * n + i]
-            .iter()
-            .zip(&work[index..i])
-        {
+        for (&coefficient, &previous) in l[i * n + index..i * n + i].iter().zip(&work[index..i]) {
             value -= coefficient * previous;
         }
         let diagonal = l[i * n + i];
@@ -1955,11 +2599,7 @@ fn forward_sub_packed(l: &[Real], b: &[Real], n: usize) -> Vec<Real> {
 }
 
 /// Solve a packed joint Cholesky block using stack-backed substitutions.
-fn solve_joint_block(
-    l: &[Real],
-    rhs: &[Real; MAX_JOINT_DOFS],
-    n: usize,
-) -> [Real; MAX_JOINT_DOFS] {
+fn solve_joint_block(l: &[Real], rhs: &[Real; MAX_JOINT_DOFS], n: usize) -> [Real; MAX_JOINT_DOFS] {
     let mut y = [0.0; MAX_JOINT_DOFS];
     for i in 0..n {
         let mut value = rhs[i];
@@ -1967,7 +2607,11 @@ fn solve_joint_block(
             value -= l[i * n + k] * y[k];
         }
         let pivot = l[i * n + i];
-        y[i] = if pivot.abs() < 1e-30 { 0.0 } else { value / pivot };
+        y[i] = if pivot.abs() < 1e-30 {
+            0.0
+        } else {
+            value / pivot
+        };
     }
     let mut x = [0.0; MAX_JOINT_DOFS];
     for i in (0..n).rev() {
@@ -1976,7 +2620,11 @@ fn solve_joint_block(
             value -= l[k * n + i] * x[k];
         }
         let pivot = l[i * n + i];
-        x[i] = if pivot.abs() < 1e-30 { 0.0 } else { value / pivot };
+        x[i] = if pivot.abs() < 1e-30 {
+            0.0
+        } else {
+            value / pivot
+        };
     }
     x
 }
@@ -2079,6 +2727,9 @@ fn clamp_or_passthrough(x: Real, limit: Real) -> Real {
 /// "unbounded" semantics without a runtime NaN check.
 #[inline]
 fn clamp_joint_pos(q: Real, qd: Real, lo: Real, hi: Real) -> (Real, Real) {
+    if lo.is_finite() && hi.is_finite() && (hi - lo).abs() < 1e-12 {
+        return (lo, 0.0);
+    }
     debug_assert!(!lo.is_nan(), "clamp_joint_pos: lower bound must not be NaN");
     debug_assert!(!hi.is_nan(), "clamp_joint_pos: upper bound must not be NaN");
     let mut q_out = q;
@@ -2136,12 +2787,25 @@ mod tests {
     #[test]
     fn joint_blocks_match_allocated_substitutions_exactly() {
         for n in 0..=MAX_JOINT_DOFS {
-            for pivot in [0.0, 1e-31, 1e-30, 1e-25, -0.7, 0.7, Real::INFINITY, Real::NAN] {
+            for pivot in [
+                0.0,
+                1e-31,
+                1e-30,
+                1e-25,
+                -0.7,
+                0.7,
+                Real::INFINITY,
+                Real::NAN,
+            ] {
                 let mut factor = [Real::NAN; MAX_JOINT_DOFS * MAX_JOINT_DOFS];
                 let mut rhs = [Real::NAN; MAX_JOINT_DOFS];
                 for i in 0..n {
                     rhs[i] = ((i * 5 + 1) as Real).cos();
-                    factor[i * n + i] = if i == n / 2 { pivot } else { 0.5 + i as Real * 0.2 };
+                    factor[i * n + i] = if i == n / 2 {
+                        pivot
+                    } else {
+                        0.5 + i as Real * 0.2
+                    };
                     for k in 0..i {
                         factor[i * n + k] = ((i * 7 + k * 3) as Real).sin() * 0.03;
                     }
@@ -2149,8 +2813,10 @@ mod tests {
                 let expected = back_sub_packed(&factor, &forward_sub_packed(&factor, &rhs, n), n);
                 let actual = solve_joint_block(&factor, &rhs, n);
                 for (&a, &b) in actual[..n].iter().zip(&expected) {
-                    assert!(a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()),
-                        "n={n}, pivot={pivot}: {a} != {b}");
+                    assert!(
+                        a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()),
+                        "n={n}, pivot={pivot}: {a} != {b}"
+                    );
                 }
                 assert!(actual[n..].iter().all(|&x| x == 0.0));
             }
@@ -2195,13 +2861,12 @@ mod tests {
                 let mut parent = BodyId::NONE;
                 for i in 0..5 {
                     let weight = if massless_tip && i == 4 { 0.0 } else { scale };
-                    let body = builder.add_body(
-                        BodyParams::new().with_spatial_inertia(SpatialInertia {
+                    let body =
+                        builder.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
                             mass: weight * (1.0 + i as Real),
                             com: V3::new(0.1, 0.2, -0.1),
                             inertia: Mat3::IDENTITY * weight,
-                        }),
-                    );
+                        }));
                     builder
                         .add_joint_revolute(
                             parent,
@@ -2226,7 +2891,8 @@ mod tests {
                     .unwrap()
                     .fill(JointTargetMode::Velocity as u32);
                 let mut cache = crate::joint_mass::JointMass::new(&model, &state);
-                let result = effective_drive_inertias(&model, &control, true, &mut cache, None).unwrap();
+                let result =
+                    effective_drive_inertias(&model, &control, true, &mut cache, None).unwrap();
                 let mass = crate::mass_matrix(&model, &state, 0).unwrap();
                 let shared = cache.factor(0, 5).unwrap();
                 for (i, actual) in result.iter().enumerate() {
@@ -2252,13 +2918,11 @@ mod tests {
     #[test]
     fn drive_inertias_preserve_singular_response_fallback() {
         let mut builder = ModelBuilder::new();
-        let body = builder.add_body(
-            BodyParams::new().with_spatial_inertia(SpatialInertia {
-                mass: 1.0,
-                com: V3::ZERO,
-                inertia: Mat3::from_cols(V3::new(1.0, 1.0, 0.0), V3::new(1.0, 1.0, 0.0), V3::ZERO),
-            }),
-        );
+        let body = builder.add_body(BodyParams::new().with_spatial_inertia(SpatialInertia {
+            mass: 1.0,
+            com: V3::ZERO,
+            inertia: Mat3::from_cols(V3::new(1.0, 1.0, 0.0), V3::new(1.0, 1.0, 0.0), V3::ZERO),
+        }));
         builder
             .add_joint_free(BodyId::NONE, body, Transform::IDENTITY, Transform::IDENTITY)
             .unwrap();

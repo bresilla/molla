@@ -1,0 +1,11 @@
+--- benchmarks/primitives/engine-program-cache-2026-10-01/relative-momentum-source-sha256.txt	2026-10-02 17:05:17.685867432 +0200
++++ benchmarks/primitives/engine-program-cache-2026-10-01/impact-capacity-source-sha256.txt	2026-10-02 17:31:25.737729016 +0200
+@@ -916,7 +916,7 @@
+ 7cb380f8bbfb22716f6bb59ff5461c7e889f472e81c57b0a41ad2d2bc1622856  crates/molla-solvers/examples/runtime_primitives.rs
+ dbe1c72a29268e0cd88d57719fbb5c763d5a66e142b627f4f59458c49aff8135  crates/molla-solvers/shaders/contact_activation.wgsl
+ 36ad01aa8e40bcc9f08bbc51ca741f50f6e3c6411e5faba11da5ef11d6b59fd4  crates/molla-solvers/shaders/contact_activation_mask.wgsl
+-37f5b572f7243018e6ad12ed60de81f89e29eef80a88689d52e4121f5c46b074  crates/molla-solvers/shaders/contact_islands.wgsl
++c6739d05d321d184e026d8b75fa5208f17d45f4db295a063cb263879dbcf446d  crates/molla-solvers/shaders/contact_islands.wgsl
+ 218928419e0fa8c53c58d92e7b88a30e5d76399a78a0defdae0400052c4af080  crates/molla-solvers/shaders/contact_precision.wgsl
+ b486f6f108d02baeef3a2514c0dd879bb812ca973700867f22b4651e6a9c3b8f  crates/molla-solvers/shaders/contact_publication.wgsl
+ 089d3ebe737ab7c598284bc6761914885982668e479d09940a39ca9bb232e201  crates/molla-solvers/shaders/contact_reactions.wgsl

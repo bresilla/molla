@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/runtime_distance_contract.rs (target/debug/deps/runtime_distance_contract-2ac2510fe3e9089e)
+
+running 1 test
+distance scale rates=[240] cases_per_rate=40 duration=10s substeps=8
+distance scale progress: hz=240 elapsed=1s relative_length=1.0658141036401502e-15 relative_momentum=8.787731337372666e-14 relative_reaction=3.552713678800501e-16
+distance scale progress: hz=240 elapsed=2s relative_length=2.1316282072803005e-15 relative_momentum=1.2138142638858856e-13 relative_reaction=3.552713678800501e-16
+distance scale progress: hz=240 elapsed=3s relative_length=2.842170943040401e-15 relative_momentum=2.2168933355715125e-13 relative_reaction=4.163336342344337e-16
+distance scale progress: hz=240 elapsed=4s relative_length=4.618527782440651e-15 relative_momentum=3.064215547965432e-13 relative_reaction=4.163336342344337e-16
+distance scale progress: hz=240 elapsed=5s relative_length=1.3500311979441903e-14 relative_momentum=3.362288225616794e-13 relative_reaction=4.440892098500626e-16
+distance scale progress: hz=240 elapsed=6s relative_length=1.7053025658242404e-14 relative_momentum=4.5383876477080683e-13 relative_reaction=4.440892098500626e-16
+distance scale progress: hz=240 elapsed=7s relative_length=1.7053025658242404e-14 relative_momentum=5.55275914683115e-13 relative_reaction=4.440892098500626e-16
+distance scale progress: hz=240 elapsed=8s relative_length=1.7053025658242404e-14 relative_momentum=6.313537771173462e-13 relative_reaction=4.440892098500626e-16
+distance scale progress: hz=240 elapsed=9s relative_length=1.7053025658242404e-14 relative_momentum=7.153853735640373e-13 relative_reaction=4.440892098500626e-16
+distance scale progress: hz=240 elapsed=10s relative_length=2.842170943040401e-14 relative_momentum=7.894477612417112e-13 relative_reaction=4.440892098500626e-16
+distance scale sweep: cases=40 dt=0.004166666666666667 substeps=8 duration=10s peak relative length=0.00000000000002842170943040401, 1s analytic position=0.00000000000006217248937900877, quasi-static relative reaction=0.0000000000000004440892098500626, relative momentum=0.0000000000007894477612417112
+test cpu_distance_length_mass_scales_and_analytic_reactions ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 49.21s
+

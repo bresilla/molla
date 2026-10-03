@@ -112,7 +112,7 @@ fn nanometer_face_gaps(kind: u32) {
             for dynamic in [false, true] {
                 for radii in [[0.0; 3], [0.0, 1.0e-8, 2.0e-8]] {
                     let mut center = [3.0, 7.0, -4.0, 0.0];
-                    center[axis] = sign * -0.4780000150203705_f32;
+                    center[axis] = sign * -0.478_000_02_f32;
                     let face = center[axis] + sign * 0.5;
                     let mut points = [center; 3];
                     for (i, offset) in [0.0, 4.8428774e-8, -2.0489097e-8].into_iter().enumerate() {

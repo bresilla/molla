@@ -1,0 +1,23 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/runtime_d6_singular_bounds.rs (target/debug/deps/runtime_d6_singular_bounds-85d5f4f2034012d8)
+
+running 1 test
+adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+singular_xyz_poles=[-1.0] duration=one_frame dt=0.004166666666666667 substeps=1
+singular_xyz_prepare_begin sign=-1 pairs=8 contacts_per_island=16
+test gpu_active_phase_interval_matches_cpu_at_both_xyz_poles has been running for over 60 seconds
+singular_xyz_prepare_complete sign=-1 seconds=85.068658
+singular_xyz_frame sign=-1 phase_violation=8.320855611e-5 velocity=SpatialVector { linear: DVec3(0.0, -0.040874999999999995, 0.0), angular: DVec3(-24.000000000000007, 0.0, 0.0) }
+singular_xyz_advance_begin sign=-1
+singular_xyz_frame sign=-1 phase_violation=8.321487025e-5 velocity=SpatialVector { linear: DVec3(0.0, -0.04087500274181366, 0.0), angular: DVec3(-23.999998092651367, -5.615087310902919e-23, -3.165878390470672e-15) }
+singular_xyz_advance_complete sign=-1 seconds=0.032505
+singular_xyz_parity sign=-1 errors=[2.2029876700635498e-8, 0.0, 2.7418136649970393e-9, 1.9073486399179274e-6] tolerance=0.001
+test gpu_active_phase_interval_matches_cpu_at_both_xyz_poles ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 85.47s
+

@@ -46,12 +46,15 @@ impl RaycastBindings {
 impl RaycastKernel {
     /// Bind shape kind/data/body/pose, body poses, rays, then t/shape/point/normal.
     pub fn prepare(&self, device: &wgpu::Device, buffers: [&wgpu::Buffer; 11]) -> RaycastBindings {
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::raycast retained uniform"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::raycast retained uniform"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let make_group = |layout, buffers: &[&wgpu::Buffer]| {
             let entries: Vec<_> = buffers
                 .iter()
@@ -92,7 +95,8 @@ impl RaycastKernel {
         if ray_count == 0 {
             return;
         }
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &bindings.uniform,
             0,
             bytemuck::bytes_of(&Uniforms {
@@ -297,13 +301,16 @@ impl RaycastKernel {
             max_distance,
             _pad: 0.0,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::raycast uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::raycast uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::raycast uniforms bg"),
             layout: &self.layout_uniforms,

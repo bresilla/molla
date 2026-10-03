@@ -197,10 +197,10 @@ fn parallel_patch_matches_serial_and_preserves_material_state() {
                 } else {
                     baseline = Some(bits);
                 }
-                if index == 1 {
-                    if let Some(path) = std::env::var_os("MOLLA_PATCH_OUTPUT") {
-                        std::fs::write(path, bytemuck::cast_slice(&result[..34])).unwrap();
-                    }
+                if index == 1
+                    && let Some(path) = std::env::var_os("MOLLA_PATCH_OUTPUT")
+                {
+                    std::fs::write(path, bytemuck::cast_slice(&result[..34])).unwrap();
                 }
             }
         }

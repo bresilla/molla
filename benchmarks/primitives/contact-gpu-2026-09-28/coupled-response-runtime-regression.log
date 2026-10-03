@@ -1,0 +1,370 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: field `scalar_export` is never read
+  --> crates/molla-solvers/src/distance_gpu.rs:64:5
+   |
+50 | pub(crate) struct DistanceGpu {
+   |                   ----------- field in this struct
+...
+64 |     scalar_export: Option<ScalarExport>,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `pipeline`, `rows`, `jacobians`, and `directions` are never read
+  --> crates/molla-solvers/src/distance_gpu.rs:68:5
+   |
+67 | struct ScalarExport {
+   |        ------------ fields in this struct
+68 |     pipeline: wgpu::ComputePipeline,
+   |     ^^^^^^^^
+69 |     rows: wgpu::Buffer,
+   |     ^^^^
+70 |     jacobians: wgpu::Buffer,
+   |     ^^^^^^^^^
+71 |     directions: wgpu::Buffer,
+   |     ^^^^^^^^^^
+
+warning: associated items `new_for_coupling`, `scalar_buffers`, and `prepare_scalar_rows` are never used
+   --> crates/molla-solvers/src/distance_gpu.rs:123:19
+    |
+ 89 | impl DistanceGpu {
+    | ---------------- associated items in this implementation
+...
+123 |     pub(crate) fn new_for_coupling(
+    |                   ^^^^^^^^^^^^^^^^
+...
+584 |     pub(crate) fn scalar_buffers(
+    |                   ^^^^^^^^^^^^^^
+...
+596 |     pub(crate) fn prepare_scalar_rows(
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: `molla-solvers` (lib) generated 3 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.84s
+     Running tests/runtime_distance_gpu.rs (target/debug/deps/runtime_distance_gpu-73a3d0bb456975ab)
+
+running 6 tests
+test runtime_distance_gpu_offset_rotated_frames_full_inertia_and_loop ... offset redundant distance one-second CPU/GPU peak position=0.0000009501424992601004
+ok
+test runtime_distance_gpu_retains_warm_resources_and_tracks_mutation ... distance GPU warm [buffers, bytes, groups, pipelines, shaders]=[99, 529920, 28, 6, 6]
+ok
+test runtime_distance_gpu_scalar_stop_couples_to_other_articulation ... ok
+test runtime_distance_gpu_shared_response_and_independent_bounds ... ok
+test runtime_distance_gpu_world_pendulum_ten_seconds_and_short_parity ... GPU distance pendulum dt=0.016666666666666666 substeps=8 duration=10s peak=0.0000437728987852104 one-second-parity=0.0000006819710944340732
+GPU distance pendulum dt=0.008333333333333333 substeps=8 duration=10s peak=0.000011032035855285116 one-second-parity=0.0000010241657160865115
+GPU distance pendulum dt=0.004166666666666667 substeps=8 duration=10s peak=0.000002860525599501784 one-second-parity=0.000002501104515619641
+ok
+test runtime_distance_gpu_zero_equality_failure_and_resume_are_atomic ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 760.92s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: field `scalar_export` is never read
+  --> crates/molla-solvers/src/distance_gpu.rs:68:5
+   |
+54 | pub(crate) struct DistanceGpu {
+   |                   ----------- field in this struct
+...
+68 |     scalar_export: Option<ScalarExport>,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `pipeline`, `rows`, `jacobians`, and `directions` are never read
+  --> crates/molla-solvers/src/distance_gpu.rs:72:5
+   |
+71 | struct ScalarExport {
+   |        ------------ fields in this struct
+72 |     pipeline: wgpu::ComputePipeline,
+   |     ^^^^^^^^
+73 |     rows: wgpu::Buffer,
+   |     ^^^^
+74 |     jacobians: wgpu::Buffer,
+   |     ^^^^^^^^^
+75 |     directions: wgpu::Buffer,
+   |     ^^^^^^^^^^
+
+warning: associated items `new_for_coupling`, `scalar_buffers`, `scalar_publication`, and `prepare_scalar_rows` are never used
+   --> crates/molla-solvers/src/distance_gpu.rs:127:19
+    |
+ 93 | impl DistanceGpu {
+    | ---------------- associated items in this implementation
+...
+127 |     pub(crate) fn new_for_coupling(
+    |                   ^^^^^^^^^^^^^^^^
+...
+588 |     pub(crate) fn scalar_buffers(
+    |                   ^^^^^^^^^^^^^^
+...
+600 |     pub(crate) fn scalar_publication(
+    |                   ^^^^^^^^^^^^^^^^^^
+...
+623 |     pub(crate) fn prepare_scalar_rows(
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `ScalarJointPublication` is never constructed
+ --> crates/molla-solvers/src/scalar_joint_publication_gpu.rs:4:19
+  |
+4 | pub(crate) struct ScalarJointPublication {
+  |                   ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `new` and `encode` are never used
+  --> crates/molla-solvers/src/scalar_joint_publication_gpu.rs:13:19
+   |
+11 | impl ScalarJointPublication {
+   | --------------------------- associated items in this implementation
+12 |     #[allow(clippy::too_many_arguments)]
+13 |     pub(super) fn new(
+   |                   ^^^
+...
+64 |     pub(crate) fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+   |                   ^^^^^^
+
+warning: `molla-solvers` (lib) generated 5 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.03s
+     Running tests/runtime_cone_limits.rs (target/debug/deps/runtime_cone_limits-7faab4c43142700e)
+
+running 1 test
+test gpu_cone_and_radial_rows_share_offset_articulated_response ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 29.15s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+warning: field `scalar_export` is never read
+  --> crates/molla-solvers/src/distance_gpu.rs:68:5
+   |
+54 | pub(crate) struct DistanceGpu {
+   |                   ----------- field in this struct
+...
+68 |     scalar_export: Option<ScalarExport>,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `pipeline`, `rows`, `jacobians`, and `directions` are never read
+  --> crates/molla-solvers/src/distance_gpu.rs:72:5
+   |
+71 | struct ScalarExport {
+   |        ------------ fields in this struct
+72 |     pipeline: wgpu::ComputePipeline,
+   |     ^^^^^^^^
+73 |     rows: wgpu::Buffer,
+   |     ^^^^
+74 |     jacobians: wgpu::Buffer,
+   |     ^^^^^^^^^
+75 |     directions: wgpu::Buffer,
+   |     ^^^^^^^^^^
+
+warning: associated items `new_for_coupling`, `scalar_buffers`, `scalar_publication`, and `prepare_scalar_rows` are never used
+   --> crates/molla-solvers/src/distance_gpu.rs:127:19
+    |
+ 93 | impl DistanceGpu {
+    | ---------------- associated items in this implementation
+...
+127 |     pub(crate) fn new_for_coupling(
+    |                   ^^^^^^^^^^^^^^^^
+...
+588 |     pub(crate) fn scalar_buffers(
+    |                   ^^^^^^^^^^^^^^
+...
+600 |     pub(crate) fn scalar_publication(
+    |                   ^^^^^^^^^^^^^^^^^^
+...
+623 |     pub(crate) fn prepare_scalar_rows(
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `ScalarJointPublication` is never constructed
+ --> crates/molla-solvers/src/scalar_joint_publication_gpu.rs:4:19
+  |
+4 | pub(crate) struct ScalarJointPublication {
+  |                   ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `new` and `encode` are never used
+  --> crates/molla-solvers/src/scalar_joint_publication_gpu.rs:13:19
+   |
+11 | impl ScalarJointPublication {
+   | --------------------------- associated items in this implementation
+12 |     #[allow(clippy::too_many_arguments)]
+13 |     pub(super) fn new(
+   |                   ^^^
+...
+64 |     pub(crate) fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+   |                   ^^^^^^
+
+warning: `molla-solvers` (lib) generated 5 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/runtime_cone_limits.rs (target/debug/deps/runtime_cone_limits-7faab4c43142700e)
+
+running 1 test
+test gpu_zero_cone_preserves_free_twist ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 31.49s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.74s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 9 tests
+test contact_response_gpu::tests::articulated_response_matches_cpu_gram_and_generalized_friction ... articulated contact response: peak gram error=5.680281103259688e-7, peak rate error=3.888536544031712e-7
+ok
+test contact_response_gpu::tests::contact_publication_preserves_halted_predictor_and_redrift ... ok
+test contact_response_gpu::tests::contact_response_faults_preserve_status_and_retire_rates_and_impulses ... ok
+test contact_response_gpu::tests::coordinate_null_mass_is_supported_and_oblique_rank_deficiency_fails_closed ... ok
+test contact_response_gpu::tests::device_contact_friction_breakaway_time_refinement ... CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=1763 regimes=[3, 3, 3, 3] vx=4.040414391218885e-3
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=1763 regimes=[3, 3, 3, 3] vx=4.040548112243414e-3, CPU vx=4.040414391218885e-3
+GPU contact trajectory: case=Breakaway substeps=1, peak drift=1.1878119707107544e0, settled creep=1.1877919192938862e0, CPU position error=7.038235820748793e-6, orientation error=2.9802322387695313e-8, velocity error=2.8728850618815036e-5
+integrated published-impulse host KKT peak=9.998230171373792e-8
+GPU breakaway: first sliding step=1763, force=11.815 N
+CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=3526 regimes=[3, 3, 3, 3] vx=2.067650951324468e-3
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=3526 regimes=[3, 3, 3, 3] vx=2.0678399596363306e-3, CPU vx=2.067650951324468e-3
+GPU contact trajectory: case=Breakaway substeps=2, peak drift=1.1869783401489258e0, settled creep=1.1869582807066763e0, CPU position error=8.021341745840067e-6, orientation error=2.9802322387695313e-8, velocity error=9.851026351133728e-5
+integrated published-impulse host KKT peak=9.99930143049456e-8
+GPU breakaway: first sliding step=3526, force=11.815 N
+CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=7052 regimes=[3, 3, 3, 3] vx=1.0815288661214224e-3
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=7052 regimes=[3, 3, 3, 3] vx=1.0815192945301533e-3, CPU vx=1.0815288661214224e-3
+GPU contact trajectory: case=Breakaway substeps=4, peak drift=1.1865683794021606e0, settled creep=1.1865483465408033e0, CPU position error=1.3338194948308414e-5, orientation error=2.9802322387695313e-8, velocity error=8.199145789005466e-5
+integrated published-impulse host KKT peak=9.998650707408202e-8
+GPU breakaway: first sliding step=7052, force=11.815 N
+CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=14105 regimes=[3, 3, 3, 3] vx=5.915495274752033e-4
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=14105 regimes=[3, 3, 3, 3] vx=5.911621847189963e-4, CPU vx=5.915495274752033e-4
+GPU contact trajectory: case=Breakaway substeps=8, peak drift=1.186031460762024e0, settled creep=1.1860114889059332e0, CPU position error=2.0315085560652826e-5, orientation error=4.2146848510894035e-8, velocity error=1.0022252301655631e-4
+integrated published-impulse host KKT peak=9.998844584148552e-8
+GPU breakaway: first sliding step=14105, force=11.815 N
+GPU breakaway refinement [position, orientation, velocity]: [[7.038235820748793e-6, 2.9802322387695313e-8, 2.8728850618815036e-5], [8.021341745840067e-6, 2.9802322387695313e-8, 9.851026351133728e-5], [1.3338194948308414e-5, 2.9802322387695313e-8, 8.199145789005466e-5], [2.0315085560652826e-5, 4.2146848510894035e-8, 0.00010022252301655631]]
+ok
+test contact_response_gpu::tests::device_contact_friction_breaks_away_when_load_crosses_static_bound ... CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=1763 regimes=[3, 3, 3, 3] vx=4.040414391218885e-3
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=1763 regimes=[3, 3, 3, 3] vx=4.040548112243414e-3, CPU vx=4.040414391218885e-3
+GPU contact trajectory: case=Breakaway substeps=1, peak drift=1.1878119707107544e0, settled creep=1.1877919192938862e0, CPU position error=7.038235820748793e-6, orientation error=2.9802322387695313e-8, velocity error=2.8728850618815036e-5
+integrated published-impulse host KKT peak=9.998230171373792e-8
+GPU breakaway: first sliding step=1763, force=11.815 N
+ok
+test contact_response_gpu::tests::device_contact_friction_holds_loaded_box_and_matches_cpu_trajectory ... GPU contact trajectory: case=Hold substeps=1, peak drift=2.2770886062062352e-5, settled creep=5.615338530000398e-7, CPU position error=5.614143341586086e-7, orientation error=1.264405455326821e-7, velocity error=3.306985503323022e-6
+integrated published-impulse host KKT peak=9.977679062022732e-8
+ok
+test contact_response_gpu::tests::device_contact_friction_slide_matches_analytic_acceleration_and_cpu ... GPU contact trajectory: case=Slide substeps=1, peak drift=1.5921634435653687e0, settled creep=0e0, CPU position error=2.6979639559521625e-6, orientation error=2.9802322387695313e-8, velocity error=1.5653863076161172e-5
+integrated published-impulse host KKT peak=9.991699150835559e-8
+GPU kinetic slide: acceleration=2.9813669621944427e0, analytic=2.98134754727832e0
+ok
+test contact_response_gpu::tests::device_contact_friction_stops_resticks_and_reverses_under_load ... GPU contact trajectory: case=StopReverse substeps=1, peak drift=5.021477937698364e-1, settled creep=5.327702667564154e-1, CPU position error=3.1322935400602816e-6, orientation error=2.9802322387695313e-8, velocity error=1.91033198675454e-5
+integrated published-impulse host KKT peak=9.890506284409082e-8
+GPU stop/re-stick: reversal-window displacement=7.817521691322327e-6
+ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 117 filtered out; finished in 450.98s
+
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+warning: field `scalar_export` is never read
+  --> crates/molla-solvers/src/distance_gpu.rs:68:5
+   |
+54 | pub(crate) struct DistanceGpu {
+   |                   ----------- field in this struct
+...
+68 |     scalar_export: Option<ScalarExport>,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `pipeline`, `rows`, `jacobians`, and `directions` are never read
+  --> crates/molla-solvers/src/distance_gpu.rs:72:5
+   |
+71 | struct ScalarExport {
+   |        ------------ fields in this struct
+72 |     pipeline: wgpu::ComputePipeline,
+   |     ^^^^^^^^
+73 |     rows: wgpu::Buffer,
+   |     ^^^^
+74 |     jacobians: wgpu::Buffer,
+   |     ^^^^^^^^^
+75 |     directions: wgpu::Buffer,
+   |     ^^^^^^^^^^
+
+warning: associated items `new_for_coupling`, `scalar_buffers`, `scalar_publication`, and `prepare_scalar_rows` are never used
+   --> crates/molla-solvers/src/distance_gpu.rs:127:19
+    |
+ 93 | impl DistanceGpu {
+    | ---------------- associated items in this implementation
+...
+127 |     pub(crate) fn new_for_coupling(
+    |                   ^^^^^^^^^^^^^^^^
+...
+588 |     pub(crate) fn scalar_buffers(
+    |                   ^^^^^^^^^^^^^^
+...
+600 |     pub(crate) fn scalar_publication(
+    |                   ^^^^^^^^^^^^^^^^^^
+...
+623 |     pub(crate) fn prepare_scalar_rows(
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `ScalarJointPublication` is never constructed
+ --> crates/molla-solvers/src/scalar_joint_publication_gpu.rs:4:19
+  |
+4 | pub(crate) struct ScalarJointPublication {
+  |                   ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `new` and `encode` are never used
+  --> crates/molla-solvers/src/scalar_joint_publication_gpu.rs:13:19
+   |
+11 | impl ScalarJointPublication {
+   | --------------------------- associated items in this implementation
+12 |     #[allow(clippy::too_many_arguments)]
+13 |     pub(super) fn new(
+   |                   ^^^
+...
+64 |     pub(crate) fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+   |                   ^^^^^^
+
+warning: `molla-solvers` (lib) generated 5 warnings
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.16s
+     Running tests/runtime_contacts_gpu.rs (target/debug/deps/runtime_contacts_gpu-142757d5d2edccea)
+
+running 6 tests
+test contact_capacity_fault_rolls_back_and_topology_recovery_preserves_handles ... ok
+test contact_material_permissions_and_topology_mutations_recompile_without_stale_readouts ... ok
+test public_runtime_contacts_hold_and_publish_substep_forces ... public GPU contact hold CPU position error=3.473708512759624e-7
+ok
+test public_runtime_kinetic_contact_matches_cpu_and_analytic_acceleration ... public GPU kinetic contact CPU position error=5.896698880711748e-6, acceleration=3.999994173645973e0
+ok
+test static_only_contact_scene_and_capacity_validation_are_transactional ... ok
+test warm_contact_fault_keeps_scene_and_recovers_without_recompilation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 244.95s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

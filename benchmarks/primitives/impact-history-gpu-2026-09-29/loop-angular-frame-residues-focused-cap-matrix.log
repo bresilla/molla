@@ -1,0 +1,33 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.45s
+     Running tests/runtime_loop_controls.rs (target/debug/deps/runtime_loop_controls-6d091bb7df08fa1c)
+
+running 1 test
+test gpu_rotated_high_inertia_compliant_loop_matches_near_rest_oracle ... angular predictor frame=10 cap=0 expected_q=-0.010310095451901313 actual_q=-0.010310097597539425 expected_rate=-0.34749053803407876 actual_rate=-0.3474905788898468 pose=Transform { position: DVec3(0.0, 2.0, -3.0), rotation: DQuat(0.06337641179561615, -0.1883544772863388, 0.335096150636673, 0.9209867119789124) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24479541182518005, -0.20618830621242523, -0.13531918823719025) }
+angular predictor frame=10 cap=0.25 expected_q=-0.010309885566089366 actual_q=-0.010309888049960136 expected_rate=-0.34750399063631265 actual_rate=-0.34750401973724365 pose=Transform { position: DVec3(8.0, 2.0, -3.0), rotation: DQuat(0.06337650865316391, -0.18835444748401642, 0.33509618043899536, 0.9209867119789124) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24480487406253815, -0.20619630813598633, -0.13532443344593048) }
+angular predictor frame=10 cap=inf expected_q=-0.010297585267053795 actual_q=-0.01029758807271719 expected_rate=-0.3474078576667667 actual_rate=-0.3474079668521881 pose=Transform { position: DVec3(16.0, 2.0, -3.0), rotation: DQuat(0.06338217109441757, -0.18835237622261047, 0.3350973427295685, 0.9209863543510437) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24473720788955688, -0.20613929629325867, -0.13528703153133392) }
+angular predictor frame=11 cap=0 expected_q=-0.011770425262533383 actual_q=-0.011770427227020264 expected_rate=-0.3504791545516967 actual_rate=-0.3504791855812073 pose=Transform { position: DVec3(0.0, 2.0, -3.0), rotation: DQuat(0.0627039223909378, -0.188599094748497, 0.3349585235118866, 0.921032726764679) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.2469007819890976, -0.20796164870262146, -0.13648302853107452) }
+angular predictor frame=11 cap=0.25 expected_q=-0.011770266716355456 actual_q=-0.011770269833505154 expected_rate=-0.3504914760638615 actual_rate=-0.3504915237426758 pose=Transform { position: DVec3(8.0, 2.0, -3.0), rotation: DQuat(0.06270398944616318, -0.18859906494617462, 0.3349585235118866, 0.921032726764679) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.2469094693660736, -0.20796896517276764, -0.13648782670497894) }
+angular predictor frame=11 cap=inf expected_q=-0.011757732685865848 actual_q=-0.011757736094295979 expected_rate=-0.3504353805148927 actual_rate=-0.3504354953765869 pose=Transform { position: DVec3(16.0, 2.0, -3.0), rotation: DQuat(0.06270977109670639, -0.18859697878360748, 0.3349597156047821, 0.9210323691368103) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.2468700110912323, -0.20793572068214417, -0.13646599650382996) }
+
+thread 'gpu_rotated_high_inertia_compliant_loop_matches_near_rest_oracle' (290716) panicked at crates/molla-solvers/tests/runtime_loop_controls.rs:329:21:
+load hz=240 substeps=1 frame=11 case=Case { body: BodyHandle(4), joint: JointHandle(6), kind: Revolute, origin: DVec3(8.0, 2.0, -3.0), rotation: DQuat(0.06812327793826826, -0.18662454822852997, 0.3360626807021292, 0.920647799997774), inertia: 100.0, motor: JointMotor { mode: None, target_position: -0.1, target_velocity: -0.2, stiffness: 18.0, damping: 4.5, max_force: 0.25, model: Force }, position: -0.013227509628473941, velocity: -0.3497382989084368 } expected=-1.9237482698069666 actual=DVec3(-1.3547675609588623, -1.1411049365997314, -0.7488950490951538) pose=Transform { position: DVec3(8.0, 2.0, -3.0), rotation: DQuat(0.06203289330005646, -0.18884308636188507, 0.33482104539871216, 0.9210782051086426) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24637886881828308, -0.20752204954624176, -0.13619451224803925) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_rotated_high_inertia_compliant_loop_matches_near_rest_oracle
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 7.79s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_loop_controls`
+make: *** [Makefile:112: test-gpu] Error 101

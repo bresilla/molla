@@ -1,0 +1,26 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on artifact directory
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.95s
+     Running tests/runtime_acceleration_drives.rs (target/debug/deps/runtime_acceleration_drives-604923b906406ebe)
+
+running 1 test
+
+thread 'cpu_acceleration_drives_use_locked_pivot_inertia_and_physical_force_caps' (670542) panicked at crates/molla-solvers/tests/runtime_acceleration_drives.rs:181:9:
+child torque axis=AngX model=Force mass=0.01 cap=inf effective=0.016180785714285717: SpatialVector { linear: DVec3(-0.0027289033247757943, 0.03622847453220711, 0.0111211312984118), angular: DVec3(0.06900392655419058, 0.09785990151059593, -0.18864908630498156) } != SpatialVector { linear: DVec3(-0.0027289032493928935, 0.03622847477420007, 0.011121131394239087), angular: DVec3(0.05957330707330962, 0.09434897698648316, -0.17952589656749834) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_acceleration_drives_use_locked_pivot_inertia_and_physical_force_caps ... FAILED
+
+failures:
+
+failures:
+    cpu_acceleration_drives_use_locked_pivot_inertia_and_physical_force_caps
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_acceleration_drives`
+make: *** [Makefile:95: test] Error 101

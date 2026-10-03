@@ -1,0 +1,21 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/runtime_softness.rs (target/debug/deps/runtime_softness-0d7960e735a73d1f)
+
+running 10 tests
+test raw_controls_survive_layout_toggles_and_suspension ... ok
+test invalid_softness_and_frames_are_atomic_even_when_suspended ... ok
+test soft_velocity_and_wrenches_survive_unrelated_rebuilds ... ok
+test all_logical_kinds_lower_without_losing_handles_or_kinematics ... ok
+test authored_motors_survive_softness_toggles_and_reversed_axis_alignment ... ok
+test semantic_motors_follow_scalar_axes_and_ball_slots ... ok
+test soft_locks_and_limits_change_rest_bounds_without_projection ... ok
+test reversed_soft_fixed_joint_recovers_without_pose_jump ... ok
+test suspended_softness_updates_survive_resume_and_body_removal ... ok
+test frame_capture_moves_by_force_and_settles_at_new_rest_frame ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

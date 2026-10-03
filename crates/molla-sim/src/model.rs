@@ -1,7 +1,7 @@
 //! `Model` — static, immutable simulation description.
 
 use molla_core::{Error, Result};
-use molla_math::{Mat3, Real, Transform, Vec3};
+use molla_math::{Mat3, Real, SpatialVector, Transform, Vec3};
 use molla_storage::{Buffer, BufferUsage};
 
 /// Regular grid of height samples (heightmap) — terrain primitive.
@@ -579,6 +579,8 @@ pub struct Model {
     pub body_com: Buffer<Vec3>,
     /// Per-body bitflags (see [`super::BodyFlags`]).
     pub body_flags: Buffer<u32>,
+    /// Prescribed world COM/angular acceleration for driven kinematic bodies.
+    pub body_kinematic_acceleration: Buffer<SpatialVector>,
     /// Per-body world index.
     pub body_world: Buffer<i32>,
     /// Initial body pose snapshotted at build time. [`super::State::for_model`]
@@ -765,6 +767,9 @@ pub struct Model {
     pub joint_limit_lower: Buffer<Real>,
     /// Per-DOF upper position limit. `NaN` = unlimited.
     pub joint_limit_upper: Buffer<Real>,
+    /// Authored bound and angle-reference high/low parts, refreshed on full upload.
+    pub joint_limit_references: Buffer<crate::JointLimitReference>,
+    pub joint_frame_references: Buffer<crate::JointFrameReference>,
     /// Per-DOF Coulomb-style damping coefficient (N·m·s/rad or N·s/m).
     /// 0 = none. Damping torque each step is `−friction·qd`.
     pub joint_friction: Buffer<Real>,
@@ -795,6 +800,8 @@ pub struct Model {
     /// joints don't contribute torque or constrain motion. Length =
     /// `joint_count`.
     pub joint_enabled: Buffer<u32>,
+    /// GPU enable bit and authored axis-point bits 1–6, refreshed on model upload.
+    pub joint_motion_flags: Buffer<u32>,
     /// Invert the authored joint map while retaining its coordinate and effort signs.
     pub joint_reversed: Buffer<u32>,
     /// Per-joint ancestor — index of the parent joint in the
@@ -909,7 +916,138 @@ pub struct Model {
 }
 
 impl Model {
+    #[cfg(feature = "gpu")]
+    fn refresh_joint_motion_flags(&mut self) -> Result<()> {
+        if self.joint_motion_flags.len() != self.joint_count {
+            self.joint_motion_flags = Buffer::from_vec(
+                vec![0; self.joint_count],
+                molla_storage::BufferUsage::Storage,
+            );
+        }
+        if self.joint_count == 0 {
+            return Ok(());
+        }
+        let enabled = self.joint_enabled.host()?;
+        let offsets = self.joint_dof_offset.host()?;
+        let lower = self.joint_limit_lower.host()?;
+        let upper = self.joint_limit_upper.host()?;
+        if enabled.len() < self.joint_count || offsets.len() <= self.joint_count {
+            return Err(molla_core::Error::Build(
+                "joint motion metadata is incomplete".into(),
+            ));
+        }
+        for (joint, flags) in self.joint_motion_flags.host_mut()?.iter_mut().enumerate() {
+            *flags = u32::from(enabled[joint] != 0);
+            if *flags == 0 {
+                continue;
+            }
+            let start = offsets[joint] as usize;
+            let end = offsets[joint + 1] as usize;
+            if end < start || end > lower.len() || end > upper.len() || end - start > 6 {
+                return Err(molla_core::Error::Build(
+                    "joint motion metadata has invalid DOFs".into(),
+                ));
+            }
+            for axis in 0..end - start {
+                let lo = lower[start + axis];
+                let hi = upper[start + axis];
+                if lo.is_finite() && hi.is_finite() && (hi - lo).abs() < 1e-12 {
+                    *flags |= 1 << (axis + 1);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "gpu")]
+    fn refresh_joint_limit_references(&mut self) -> Result<()> {
+        let lower = self.joint_limit_lower.host()?;
+        let upper = self.joint_limit_upper.host()?;
+        if lower.len() != self.joint_dof_total || upper.len() != self.joint_dof_total {
+            return Err(Error::Build(
+                "joint limit reference dimensions are invalid".into(),
+            ));
+        }
+        if self.joint_limit_references.len() != self.joint_dof_total {
+            self.joint_limit_references = Buffer::from_vec(
+                vec![crate::JointLimitReference::default(); self.joint_dof_total],
+                BufferUsage::Storage,
+            );
+        }
+        for (index, reference) in self
+            .joint_limit_references
+            .host_mut()?
+            .iter_mut()
+            .enumerate()
+        {
+            *reference = crate::JointLimitReference::new(lower[index], upper[index])?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "gpu")]
+    fn refresh_joint_frame_references(&mut self) -> Result<()> {
+        let parents = self.joint_x_p.host()?;
+        let children = self.joint_x_c.host()?;
+        let axes = self.joint_axis.host()?;
+        if [parents.len(), children.len(), axes.len()]
+            .iter()
+            .any(|&n| n != self.joint_count)
+        {
+            return Err(Error::Build(
+                "joint frame reference dimensions are invalid".into(),
+            ));
+        }
+        if self.joint_frame_references.len() != self.joint_count {
+            self.joint_frame_references = Buffer::from_vec(
+                vec![crate::JointFrameReference::default(); self.joint_count],
+                BufferUsage::Storage,
+            );
+        }
+        for (j, reference) in self
+            .joint_frame_references
+            .host_mut()?
+            .iter_mut()
+            .enumerate()
+        {
+            *reference = crate::JointFrameReference::new(parents[j], children[j], axes[j])?;
+        }
+        Ok(())
+    }
+
+    /// Whether enabled Ball or D6 joints require physical Euler equality rows.
+    pub fn requires_angular_lock_rows(&self) -> Result<bool> {
+        let kinds = self.joint_type.host()?;
+        let enabled = self.joint_enabled.host()?;
+        let offsets = self.joint_dof_offset.host()?;
+        let lower = self.joint_limit_lower.host()?;
+        let upper = self.joint_limit_upper.host()?;
+        Ok((0..self.joint_count).any(|joint| {
+            let first = offsets[joint] as usize;
+            let angular = if kinds[joint] == crate::JointType::Ball as u32 {
+                0
+            } else {
+                3
+            };
+            enabled[joint] != 0
+                && (kinds[joint] == crate::JointType::D6 as u32
+                    || kinds[joint] == crate::JointType::Ball as u32)
+                && crate::joint_control::partial_angular_lock(
+                    &lower[first + angular..first + angular + 3],
+                    &upper[first + angular..first + angular + 3],
+                )
+        }))
+    }
+
     pub fn combined_shape_friction(&self, a: usize, b: usize) -> Result<Real> {
+        Ok(self.combined_shape_friction_coefficients(a, b)?.mu_dynamic)
+    }
+
+    pub fn combined_shape_friction_coefficients(
+        &self,
+        a: usize,
+        b: usize,
+    ) -> Result<crate::FrictionCoefficients> {
         let coefficients = self.shape_friction.host()?;
         let ma = self
             .shape_contact_material
@@ -925,7 +1063,26 @@ impl Model {
         let fb = coefficients
             .get(b)
             .ok_or_else(|| molla_core::Error::Build("missing shape friction".into()))?;
-        Ok(ma.friction_combine.combine(mb.friction_combine, *fa, *fb))
+        let a = ma
+            .friction
+            .unwrap_or(crate::FrictionCoefficients::uniform(*fa));
+        let b = mb
+            .friction
+            .unwrap_or(crate::FrictionCoefficients::uniform(*fb));
+        a.validate()?;
+        b.validate()?;
+        let pair = crate::FrictionCoefficients {
+            mu_static: ma
+                .friction_combine
+                .combine(mb.friction_combine, a.mu_static, b.mu_static),
+            mu_dynamic: ma.friction_combine.combine(
+                mb.friction_combine,
+                a.mu_dynamic,
+                b.mu_dynamic,
+            ),
+        };
+        pair.validate()?;
+        Ok(pair)
     }
 
     /// An empty model: zero particles, zero bodies, zero shapes, one
@@ -1011,6 +1168,7 @@ impl Model {
             body_inv_inertia: Buffer::from_vec(Vec::new(), s),
             body_com: Buffer::from_vec(Vec::new(), s),
             body_flags: Buffer::from_vec(Vec::new(), s),
+            body_kinematic_acceleration: Buffer::from_vec(Vec::new(), s),
             body_world: Buffer::from_vec(Vec::new(), s),
             initial_body_q: Buffer::from_vec(Vec::new(), s),
 
@@ -1073,6 +1231,8 @@ impl Model {
             initial_joint_q: Buffer::from_vec(Vec::new(), s),
             joint_limit_lower: Buffer::from_vec(Vec::new(), s),
             joint_limit_upper: Buffer::from_vec(Vec::new(), s),
+            joint_limit_references: Buffer::from_vec(Vec::new(), s),
+            joint_frame_references: Buffer::from_vec(Vec::new(), s),
             joint_friction: Buffer::from_vec(Vec::new(), s),
             joint_effort_limit: Buffer::from_vec(Vec::new(), s),
             joint_velocity_limit: Buffer::from_vec(Vec::new(), s),
@@ -1083,6 +1243,7 @@ impl Model {
             articulation_world: Buffer::from_vec(Vec::new(), s),
             joint_world: Buffer::from_vec(Vec::new(), s),
             joint_enabled: Buffer::from_vec(Vec::new(), s),
+            joint_motion_flags: Buffer::from_vec(Vec::new(), s),
             joint_reversed: Buffer::from_vec(Vec::new(), s),
             joint_ancestor: Buffer::from_vec(Vec::new(), s),
             joint_target_ke: Buffer::from_vec(Vec::new(), s),
@@ -1171,6 +1332,9 @@ impl Model {
         queue: &wgpu::Queue,
     ) -> Result<()> {
         self.validate_tet_viscosity()?;
+        self.refresh_joint_motion_flags()?;
+        self.refresh_joint_limit_references()?;
+        self.refresh_joint_frame_references()?;
         macro_rules! up {
             ($field:ident) => {{
                 self.$field.ensure_device(device)?;
@@ -1224,6 +1388,7 @@ impl Model {
         up!(body_inv_inertia);
         up!(body_com);
         up!(body_flags);
+        up!(body_kinematic_acceleration);
         up!(body_world);
         up!(initial_body_q);
         up!(shape_body);
@@ -1242,6 +1407,8 @@ impl Model {
         up!(initial_joint_q);
         up!(joint_limit_lower);
         up!(joint_limit_upper);
+        up!(joint_limit_references);
+        up!(joint_frame_references);
         up!(joint_friction);
         up!(joint_effort_limit);
         up!(joint_velocity_limit);
@@ -1250,6 +1417,7 @@ impl Model {
         up!(articulation_world);
         up!(joint_world);
         up!(joint_enabled);
+        up!(joint_motion_flags);
         up!(joint_reversed);
         up!(joint_ancestor);
         up!(joint_target_ke);
@@ -1327,15 +1495,18 @@ impl Model {
             for (i, t) in self.soft_surface_tris.iter().enumerate() {
                 tri_data.push([t[0], t[1], t[2], tri_owner[i]]);
             }
-            let tris_buf = device.device().create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::soft_surface_tris"),
-                size: (tri_data.len() * core::mem::size_of::<[u32; 4]>()) as u64,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST
-                    | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&tris_buf, 0, bytemuck::cast_slice(&tri_data));
+            let tris_buf = molla_core::gpu_create_buffer!(
+                device.device(),
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::soft_surface_tris"),
+                    size: (tri_data.len() * core::mem::size_of::<[u32; 4]>()) as u64,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST
+                        | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &tris_buf, 0, bytemuck::cast_slice(&tri_data));
             self.soft_surface_tris_gpu = Some(tris_buf);
 
             let mut surf_data: Vec<SoftSurfaceGpu> = Vec::with_capacity(self.soft_surfaces.len());
@@ -1356,15 +1527,18 @@ impl Model {
                     _pad: 0u32,
                 });
             }
-            let surf_buf = device.device().create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::soft_surfaces"),
-                size: (surf_data.len() * core::mem::size_of::<SoftSurfaceGpu>()) as u64,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST
-                    | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&surf_buf, 0, bytemuck::cast_slice(&surf_data));
+            let surf_buf = molla_core::gpu_create_buffer!(
+                device.device(),
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::soft_surfaces"),
+                    size: (surf_data.len() * core::mem::size_of::<SoftSurfaceGpu>()) as u64,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST
+                        | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &surf_buf, 0, bytemuck::cast_slice(&surf_data));
             self.soft_surfaces_gpu = Some(surf_buf);
         }
 
@@ -1408,6 +1582,55 @@ pub struct SoftSurfaceGpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn joint_frame_references_refresh_after_frame_edits_and_resize() {
+        let mut model = Model::empty();
+        model.joint_count = 1;
+        model.joint_x_p = Buffer::from_vec(vec![Transform::IDENTITY], BufferUsage::Storage);
+        model.joint_x_c = Buffer::from_vec(vec![Transform::IDENTITY], BufferUsage::Storage);
+        model.joint_axis = Buffer::from_vec(vec![Vec3::X], BufferUsage::Storage);
+        model.refresh_joint_frame_references().unwrap();
+        assert_eq!(
+            model.joint_frame_references.host().unwrap()[0].parent_position[0],
+            0.
+        );
+        model.joint_x_p.host_mut().unwrap()[0].position.x = 1.2;
+        model.refresh_joint_frame_references().unwrap();
+        let reference = model.joint_frame_references.host().unwrap()[0];
+        let restored = f64::from(1.2f32) + f64::from(reference.parent_position[0]);
+        assert!((restored - 1.2).abs() < 2e-15);
+        model.joint_count = 0;
+        model.joint_x_p = Buffer::from_vec(Vec::new(), BufferUsage::Storage);
+        model.joint_x_c = Buffer::from_vec(Vec::new(), BufferUsage::Storage);
+        model.joint_axis = Buffer::from_vec(Vec::new(), BufferUsage::Storage);
+        model.refresh_joint_frame_references().unwrap();
+        assert!(model.joint_frame_references.is_empty());
+        model.joint_count = 1;
+        assert!(model.refresh_joint_frame_references().is_err());
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn joint_limit_references_refresh_after_bound_edits_and_resize() {
+        let mut model = Model::empty();
+        model.joint_dof_total = 1;
+        model.joint_limit_lower = Buffer::from_vec(vec![1.5], BufferUsage::Storage);
+        model.joint_limit_upper = Buffer::from_vec(vec![1.5 + 1e-9], BufferUsage::Storage);
+        model.refresh_joint_limit_references().unwrap();
+        let before = model.joint_limit_references.host().unwrap()[0];
+        model.joint_limit_upper.host_mut().unwrap()[0] = 1.5 + 2e-9;
+        model.refresh_joint_limit_references().unwrap();
+        let after = model.joint_limit_references.host().unwrap()[0];
+        assert_eq!(before.bounds[2], after.bounds[2]);
+        assert!(after.bounds[3] > before.bounds[3]);
+        model.joint_dof_total = 0;
+        model.joint_limit_lower = Buffer::from_vec(Vec::new(), BufferUsage::Storage);
+        model.joint_limit_upper = Buffer::from_vec(Vec::new(), BufferUsage::Storage);
+        model.refresh_joint_limit_references().unwrap();
+        assert!(model.joint_limit_references.is_empty());
+    }
 
     #[test]
     fn empty_model_has_one_world_with_gravity() {

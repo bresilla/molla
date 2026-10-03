@@ -4,7 +4,7 @@
 //! arrives in stages 3 (joints) and 4 (other shapes).
 
 use molla_core::{BodyId, Error, JointId, Result, ShapeId, WorldId};
-use molla_math::{Mat3, Real, SpatialInertia, Transform, Vec3};
+use molla_math::{Mat3, Real, SpatialInertia, SpatialVector, Transform, Vec3};
 use molla_storage::{Buffer, BufferUsage};
 
 use super::flags::BodyFlags;
@@ -424,6 +424,7 @@ pub struct ModelBuilder {
     body_inv_inertia: Vec<Mat3>,
     body_com: Vec<Vec3>,
     body_flags: Vec<u32>,
+    body_kinematic_acceleration: Vec<SpatialVector>,
     body_world: Vec<i32>,
     body_q0: Vec<Transform>,
 
@@ -1344,9 +1345,36 @@ impl ModelBuilder {
         self.body_inv_inertia.push(inv_inertia);
         self.body_com.push(params.com);
         self.body_flags.push(params.flags);
+        self.body_kinematic_acceleration.push(SpatialVector::ZERO);
         self.body_world.push(params.world.0 as i32);
         self.body_q0.push(params.pose);
         id
+    }
+
+    /// Enable constant world COM/angular acceleration, or restore held kinematic motion.
+    pub fn set_kinematic_acceleration(
+        &mut self,
+        body: BodyId,
+        acceleration: Option<SpatialVector>,
+    ) -> Result<()> {
+        let index = body.index();
+        let flags = self
+            .body_flags
+            .get_mut(index)
+            .ok_or_else(|| Error::Build("invalid kinematic body".into()))?;
+        if acceleration.is_some_and(|a| !a.linear.is_finite() || !a.angular.is_finite())
+            || (acceleration.is_some() && (*flags & BodyFlags::IMMOVABLE != BodyFlags::KINEMATIC))
+        {
+            return Err(Error::Build(
+                "invalid prescribed kinematic acceleration".into(),
+            ));
+        }
+        *flags &= !BodyFlags::KINEMATIC_DRIVEN;
+        if acceleration.is_some() {
+            *flags |= BodyFlags::KINEMATIC_DRIVEN;
+        }
+        self.body_kinematic_acceleration[index] = acceleration.unwrap_or(SpatialVector::ZERO);
+        Ok(())
     }
 
     /// Attach a sphere shape to `body`. Pass [`BodyId::NONE`] to make
@@ -2688,6 +2716,14 @@ impl ModelBuilder {
 
     /// Finalise into a [`Model`].
     pub fn build(mut self) -> Result<Model> {
+        if self.body_flags.iter().any(|flags| {
+            flags & BodyFlags::KINEMATIC_DRIVEN != 0
+                && flags & BodyFlags::IMMOVABLE != BodyFlags::KINEMATIC
+        }) {
+            return Err(Error::Build(
+                "driven motion requires a kinematic body".into(),
+            ));
+        }
         let s = BufferUsage::Storage;
         let body_count = self.body_mass.len();
         let shape_count = self.shape_geometry.len();
@@ -3082,6 +3118,7 @@ impl ModelBuilder {
             body_inv_inertia: Buffer::from_vec(self.body_inv_inertia, s),
             body_com: Buffer::from_vec(self.body_com, s),
             body_flags: Buffer::from_vec(self.body_flags, s),
+            body_kinematic_acceleration: Buffer::from_vec(self.body_kinematic_acceleration, s),
             body_world: Buffer::from_vec(self.body_world, s),
             initial_body_q: Buffer::from_vec(self.body_q0, s),
 
@@ -3219,6 +3256,8 @@ impl ModelBuilder {
             initial_joint_q: Buffer::from_vec(self.joint_q0, s),
             joint_limit_lower: Buffer::from_vec(self.joint_limit_lower, s),
             joint_limit_upper: Buffer::from_vec(self.joint_limit_upper, s),
+            joint_limit_references: Buffer::from_vec(Vec::new(), s),
+            joint_frame_references: Buffer::from_vec(Vec::new(), s),
             joint_friction: Buffer::from_vec(self.joint_friction, s),
             joint_effort_limit: Buffer::from_vec(self.joint_effort_limit, s),
             joint_velocity_limit: Buffer::from_vec(self.joint_velocity_limit, s),
@@ -3229,6 +3268,7 @@ impl ModelBuilder {
             articulation_world: Buffer::from_vec(self.articulation_world, s),
             joint_world: Buffer::from_vec(self.joint_world, s),
             joint_enabled: Buffer::from_vec(self.joint_enabled, s),
+            joint_motion_flags: Buffer::from_vec(Vec::new(), s),
             joint_reversed: Buffer::from_vec(self.joint_reversed, s),
             joint_ancestor: Buffer::from_vec(self.joint_ancestor, s),
             joint_target_ke: Buffer::from_vec(self.joint_target_ke, s),

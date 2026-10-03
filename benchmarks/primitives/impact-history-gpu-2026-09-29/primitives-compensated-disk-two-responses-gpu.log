@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 2 tests
+test contact_response_gpu::coupled_tests::disk_impulse_residue_survives_mass_response_and_rate_cancellation ... disk mass response primary=1537.173 residue=-0.000024414063 rates=[0.0, -2.4414063e-5, 0.0, 0.0, 0.0, 0.0]
+disk mass response primary=1537.173 residue=0.000024414063 rates=[0.0, 2.4414063e-5, 0.0, 0.0, 0.0, 0.0]
+ok
+test contact_response_gpu::coupled_tests::scalar_impulse_residue_survives_mass_response_and_rate_cancellation ... mass_response_probe impulse=[1229.7384, -2.4414063e-5] delta=[1229.7384, 614.8692, 0.0, 0.0, 0.0, 0.0] rates=[-307.4346, 614.8692, 0.0, 0.0, 0.0, 0.0] exact=1229.73837890625
+adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } impulse=[1229.7384, -2.4414063e-5] rates=[-307.4346, 614.8692, 0.0, 0.0, 0.0, 0.0] absolute_kkt=0
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 243 filtered out; finished in 25.03s
+

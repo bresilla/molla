@@ -1,0 +1,42 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.16s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 5 tests
+test coupled_constraints::tests::bounded_null_response_effort_and_invalid_domains_are_explicit ... ok
+test coupled_constraints::tests::unilateral_joint_activation_and_static_promotion_use_global_solution ... ok
+test coupled_constraints::tests::bounded_feedback_and_friction_match_independent_active_set_oracle ... ok
+test coupled_constraints::tests::mixed_disk_scalar_solution_and_infeasible_rows ... ok
+test coupled_constraints::tests::satisfied_zero_response_rows_coexist_with_contact_and_faults_are_explicit ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 127 filtered out; finished in 0.02s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 5 tests
+test constraint_allocation::tests::tangent_affine_disk_intersection_retains_its_unique_impulse ... ok
+test constraint_allocation::tests::redundant_bilateral_rows_leave_strictly_inactive_stop_at_exact_zero ... ok
+test constraint_allocation::tests::objective_linear_part_and_unilateral_feasibility_are_preserved ... ok
+test constraint_allocation::tests::redundant_interval_rows_preserve_caps_points_and_minimum_norm ... ok
+test constraint_allocation::tests::redundant_allocation_has_analytic_interior_and_capped_solutions ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 127 filtered out; finished in 0.00s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

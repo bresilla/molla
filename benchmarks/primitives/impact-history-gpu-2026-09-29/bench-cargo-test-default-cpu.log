@@ -1,0 +1,50 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running benches/runtime_primitives.rs (target/debug/deps/runtime_primitives-d0f671e015455fb0)
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_process_start	primitive=distance	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=distance	instances=1	backend=cpu
+case_setup_complete	primitive=distance	instances=1	backend=cpu	seconds=0.000628040
+case_warmup_complete	primitive=distance	instances=1	backend=cpu	steps=1
+case_ok	primitive=distance	instances=1	backend=cpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000628040	wall_seconds=0.001326714	max_step_seconds=0.000674041	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=0	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=cone	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=cone	instances=1	backend=cpu
+case_setup_complete	primitive=cone	instances=1	backend=cpu	seconds=0.000591511
+case_warmup_complete	primitive=cone	instances=1	backend=cpu	steps=1
+case_ok	primitive=cone	instances=1	backend=cpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000591511	wall_seconds=0.001265870	max_step_seconds=0.000641337	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=0	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=d6	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=d6	instances=1	backend=cpu
+case_setup_complete	primitive=d6	instances=1	backend=cpu	seconds=0.000542803
+case_warmup_complete	primitive=d6	instances=1	backend=cpu	steps=1
+case_ok	primitive=d6	instances=1	backend=cpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000542803	wall_seconds=0.000327035	max_step_seconds=0.000170435	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=0	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=reaction	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=reaction	instances=1	backend=cpu
+case_setup_complete	primitive=reaction	instances=1	backend=cpu	seconds=0.000409698
+case_warmup_complete	primitive=reaction	instances=1	backend=cpu	steps=1
+case_ok	primitive=reaction	instances=1	backend=cpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000409698	wall_seconds=0.000444160	max_step_seconds=0.000229970	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=0	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=break	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=break	instances=1	backend=cpu
+case_setup_complete	primitive=break	instances=1	backend=cpu	seconds=0.000309314
+case_warmup_complete	primitive=break	instances=1	backend=cpu	steps=1
+case_ok	primitive=break	instances=1	backend=cpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000309314	wall_seconds=0.000473714	max_step_seconds=0.000394568	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=1	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=friction	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=friction	instances=1	backend=cpu
+case_setup_complete	primitive=friction	instances=1	backend=cpu	seconds=0.000353846
+case_warmup_complete	primitive=friction	instances=1	backend=cpu	steps=1
+case_ok	primitive=friction	instances=1	backend=cpu	bodies=1	articulations=1	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000353846	wall_seconds=0.000632749	max_step_seconds=0.000316948	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=0	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=mixed	instances=1	backend=cpu	timeout_seconds=3600
+benchmark_schema=4	run_mode=smoke	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	frame_trace=false	build_profile=debug
+case_start	primitive=mixed	instances=1	backend=cpu
+case_setup_complete	primitive=mixed	instances=1	backend=cpu	seconds=0.002187534
+case_warmup_complete	primitive=mixed	instances=1	backend=cpu	steps=1
+case_ok	primitive=mixed	instances=1	backend=cpu	bodies=6	articulations=6	warmup=1	steps=2	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.002187534	wall_seconds=0.003039759	max_step_seconds=0.001840433	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_buffers=None	boundary_allocations=None	model_compilations=None	break_events=1	encoded_dispatches=0	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable

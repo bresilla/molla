@@ -228,25 +228,34 @@ mod gpu {
             let storage_usage = wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC;
-            let buf_in = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_convolution in"),
-                size: bytes,
-                usage: storage_usage,
-                mapped_at_creation: false,
-            });
-            let buf_tmp = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_convolution tmp"),
-                size: bytes,
-                usage: storage_usage,
-                mapped_at_creation: false,
-            });
-            let buf_out = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_convolution out"),
-                size: bytes,
-                usage: storage_usage,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf_in, 0, bytemuck::cast_slice(input));
+            let buf_in = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_convolution in"),
+                    size: bytes,
+                    usage: storage_usage,
+                    mapped_at_creation: false,
+                }
+            );
+            let buf_tmp = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_convolution tmp"),
+                    size: bytes,
+                    usage: storage_usage,
+                    mapped_at_creation: false,
+                }
+            );
+            let buf_out = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_convolution out"),
+                    size: bytes,
+                    usage: storage_usage,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &buf_in, 0, bytemuck::cast_slice(input));
 
             let uniforms = Uniforms {
                 width: width as u32,
@@ -266,20 +275,26 @@ mod gpu {
                 _pad1: 0.0,
                 _pad2: 0.0,
             };
-            let buf_u = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_convolution uniforms"),
-                size: core::mem::size_of::<Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf_u, 0, bytemuck::bytes_of(&uniforms));
-            let buf_k = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_convolution kernel"),
-                size: core::mem::size_of::<KernelUniform>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf_k, 0, bytemuck::bytes_of(&kernel_u));
+            let buf_u = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_convolution uniforms"),
+                    size: core::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &buf_u, 0, bytemuck::bytes_of(&uniforms));
+            let buf_k = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_convolution kernel"),
+                    size: core::mem::size_of::<KernelUniform>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &buf_k, 0, bytemuck::bytes_of(&kernel_u));
 
             let bg_horiz = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("molla::tile_convolution horiz io"),
@@ -351,12 +366,15 @@ mod gpu {
                 pass.dispatch_workgroups(groups_x, groups_y, 1);
             }
 
-            let stage = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_convolution stage"),
-                size: bytes,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
+            let stage = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_convolution stage"),
+                    size: bytes,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }
+            );
             encoder.copy_buffer_to_buffer(&buf_out, 0, &stage, 0, bytes);
             queue.submit(std::iter::once(encoder.finish()));
 
@@ -373,7 +391,7 @@ mod gpu {
             receiver
                 .recv()
                 .map_err(|e| Error::Gpu(format!("conv recv: {e:?}")))??;
-            let data = slice.get_mapped_range();
+            let data = molla_core::gpu_readback!(slice);
             let read: &[f32] = bytemuck::cast_slice(&data);
             output.copy_from_slice(read);
             drop(data);

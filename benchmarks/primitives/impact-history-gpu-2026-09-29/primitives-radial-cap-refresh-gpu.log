@@ -1,0 +1,43 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.91s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 1 test
+test rigid_world::gpu::scale_tests::radial_point_zero_cap_first_step_stages ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } isolated_radial_cap=true
+radial_host a=DVec3(1.2, -0.4, 0.8) b=DVec3(2.2, -0.3999999999999999, 0.8) delta=DVec3(1.0000000000000002, 1.1102230246251565e-16, 0.0) q=[0.0, 0.0, 0.0, 1.0, 1.0000000000000002, 1.1102230246251565e-16, 0.0, 0.0, 3.469446951953614e-18, 0.0, 1.0]
+distance_scale_stage_wait stage=initial-position-tail
+distance_scale_stage_complete stage=initial-position-tail
+radial_position_tails=[0.0, 0.0, 0.0, 0.0, 2.852035e-8, -4.7117005e-8, -4.4505693e-8, 0.0]
+distance_scale_stage_wait stage=isolated-refresh
+distance_scale_stage_complete stage=isolated-refresh
+distance_scale_stage_wait stage=isolated-predictor
+distance_scale_stage_complete stage=isolated-predictor
+distance_scale_stage_wait stage=isolated-radial-status
+distance_scale_stage_complete stage=isolated-radial-status
+distance_scale_stage_wait stage=isolated-radial-geometry
+distance_scale_stage_complete stage=isolated-radial-geometry
+distance_scale_stage_wait stage=isolated-radial-response
+distance_scale_stage_complete stage=isolated-radial-response
+radial_device status=512 row=3 geometry=[1.0, 1.7314685e-8, 1.4703372e-8, -4.2260165e-8, 4.2260165e-8, 0.0, 0.0, 0.0] response=[-0.0042266124, 1.4267806, 0.004223798, -97.10653]
+
+thread 'rigid_world::gpu::scale_tests::radial_point_zero_cap_first_step_stages' (298474) panicked at crates/molla-solvers/src/rigid_distance_scale_gpu_tests.rs:256:5:
+assertion `left == right` failed
+  left: 512
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    rigid_world::gpu::scale_tests::radial_point_zero_cap_first_step_stages
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 238 filtered out; finished in 2.15s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:519: test-primitives-radial-cap-stages-gpu] Error 101

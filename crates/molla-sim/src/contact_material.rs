@@ -3,6 +3,34 @@
 use molla_core::{Error, Result};
 use molla_math::Real;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrictionCoefficients {
+    pub mu_static: Real,
+    pub mu_dynamic: Real,
+}
+
+impl FrictionCoefficients {
+    pub fn validate(self) -> Result<()> {
+        if !self.mu_static.is_finite()
+            || !self.mu_dynamic.is_finite()
+            || self.mu_dynamic < 0.0
+            || self.mu_static < self.mu_dynamic
+        {
+            return Err(Error::Build(
+                "friction requires finite 0 <= mu_dynamic <= mu_static".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn uniform(coefficient: Real) -> Self {
+        Self {
+            mu_static: coefficient,
+            mu_dynamic: coefficient,
+        }
+    }
+}
+
 /// Pair rule priority is Average < Min < Multiply < Max.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 pub enum CoefficientCombineRule {
@@ -26,6 +54,8 @@ impl CoefficientCombineRule {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ContactMaterial {
+    /// Explicit pair; None uses the legacy shape coefficient for both regimes.
+    pub friction: Option<FrictionCoefficients>,
     /// Normal spring stiffness in N/m.
     pub stiffness: Real,
     /// Compression damping in N s/m.
@@ -40,6 +70,7 @@ pub struct ContactMaterial {
 impl Default for ContactMaterial {
     fn default() -> Self {
         Self {
+            friction: None,
             stiffness: 1.0e5,
             damping: 1.0e3,
             friction_stiffness: 1.0e3,
@@ -51,6 +82,9 @@ impl Default for ContactMaterial {
 
 impl ContactMaterial {
     pub fn validate(self) -> Result<()> {
+        if let Some(friction) = self.friction {
+            friction.validate()?;
+        }
         if [
             self.stiffness,
             self.damping,
@@ -69,6 +103,21 @@ impl ContactMaterial {
 
     pub fn averaged(self, other: Self) -> Self {
         Self {
+            friction: self
+                .friction
+                .zip(other.friction)
+                .map(|(a, b)| FrictionCoefficients {
+                    mu_static: self.friction_combine.combine(
+                        other.friction_combine,
+                        a.mu_static,
+                        b.mu_static,
+                    ),
+                    mu_dynamic: self.friction_combine.combine(
+                        other.friction_combine,
+                        a.mu_dynamic,
+                        b.mu_dynamic,
+                    ),
+                }),
             stiffness: 0.5 * self.stiffness + 0.5 * other.stiffness,
             damping: 0.5 * self.damping + 0.5 * other.damping,
             friction_stiffness: 0.5 * self.friction_stiffness + 0.5 * other.friction_stiffness,

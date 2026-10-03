@@ -1,0 +1,30 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.92s
+     Running tests/standalone_redundant_limits.rs (target/debug/deps/standalone_redundant_limits-9d8b6e124ea793a6)
+
+running 2 tests
+test cpu_runtime_redundant_points_and_caps_preserve_permitted_physical_motion ... 
+thread 'cpu_runtime_redundant_points_and_caps_preserve_permitted_physical_motion' (169514) panicked at crates/molla-solvers/tests/standalone_redundant_limits.rs:713:20:
+called `Result::unwrap()` on an `Err` value: Solver("common joint/contact response did not converge: residual=1.1102230246311122e-11 row=0 velocity=-1.1102230246311122e-11 free=-3.1021966347504174e-8")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test cpu_runtime_redundant_points_and_zero_caps_hold_under_load ... 
+thread 'cpu_runtime_redundant_points_and_zero_caps_hold_under_load' (169516) panicked at crates/molla-solvers/tests/standalone_redundant_limits.rs:606:24:
+called `Result::unwrap()` on an `Err` value: Solver("common joint/contact response did not converge: residual=1.1102230245828049e-11 row=0 velocity=-1.1102230245828049e-11 free=-2.573912823962653e-6")
+FAILED
+
+failures:
+
+failures:
+    cpu_runtime_redundant_points_and_caps_preserve_permitted_physical_motion
+    cpu_runtime_redundant_points_and_zero_caps_hold_under_load
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.91s
+
+error: test failed, to rerun pass `-p molla-solvers --test standalone_redundant_limits`
+make: *** [Makefile:507: test-primitives-redundant-runtime-cpu] Error 101

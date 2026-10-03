@@ -1,0 +1,255 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 7 tests
+test coulomb_disk_gpu::tests::coupled_disk_gpu_device_sequence_regimes_and_contact_retirement ... ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_matches_cpu_and_retires_batched_island_slots ... coupled disk batch: peak iterations=23
+ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_rotations_permutations_and_reciprocal_scales ... disk basis/permutation/scale: 30 cases, peak host KKT=9.977477124566751e-8
+ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_validation_sticky_faults_and_reset ... ok
+test coulomb_disk_gpu::tests::nearly_loaded_static_disks_cancel_slip_across_scales_and_directions ... nearly loaded static peak slip=6.717164069414139e-8
+ok
+test coulomb_disk_gpu::tests::rank_deficient_grams_pass_and_indefinite_null_blocks_fail ... ok
+test coulomb_disk_gpu::tests::rounded_disk_boundary_gap_matches_f64 ... disk boundary squared-gap peak error=1.9210221126225147e-14
+ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 246 filtered out; finished in 83.25s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 15 tests
+test coupled_constraint_gpu::tests::bilateral_coupling_prevents_premature_sliding ... ok
+test coupled_constraint_gpu::tests::bounded_effort_and_invalid_domains_are_explicit ... island=0 diagnostic=[524288, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+ok
+test coupled_constraint_gpu::tests::bounded_feedback_couples_to_friction_and_publishes_physical_slip ... ok
+test coupled_constraint_gpu::tests::contradictory_bilateral_rows_fail_closed ... island=0 diagnostic=[524288, 4096, 1065353216, 1] residual=1
+ok
+test coupled_constraint_gpu::tests::large_scalar_recovery_coupled_to_sliding_disk_preserves_absolute_kkt_precision ... large_mixed_reference disk=[-0.0005627171314631129, -0.00020820534132459613] scalar=768.5868066929606 gram_min_schur=0.863099996471405
+large_mixed_before_oracle solutions=[CoulombDiskSolution { impulse: [-0.00056271715, -0.00020820534], slip: [768.58624, 284.37692], applied_cap: 0.0006, regime: 3, iterations: 32, residual: 9.251858e-12 }, CoulombDiskSolution { impulse: [768.5868, 1.4700774e-5], slip: [0.0, 0.0], applied_cap: 0.0, regime: 5, iterations: 32, residual: 9.251858e-12 }] residues=[[1.710537e-11, -1.5929532e-12], [0.0, 0.0]]
+large_mixed_solution primary=[-0.00056271715, -0.00020820534] residues=[[1.710537e-11, -1.5929532e-12], [0.0, 0.0]] scalar=768.5868066929615 residual=0.000000000009251858
+ok
+test coupled_constraint_gpu::tests::large_scalar_recovery_preserves_absolute_kkt_precision ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } scalar_absolute_kkt=1e-7
+kind=1 gram=0.37 impulse=[4154.5215, 1.2442596e-5] host_kkt=2.2737367544323206e-13
+kind=1 gram=1.17 impulse=[1313.8231, -1.7539423e-5] host_kkt=6.821210263296962e-13
+kind=1 gram=7.31 impulse=[210.28358, -2.424366e-6] host_kkt=9.094947017729282e-13
+kind=2 gram=0.37 impulse=[4154.5215, 1.2442596e-5] host_kkt=2.2737367544323206e-13
+kind=2 gram=1.17 impulse=[1313.8231, -1.7539423e-5] host_kkt=6.821210263296962e-13
+kind=2 gram=7.31 impulse=[210.28358, -2.424366e-6] host_kkt=9.094947017729282e-13
+kind=3 gram=0.37 impulse=[3074.346, 0.0] host_kkt=0e0
+kind=3 gram=1.17 impulse=[1182.4408, -3.5784503e-6] host_kkt=0e0
+kind=3 gram=7.31 impulse=[206.60927, 4.1825288e-6] host_kkt=2.2737367544323206e-13
+ok
+test coupled_constraint_gpu::tests::manufactured_mixed_kkt_permutations_cross_workgroups ... ok
+test coupled_constraint_gpu::tests::mixed_constraints_match_analytic_impulses_across_scales ... ok
+test coupled_constraint_gpu::tests::mixed_constructor_rejects_invalid_domain_buffers_and_capacity ... ok
+test coupled_constraint_gpu::tests::redundant_allocation_matches_minimum_norm_across_scales_rotations_and_order ... ok
+test coupled_constraint_gpu::tests::redundant_bilateral_rows_keep_inactive_stop_exactly_zero ... ok
+test coupled_constraint_gpu::tests::redundant_bounded_allocation_matches_independent_capped_minimum_norm ... ok
+test coupled_constraint_gpu::tests::retained_device_sequence_changes_domains_counts_and_status ... ok
+test coupled_constraint_gpu::tests::sticky_faults_retire_and_recover_mixed_outputs ... island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[131072, 0, 0, 0] residual=0
+island=0 diagnostic=[131072, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[262144, 0, 1065353216, 1073741826] residual=1
+island=0 diagnostic=[262144, 0, 1065353216, 1073741826] residual=1
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+ok
+test coupled_constraint_gpu::tests::zero_response_scalar_domains_fail_only_when_unbounded ... island=0 diagnostic=[524288, 0, 0, 0] residual=0
+island=0 diagnostic=[524288, 0, 0, 0] residual=0
+ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 238 filtered out; finished in 235.98s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 9 tests
+test contact_response_gpu::coupled_tests::bounded_feedback_response_preserves_contact_capacity_and_physical_mass_response ... ok
+test contact_response_gpu::coupled_tests::common_articulated_response_matches_mixed_analytic_solution ... ok
+test contact_response_gpu::coupled_tests::device_generated_distance_rows_share_contact_response_without_double_prediction ... generated_distance case=0 stage=scene
+generated_distance case=0 stage=response
+generated_distance case=0 stage=dispatch
+generated_distance case=0 stage=complete
+generated_distance case=1 stage=scene
+generated_distance case=1 stage=response
+generated_distance case=1 stage=dispatch
+generated_distance case=1 stage=complete
+generated_distance case=2 stage=scene
+generated_distance case=2 stage=response
+generated_distance case=2 stage=dispatch
+generated_distance case=2 stage=complete
+ok
+test contact_response_gpu::coupled_tests::device_generated_locked_cone_rows_share_off_center_contact_response ... ok
+test contact_response_gpu::coupled_tests::device_generated_scalar_stop_couples_distance_and_contact_rows ... ok
+test contact_response_gpu::coupled_tests::disk_impulse_residue_survives_mass_response_and_rate_cancellation ... disk mass response primary=1537.173 residue=-0.000024414063 rates=[0.0, -2.4414063e-5, 0.0, 0.0, 0.0, 0.0]
+disk mass response primary=1537.173 residue=0.000024414063 rates=[0.0, 2.4414063e-5, 0.0, 0.0, 0.0, 0.0]
+ok
+test contact_response_gpu::coupled_tests::retained_predictor_increment_survives_rounded_rates_in_mixed_response ... ok
+test contact_response_gpu::coupled_tests::scalar_impulse_residue_survives_mass_response_and_rate_cancellation ... mass_response_probe impulse=[1229.7384, -2.4414063e-5] delta=[1229.7384, 614.8692, 0.0, 0.0, 0.0, 0.0] rates=[-307.4346, 614.8692, 0.0, 0.0, 0.0, 0.0] exact=1229.73837890625
+adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } impulse=[1229.7384, -2.4414063e-5] rates=[-307.4346, 614.8692, 0.0, 0.0, 0.0, 0.0] absolute_kkt=0
+ok
+test contact_response_gpu::coupled_tests::scalar_response_faults_recover_and_inactive_joint_rows_retire ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 244 filtered out; finished in 460.99s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.13s
+     Running tests/runtime_mixed_contacts_gpu.rs (target/debug/deps/runtime_mixed_contacts_gpu-6d4c48a61920f61e)
+
+running 9 tests
+test hardware_engine::hardware_engine_identity_is_shared_within_the_test_executable ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test loaded_contact_slider_hits_releases_and_mutates_both_stops ... ok
+test mixed_distance_contact_break_continues_remaining_substeps ... ok
+test redundant_cone_contact_break_decisions_match_away_from_threshold_ties ... ok
+test runtime_contact_and_scalar_stop_without_distance_joint_share_response ... ok
+test runtime_distance_contact_uses_common_impulse_and_publishes_reactions ... live_distance_contact capture=false stage=scene
+live_distance_contact capture=false stage=gpu elapsed=1.923113ms
+live_distance_contact capture=false stage=readout elapsed=15.505293972s
+live_distance_contact capture=false stage=complete elapsed=15.505331749s
+live_distance_contact capture=true stage=scene
+live_distance_contact capture=true stage=gpu elapsed=1.404303ms
+live_distance_contact capture=true stage=readout elapsed=16.458500332s
+live_distance_contact capture=true stage=complete elapsed=16.458534048s
+ok
+test runtime_locked_cone_and_contact_publish_complete_torque ... ok
+test scalar_reservations_do_not_expand_contact_capacity_and_faults_roll_back ... ok
+test two_contact_articulations_share_distance_impulses_under_endpoint_exchange ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 325.18s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling bytemuck v1.25.0
+   Compiling wgpu-types v29.0.4
+   Compiling glam v0.30.10
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling wgpu-hal v29.0.4
+   Compiling wgpu-core-deps-windows-linux-android v29.0.4
+   Compiling wgpu-core v29.0.4
+   Compiling molla-core v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-core)
+   Compiling molla-math v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-math)
+   Compiling wgpu v29.0.4
+   Compiling molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.47s
+     Running tests/radix_sort_gpu.rs (target/debug/deps/radix_sort_gpu-04d0e3ea97727d3c)
+
+running 8 tests
+test radix_sort_all_equal_keys_preserves_order ... ok
+test radix_sort_already_sorted_input_is_idempotent ... ok
+test radix_sort_high_byte_only_keys ... ok
+test radix_sort_paired_duplicates_are_stable ... ok
+test radix_sort_random_100k_matches_reference ... ok
+test radix_sort_random_1k_matches_reference ... ok
+test radix_sort_reverse_sorted_input_works ... ok
+test retained_sorts_keep_independent_uniforms_and_scratch_across_queued_updates ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.55s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.01s
+     Running tests/contact_islands_gpu.rs (target/debug/deps/contact_islands_gpu-26ebfd66d59f4e30)
+
+running 7 tests
+test contact_island_faults_retire_outputs_and_reset_at_explicit_boundary ... ok
+test deterministic_contact_islands_match_cpu_across_100_queued_graph_changes ... ok
+test mixed_graph_validation_capacity_and_sticky_recovery ... 
+thread 'mixed_graph_validation_capacity_and_sticky_recovery' (371395) panicked at crates/molla-solvers/tests/contact_islands_gpu.rs:397:9:
+assertion `left == right` failed: step=3
+  left: 0
+ right: 1048576
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test mixed_joint_contact_graphs_preserve_joint_only_and_boundary_only_islands ... ok
+test onset_selected_groups_match_cpu_over_80_queued_contact_and_scalar_graphs ... ok
+test onset_selection_validates_masks_and_only_charges_selected_island_capacity ... ok
+test reversed_cross_workgroup_chains_keep_one_whole_articulation_component ... ok
+
+failures:
+
+failures:
+    mixed_graph_validation_capacity_and_sticky_recovery
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.56s
+
+error: test failed, to rerun pass `-p molla-solvers --test contact_islands_gpu`
+make[2]: *** [Makefile:172: test-gpu] Error 101
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: *** [Makefile:354: test-primitives-contact-islands-gpu] Error 2
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:149: test-primitives-gpu] Error 2

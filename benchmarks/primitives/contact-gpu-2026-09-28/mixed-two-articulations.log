@@ -1,0 +1,13 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/runtime_mixed_contacts_gpu.rs (target/debug/deps/runtime_mixed_contacts_gpu-6d4c48a61920f61e)
+
+running 1 test
+test two_contact_articulations_share_distance_impulses_under_endpoint_exchange ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 61.79s
+

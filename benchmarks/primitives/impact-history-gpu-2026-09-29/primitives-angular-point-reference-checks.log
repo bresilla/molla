@@ -1,0 +1,349 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.70s
+     Running `target/debug/examples/check_primitives_shaders`
+shader_wiring_ok	module=mass_response	entry_points=1
+shader_wiring_ok	module=jacobian_response	entry_points=1
+shader_wiring_ok	module=reaction_response	entry_points=1
+shader_wiring_ok	module=featherstone	entry_points=1
+shader_wiring_ok	module=runtime_distance	entry_points=2
+shader_wiring_ok	module=body_damping	entry_points=1
+shader_wiring_ok	module=scalar_publication	entry_points=1
+shader_wiring_ok	module=floating_momentum	entry_points=1
+shader_wiring_complete	modules=8	device_execution=false
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.24s
+     Running tests/runtime_d6_angular_mass.rs (target/debug/deps/runtime_d6_angular_mass-96c37e85e34721c1)
+
+running 2 tests
+angular_mass case=0 reversed=false rate_error=1.249927818e-14 linear_error=1.107237828e-14 pose_error=6.962045619e-14 rotation_error=7.954643500e-14
+angular_mass case=1 reversed=false rate_error=1.249853836e-14 linear_error=1.106832871e-14 pose_error=1.570092459e-16 rotation_error=1.619901092e-16
+angular_mass case=2 reversed=false rate_error=1.252038241e-14 linear_error=1.109254327e-14 pose_error=6.962045619e-14 rotation_error=7.954643500e-14
+angular_mass case=3 reversed=false rate_error=1.251828535e-14 linear_error=1.108943935e-14 pose_error=1.570092459e-16 rotation_error=1.619901092e-16
+angular_mass case=4 reversed=false rate_error=5.969742077e-12 linear_error=5.013497028e-12 pose_error=9.721960015e-14 rotation_error=9.054498924e-14
+angular_mass case=5 reversed=false rate_error=4.695159382e-12 linear_error=3.943994951e-12 pose_error=2.500689566e-14 rotation_error=4.676896851e-14
+angular_mass case=6 reversed=false rate_error=7.466552138e-12 linear_error=8.404985914e-12 pose_error=2.746886516e-13 rotation_error=2.911626469e-13
+angular_mass case=7 reversed=false rate_error=1.418609066e-12 linear_error=1.604120375e-12 pose_error=9.660854302e-15 rotation_error=1.428954643e-14
+angular_mass case=8 reversed=false rate_error=1.017075845e-14 linear_error=9.007998265e-15 pose_error=1.139218667e-13 rotation_error=2.617219556e-13
+angular_mass case=9 reversed=false rate_error=1.017271783e-14 linear_error=9.011166337e-15 pose_error=7.021666937e-16 rotation_error=3.152427400e-16
+angular_mass case=10 reversed=false rate_error=5.892818130e-15 linear_error=5.216085614e-15 pose_error=1.139218667e-13 rotation_error=2.616699529e-13
+angular_mass case=11 reversed=false rate_error=5.892646551e-15 linear_error=5.216609166e-15 pose_error=8.005932085e-16 rotation_error=1.144391700e-16
+angular_mass case=12 reversed=false rate_error=4.749946200e-13 linear_error=6.448736785e-13 pose_error=1.662297157e-14 rotation_error=2.307188797e-14
+angular_mass case=13 reversed=false rate_error=8.399948496e-13 linear_error=1.159801803e-12 pose_error=7.394452075e-15 rotation_error=8.303626794e-15
+angular_mass case=14 reversed=false rate_error=7.700356554e-12 linear_error=8.661954389e-12 pose_error=4.100647480e-14 rotation_error=9.517584480e-14
+angular_mass case=15 reversed=false rate_error=1.404783948e-12 linear_error=1.583110710e-12 pose_error=9.992623993e-15 rotation_error=1.414479524e-14
+angular_mass case=16 reversed=true rate_error=8.942547874e-15 linear_error=4.599991469e-15 pose_error=4.966622750e-14 rotation_error=4.651512164e-14
+angular_mass case=17 reversed=true rate_error=8.942689404e-15 linear_error=4.604655684e-15 pose_error=7.195067540e-16 rotation_error=2.128555894e-16
+angular_mass case=18 reversed=true rate_error=8.816702119e-15 linear_error=4.541078369e-15 pose_error=4.966622750e-14 rotation_error=4.651512164e-14
+angular_mass case=19 reversed=true rate_error=8.811897584e-15 linear_error=4.541952011e-15 pose_error=7.195067540e-16 rotation_error=2.128555894e-16
+angular_mass case=20 reversed=true rate_error=3.041062819e-12 linear_error=3.287496186e-12 pose_error=1.475601365e-13 rotation_error=1.433508668e-13
+angular_mass case=21 reversed=true rate_error=9.972177850e-12 linear_error=1.079220307e-11 pose_error=8.896821928e-14 rotation_error=9.979140902e-14
+angular_mass case=22 reversed=true rate_error=1.020364208e-11 linear_error=1.304290491e-11 pose_error=1.005173296e-13 rotation_error=1.002411565e-13
+angular_mass case=23 reversed=true rate_error=6.469151679e-12 linear_error=8.272069689e-12 pose_error=6.318963843e-14 rotation_error=6.475046209e-14
+angular_mass case=24 reversed=true rate_error=3.491147056e-15 linear_error=1.809238829e-15 pose_error=1.331229629e-13 rotation_error=1.380505441e-13
+angular_mass case=25 reversed=true rate_error=3.487999358e-15 linear_error=1.788755196e-15 pose_error=3.376611507e-16 rotation_error=5.594315114e-17
+angular_mass case=26 reversed=true rate_error=2.937790707e-15 linear_error=1.505011649e-15 pose_error=1.331229629e-13 rotation_error=1.380505441e-13
+angular_mass case=27 reversed=true rate_error=2.936976402e-15 linear_error=1.525677731e-15 pose_error=3.376611507e-16 rotation_error=5.594315114e-17
+angular_mass case=28 reversed=true rate_error=7.420917886e-12 linear_error=8.025502754e-12 pose_error=2.980490896e-13 rotation_error=3.168376995e-13
+angular_mass case=29 reversed=true rate_error=1.000763852e-11 linear_error=1.082533346e-11 pose_error=8.894272365e-14 rotation_error=1.001686883e-13
+angular_mass case=30 reversed=true rate_error=6.783039379e-13 linear_error=8.648883979e-13 pose_error=1.970283136e-13 rotation_error=1.889903233e-13
+angular_mass case=31 reversed=true rate_error=6.463400437e-12 linear_error=8.259697021e-12 pose_error=6.292166342e-14 rotation_error=6.463431282e-14
+angular_mass case=32 reversed=false rate_error=1.665713166e-14 linear_error=1.475733301e-14 pose_error=9.572427646e-14 rotation_error=9.208156507e-14
+angular_mass case=33 reversed=false rate_error=1.666248374e-14 linear_error=1.475345860e-14 pose_error=2.482534153e-16 rotation_error=1.861900615e-16
+angular_mass case=34 reversed=false rate_error=1.619991792e-14 linear_error=1.435150741e-14 pose_error=9.572427646e-14 rotation_error=9.208156507e-14
+angular_mass case=35 reversed=false rate_error=1.620850219e-14 linear_error=1.435311506e-14 pose_error=2.482534153e-16 rotation_error=1.861900615e-16
+angular_mass case=36 reversed=false rate_error=5.733011986e-12 linear_error=4.802043907e-12 pose_error=1.079000278e-13 rotation_error=1.015979832e-13
+angular_mass case=37 reversed=false rate_error=4.753220112e-12 linear_error=3.980011000e-12 pose_error=2.537266498e-14 rotation_error=4.759899954e-14
+angular_mass case=38 reversed=false rate_error=7.729319777e-12 linear_error=8.678464550e-12 pose_error=2.488172041e-13 rotation_error=2.588324324e-13
+angular_mass case=39 reversed=false rate_error=1.415533985e-12 linear_error=1.578686680e-12 pose_error=9.795791624e-15 rotation_error=1.422050084e-14
+angular_mass case=40 reversed=false rate_error=6.903479356e-15 linear_error=6.122412835e-15 pose_error=1.869336019e-13 rotation_error=3.842908223e-13
+angular_mass case=41 reversed=false rate_error=6.899731340e-15 linear_error=6.113903757e-15 pose_error=5.438959822e-16 rotation_error=2.989366980e-16
+angular_mass case=42 reversed=false rate_error=8.837540600e-15 linear_error=7.836793013e-15 pose_error=1.869336019e-13 rotation_error=3.842908223e-13
+angular_mass case=43 reversed=false rate_error=8.835967109e-15 linear_error=7.829221090e-15 pose_error=5.438959822e-16 rotation_error=2.989366980e-16
+angular_mass case=44 reversed=false rate_error=6.040690811e-13 linear_error=8.220711556e-13 pose_error=1.522463532e-14 rotation_error=2.197493252e-14
+angular_mass case=45 reversed=false rate_error=8.399917479e-13 linear_error=1.159797107e-12 pose_error=7.514331938e-15 rotation_error=8.406274511e-15
+angular_mass case=46 reversed=false rate_error=6.820874492e-12 linear_error=7.674924432e-12 pose_error=3.852793831e-14 rotation_error=9.438510293e-14
+angular_mass case=47 reversed=false rate_error=1.434756946e-12 linear_error=1.618629010e-12 pose_error=1.031551940e-14 rotation_error=1.442243381e-14
+angular_mass case=48 reversed=true rate_error=6.867389613e-15 linear_error=3.547338265e-15 pose_error=1.010539610e-13 rotation_error=9.832773538e-14
+angular_mass case=49 reversed=true rate_error=6.868328947e-15 linear_error=3.547400508e-15 pose_error=6.661338148e-16 rotation_error=4.502267503e-16
+angular_mass case=50 reversed=true rate_error=8.072371182e-15 linear_error=4.173437459e-15 pose_error=1.010923145e-13 rotation_error=9.847474465e-14
+angular_mass case=51 reversed=true rate_error=8.077515893e-15 linear_error=4.179204597e-15 pose_error=6.661338148e-16 rotation_error=4.502267503e-16
+angular_mass case=52 reversed=true rate_error=2.366178001e-12 linear_error=2.548503837e-12 pose_error=1.736393425e-13 rotation_error=1.705639666e-13
+angular_mass case=53 reversed=true rate_error=1.005209086e-11 linear_error=1.088748951e-11 pose_error=8.950470398e-14 rotation_error=1.002351703e-13
+angular_mass case=54 reversed=true rate_error=1.777297321e-12 linear_error=2.275688844e-12 pose_error=4.765767310e-14 rotation_error=4.730580172e-14
+angular_mass case=55 reversed=true rate_error=6.471800401e-12 linear_error=8.263723245e-12 pose_error=6.315295597e-14 rotation_error=6.462052490e-14
+angular_mass case=56 reversed=true rate_error=3.644999058e-15 linear_error=1.888709212e-15 pose_error=1.069631177e-13 rotation_error=1.108609331e-13
+angular_mass case=57 reversed=true rate_error=3.646308313e-15 linear_error=1.874891443e-15 pose_error=3.330669074e-16 rotation_error=1.804112415e-16
+angular_mass case=58 reversed=true rate_error=2.936431611e-15 linear_error=1.523244277e-15 pose_error=1.069631177e-13 rotation_error=1.108609331e-13
+angular_mass case=59 reversed=true rate_error=2.940817387e-15 linear_error=1.509555580e-15 pose_error=3.330669074e-16 rotation_error=1.804112415e-16
+angular_mass case=60 reversed=true rate_error=5.254169009e-12 linear_error=5.692450888e-12 pose_error=3.129693698e-13 rotation_error=3.268517184e-13
+angular_mass case=61 reversed=true rate_error=1.004011038e-11 linear_error=1.087150771e-11 pose_error=8.916051739e-14 rotation_error=1.003376497e-13
+angular_mass case=62 reversed=true rate_error=4.780731646e-12 linear_error=6.106004921e-12 pose_error=1.803949803e-13 rotation_error=1.775245163e-13
+angular_mass case=63 reversed=true rate_error=6.451353031e-12 linear_error=8.244303713e-12 pose_error=6.281704272e-14 rotation_error=6.449889518e-14
+test cpu_standalone_mixed_locks_use_full_anchored_inertia ... ok
+angular_mass case=0 reversed=false rate_error=1.249727808e-14 linear_error=1.107327753e-14 pose_error=6.962045619e-14 rotation_error=7.954643500e-14
+angular_mass case=1 reversed=false rate_error=1.249717728e-14 linear_error=1.106457060e-14 pose_error=1.570092459e-16 rotation_error=1.619901092e-16
+angular_mass case=2 reversed=false rate_error=1.252321229e-14 linear_error=1.109488236e-14 pose_error=6.962045619e-14 rotation_error=7.954643500e-14
+angular_mass case=3 reversed=false rate_error=1.252063525e-14 linear_error=1.108854127e-14 pose_error=1.570092459e-16 rotation_error=1.619901092e-16
+angular_mass case=4 reversed=false rate_error=5.969741383e-12 linear_error=5.013500120e-12 pose_error=9.721960015e-14 rotation_error=9.054498924e-14
+angular_mass case=5 reversed=false rate_error=4.695158577e-12 linear_error=3.943993916e-12 pose_error=2.500689566e-14 rotation_error=4.676896851e-14
+angular_mass case=6 reversed=false rate_error=7.466551966e-12 linear_error=8.404984964e-12 pose_error=2.746886516e-13 rotation_error=2.911626469e-13
+angular_mass case=7 reversed=false rate_error=1.418607666e-12 linear_error=1.604119914e-12 pose_error=9.660854302e-15 rotation_error=1.428954643e-14
+angular_mass case=8 reversed=false rate_error=1.017191987e-14 linear_error=9.005984206e-15 pose_error=1.139218667e-13 rotation_error=2.617219556e-13
+angular_mass case=9 reversed=false rate_error=1.016804637e-14 linear_error=9.006316467e-15 pose_error=7.021666937e-16 rotation_error=3.152427400e-16
+angular_mass case=10 reversed=false rate_error=5.892398395e-15 linear_error=5.216085614e-15 pose_error=1.139218667e-13 rotation_error=2.616699529e-13
+angular_mass case=11 reversed=false rate_error=5.888794682e-15 linear_error=5.213151562e-15 pose_error=8.005932085e-16 rotation_error=1.144391700e-16
+angular_mass case=12 reversed=false rate_error=4.749946903e-13 linear_error=6.448740057e-13 pose_error=1.662297157e-14 rotation_error=2.307188797e-14
+angular_mass case=13 reversed=false rate_error=8.399905082e-13 linear_error=1.159796940e-12 pose_error=7.394452075e-15 rotation_error=8.303626794e-15
+angular_mass case=14 reversed=false rate_error=7.700356136e-12 linear_error=8.661953223e-12 pose_error=4.100647480e-14 rotation_error=9.517584480e-14
+angular_mass case=15 reversed=false rate_error=1.404784872e-12 linear_error=1.583105232e-12 pose_error=9.992623993e-15 rotation_error=1.414479524e-14
+angular_mass case=16 reversed=true rate_error=8.942632159e-15 linear_error=4.603531719e-15 pose_error=4.966622750e-14 rotation_error=4.651512164e-14
+angular_mass case=17 reversed=true rate_error=8.938678315e-15 linear_error=4.605694948e-15 pose_error=7.195067540e-16 rotation_error=2.128555894e-16
+angular_mass case=18 reversed=true rate_error=8.818489688e-15 linear_error=4.539691647e-15 pose_error=4.966622750e-14 rotation_error=4.651512164e-14
+angular_mass case=19 reversed=true rate_error=8.813487588e-15 linear_error=4.541564503e-15 pose_error=7.195067540e-16 rotation_error=2.128555894e-16
+angular_mass case=20 reversed=true rate_error=3.041063175e-12 linear_error=3.287496952e-12 pose_error=1.475601365e-13 rotation_error=1.433508668e-13
+angular_mass case=21 reversed=true rate_error=9.972180800e-12 linear_error=1.079220519e-11 pose_error=8.896821928e-14 rotation_error=9.979140902e-14
+angular_mass case=22 reversed=true rate_error=1.020364197e-11 linear_error=1.304290519e-11 pose_error=1.005173296e-13 rotation_error=1.002411565e-13
+angular_mass case=23 reversed=true rate_error=6.469148767e-12 linear_error=8.272062775e-12 pose_error=6.318963843e-14 rotation_error=6.475046209e-14
+angular_mass case=24 reversed=true rate_error=3.489240497e-15 linear_error=1.807304027e-15 pose_error=1.331229629e-13 rotation_error=1.380505441e-13
+angular_mass case=25 reversed=true rate_error=3.490061472e-15 linear_error=1.788420829e-15 pose_error=3.376611507e-16 rotation_error=5.594315114e-17
+angular_mass case=26 reversed=true rate_error=2.940693049e-15 linear_error=1.508752993e-15 pose_error=1.331229629e-13 rotation_error=1.380505441e-13
+angular_mass case=27 reversed=true rate_error=2.936891232e-15 linear_error=1.524256524e-15 pose_error=3.376611507e-16 rotation_error=5.594315114e-17
+angular_mass case=28 reversed=true rate_error=7.420918426e-12 linear_error=8.025503560e-12 pose_error=2.980490896e-13 rotation_error=3.168376995e-13
+angular_mass case=29 reversed=true rate_error=1.000764477e-11 linear_error=1.082533963e-11 pose_error=8.894272365e-14 rotation_error=1.001686883e-13
+angular_mass case=30 reversed=true rate_error=6.783026079e-13 linear_error=8.648877673e-13 pose_error=1.970283136e-13 rotation_error=1.889903233e-13
+angular_mass case=31 reversed=true rate_error=6.463401135e-12 linear_error=8.259701319e-12 pose_error=6.292166342e-14 rotation_error=6.463431282e-14
+angular_mass case=32 reversed=false rate_error=1.665554503e-14 linear_error=1.475703570e-14 pose_error=9.572427646e-14 rotation_error=9.208156507e-14
+angular_mass case=33 reversed=false rate_error=1.665875828e-14 linear_error=1.474878327e-14 pose_error=2.482534153e-16 rotation_error=1.861900615e-16
+angular_mass case=34 reversed=false rate_error=1.619932573e-14 linear_error=1.435165618e-14 pose_error=9.572427646e-14 rotation_error=9.208156507e-14
+angular_mass case=35 reversed=false rate_error=1.620118297e-14 linear_error=1.434543441e-14 pose_error=2.482534153e-16 rotation_error=1.861900615e-16
+angular_mass case=36 reversed=false rate_error=5.733009689e-12 linear_error=4.802044153e-12 pose_error=1.079000278e-13 rotation_error=1.015979832e-13
+angular_mass case=37 reversed=false rate_error=4.753216310e-12 linear_error=3.980004863e-12 pose_error=2.537266498e-14 rotation_error=4.759899954e-14
+angular_mass case=38 reversed=false rate_error=7.729321144e-12 linear_error=8.678467046e-12 pose_error=2.488172041e-13 rotation_error=2.588324324e-13
+angular_mass case=39 reversed=false rate_error=1.415533533e-12 linear_error=1.578685993e-12 pose_error=9.795791624e-15 rotation_error=1.422050084e-14
+angular_mass case=40 reversed=false rate_error=6.903476226e-15 linear_error=6.123053984e-15 pose_error=1.869336019e-13 rotation_error=3.842908223e-13
+angular_mass case=41 reversed=false rate_error=6.901025875e-15 linear_error=6.114315791e-15 pose_error=5.438959822e-16 rotation_error=2.989366980e-16
+angular_mass case=42 reversed=false rate_error=8.838206399e-15 linear_error=7.834535583e-15 pose_error=1.869336019e-13 rotation_error=3.842908223e-13
+angular_mass case=43 reversed=false rate_error=8.834949899e-15 linear_error=7.828905310e-15 pose_error=5.438959822e-16 rotation_error=2.989366980e-16
+angular_mass case=44 reversed=false rate_error=6.040684242e-13 linear_error=8.220713371e-13 pose_error=1.522463532e-14 rotation_error=2.197493252e-14
+angular_mass case=45 reversed=false rate_error=8.399922935e-13 linear_error=1.159800732e-12 pose_error=7.514331938e-15 rotation_error=8.406274511e-15
+angular_mass case=46 reversed=false rate_error=6.820876151e-12 linear_error=7.674925282e-12 pose_error=3.852793831e-14 rotation_error=9.438510293e-14
+angular_mass case=47 reversed=false rate_error=1.434756026e-12 linear_error=1.618629303e-12 pose_error=1.031551940e-14 rotation_error=1.442243381e-14
+angular_mass case=48 reversed=true rate_error=6.866237372e-15 linear_error=3.541935890e-15 pose_error=1.010539610e-13 rotation_error=9.832773538e-14
+angular_mass case=49 reversed=true rate_error=6.867842320e-15 linear_error=3.547800924e-15 pose_error=6.661338148e-16 rotation_error=4.502267503e-16
+angular_mass case=50 reversed=true rate_error=8.082421289e-15 linear_error=4.178126513e-15 pose_error=1.010923145e-13 rotation_error=9.847474465e-14
+angular_mass case=51 reversed=true rate_error=8.077923106e-15 linear_error=4.183010241e-15 pose_error=6.661338148e-16 rotation_error=4.502267503e-16
+angular_mass case=52 reversed=true rate_error=2.366178940e-12 linear_error=2.548503635e-12 pose_error=1.736393425e-13 rotation_error=1.705639666e-13
+angular_mass case=53 reversed=true rate_error=1.005209033e-11 linear_error=1.088748893e-11 pose_error=8.950470398e-14 rotation_error=1.002351703e-13
+angular_mass case=54 reversed=true rate_error=1.777297708e-12 linear_error=2.275688607e-12 pose_error=4.765767310e-14 rotation_error=4.730580172e-14
+angular_mass case=55 reversed=true rate_error=6.471802933e-12 linear_error=8.263721723e-12 pose_error=6.315295597e-14 rotation_error=6.462052490e-14
+angular_mass case=56 reversed=true rate_error=3.644999058e-15 linear_error=1.888709212e-15 pose_error=1.069631177e-13 rotation_error=1.108609331e-13
+angular_mass case=57 reversed=true rate_error=3.648451345e-15 linear_error=1.875778007e-15 pose_error=3.330669074e-16 rotation_error=1.804112415e-16
+angular_mass case=58 reversed=true rate_error=2.943444039e-15 linear_error=1.529680892e-15 pose_error=1.069631177e-13 rotation_error=1.108609331e-13
+angular_mass case=59 reversed=true rate_error=2.937000066e-15 linear_error=1.508663110e-15 pose_error=3.330669074e-16 rotation_error=1.804112415e-16
+angular_mass case=60 reversed=true rate_error=5.254169829e-12 linear_error=5.692453834e-12 pose_error=3.129693698e-13 rotation_error=3.268517184e-13
+angular_mass case=61 reversed=true rate_error=1.004011546e-11 linear_error=1.087151220e-11 pose_error=8.916051739e-14 rotation_error=1.003376497e-13
+angular_mass case=62 reversed=true rate_error=4.780733589e-12 linear_error=6.106005964e-12 pose_error=1.803949803e-13 rotation_error=1.775245163e-13
+angular_mass case=63 reversed=true rate_error=6.451352555e-12 linear_error=8.244304748e-12 pose_error=6.281704272e-14 rotation_error=6.449889518e-14
+angular_mass_reaction case=0 force_error=2.213998917e-12 torque_error=6.363571003e-12
+angular_mass_reaction case=1 force_error=2.212914121e-12 torque_error=6.360704863e-12
+angular_mass_reaction case=2 force_error=2.218484285e-12 torque_error=6.375588967e-12
+angular_mass_reaction case=3 force_error=2.217708254e-12 torque_error=6.374350770e-12
+angular_mass_reaction case=4 force_error=1.002801381e-9 torque_error=3.419501066e-9
+angular_mass_reaction case=5 force_error=7.887987833e-10 torque_error=2.689591833e-9
+angular_mass_reaction case=6 force_error=1.680814824e-9 torque_error=6.056199841e-9
+angular_mass_reaction case=7 force_error=3.208239828e-10 torque_error=1.153655098e-9
+angular_mass_reaction case=8 force_error=1.801768930e-12 torque_error=5.178288517e-12
+angular_mass_reaction case=9 force_error=1.801263293e-12 torque_error=5.176612144e-12
+angular_mass_reaction case=10 force_error=1.043387480e-12 torque_error=2.998859958e-12
+angular_mass_reaction case=11 force_error=1.042630312e-12 torque_error=2.997867535e-12
+angular_mass_reaction case=12 force_error=1.289712296e-10 torque_error=3.554550301e-10
+angular_mass_reaction case=13 force_error=2.319593881e-10 torque_error=6.346073663e-10
+angular_mass_reaction case=14 force_error=1.732293246e-9 torque_error=6.243486244e-9
+angular_mass_reaction case=15 force_error=3.166210464e-10 torque_error=1.140223124e-9
+angular_mass_reaction case=16 force_error=9.211145960e-13 torque_error=4.571404646e-12
+angular_mass_reaction case=17 force_error=9.211389896e-13 torque_error=4.569575119e-12
+angular_mass_reaction case=18 force_error=9.087500379e-13 torque_error=4.508664513e-12
+angular_mass_reaction case=19 force_error=9.083129007e-13 torque_error=4.505477774e-12
+angular_mass_reaction case=20 force_error=6.575684912e-10 torque_error=1.926760195e-9
+angular_mass_reaction case=21 force_error=2.158441039e-9 torque_error=6.322934300e-9
+angular_mass_reaction case=22 force_error=2.608694884e-9 torque_error=7.119851190e-9
+angular_mass_reaction case=23 force_error=1.654412555e-9 torque_error=4.514884133e-9
+angular_mass_reaction case=24 force_error=3.611756003e-13 torque_error=1.784329550e-12
+angular_mass_reaction case=25 force_error=3.576841659e-13 torque_error=1.782062021e-12
+angular_mass_reaction case=26 force_error=3.020715893e-13 torque_error=1.502099409e-12
+angular_mass_reaction case=27 force_error=3.048513048e-13 torque_error=1.503895413e-12
+angular_mass_reaction case=28 force_error=1.605312375e-9 torque_error=4.703270670e-9
+angular_mass_reaction case=29 force_error=2.165067925e-9 torque_error=6.343114087e-9
+angular_mass_reaction case=30 force_error=1.729923689e-10 torque_error=4.725497751e-10
+angular_mass_reaction case=31 force_error=1.651940264e-9 torque_error=4.509092764e-9
+angular_mass_reaction case=32 force_error=2.950514676e-12 torque_error=8.482224183e-12
+angular_mass_reaction case=33 force_error=2.949756653e-12 torque_error=8.478791332e-12
+angular_mass_reaction case=34 force_error=2.869372127e-12 torque_error=8.247886898e-12
+angular_mass_reaction case=35 force_error=2.869086882e-12 torque_error=8.247288073e-12
+angular_mass_reaction case=36 force_error=9.605098849e-10 torque_error=3.279522956e-9
+angular_mass_reaction case=37 force_error=7.960009727e-10 torque_error=2.718424707e-9
+angular_mass_reaction case=38 force_error=1.735512286e-9 torque_error=6.260242829e-9
+angular_mass_reaction case=39 force_error=3.157371986e-10 torque_error=1.142187714e-9
+angular_mass_reaction case=40 force_error=1.223125546e-12 torque_error=3.516216832e-12
+angular_mass_reaction case=41 force_error=1.222863158e-12 torque_error=3.514279584e-12
+angular_mass_reaction case=42 force_error=1.565934640e-12 torque_error=4.501433524e-12
+angular_mass_reaction case=43 force_error=1.565781062e-12 torque_error=4.499047248e-12
+angular_mass_reaction case=44 force_error=1.644102628e-10 torque_error=4.526592636e-10
+angular_mass_reaction case=45 force_error=2.319601464e-10 torque_error=6.346083642e-10
+angular_mass_reaction case=46 force_error=1.534892837e-9 torque_error=5.531318050e-9
+angular_mass_reaction case=47 force_error=3.237258606e-10 torque_error=1.165261513e-9
+angular_mass_reaction case=48 force_error=7.080493798e-13 torque_error=3.512258459e-12
+angular_mass_reaction case=49 force_error=7.095601849e-13 torque_error=3.513170149e-12
+angular_mass_reaction case=50 force_error=8.358901225e-13 torque_error=4.136794044e-12
+angular_mass_reaction case=51 force_error=8.366020482e-13 torque_error=4.134409252e-12
+angular_mass_reaction case=52 force_error=5.097574068e-10 torque_error=1.495042786e-9
+angular_mass_reaction case=53 force_error=2.177497787e-9 torque_error=6.377473225e-9
+angular_mass_reaction case=54 force_error=4.551590787e-10 torque_error=1.241519733e-9
+angular_mass_reaction case=55 force_error=1.652744345e-9 torque_error=4.512569301e-9
+angular_mass_reaction case=56 force_error=3.784899284e-13 torque_error=1.866716133e-12
+angular_mass_reaction case=57 force_error=3.751556014e-13 torque_error=1.863396936e-12
+angular_mass_reaction case=58 force_error=3.065850880e-13 torque_error=1.507956129e-12
+angular_mass_reaction case=59 force_error=3.017326220e-13 torque_error=1.499776025e-12
+angular_mass_reaction case=60 force_error=1.138644720e-9 torque_error=3.334522230e-9
+angular_mass_reaction case=61 force_error=2.174302440e-9 torque_error=6.368553320e-9
+angular_mass_reaction case=62 force_error=1.221294224e-9 torque_error=3.334169098e-9
+angular_mass_reaction case=63 force_error=1.648860950e-9 torque_error=4.500687633e-9
+angular_mass case=0 reversed=false rate_error=1.249935672e-12 linear_error=1.107109788e-12 pose_error=3.140184917e-16 rotation_error=3.041262658e-16
+angular_mass case=1 reversed=false rate_error=1.249935689e-12 linear_error=1.107109814e-12 pose_error=1.570092459e-16 rotation_error=1.619901092e-16
+angular_mass case=2 reversed=false rate_error=1.251998203e-12 linear_error=1.108936656e-12 pose_error=3.140184917e-16 rotation_error=3.041262658e-16
+angular_mass case=3 reversed=false rate_error=1.251998197e-12 linear_error=1.108936681e-12 pose_error=1.570092459e-16 rotation_error=1.619901092e-16
+angular_mass case=4 reversed=false rate_error=1.393312766e-12 linear_error=9.392717510e-13 pose_error=3.510833469e-16 rotation_error=1.430489625e-16
+angular_mass case=5 reversed=false rate_error=1.587787686e-12 linear_error=1.100598369e-12 pose_error=4.002966042e-16 rotation_error=1.249000903e-16
+angular_mass case=6 reversed=false rate_error=8.976305755e-12 linear_error=1.096783551e-11 pose_error=6.377745717e-16 rotation_error=9.192921514e-16
+angular_mass case=7 reversed=false rate_error=1.805854081e-12 linear_error=2.703118934e-12 pose_error=2.220446049e-16 rotation_error=2.435541876e-16
+angular_mass case=8 reversed=false rate_error=1.016901128e-12 linear_error=9.007033004e-13 pose_error=2.482534153e-16 rotation_error=1.841096603e-16
+angular_mass case=9 reversed=false rate_error=1.016901078e-12 linear_error=9.007032661e-13 pose_error=7.021666937e-16 rotation_error=3.152427400e-16
+angular_mass case=10 reversed=false rate_error=5.891756127e-13 linear_error=5.218525151e-13 pose_error=3.140184917e-16 rotation_error=1.455514665e-16
+angular_mass case=11 reversed=false rate_error=5.891756459e-13 linear_error=5.218525340e-13 pose_error=8.005932085e-16 rotation_error=1.144391700e-16
+angular_mass case=12 reversed=false rate_error=4.397414258e-12 linear_error=5.184610350e-12 pose_error=5.661048867e-16 rotation_error=6.421383037e-16
+angular_mass case=13 reversed=false rate_error=8.226357341e-12 linear_error=1.189984483e-11 pose_error=6.843874359e-16 rotation_error=7.054504218e-16
+angular_mass case=14 reversed=false rate_error=7.854977341e-12 linear_error=9.190555310e-12 pose_error=5.978733960e-16 rotation_error=7.328996258e-16
+angular_mass case=15 reversed=false rate_error=4.185823017e-13 linear_error=5.821870889e-13 pose_error=4.154074181e-16 rotation_error=9.412373635e-17
+angular_mass case=16 reversed=true rate_error=8.938222493e-13 linear_error=4.611313058e-13 pose_error=9.485749681e-16 rotation_error=1.550419721e-16
+angular_mass case=17 reversed=true rate_error=8.938221647e-13 linear_error=4.611313133e-13 pose_error=7.195067540e-16 rotation_error=2.128555894e-16
+angular_mass case=18 reversed=true rate_error=8.813517128e-13 linear_error=4.546976916e-13 pose_error=9.485749681e-16 rotation_error=1.550419721e-16
+angular_mass case=19 reversed=true rate_error=8.813516647e-13 linear_error=4.546977085e-13 pose_error=7.195067540e-16 rotation_error=2.128555894e-16
+angular_mass case=20 reversed=true rate_error=6.583317731e-12 linear_error=6.867311065e-12 pose_error=5.236911533e-16 rotation_error=6.369530437e-16
+angular_mass case=21 reversed=true rate_error=6.882675385e-12 linear_error=7.695206982e-12 pose_error=1.053250041e-15 rotation_error=8.260271594e-16
+angular_mass case=22 reversed=true rate_error=2.283783698e-12 linear_error=3.405393825e-12 pose_error=1.047382307e-15 rotation_error=3.586978636e-16
+angular_mass case=23 reversed=true rate_error=1.691589889e-12 linear_error=2.577066992e-12 pose_error=7.870063978e-16 rotation_error=2.727435501e-16
+angular_mass case=24 reversed=true rate_error=3.487757744e-13 linear_error=1.799368670e-13 pose_error=3.140184917e-16 rotation_error=1.211825723e-16
+angular_mass case=25 reversed=true rate_error=3.487758535e-13 linear_error=1.799366867e-13 pose_error=3.376611507e-16 rotation_error=5.594315114e-17
+angular_mass case=26 reversed=true rate_error=2.937839193e-13 linear_error=1.515659111e-13 pose_error=2.482534153e-16 rotation_error=3.034923386e-16
+angular_mass case=27 reversed=true rate_error=2.937838057e-13 linear_error=1.515659608e-13 pose_error=3.376611507e-16 rotation_error=5.594315114e-17
+angular_mass case=28 reversed=true rate_error=7.754314543e-12 linear_error=8.114563814e-12 pose_error=9.550499577e-16 rotation_error=6.811435411e-16
+angular_mass case=29 reversed=true rate_error=1.042798260e-11 linear_error=1.100835390e-11 pose_error=9.104505742e-16 rotation_error=8.457768793e-16
+angular_mass case=30 reversed=true rate_error=2.262386831e-12 linear_error=2.711770192e-12 pose_error=6.280369835e-16 rotation_error=3.705655206e-16
+angular_mass case=31 reversed=true rate_error=9.357692867e-13 linear_error=1.335920892e-12 pose_error=4.041272810e-16 rotation_error=1.241267077e-16
+angular_mass case=32 reversed=false rate_error=1.666121054e-12 linear_error=1.475739188e-12 pose_error=6.280369835e-16 rotation_error=4.126162952e-16
+angular_mass case=33 reversed=false rate_error=1.666121075e-12 linear_error=1.475739124e-12 pose_error=2.482534153e-16 rotation_error=1.861900615e-16
+angular_mass case=34 reversed=false rate_error=1.620232929e-12 linear_error=1.435094526e-12 pose_error=6.280369835e-16 rotation_error=4.126162952e-16
+angular_mass case=35 reversed=false rate_error=1.620232881e-12 linear_error=1.435094403e-12 pose_error=2.482534153e-16 rotation_error=1.861900615e-16
+angular_mass case=36 reversed=false rate_error=4.503980121e-12 linear_error=2.819438155e-12 pose_error=2.220446049e-16 rotation_error=3.310368769e-16
+angular_mass case=37 reversed=false rate_error=4.356626411e-12 linear_error=2.700288085e-12 pose_error=3.330669074e-16 rotation_error=4.257111788e-16
+angular_mass case=38 reversed=false rate_error=9.044371493e-12 linear_error=8.823454143e-12 pose_error=5.978733960e-16 rotation_error=9.502991902e-16
+angular_mass case=39 reversed=false rate_error=1.838228249e-12 linear_error=1.004791800e-12 pose_error=4.577566799e-16 rotation_error=2.513374269e-16
+angular_mass case=40 reversed=false rate_error=6.904386758e-13 linear_error=6.115446277e-13 pose_error=1.110223025e-16 rotation_error=7.850462293e-17
+angular_mass case=41 reversed=false rate_error=6.904387004e-13 linear_error=6.115446507e-13 pose_error=5.438959822e-16 rotation_error=2.989366980e-16
+angular_mass case=42 reversed=false rate_error=8.837634280e-13 linear_error=7.827788750e-13 pose_error=1.110223025e-16 rotation_error=7.850462293e-17
+angular_mass case=43 reversed=false rate_error=8.837633990e-13 linear_error=7.827788374e-13 pose_error=5.438959822e-16 rotation_error=2.989366980e-16
+angular_mass case=44 reversed=false rate_error=5.584571139e-12 linear_error=6.846957665e-12 pose_error=6.473657049e-16 rotation_error=6.736090074e-16
+angular_mass case=45 reversed=false rate_error=8.226357356e-12 linear_error=1.189984485e-11 pose_error=8.382000022e-16 rotation_error=9.108735478e-16
+angular_mass case=46 reversed=false rate_error=9.744480262e-12 linear_error=1.149219510e-11 pose_error=1.115760331e-15 rotation_error=1.056536320e-15
+angular_mass case=47 reversed=false rate_error=3.178679783e-12 linear_error=4.081345601e-12 pose_error=5.551115123e-16 rotation_error=4.335559509e-16
+angular_mass case=48 reversed=true rate_error=6.869852240e-13 linear_error=3.544222331e-13 pose_error=9.742167503e-16 rotation_error=1.532164497e-16
+angular_mass case=49 reversed=true rate_error=6.869851865e-13 linear_error=3.544222720e-13 pose_error=6.661338148e-16 rotation_error=4.502267503e-16
+angular_mass case=50 reversed=true rate_error=8.079056397e-13 linear_error=4.168063988e-13 pose_error=9.550499577e-16 rotation_error=1.710352896e-16
+angular_mass case=51 reversed=true rate_error=8.079057021e-13 linear_error=4.168064031e-13 pose_error=6.661338148e-16 rotation_error=4.502267503e-16
+angular_mass case=52 reversed=true rate_error=2.319264863e-12 linear_error=3.386645325e-12 pose_error=3.140184917e-16 rotation_error=4.074237307e-16
+angular_mass case=53 reversed=true rate_error=1.491147734e-11 linear_error=1.723383138e-11 pose_error=1.650465181e-15 rotation_error=1.343410898e-15
+angular_mass case=54 reversed=true rate_error=4.797943257e-12 linear_error=6.585534412e-12 pose_error=4.965068306e-16 rotation_error=6.596717973e-16
+angular_mass case=55 reversed=true rate_error=1.854578968e-12 linear_error=1.741831171e-12 pose_error=7.691850746e-16 rotation_error=4.270979386e-16
+angular_mass case=56 reversed=true rate_error=3.644825656e-13 linear_error=1.880401275e-13 pose_error=4.577566799e-16 rotation_error=5.026748539e-16
+angular_mass case=57 reversed=true rate_error=3.644824751e-13 linear_error=1.880399384e-13 pose_error=3.330669074e-16 rotation_error=1.804112415e-16
+angular_mass case=58 reversed=true rate_error=2.937839467e-13 linear_error=1.515660442e-13 pose_error=4.577566799e-16 rotation_error=5.026748539e-16
+angular_mass case=59 reversed=true rate_error=2.937839000e-13 linear_error=1.515658487e-13 pose_error=3.330669074e-16 rotation_error=1.804112415e-16
+angular_mass case=60 reversed=true rate_error=8.761174403e-12 linear_error=1.028005045e-11 pose_error=7.447602460e-16 rotation_error=8.163159687e-16
+angular_mass case=61 reversed=true rate_error=1.369610336e-11 linear_error=1.563128973e-11 pose_error=1.355199910e-15 rotation_error=1.443556788e-15
+angular_mass case=62 reversed=true rate_error=2.252184846e-12 linear_error=2.698684945e-12 pose_error=4.965068306e-16 rotation_error=3.775166432e-16
+angular_mass case=63 reversed=true rate_error=3.533096325e-13 linear_error=2.073088888e-13 pose_error=3.330669074e-16 rotation_error=1.804112415e-16
+angular_mass_reaction case=0 force_error=2.214219600e-8 torque_error=6.363779838e-8
+angular_mass_reaction case=1 force_error=2.214219628e-8 torque_error=6.363779819e-8
+angular_mass_reaction case=2 force_error=2.217873367e-8 torque_error=6.374280738e-8
+angular_mass_reaction case=3 force_error=2.217873362e-8 torque_error=6.374280706e-8
+angular_mass_reaction case=4 force_error=1.878543504e-8 torque_error=7.173938913e-8
+angular_mass_reaction case=5 force_error=2.201196738e-8 torque_error=8.282332414e-8
+angular_mass_reaction case=6 force_error=2.193567073e-7 torque_error=7.621668893e-7
+angular_mass_reaction case=7 force_error=5.406237869e-8 torque_error=1.673651048e-7
+angular_mass_reaction case=8 force_error=1.801406697e-8 torque_error=5.177334293e-8
+angular_mass_reaction case=9 force_error=1.801406532e-8 torque_error=5.177334031e-8
+angular_mass_reaction case=10 force_error=1.043705044e-8 torque_error=2.999661404e-8
+angular_mass_reaction case=11 force_error=1.043705068e-8 torque_error=2.999661537e-8
+angular_mass_reaction case=12 force_error=1.036922066e-7 torque_error=3.032623137e-7
+angular_mass_reaction case=13 force_error=2.379968966e-7 torque_error=6.372547354e-7
+angular_mass_reaction case=14 force_error=1.838111051e-7 torque_error=6.511623672e-7
+angular_mass_reaction case=15 force_error=1.164374178e-8 torque_error=3.242141994e-8
+angular_mass_reaction case=16 force_error=9.222626687e-9 torque_error=4.570773405e-8
+angular_mass_reaction case=17 force_error=9.222626266e-9 torque_error=4.570772973e-8
+angular_mass_reaction case=18 force_error=9.093954335e-9 torque_error=4.507002353e-8
+angular_mass_reaction case=19 force_error=9.093954169e-9 torque_error=4.507002191e-8
+angular_mass_reaction case=20 force_error=1.373462224e-7 torque_error=4.062625622e-7
+angular_mass_reaction case=21 force_error=1.539041396e-7 torque_error=4.473775460e-7
+angular_mass_reaction case=22 force_error=6.810787647e-8 torque_error=1.778393629e-7
+angular_mass_reaction case=23 force_error=5.154133983e-8 torque_error=1.342238134e-7
+angular_mass_reaction case=24 force_error=3.598737766e-9 torque_error=1.783548462e-8
+angular_mass_reaction case=25 force_error=3.598733733e-9 torque_error=1.783548317e-8
+angular_mass_reaction case=26 force_error=3.031317688e-9 torque_error=1.502334313e-8
+angular_mass_reaction case=27 force_error=3.031319217e-9 torque_error=1.502333887e-8
+angular_mass_reaction case=28 force_error=1.622912786e-7 torque_error=4.796273109e-7
+angular_mass_reaction case=29 force_error=2.201670779e-7 torque_error=6.491245559e-7
+angular_mass_reaction case=30 force_error=5.423540448e-8 torque_error=1.515918668e-7
+angular_mass_reaction case=31 force_error=2.671841785e-8 torque_error=7.047245577e-8
+angular_mass_reaction case=32 force_error=2.951478305e-8 torque_error=8.482698739e-8
+angular_mass_reaction case=33 force_error=2.951478249e-8 torque_error=8.482698642e-8
+angular_mass_reaction case=34 force_error=2.870189004e-8 torque_error=8.249069238e-8
+angular_mass_reaction case=35 force_error=2.870188806e-8 torque_error=8.249068653e-8
+angular_mass_reaction case=36 force_error=5.638876137e-8 torque_error=2.240832149e-7
+angular_mass_reaction case=37 force_error=5.400576169e-8 torque_error=2.157604160e-7
+angular_mass_reaction case=38 force_error=1.764690792e-7 torque_error=6.759195850e-7
+angular_mass_reaction case=39 force_error=2.009583599e-8 torque_error=8.454284802e-8
+angular_mass_reaction case=40 force_error=1.223089228e-8 torque_error=3.515220733e-8
+angular_mass_reaction case=41 force_error=1.223089301e-8 torque_error=3.515220770e-8
+angular_mass_reaction case=42 force_error=1.565557658e-8 torque_error=4.499492380e-8
+angular_mass_reaction case=43 force_error=1.565557675e-8 torque_error=4.499492178e-8
+angular_mass_reaction case=44 force_error=1.369391529e-7 torque_error=3.939815962e-7
+angular_mass_reaction case=45 force_error=2.379968971e-7 torque_error=6.372547369e-7
+angular_mass_reaction case=46 force_error=2.298439015e-7 torque_error=8.113823924e-7
+angular_mass_reaction case=47 force_error=8.162691202e-8 torque_error=2.771599759e-7
+angular_mass_reaction case=48 force_error=7.088444960e-9 torque_error=3.513063318e-8
+angular_mass_reaction case=49 force_error=7.088445440e-9 torque_error=3.513062994e-8
+angular_mass_reaction case=50 force_error=8.336127895e-9 torque_error=4.131419120e-8
+angular_mass_reaction case=51 force_error=8.336128061e-9 torque_error=4.131419083e-8
+angular_mass_reaction case=52 force_error=6.773290744e-8 torque_error=1.914285166e-7
+angular_mass_reaction case=53 force_error=3.446766276e-7 torque_error=9.949067130e-7
+angular_mass_reaction case=54 force_error=1.317106888e-7 torque_error=3.512644236e-7
+angular_mass_reaction case=55 force_error=3.483662342e-8 torque_error=1.090308811e-7
+angular_mass_reaction case=56 force_error=3.760802669e-9 torque_error=1.863868817e-8
+angular_mass_reaction case=57 force_error=3.760798768e-9 torque_error=1.863867999e-8
+angular_mass_reaction case=58 force_error=3.031321097e-9 torque_error=1.502334422e-8
+angular_mass_reaction case=59 force_error=3.031316974e-9 torque_error=1.502333940e-8
+angular_mass_reaction case=60 force_error=2.056010126e-7 torque_error=5.917313926e-7
+angular_mass_reaction case=61 force_error=3.126257946e-7 torque_error=9.047128054e-7
+angular_mass_reaction case=62 force_error=5.397369979e-8 torque_error=1.508790857e-7
+angular_mass_reaction case=63 force_error=4.146177775e-9 torque_error=1.768805619e-8
+test cpu_mixed_locks_use_full_anchored_inertia_and_authored_reactions ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+

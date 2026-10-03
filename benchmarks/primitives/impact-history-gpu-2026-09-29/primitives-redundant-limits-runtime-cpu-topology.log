@@ -1,0 +1,37 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0368]: binary assignment operation `+=` cannot be applied to type `SpatialVector`
+   --> crates/molla-solvers/tests/standalone_redundant_limits.rs:627:17
+    |
+627 |                 reaction.child += external.child;
+    |                 --------------^^^^^^^^^^^^^^^^^^
+    |                 |
+    |                 cannot use `+=` on type `SpatialVector`
+    |
+note: `SpatialVector` does not implement `AddAssign`
+   --> crates/molla-math/src/spatial.rs:14:1
+    |
+ 14 | pub struct SpatialVector {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^ `SpatialVector` is defined in another crate
+
+error[E0368]: binary assignment operation `+=` cannot be applied to type `SpatialVector`
+   --> crates/molla-solvers/tests/standalone_redundant_limits.rs:628:17
+    |
+628 |                 reaction.parent += external.parent;
+    |                 ---------------^^^^^^^^^^^^^^^^^^^
+    |                 |
+    |                 cannot use `+=` on type `SpatialVector`
+    |
+note: `SpatialVector` does not implement `AddAssign`
+   --> crates/molla-math/src/spatial.rs:14:1
+    |
+ 14 | pub struct SpatialVector {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^ `SpatialVector` is defined in another crate
+
+For more information about this error, try `rustc --explain E0368`.
+error: could not compile `molla-solvers` (test "standalone_redundant_limits") due to 2 previous errors
+make: *** [Makefile:506: test-primitives-redundant-limits-cpu] Error 101

@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-core v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s
+     Running unittests src/lib.rs (target/debug/deps/molla_core-dee0efa42efd07fc)
+
+running 5 tests
+test gpu_metrics::enabled::tests::counter_overflow_is_reported_without_wrapping ... ok
+test gpu_metrics::enabled::tests::dropping_during_unwind_clears_the_scope ... ok
+test gpu_metrics::enabled::tests::scopes_count_only_encodings_inside_their_lifetime ... ok
+test gpu_metrics::enabled::tests::nested_scopes_fail_without_resetting_the_outer_count ... ok
+test gpu_metrics::enabled::tests::threads_keep_independent_counts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

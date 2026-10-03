@@ -1,0 +1,174 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/molla_geometry-ab204e33ce70f222)
+
+running 128 tests
+test aabb::tests::touching_intersects ... ok
+test aabb::tests::infinite_intersects_anything ... ok
+test aabb::tests::point_intersects_itself ... ok
+test aabb::tests::disjoint_does_not_intersect ... ok
+test contact_extras::tests::contact_id_stable_under_pair_swap ... ok
+test contact_extras::tests::contact_id_changes_with_voxel ... ok
+test contact_reduction::tests::zero_max_returns_empty ... ok
+test contact_reduction::tests::empty_input_returns_empty ... ok
+test gaussian_splat::tests::anisotropic_scaling_affects_response ... ok
+test contact_reduction::tests::temporal_coherence_drops_unmatched ... ok
+test contact_reduction::tests::keeps_deepest_first ... ok
+test contact_reduction::tests::deepest_is_preserved_among_eight ... ok
+test contact_reduction::tests::eight_contacts_reduce_to_four_canonical ... ok
+test epa::tests::epa_box_box_overlap_axis_aligned ... ok
+test contact_reduction::tests::keeps_all_when_under_cap ... ok
+test contact_reduction::tests::pair_grouping_is_independent ... ok
+test gaussian_splat::tests::sh_band1_view_dependent ... ok
+test gaussian_splat::tests::front_to_back_composite_two_splats ... ok
+test gjk::tests::gjk_box_box_overlapping ... ok
+test gjk::tests::gjk_box_box_separated ... ok
+test contact_reduction::tests::temporal_coherence_preserves_ids ... ok
+test contact_reduction::tests::temporal_coherence_no_double_claim ... ok
+test gjk::tests::gjk_capsule_box_separated_distance ... ok
+test gaussian_splat::tests::response_falls_off_at_one_sigma ... ok
+test gaussian_splat::tests::response_peaks_through_center ... ok
+test gaussian_splat::tests::sh_band0_diffuse_parity ... ok
+test gjk::tests::gjk_overlapping_spheres_returns_overlap ... ok
+test contact_extras::tests::reduce_preserves_distinct_pairs ... ok
+test contact_extras::tests::reduce_keeps_deepest_per_voxel ... ok
+test epa::tests::epa_capsule_box_overlap ... ok
+test gjk::tests::gjk_two_separated_spheres_distance ... ok
+test gjk::tests::gjk_cylinder_cylinder_perpendicular_overlap ... ok
+test contact_extras::tests::match_finds_persistent_contact ... ok
+test contact_extras::tests::match_misses_drifted_contact ... ok
+test hull::tests::hull_of_cube_corners_returns_eight_vertices ... ok
+test hull::tests::hull_drops_interior_points ... ok
+test hull::tests::hull_of_tetrahedron_is_itself ... ok
+test hydroelastic::tests::sphere_samples_are_balanced ... ok
+test gjk::tests::tetra_reduction_uses_closest_exterior_face_for_every_ordering ... ok
+test epa::tests::epa_two_overlapping_spheres ... ok
+test mesh_bvh::tests::aabb_query_finds_overlapping_triangles_only ... ok
+test marching_cubes::tests::empty_grid_returns_empty_mesh ... ok
+test mesh_bvh::tests::aabb_query_prunes_strip_mesh ... ok
+test bvh::tests::explicit_exclusion_filters_pair ... ok
+test bvh::tests::bvh_handles_planes ... ok
+test bvh::tests::bvh_filters_by_collision_group ... ok
+test mesh_bvh::tests::build_returns_root_aabb_matches_mesh ... ok
+test marching_cubes::tests::single_cell_with_one_corner_inside_emits_a_triangle ... ok
+test broad_phase::tests::sap_matches_brute_force_on_small_scene ... ok
+test mesh_bvh::tests::ray_cast_hits_unit_cube_face ... ok
+test mesh_bvh::tests::ray_cast_misses_returns_none ... ok
+test mpr::tests::mpr_separated_spheres_returns_none ... ok
+test mpr::tests::mpr_rotated_box_overlap ... ok
+test mpr::tests::mpr_box_box_shallow_overlap ... ok
+test mpr::tests::mpr_overlapping_spheres_returns_overlap ... ok
+test narrow_phase::tests::box_box_face_overlap ... ok
+test mpr::tests::shape_support_adapter_matches_support_fn ... ok
+test narrow_phase::tests::box_box_separated_no_contact ... ok
+test narrow_phase::tests::box_plane_flat_makes_4_contacts ... ok
+test narrow_phase::tests::capsule_capsule_parallel_overlapping ... ok
+test narrow_phase::tests::capsule_capsule_parallel_separated ... ok
+test narrow_phase::tests::capsule_capsule_perpendicular ... ok
+test narrow_phase::tests::capsule_manifold_bounds_near_parallel_candidates_without_losing_span ... ok
+test narrow_phase::tests::capsule_manifold_keeps_crossing_and_degenerate_pairs_single ... ok
+test narrow_phase::tests::capsule_manifold_retains_parallel_support_span_under_exchange_and_scale ... ok
+test narrow_phase::tests::capsule_plane_above ... ok
+test narrow_phase::tests::capsule_plane_lying_horizontal ... ok
+test narrow_phase::tests::box_face_contacts_are_midpoints_of_surface_witnesses ... ok
+test narrow_phase::tests::curved_plane_grazing_between_rim_samples ... ok
+test narrow_phase::tests::sphere_above_plane_no_contact ... ok
+test narrow_phase::tests::sphere_box_exact_touch_retains_zero_depth_without_separated_contacts ... ok
+test narrow_phase::tests::sphere_box_face_contact ... ok
+test bvh::tests::bvh_matches_brute_force_on_100_shapes ... ok
+test narrow_phase::tests::sphere_box_inside ... ok
+test narrow_phase::tests::sphere_through_plane_contacts ... ok
+[realistic] TOI = Some(0.499951171875)
+test self_contact::tests::skips_incident_faces_and_finds_nearby_remote_triangle ... ok
+test narrow_phase::tests::sphere_capsule_endpoint_contact ... ok
+test soft_ccd::tests::no_crossing_returns_none ... ok
+test soft_ccd::tests::realistic_cube_through_cloth_crossing ... ok
+test soft_ccd::tests::simple_pass_through_finds_half ... ok
+test sparse_grid::tests::background_returned_for_inactive ... ok
+test narrow_phase::tests::sphere_capsule_separated ... ok
+test narrow_phase::tests::tilted_box_ground_contacts_reconstruct_the_reference_plane ... ok
+test narrow_phase::tests::sphere_sphere_separated ... ok
+test narrow_phase::tests::hull_contact_survives_small_pose_changes_on_wide_thin_ground ... ok
+test spatial_hash::tests::cell_of_wraps_negative_correctly ... ok
+test sparse_grid::tests::gpu_pack_layout_is_well_formed ... ok
+test spatial_hash::tests::clear_resets_len_but_keeps_capacity ... ok
+test spatial_hash::tests::insert_and_query_returns_inserted_ids ... ok
+test sparse_grid::tests::for_each_active_leaf_visits_each_once ... ok
+test support::tests::box_support_picks_corner ... ok
+test narrow_phase::tests::sphere_sphere_overlap ... ok
+test support::tests::capsule_support_endpoint_then_sphere ... ok
+test narrow_phase::tests::sphere_box_contact_is_the_surface_witness_midpoint_in_world_space ... ok
+test soft_ccd::tests::outside_triangle_returns_none ... ok
+test narrow_phase::tests::sphere_capsule_side_contact ... ok
+test shape_world::heightfield_bounds::tests::tile_edges_partial_tiles_and_triangle_samples_are_conservative ... ok
+test sparse_grid::tests::overwrite_replaces_value ... ok
+test spatial_hash::tests::aabb_query_matches_brute_force ... ok
+test support::tests::support_respects_world_transform ... ok
+test support::tests::curved_support_is_direction_scale_invariant ... ok
+test tet_bvh::tests::aabb_inflate_expands_symmetrically ... ok
+test tet_bvh::tests::closest_face_inside_returns_negative_signed_distance ... ok
+test tet_bvh::tests::aabb_recompute_round_trips ... ok
+test support::tests::cylinder_support_disk_edge ... ok
+test support::tests::ellipsoid_support_axis_directions ... ok
+test tet_bvh::tests::closest_face_outside_returns_positive_signed_distance ... ok
+test support::tests::ellipsoid_support_lies_on_surface ... ok
+test support::tests::minkowski_support_two_spheres ... ok
+test support::tests::sphere_support_unit_directions ... ok
+test support::tests::support_handles_rotation ... ok
+test tet_bvh::tests::mesh_aabb_overlap_disjoint_returns_false ... ok
+test tet_bvh::tests::mesh_aabb_overlap_touching_returns_true ... ok
+test tet_bvh::tests::tet_bvh_point_candidates_match_linear_scan ... ok
+test sparse_grid::tests::insert_and_lookup_round_trip ... ok
+test shape_world::scene_bounds_tests::scene_steps_reuse_storage_and_distinct_scenes_refresh_bounds ... ok
+test narrow_phase::tests::hull_gjk_matches_box_sat_for_rotated_translated_pairs ... ok
+test sdf_bake::tests::bake_cube_corner_is_positive ... ok
+test sdf_bake::tests::bake_cube_centre_is_negative ... ok
+test decimate::tests::decimate_with_high_target_returns_input_size ... ok
+test decimate::tests::decimate_returns_something_for_cube ... ok
+test hydroelastic::tests::sdf_gradient_matches_expected_normal ... ok
+test hydroelastic::tests::cpu_sphere_into_cube_produces_force ... ok
+test mesh_bvh::tests::planned_capacity_matches_actual_trees_across_leaf_sizes ... ok
+test bvh::tests::bvh_matches_brute_force_on_1k_shapes ... ok
+sparse leaves=64 internals=1 active_voxels=16624 dense_voxels=32768
+test sparse_grid::tests::sparse_sdf_sample_matches_dense_on_sphere ... ok
+storage cost: leaves=65536 internals=4 bytes=138952800 (132 MiB)
+test sparse_grid::tests::storage_cost_1024_cubed_one_percent ... ok
+test sparse_grid::tests::random_round_trip_10k ... ok
+
+test result: ok. 128 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.61s
+     Running tests/runtime_capsule_manifold.rs (target/debug/deps/runtime_capsule_manifold-99cfc5bee15be1bd)
+
+running 1 test
+capsule span hz=60 peak_position=4.829843910007136e-16 peak_angle=0e0
+capsule span hz=120 peak_position=4.442387470762047e-16 peak_angle=0e0
+capsule span hz=240 peak_position=4.44543427968661e-16 peak_angle=0e0
+test cpu_capsule_support_span_preserves_loaded_equilibrium ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/xpbd_capsules.rs (target/debug/deps/xpbd_capsules-9e9215fd71291636)
+
+running 3 tests
+capsule lying: y=0.2000 |v|=0.0000
+test capsule_settles_on_plane ... ok
+two parallel capsules: dx=2.7759
+test capsule_capsule_parallel_no_overlap_after_settling ... ok
+capsule stack: y0=0.1998 y1=0.5997 v0=0.0000 v1=0.0000
+capsule stack poses=[Transform { position: DVec3(-8.182577195098154e-7, 0.19982136101627454, 0.0), rotation: DQuat(0.0, 0.0, -0.7071067827413454, 0.7071067796317496) }, Transform { position: DVec3(1.56090230504073e-5, 0.599732813016727, 0.0), rotation: DQuat(0.0, 0.0, -0.7071067835187573, 0.7071067788543378) }] velocities=[SpatialVector { linear: DVec3(1.8978964217539912e-7, -2.984455300443978e-11, 0.0), angular: DVec3(0.0, 0.0, -7.15899193279518e-7) }, SpatialVector { linear: DVec3(1.3851680303560655e-6, 2.596703699323572e-10, 0.0), angular: DVec3(0.0, 0.0, -2.15397821110758e-6) }]
+test capsule_stack_two ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+

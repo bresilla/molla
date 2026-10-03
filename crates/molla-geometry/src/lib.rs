@@ -31,6 +31,8 @@ pub mod mpr;
 #[cfg(feature = "gpu")]
 mod mpr_gpu;
 pub mod narrow_phase;
+#[cfg(feature = "gpu")]
+mod narrow_resident_gpu;
 pub mod pipeline;
 pub mod raycast_cpu;
 pub mod sdf_bake;
@@ -39,6 +41,8 @@ mod sdf_bake_gpu;
 pub mod self_contact;
 #[cfg(feature = "gpu")]
 mod self_contact_gpu;
+#[cfg(feature = "gpu")]
+mod shape_bounds_gpu;
 pub mod shape_world;
 pub mod soft_bvh;
 #[cfg(feature = "gpu")]
@@ -92,7 +96,7 @@ pub use hydroelastic::{
     sample_sdf_trilinear, sample_sphere_surface,
 };
 #[cfg(feature = "gpu")]
-pub use lbvh::{LbvhBroadPhase, LbvhPairs, collect_shape_aabbs};
+pub use lbvh::{LbvhBroadPhase, LbvhDiagnostics, LbvhPairs, collect_shape_aabbs};
 pub use marching_cubes::marching_cubes;
 #[cfg(feature = "gpu")]
 pub use marching_cubes_gpu::marching_cubes_gpu;
@@ -106,6 +110,12 @@ pub use mpr_gpu::{
     MprKernel, MprPairResult, decode_mpr_out,
 };
 pub use narrow_phase::{ContactManifold, MAX_MANIFOLD_POINTS, pair_contact};
+#[cfg(feature = "gpu")]
+pub use narrow_resident_gpu::{
+    NARROW_FAULT_CAPACITY, NARROW_FAULT_EPA, NARROW_FAULT_GJK, NARROW_FAULT_INDEX,
+    NARROW_FAULT_NONFINITE, RESIDENT_MANIFOLD_POINTS, ResidentCollisionOptions,
+    ResidentNarrowPhase,
+};
 pub use pipeline::{CollisionPipeline, NarrowPhaseBackend, STATIC_BODY, collide};
 pub use sdf_bake::{SdfGrid, bake_mesh_to_sdf, closest_point_on_triangle};
 #[cfg(feature = "gpu")]
@@ -113,6 +123,8 @@ pub use sdf_bake_gpu::{SdfBakeKernel, bake_mesh_to_sdf_gpu};
 pub use self_contact::{SelfContactCandidate, detect_vertex_triangle_self_contacts};
 #[cfg(feature = "gpu")]
 pub use self_contact_gpu::{SelfContactKernel, detect_vertex_triangle_self_contacts_gpu};
+#[cfg(feature = "gpu")]
+pub use shape_bounds_gpu::ResidentShapeBounds;
 pub use shape_world::{shape_world_aabb, shape_world_transform};
 pub use soft_bvh::SoftBvh;
 #[cfg(feature = "gpu")]

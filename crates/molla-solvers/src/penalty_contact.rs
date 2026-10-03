@@ -4,6 +4,15 @@ use molla_core::{BodyId, Error, Result, ShapeId};
 use molla_math::{Real, SpatialVector, Vec3};
 use molla_sim::{BodyFlags, ContactMaterial, Contacts, Model, ShapeFlags, State};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FrictionRegime {
+    #[default]
+    Inactive,
+    Regularized,
+    Sticking,
+    Sliding,
+}
+
 #[derive(Clone, Debug)]
 pub struct ContactForce {
     pub bodies: [Option<BodyId>; 2],
@@ -13,6 +22,10 @@ pub struct ContactForce {
     pub normal: Vec3,
     pub penetration: Real,
     pub friction: Real,
+    pub static_friction: Real,
+    pub friction_regime: FrictionRegime,
+    pub applied_friction: Real,
+    pub tangent_impulse: Vec3,
     pub normal_force: Real,
     /// Duration of this solver sample; zero for direct force-only evaluation.
     pub sample_dt: Real,
@@ -30,6 +43,25 @@ pub fn eval_penalty_contacts(
     contacts: &Contacts,
     forces: &mut [SpatialVector],
 ) -> Result<Vec<ContactForce>> {
+    eval_contacts(model, state, contacts, forces, true)
+}
+
+pub(crate) fn eval_normal_contacts(
+    model: &Model,
+    state: &State,
+    contacts: &Contacts,
+    forces: &mut [SpatialVector],
+) -> Result<Vec<ContactForce>> {
+    eval_contacts(model, state, contacts, forces, false)
+}
+
+fn eval_contacts(
+    model: &Model,
+    state: &State,
+    contacts: &Contacts,
+    forces: &mut [SpatialVector],
+    regularized: bool,
+) -> Result<Vec<ContactForce>> {
     let n = contacts.count as usize;
     if n > contacts.capacity || forces.len() != model.body_count {
         return Err(Error::Solver(
@@ -44,6 +76,7 @@ pub fn eval_penalty_contacts(
     let normal = contacts.normal.host()?;
     let depth = contacts.depth.host()?;
     let friction = contacts.friction.host()?;
+    let static_friction = contacts.static_friction.host()?;
     if [
         a.len(),
         b.len(),
@@ -53,6 +86,7 @@ pub fn eval_penalty_contacts(
         normal.len(),
         depth.len(),
         friction.len(),
+        static_friction.len(),
     ]
     .iter()
     .any(|&len| len < n)
@@ -85,6 +119,16 @@ pub fn eval_penalty_contacts(
     };
     let mut readings = Vec::with_capacity(n);
     for c in 0..n {
+        let mu_static = if static_friction[c].is_nan() {
+            friction[c]
+        } else {
+            static_friction[c]
+        };
+        molla_sim::FrictionCoefficients {
+            mu_static,
+            mu_dynamic: friction[c],
+        }
+        .validate()?;
         let bodies = [
             decode(a[c], model.body_count)?,
             decode(b[c], model.body_count)?,
@@ -153,7 +197,7 @@ pub fn eval_penalty_contacts(
             } else {
                 speed
             };
-            let friction_force = if smooth_speed > 0.0 {
+            let friction_force = if regularized && smooth_speed > 0.0 {
                 tangent
                     * material
                         .friction_stiffness
@@ -173,6 +217,18 @@ pub fn eval_penalty_contacts(
             normal,
             penetration: depth[c],
             friction: friction[c],
+            static_friction: mu_static,
+            friction_regime: if active && regularized && friction[c] > 0.0 {
+                FrictionRegime::Regularized
+            } else {
+                FrictionRegime::Inactive
+            },
+            applied_friction: if active && regularized {
+                friction[c]
+            } else {
+                0.0
+            },
+            tangent_impulse: Vec3::ZERO,
             normal_force,
             sample_dt: 0.0,
             normal_impulse: 0.0,

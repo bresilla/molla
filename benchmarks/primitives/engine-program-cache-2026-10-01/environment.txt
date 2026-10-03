@@ -1,0 +1,443 @@
+develop
+da495a0971c666c7230dd49e0b2a48d0307fc7a4
+ M Makefile
+ M bin/molla_viewer/src/main.rs
+ M bin/molla_viewer/src/viewer_readback_tests.rs
+ M bin/molla_viewer/src/viewer_sensor_tests.rs
+ M crates/molla-compute-primitives/src/lib.rs
+ M crates/molla-compute-primitives/src/radix_sort.rs
+ M crates/molla-compute-primitives/src/tile_block_cholesky.rs
+ M crates/molla-compute-primitives/src/tile_convolution.rs
+ M crates/molla-compute-primitives/src/tile_matmul.rs
+ M crates/molla-compute-primitives/src/tile_stream_compaction.rs
+ M crates/molla-compute-primitives/tests/radix_sort_gpu.rs
+ M crates/molla-compute/src/engine.rs
+ M crates/molla-compute/src/lib.rs
+ M crates/molla-core/Cargo.toml
+ M crates/molla-core/src/lib.rs
+ M crates/molla-fem/src/gpu_kernels/fem_elasticity.rs
+ M crates/molla-fem/src/gpu_kernels/fem_stokes.rs
+ M crates/molla-geometry/shaders/epa.wgsl
+ M crates/molla-geometry/shaders/gjk.wgsl
+ D crates/molla-geometry/shaders/lbvh.wgsl
+ M crates/molla-geometry/src/contact_extras.rs
+ M crates/molla-geometry/src/epa_gpu.rs
+ M crates/molla-geometry/src/gjk_gpu.rs
+ M crates/molla-geometry/src/hydroelastic.rs
+ M crates/molla-geometry/src/lbvh.rs
+ M crates/molla-geometry/src/lib.rs
+ M crates/molla-geometry/src/marching_cubes_gpu.rs
+ M crates/molla-geometry/src/mesh_bvh_raycast_gpu.rs
+ M crates/molla-geometry/src/mpr_gpu.rs
+ M crates/molla-geometry/src/narrow_phase.rs
+ M crates/molla-geometry/src/pipeline.rs
+ M crates/molla-geometry/src/sdf_bake_gpu.rs
+ M crates/molla-geometry/src/self_contact_gpu.rs
+ M crates/molla-geometry/src/shape_world.rs
+ M crates/molla-geometry/src/soft_bvh_gpu.rs
+ M crates/molla-geometry/src/soft_ccd_gpu.rs
+ M crates/molla-geometry/src/support.rs
+ M crates/molla-geometry/tests/broadphase_lbvh_gpu.rs
+ M crates/molla-geometry/tests/contact_materials.rs
+ M crates/molla-kernels/shaders/articulated_response_common.wgsl
+ M crates/molla-kernels/shaders/barrier_newton.wgsl
+ M crates/molla-kernels/shaders/featherstone.wgsl
+ M crates/molla-kernels/shaders/featherstone_feedback.wgsl
+ M crates/molla-kernels/shaders/featherstone_stops.wgsl
+ M crates/molla-kernels/src/actuator_delay.rs
+ M crates/molla-kernels/src/actuator_neural_lstm.rs
+ M crates/molla-kernels/src/actuator_neural_mlp.rs
+ M crates/molla-kernels/src/actuator_pd.rs
+ M crates/molla-kernels/src/actuator_pid.rs
+ M crates/molla-kernels/src/actuator_pipeline_pd.rs
+ M crates/molla-kernels/src/actuator_pipeline_pid.rs
+ M crates/molla-kernels/src/annotation.rs
+ M crates/molla-kernels/src/barrier_newton.rs
+ M crates/molla-kernels/src/camera_accumulate.rs
+ M crates/molla-kernels/src/camera_prepared.rs
+ M crates/molla-kernels/src/clamping_dc_motor.rs
+ M crates/molla-kernels/src/clamping_max_effort.rs
+ M crates/molla-kernels/src/clamping_position_based.rs
+ M crates/molla-kernels/src/cloth_diff.rs
+ M crates/molla-kernels/src/cloud_grid.rs
+ M crates/molla-kernels/src/cloud_process.rs
+ M crates/molla-kernels/src/contact_reduction.rs
+ M crates/molla-kernels/src/crba.rs
+ M crates/molla-kernels/src/dahl_friction.rs
+ M crates/molla-kernels/src/dense3.rs
+ M crates/molla-kernels/src/featherstone.rs
+ M crates/molla-kernels/src/featherstone_adjoint_gpu.rs
+ M crates/molla-kernels/src/fft.rs
+ M crates/molla-kernels/src/gmres.rs
+ M crates/molla-kernels/src/hydroelastic.rs
+ M crates/molla-kernels/src/image_process.rs
+ M crates/molla-kernels/src/implicit_mpm.rs
+ M crates/molla-kernels/src/integrate_bodies.rs
+ M crates/molla-kernels/src/jacobian.rs
+ M crates/molla-kernels/src/lib.rs
+ M crates/molla-kernels/src/lidar_scan.rs
+ M crates/molla-kernels/src/momentum.rs
+ M crates/molla-kernels/src/muscle.rs
+ M crates/molla-kernels/src/optim_adam.rs
+ M crates/molla-kernels/src/optim_sgd.rs
+ M crates/molla-kernels/src/raycast.rs
+ M crates/molla-kernels/src/raycast_merge.rs
+ M crates/molla-kernels/src/rnea.rs
+ M crates/molla-kernels/src/robust_loss.rs
+ M crates/molla-kernels/src/scan.rs
+ M crates/molla-kernels/src/scene_bounds.rs
+ M crates/molla-kernels/src/scene_quality.rs
+ M crates/molla-kernels/src/scene_rebuild.rs
+ M crates/molla-kernels/src/scene_trace.rs
+ M crates/molla-kernels/src/sensor_bindings.rs
+ M crates/molla-kernels/src/soft_rigid_bounds.rs
+ M crates/molla-kernels/src/soft_rigid_contact.rs
+ M crates/molla-kernels/src/soft_rigid_solve.rs
+ M crates/molla-kernels/src/soft_rigid_solve/coupled_newton.rs
+ M crates/molla-kernels/src/soft_rigid_solve/global_bridge.rs
+ M crates/molla-kernels/src/soft_rigid_solve/linearization.rs
+ M crates/molla-kernels/src/soft_rigid_solve/material_iteration.rs
+ M crates/molla-kernels/src/soft_vt_contact.rs
+ M crates/molla-kernels/src/sparse_gpu.rs
+ M crates/molla-kernels/src/sparse_grid.rs
+ M crates/molla-kernels/src/sparse_grid_delete.rs
+ M crates/molla-kernels/src/sparse_grid_insert.rs
+ M crates/molla-kernels/src/splat_raytrace.rs
+ M crates/molla-kernels/src/tet_volume.rs
+ M crates/molla-kernels/src/tiled_camera.rs
+ M crates/molla-kernels/src/tire_bekker.rs
+ M crates/molla-kernels/src/tire_brush.rs
+ M crates/molla-kernels/src/tire_dem.rs
+ M crates/molla-kernels/src/tire_mpm.rs
+ M crates/molla-kernels/src/tire_thermal.rs
+ M crates/molla-kernels/src/tire_transient.rs
+ M crates/molla-kernels/src/vbd_cloth.rs
+ M crates/molla-kernels/src/vbd_cloth/bindings.rs
+ M crates/molla-kernels/src/vbd_cloth/coupled_patch.rs
+ M crates/molla-kernels/src/vbd_cloth/linearization.rs
+ M crates/molla-kernels/src/xpbd.rs
+ M crates/molla-kernels/src/xpbd_equality.rs
+ M crates/molla-kernels/src/xpbd_particles.rs
+ M crates/molla-kernels/tests/tire_vehicle_gpu.rs
+ M crates/molla-sensors/benches/bench_camera_latency.rs
+ M crates/molla-sensors/benches/bench_sensor_latency.rs
+ M crates/molla-sensors/src/annotation.rs
+ M crates/molla-sensors/src/cloud_grid.rs
+ M crates/molla-sensors/src/cloud_processing.rs
+ M crates/molla-sensors/src/device_results.rs
+ M crates/molla-sensors/src/environment.rs
+ M crates/molla-sensors/src/image_processing.rs
+ M crates/molla-sensors/src/lib.rs
+ M crates/molla-sensors/src/radio.rs
+ M crates/molla-sensors/src/ray_sensors.rs
+ M crates/molla-sensors/src/raycast.rs
+ M crates/molla-sensors/src/readback.rs
+ M crates/molla-sensors/src/recognition.rs
+ M crates/molla-sensors/src/scene.rs
+ M crates/molla-sensors/src/scene_acceleration.rs
+ M crates/molla-sensors/src/scene_threading.rs
+ M crates/molla-sensors/src/snapshot.rs
+ M crates/molla-sensors/src/tiled_camera.rs
+ M crates/molla-sensors/tests/sensor_allocation_gpu.rs
+ M crates/molla-sensors/tests/sensor_annotation_direct_gpu.rs
+ M crates/molla-sensors/tests/sensor_annotation_gpu.rs
+ M crates/molla-sensors/tests/sensor_aux_direct_gpu.rs
+ M crates/molla-sensors/tests/sensor_camera_direct_gpu.rs
+ M crates/molla-sensors/tests/sensor_cloud_direct_gpu.rs
+ M crates/molla-sensors/tests/sensor_generic_gpu.rs
+ M crates/molla-sensors/tests/sensor_grid_direct_gpu.rs
+ M crates/molla-sensors/tests/sensor_grid_gpu.rs
+ M crates/molla-sensors/tests/sensor_image_direct_gpu.rs
+ M crates/molla-sensors/tests/sensor_large_coordinates_gpu.rs
+ M crates/molla-sensors/tests/sensor_pending_pipeline_gpu.rs
+ M crates/molla-sensors/tests/sensor_readback_gpu.rs
+ M crates/molla-sensors/tests/sensor_resource_retention_gpu.rs
+ M crates/molla-sensors/tests/sensor_scene_refit_gpu.rs
+ M crates/molla-sim/src/articulation.rs
+ M crates/molla-sim/src/builder.rs
+ M crates/molla-sim/src/contact_material.rs
+ M crates/molla-sim/src/contacts.rs
+ M crates/molla-sim/src/flags.rs
+ M crates/molla-sim/src/joint_control.rs
+ M crates/molla-sim/src/lib.rs
+ M crates/molla-sim/src/model.rs
+ M crates/molla-sim/src/runtime.rs
+ M crates/molla-sim/src/runtime/readout.rs
+ M crates/molla-sim/src/runtime/tree.rs
+ M crates/molla-sim/src/soft_belt.rs
+ M crates/molla-sim/tests/runtime_kind_wake.rs
+ M crates/molla-sim/tests/runtime_mass.rs
+ M crates/molla-sim/tests/runtime_mass_wake.rs
+ M crates/molla-sim/tests/runtime_readout.rs
+ M crates/molla-solvers/Cargo.toml
+ M crates/molla-solvers/benches/featherstone_cpu_vs_gpu.rs
+ M crates/molla-solvers/src/articulated_response.rs
+ M crates/molla-solvers/src/devices/aero.rs
+ M crates/molla-solvers/src/devices/belts.rs
+ M crates/molla-solvers/src/devices/connectors.rs
+ M crates/molla-solvers/src/devices/copter.rs
+ M crates/molla-solvers/src/devices/mod.rs
+ M crates/molla-solvers/src/devices/motors.rs
+ M crates/molla-solvers/src/devices/propellers.rs
+ M crates/molla-solvers/src/featherstone.rs
+ M crates/molla-solvers/src/featherstone_activation.rs
+ M crates/molla-solvers/src/featherstone_integrate.rs
+ M crates/molla-solvers/src/fem_rigid_gpu.rs
+ M crates/molla-solvers/src/fem_rigid_gpu/contact_snapshot.rs
+ M crates/molla-solvers/src/fem_rigid_gpu/coupling.rs
+ M crates/molla-solvers/src/fem_rigid_gpu/global_newton.rs
+ M crates/molla-solvers/src/fem_rigid_gpu/timing.rs
+ M crates/molla-solvers/src/ik.rs
+ M crates/molla-solvers/src/joint_compliance.rs
+ M crates/molla-solvers/src/joint_drives.rs
+ M crates/molla-solvers/src/joint_limits.rs
+ M crates/molla-solvers/src/joint_mass.rs
+ M crates/molla-solvers/src/joint_mass/seed.rs
+ M crates/molla-solvers/src/lib.rs
+ M crates/molla-solvers/src/loop_forces.rs
+ M crates/molla-solvers/src/loop_forces/blocks.rs
+ M crates/molla-solvers/src/loop_forces/selection.rs
+ M crates/molla-solvers/src/mpm.rs
+ M crates/molla-solvers/src/penalty_contact.rs
+ M crates/molla-solvers/src/pressure_tire.rs
+ M crates/molla-solvers/src/rigid_bounds_tests.rs
+ M crates/molla-solvers/src/rigid_impulse.rs
+ M crates/molla-solvers/src/rigid_settling.rs
+ M crates/molla-solvers/src/rigid_sleep.rs
+ M crates/molla-solvers/src/rigid_world.rs
+ M crates/molla-solvers/src/rnea.rs
+ M crates/molla-solvers/src/semi_implicit.rs
+ M crates/molla-solvers/src/sph.rs
+ M crates/molla-solvers/src/track_forces.rs
+ M crates/molla-solvers/src/vbd/viscosity/gpu.rs
+ M crates/molla-solvers/src/wheel_forces.rs
+ M crates/molla-solvers/src/wheel_forces/sleeping.rs
+ M crates/molla-solvers/tests/barrier_newton_gpu.rs
+ M crates/molla-solvers/tests/common/gpu_readback.rs
+ M crates/molla-solvers/tests/devices.rs
+ M crates/molla-solvers/tests/featherstone_articulation_cpu.rs
+ M crates/molla-solvers/tests/featherstone_contacts.rs
+ M crates/molla-solvers/tests/featherstone_drift_gpu.rs
+ M crates/molla-solvers/tests/featherstone_feedback_gpu.rs
+ M crates/molla-solvers/tests/featherstone_islands/activation.rs
+ M crates/molla-solvers/tests/featherstone_motor_caps_gpu.rs
+ M crates/molla-solvers/tests/fem_ball_joint_gpu.rs
+ M crates/molla-solvers/tests/fem_contact_geometry_gpu.rs
+ M crates/molla-solvers/tests/fem_contact_prepare_gpu.rs
+ M crates/molla-solvers/tests/fem_global_newton_gpu.rs
+ M crates/molla-solvers/tests/fem_patch_parallel_gpu.rs
+ M crates/molla-solvers/tests/fem_submission_gpu.rs
+ M crates/molla-solvers/tests/fem_track_loop_gpu.rs
+ M crates/molla-solvers/tests/fem_tracked_vehicle_gpu.rs
+ M crates/molla-solvers/tests/joint_control.rs
+ M crates/molla-solvers/tests/loop_forces.rs
+ M crates/molla-solvers/tests/rigid_settling/kind.rs
+ M crates/molla-solvers/tests/rigid_singular_forces.rs
+ M crates/molla-solvers/tests/rigid_sleep.rs
+ M crates/molla-solvers/tests/wheel_forces.rs
+ M crates/molla-solvers/tests/wheel_forces/footprint_material.rs
+ M crates/molla-solvers/tests/xpbd_capsules.rs
+ M crates/molla-storage/src/buffer.rs
+ M crates/molla-vehicle/src/real_tire/reports/physical_shape.rs
+ M crates/molla-vehicle/src/real_tire/rig/runners.rs
+ M crates/molla-vehicle/src/real_tire/tests.rs
+ M crates/molla-vehicle/src/real_tire/width_tests.rs
+ M crates/molla/benches/bench_sensor_physics_latency.rs
+?? MOLLA_BREAKAGE.md
+?? MOLLA_CONE_GEOMETRY.md
+?? MOLLA_FRICTION.md
+?? MOLLA_PRIMITIVES.md
+?? MOLLA_PRIMITIVES_REPORT.md
+?? MOLLA_REACTIONS.md
+?? benchmarks/primitives/
+?? crates/molla-compute/src/program_cache.rs
+?? crates/molla-core/src/gpu_metrics.rs
+?? crates/molla-geometry/shaders/lbvh_balanced.wgsl
+?? crates/molla-geometry/shaders/narrow_common.wgsl
+?? crates/molla-geometry/shaders/narrow_epa.wgsl
+?? crates/molla-geometry/shaders/narrow_gjk.wgsl
+?? crates/molla-geometry/shaders/shape_bounds.wgsl
+?? crates/molla-geometry/src/narrow_resident_gpu.rs
+?? crates/molla-geometry/src/shape_bounds_gpu.rs
+?? crates/molla-geometry/tests/lbvh_resident_gpu.rs
+?? crates/molla-geometry/tests/narrow_resident_gpu.rs
+?? crates/molla-geometry/tests/shape_bounds_gpu.rs
+?? crates/molla-kernels/shaders/compliant_loop_rows.wgsl
+?? crates/molla-kernels/shaders/cone_evaluate.wgsl
+?? crates/molla-kernels/shaders/cone_geometry.wgsl
+?? crates/molla-kernels/shaders/euler_bound_precision.wgsl
+?? crates/molla-kernels/shaders/featherstone_mass_inverse.wgsl
+?? crates/molla-kernels/shaders/featherstone_mixed_stops.wgsl
+?? crates/molla-kernels/shaders/joint_euler_chart.wgsl
+?? crates/molla-kernels/shaders/joint_limit_geometry.wgsl
+?? crates/molla-kernels/shaders/quaternion_fk.wgsl
+?? crates/molla-kernels/shaders/quaternion_precision.wgsl
+?? crates/molla-kernels/shaders/reaction_wrenches.wgsl
+?? crates/molla-kernels/shaders/runtime_distance.wgsl
+?? crates/molla-kernels/shaders/runtime_reactions.wgsl
+?? crates/molla-kernels/src/compliant_loop_rows.rs
+?? crates/molla-kernels/src/cone_geometry.rs
+?? crates/molla-kernels/src/quaternion_fk.rs
+?? crates/molla-kernels/src/reaction_wrenches.rs
+?? crates/molla-kernels/tests/compliant_loop_rows_gpu.rs
+?? crates/molla-kernels/tests/cone_geometry_gpu.rs
+?? crates/molla-kernels/tests/featherstone_mass_inverse_gpu.rs
+?? crates/molla-kernels/tests/quaternion_fk_gpu.rs
+?? crates/molla-sensors/benches/support/run_mode.rs
+?? crates/molla-sensors/tests/latency_benchmark_mode.rs
+?? crates/molla-sim/src/joint_frame_reference.rs
+?? crates/molla-sim/src/joint_limit_reference.rs
+?? crates/molla-sim/src/runtime/builder.rs
+?? crates/molla-sim/src/spherical_cone.rs
+?? crates/molla-sim/tests/runtime_break_configuration.rs
+?? crates/molla-sim/tests/runtime_builder.rs
+?? crates/molla-sim/tests/runtime_cone_configuration.rs
+?? crates/molla-sim/tests/runtime_softness_activation.rs
+?? crates/molla-sim/tests/spherical_cone.rs
+?? crates/molla-solvers/benches/primitives/
+?? crates/molla-solvers/benches/runtime_primitives.rs
+?? crates/molla-solvers/examples/
+?? crates/molla-solvers/shaders/contact_activation.wgsl
+?? crates/molla-solvers/shaders/contact_activation_mask.wgsl
+?? crates/molla-solvers/shaders/contact_islands.wgsl
+?? crates/molla-solvers/shaders/contact_precision.wgsl
+?? crates/molla-solvers/shaders/contact_publication.wgsl
+?? crates/molla-solvers/shaders/contact_reactions.wgsl
+?? crates/molla-solvers/shaders/contact_response.wgsl
+?? crates/molla-solvers/shaders/coulomb_disk.wgsl
+?? crates/molla-solvers/shaders/impact_constraints.wgsl
+?? crates/molla-solvers/shaders/impact_episodes.wgsl
+?? crates/molla-solvers/shaders/impact_merge.wgsl
+?? crates/molla-solvers/shaders/loop_forces.wgsl
+?? crates/molla-solvers/shaders/normal_contact.wgsl
+?? crates/molla-solvers/shaders/rigid_damping.wgsl
+?? crates/molla-solvers/shaders/rigid_momentum.wgsl
+?? crates/molla-solvers/shaders/scalar_joint_publication.wgsl
+?? crates/molla-solvers/src/body_wrenches.rs
+?? crates/molla-solvers/src/cone_constraints.rs
+?? crates/molla-solvers/src/constraint_allocation.rs
+?? crates/molla-solvers/src/constraint_rows_gpu.rs
+?? crates/molla-solvers/src/contact_friction.rs
+?? crates/molla-solvers/src/contact_islands_gpu.rs
+?? crates/molla-solvers/src/contact_publication_gpu.rs
+?? crates/molla-solvers/src/contact_publication_gpu_tests.rs
+?? crates/molla-solvers/src/contact_reaction_gpu.rs
+?? crates/molla-solvers/src/contact_response_gpu.rs
+?? crates/molla-solvers/src/contact_response_gpu_tests.rs
+?? crates/molla-solvers/src/coulomb_disk_gpu.rs
+?? crates/molla-solvers/src/coulomb_disk_gpu_tests.rs
+?? crates/molla-solvers/src/coupled_constraint_gpu.rs
+?? crates/molla-solvers/src/coupled_constraint_gpu_tests.rs
+?? crates/molla-solvers/src/coupled_constraints.rs
+?? crates/molla-solvers/src/coupled_response_gpu_tests.rs
+?? crates/molla-solvers/src/distance_constraints.rs
+?? crates/molla-solvers/src/distance_gpu.rs
+?? crates/molla-solvers/src/drive_response.rs
+?? crates/molla-solvers/src/impact_constraints.rs
+?? crates/molla-solvers/src/impact_constraints_gpu.rs
+?? crates/molla-solvers/src/impact_constraints_gpu_tests.rs
+?? crates/molla-solvers/src/impact_episodes_gpu.rs
+?? crates/molla-solvers/src/impact_episodes_gpu_tests.rs
+?? crates/molla-solvers/src/impact_merge_gpu.rs
+?? crates/molla-solvers/src/impact_partition_gpu_tests.rs
+?? crates/molla-solvers/src/impact_position_gpu_tests.rs
+?? crates/molla-solvers/src/impact_response_gpu_tests.rs
+?? crates/molla-solvers/src/joint_angles.rs
+?? crates/molla-solvers/src/joint_mass/drive_locks.rs
+?? crates/molla-solvers/src/joint_reactions.rs
+?? crates/molla-solvers/src/kinematic_motion.rs
+?? crates/molla-solvers/src/loop_forces_gpu.rs
+?? crates/molla-solvers/src/mixed_constraints.rs
+?? crates/molla-solvers/src/normal_contact_gpu.rs
+?? crates/molla-solvers/src/reaction_gpu.rs
+?? crates/molla-solvers/src/rigid_activation_gpu.rs
+?? crates/molla-solvers/src/rigid_breakage.rs
+?? crates/molla-solvers/src/rigid_contact_activation_gpu.rs
+?? crates/molla-solvers/src/rigid_contact_activation_gpu_tests.rs
+?? crates/molla-solvers/src/rigid_contact_precision_gpu.rs
+?? crates/molla-solvers/src/rigid_contact_reaction_tests.rs
+?? crates/molla-solvers/src/rigid_contacts_gpu.rs
+?? crates/molla-solvers/src/rigid_damping_gpu.rs
+?? crates/molla-solvers/src/rigid_distance_scale_gpu_tests.rs
+?? crates/molla-solvers/src/rigid_impact.rs
+?? crates/molla-solvers/src/rigid_impulse/impact.rs
+?? crates/molla-solvers/src/rigid_loop_constraints.rs
+?? crates/molla-solvers/src/rigid_momentum.rs
+?? crates/molla-solvers/src/rigid_momentum_gpu.rs
+?? crates/molla-solvers/src/rigid_world_gpu.rs
+?? crates/molla-solvers/src/scalar_joint_publication_gpu.rs
+?? crates/molla-solvers/tests/articulated_impact.rs
+?? crates/molla-solvers/tests/common/fem_readback.rs
+?? crates/molla-solvers/tests/cone_precision.rs
+?? crates/molla-solvers/tests/contact_islands_gpu.rs
+?? crates/molla-solvers/tests/featherstone_disabled_joints.rs
+?? crates/molla-solvers/tests/featherstone_mixed_distance.rs
+?? crates/molla-solvers/tests/featherstone_scalar_equality_gpu.rs
+?? crates/molla-solvers/tests/kinematic_motion_gpu.rs
+?? crates/molla-solvers/tests/normal_contact_gpu.rs
+?? crates/molla-solvers/tests/primitives_benchmark_contract.rs
+?? crates/molla-solvers/tests/primitives_benchmark_fixtures.rs
+?? crates/molla-solvers/tests/primitives_benchmark_process.rs
+?? crates/molla-solvers/tests/primitives_benchmark_settings.rs
+?? crates/molla-solvers/tests/reaction_boundary_acceleration.rs
+?? crates/molla-solvers/tests/reaction_wrenches.rs
+?? crates/molla-solvers/tests/reaction_wrenches_gpu.rs
+?? crates/molla-solvers/tests/runtime_acceleration_drives.rs
+?? crates/molla-solvers/tests/runtime_ball_drives.rs
+?? crates/molla-solvers/tests/runtime_ball_loop.rs
+?? crates/molla-solvers/tests/runtime_body_control_wrenches.rs
+?? crates/molla-solvers/tests/runtime_boundary_radial_caps.rs
+?? crates/molla-solvers/tests/runtime_break_detachment.rs
+?? crates/molla-solvers/tests/runtime_capsule_manifold.rs
+?? crates/molla-solvers/tests/runtime_com_roots.rs
+?? crates/molla-solvers/tests/runtime_cone_capability.rs
+?? crates/molla-solvers/tests/runtime_cone_limits.rs
+?? crates/molla-solvers/tests/runtime_contact_breakage_gpu.rs
+?? crates/molla-solvers/tests/runtime_contact_reactions_gpu.rs
+?? crates/molla-solvers/tests/runtime_contact_sleep.rs
+?? crates/molla-solvers/tests/runtime_contacts_gpu.rs
+?? crates/molla-solvers/tests/runtime_d6_angular_locks.rs
+?? crates/molla-solvers/tests/runtime_d6_angular_mass.rs
+?? crates/molla-solvers/tests/runtime_d6_axis_certification.rs
+?? crates/molla-solvers/tests/runtime_d6_hinge_antipodes.rs
+?? crates/molla-solvers/tests/runtime_d6_singular_bounds.rs
+?? crates/molla-solvers/tests/runtime_dispatch_metrics_gpu.rs
+?? crates/molla-solvers/tests/runtime_distance.rs
+?? crates/molla-solvers/tests/runtime_distance_contract.rs
+?? crates/molla-solvers/tests/runtime_distance_gpu.rs
+?? crates/molla-solvers/tests/runtime_distance_sleep.rs
+?? crates/molla-solvers/tests/runtime_friction.rs
+?? crates/molla-solvers/tests/runtime_friction_contract.rs
+?? crates/molla-solvers/tests/runtime_joint_breakage.rs
+?? crates/molla-solvers/tests/runtime_joint_breakage_gpu.rs
+?? crates/molla-solvers/tests/runtime_joint_reactions.rs
+?? crates/molla-solvers/tests/runtime_kinematic_constraints.rs
+?? crates/molla-solvers/tests/runtime_kinematic_reactions.rs
+?? crates/molla-solvers/tests/runtime_locked_drive_chains.rs
+?? crates/molla-solvers/tests/runtime_locked_drive_planes.rs
+?? crates/molla-solvers/tests/runtime_loop_articulated_contacts.rs
+?? crates/molla-solvers/tests/runtime_loop_brakes.rs
+?? crates/molla-solvers/tests/runtime_loop_compliance.rs
+?? crates/molla-solvers/tests/runtime_loop_contacts.rs
+?? crates/molla-solvers/tests/runtime_loop_controls.rs
+?? crates/molla-solvers/tests/runtime_mixed_contacts_cpu.rs
+?? crates/molla-solvers/tests/runtime_mixed_contacts_gpu.rs
+?? crates/molla-solvers/tests/runtime_mixed_drives.rs
+?? crates/molla-solvers/tests/runtime_motor_coupling.rs
+?? crates/molla-solvers/tests/runtime_motor_models.rs
+?? crates/molla-solvers/tests/runtime_multidof_feedback_gpu.rs
+?? crates/molla-solvers/tests/runtime_multidof_limits.rs
+?? crates/molla-solvers/tests/runtime_pose_precision_gpu.rs
+?? crates/molla-solvers/tests/runtime_primitives_contract_gpu.rs
+?? crates/molla-solvers/tests/runtime_reactions_gpu.rs
+?? crates/molla-solvers/tests/runtime_restitution.rs
+?? crates/molla-solvers/tests/runtime_restitution_gpu.rs
+?? crates/molla-solvers/tests/runtime_rigid_axis_loops.rs
+?? crates/molla-solvers/tests/runtime_rigid_fixed_loops.rs
+?? crates/molla-solvers/tests/runtime_rigid_loop_drives.rs
+?? crates/molla-solvers/tests/runtime_velocity_coupling.rs
+?? crates/molla-solvers/tests/standalone_ball_limits.rs
+?? crates/molla-solvers/tests/standalone_limit_precision.rs
+?? crates/molla-solvers/tests/standalone_redundant_limits.rs
+name, driver_version, memory.used [MiB], utilization.gpu [%]
+NVIDIA GeForce RTX 4080, 595.91.07, 10469 MiB, 0 %

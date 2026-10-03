@@ -1,0 +1,31 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.32s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 18 tests
+test rigid_impulse::gram_batch_tests::gram_batch_timings ... ignored, release CPU Gram benchmark; run without concurrent builds
+test rigid_impulse::blocks::tests::arbitrarily_small_cross_block_entries_are_not_discarded ... ok
+test rigid_impulse::compact::tests::invalid_rows_fail_before_modifying_response ... ok
+test rigid_impulse::gram_batch_tests::invalid_batches_do_not_modify_response ... ok
+test rigid_impulse::response_batch::tests::invalid_batches_are_rejected_in_every_lane_and_tail ... ok
+test rigid_impulse::tests::factors_preserve_nullspace_cutoff_and_reject_invalid_systems ... ok
+test rigid_impulse::tests::quadratic_response_timings ... ignored, wall-clock CPU benchmark; run in release without concurrent builds
+test rigid_impulse::blocks::tests::global_rank_cutoff_singular_and_indefinite_systems_fall_back ... ok
+test rigid_impulse::tests::gram_response_checks_dimensions_and_zero_mass ... ok
+test rigid_impulse::tests::quadratic_response_scales_before_squaring ... ok
+test rigid_impulse::tests::retained_cholesky_matches_fresh_factors_and_preserves_cutoff ... ok
+test rigid_impulse::tests::rotated_null_modes_do_not_become_cholesky_full_rank ... ok
+test rigid_impulse::tests::reusable_factors_match_analytic_full_and_reduced_rank_solutions ... ok
+test rigid_impulse::response_batch::tests::diagonal_zero_and_subnormal_responses_match_bitwise ... ok
+test rigid_impulse::blocks::tests::disconnected_full_rank_blocks_match_global_cholesky ... ok
+test rigid_impulse::compact::tests::compact_response_matches_dense_for_zero_sparse_and_dense_rows ... ok
+test rigid_impulse::response_batch::tests::batches_match_scalar_responses_bitwise ... ok
+test rigid_impulse::gram_batch_tests::gram_batches_match_scalar_solves_bitwise ... ok
+
+test result: ok. 16 passed; 0 failed; 2 ignored; 0 measured; 108 filtered out; finished in 1.59s
+

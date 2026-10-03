@@ -21,12 +21,15 @@ impl UniformSlots {
             return Err(Error::Gpu("camera: invalid uniform slot capacity".into()));
         }
         Ok(Self {
-            buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::camera parameter slots"),
-                size: bytes,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
+            buffer: molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::camera parameter slots"),
+                    size: bytes,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            ),
             stride: stride as u32,
             count,
             size,
@@ -46,7 +49,7 @@ impl UniformSlots {
             return Err(Error::Gpu("camera: invalid parameter slot or size".into()));
         }
         let offset = self.stride * slot;
-        queue.write_buffer(&self.buffer, offset as u64, bytes);
+        molla_core::gpu_write_buffer!(queue, &self.buffer, offset as u64, bytes);
         Ok(offset)
     }
 }

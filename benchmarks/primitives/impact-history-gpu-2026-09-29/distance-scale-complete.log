@@ -1,0 +1,116 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling molla-core v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-core)
+   Compiling molla-math v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-math)
+   Compiling wgpu-hal v29.0.4
+   Compiling molla-optim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-optim)
+   Compiling molla-autograd v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-autograd)
+   Compiling wgpu-core-deps-windows-linux-android v29.0.4
+   Compiling wgpu-core v29.0.4
+   Compiling wgpu v29.0.4
+   Compiling molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+   Compiling molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `release` profile [optimized] target(s) in 21.42s
+     Running unittests src/lib.rs (target/release/deps/molla_solvers-5d429a03c49d413b)
+
+running 2 tests
+test rigid_world::gpu::scale_tests::distance_thousand_first_frame_stages ... distance_scale_stage_wait stage=compile
+distance_scale_stage_complete stage=compile
+distance_scale_stage_wait stage=prepare
+distance_scale_stage_complete stage=prepare
+distance_scale_substep index=0
+distance_scale_stage_wait stage=predictor
+distance_scale_stage_complete stage=predictor
+distance_scale_stage_wait stage=predictor-status
+distance_scale_stage_complete stage=predictor-status
+distance_scale_stage_wait stage=predictor-rates
+distance_scale_stage_complete stage=predictor-rates
+distance_scale_predictor_peak substep=0 rate=0.010416667
+distance_scale_stage_wait stage=distance
+distance_scale_stage_complete stage=distance
+distance_scale_stage_wait stage=distance-status
+distance_scale_stage_complete stage=distance-status
+distance_scale_stage_wait stage=drift
+distance_scale_stage_complete stage=drift
+distance_scale_stage_wait stage=drift-status
+distance_scale_stage_complete stage=drift-status
+distance_scale_stage_wait stage=reaction
+distance_scale_stage_complete stage=reaction
+distance_scale_stage_wait stage=reaction-status
+distance_scale_stage_complete stage=reaction-status
+distance_scale_substep index=1
+distance_scale_stage_wait stage=predictor
+distance_scale_stage_complete stage=predictor
+distance_scale_stage_wait stage=predictor-status
+distance_scale_stage_complete stage=predictor-status
+distance_scale_stage_wait stage=predictor-rates
+distance_scale_stage_complete stage=predictor-rates
+distance_scale_predictor_peak substep=1 rate=0.010416666
+distance_scale_stage_wait stage=distance
+distance_scale_stage_complete stage=distance
+distance_scale_stage_wait stage=distance-status
+distance_scale_stage_complete stage=distance-status
+distance_scale_stage_wait stage=drift
+distance_scale_stage_complete stage=drift
+distance_scale_stage_wait stage=drift-status
+distance_scale_stage_complete stage=drift-status
+distance_scale_stage_wait stage=reaction
+distance_scale_stage_complete stage=reaction
+distance_scale_stage_wait stage=reaction-status
+distance_scale_stage_complete stage=reaction-status
+distance_scale_substep index=2
+distance_scale_stage_wait stage=predictor
+distance_scale_stage_complete stage=predictor
+distance_scale_stage_wait stage=predictor-status
+distance_scale_stage_complete stage=predictor-status
+distance_scale_stage_wait stage=predictor-rates
+distance_scale_stage_complete stage=predictor-rates
+distance_scale_predictor_peak substep=2 rate=0.010416667
+distance_scale_stage_wait stage=distance
+distance_scale_stage_complete stage=distance
+distance_scale_stage_wait stage=distance-status
+distance_scale_stage_complete stage=distance-status
+distance_scale_stage_wait stage=drift
+distance_scale_stage_complete stage=drift
+distance_scale_stage_wait stage=drift-status
+distance_scale_stage_complete stage=drift-status
+distance_scale_stage_wait stage=reaction
+distance_scale_stage_complete stage=reaction
+distance_scale_stage_wait stage=reaction-status
+distance_scale_stage_complete stage=reaction-status
+distance_scale_substep index=3
+distance_scale_stage_wait stage=predictor
+distance_scale_stage_complete stage=predictor
+distance_scale_stage_wait stage=predictor-status
+distance_scale_stage_complete stage=predictor-status
+distance_scale_stage_wait stage=predictor-rates
+distance_scale_stage_complete stage=predictor-rates
+distance_scale_predictor_peak substep=3 rate=0.010416666
+distance_scale_stage_wait stage=distance
+distance_scale_stage_complete stage=distance
+distance_scale_stage_wait stage=distance-status
+distance_scale_stage_complete stage=distance-status
+distance_scale_stage_wait stage=drift
+distance_scale_stage_complete stage=drift
+distance_scale_stage_wait stage=drift-status
+distance_scale_stage_complete stage=drift-status
+distance_scale_stage_wait stage=reaction
+distance_scale_stage_complete stage=reaction
+distance_scale_stage_wait stage=reaction-status
+distance_scale_stage_complete stage=reaction-status
+ok
+test rigid_world::gpu::scale_tests::distance_thousand_runtime_one_second ... distance_scale_parity instances=1000 frames=240 peak_pose=0 peak_rate=0 peak_force=0
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 28.36s
+

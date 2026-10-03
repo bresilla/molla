@@ -1,0 +1,160 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.06s
+     Running unittests src/lib.rs (target/debug/deps/molla_sim-0ea3f5e440833e76)
+
+running 27 tests
+test articulation::tests::d6_joint_fk_translates ... ok
+test articulation::tests::ball_joint_fk_rotates_via_quat ... ok
+test articulation::tests::double_pendulum_chain_fk ... ok
+test articulation::tests::fixed_joint_locks_pose ... ok
+test articulation::tests::prismatic_fk_translates_along_axis ... ok
+test articulation::tests::revolute_fk_rotates_pendulum ... ok
+test builder::tests::build_one_sphere_body ... ok
+test builder::tests::graph_color_disjoint_springs_share_color ... ok
+test builder::tests::graph_color_no_endpoint_conflicts ... ok
+test builder::tests::invalid_radius_is_rejected ... ok
+test builder::tests::set_world_gravity_extends_world_list ... ok
+test builder::tests::joint_and_articulation_worlds_propagate ... ok
+test model::tests::empty_model_has_one_world_with_gravity ... ok
+test soft_belt::path::tests::stadium_has_exact_perimeter_and_periodic_tangent ... ok
+test soft_belt::path::tests::convex_polyline_inset_preserves_distances_and_periodicity ... ok
+test builder::tests::cloth_grid_bending_disabled_when_negative ... ok
+test soft_belt::tests::invalid_resolution_and_material_are_rejected ... ok
+test tet_viscosity::tests::validates_both_coefficients_and_gpu_representation ... ok
+test tet_viscosity::tests::builder_preserves_per_material_values_and_rejects_before_mutation ... ok
+test tet_viscosity::tests::mesh_viscosity_overrides_only_its_elements_and_rejects_atomically ... ok
+test builder::tests::cloth_grid_includes_bending_springs ... ok
+test builder::tests::graph_color_cloth_grid_few_colors ... ok
+test soft_belt::tests::invalid_cords_are_rejected_before_adding_particles ... ok
+test soft_belt::path::tests::three_wheel_path_is_tangent_and_outside_every_pulley ... ok
+test soft_belt::tests::closed_belt_has_positive_volume_and_watertight_surface ... ok
+test soft_belt::tests::closed_cords_preserve_axial_rigidity_mass_and_prestrain_under_refinement ... ok
+test soft_belt::tests::installed_lugged_belt_is_connected_watertight_and_noninverted ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/belt_graded_geometry.rs (target/debug/deps/belt_graded_geometry-a619de744225a038)
+
+running 2 tests
+test paired_guides_share_base_nodes_and_preserve_positive_installed_volume ... ok
+test graded_width_preserves_mass_cord_energy_and_exact_guide_columns ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/belt_surface_lugs.rs (target/debug/deps/belt_surface_lugs-f80730b175bd1e76)
+
+running 3 tests
+test rejects_invalid_phase_grids_and_surface_rows ... ok
+test outer_phases_preserve_cord_rest_lengths_stiffness_and_mass ... ok
+test phased_chevrons_are_bonded_closed_and_positive_when_installed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+     Running tests/runtime.rs (target/debug/deps/runtime-7d3b780811629722)
+
+running 6 tests
+test rejected_edits_are_atomic ... ok
+test free_root_coordinates_preserve_offset_com_twist ... ok
+test fixed_mass_is_retained_but_inverse_mass_is_zero ... ok
+test removal_compacts_indices_without_reusing_handles_or_losing_state ... ok
+test collider_edits_and_cascading_removal_preserve_body_state ... ok
+test merging_and_splitting_preserves_unaffected_joint_state_and_controls ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_cone_configuration.rs (target/debug/deps/runtime_cone_configuration-2a7e7905c39a54cb)
+
+running 3 tests
+test invalid_cone_mutations_are_atomic ... ok
+test rigid_ball_loop_configuration_is_transactional ... ok
+test cone_edits_preserve_tree_and_loop_handles_through_compaction ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_generalized_velocity.rs (target/debug/deps/runtime_generalized_velocity-a8772da2ac2894b5)
+
+running 3 tests
+test malformed_existing_rate_buffer_is_rejected_without_indexing_it ... ok
+test generalized_rates_activate_only_changed_joints_and_noop_preserves_stamp ... ok
+test invalid_rates_are_atomic_including_finite_rates_that_overflow_body_velocity ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_kind_wake.rs (target/debug/deps/runtime_kind_wake-d3bc86e694ee6aba)
+
+running 4 tests
+test same_body_kind_is_a_true_noop ... ok
+test unknown_body_kind_edit_is_atomic ... ok
+test body_kind_edit_does_not_activate_unrelated_bodies ... ok
+test kind_transition_activation_and_fixed_velocity_follow_wake_policy ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_mass.rs (target/debug/deps/runtime_mass-e88f467100a7d988)
+
+running 7 tests
+test eigendecomposition_is_scale_relative ... ok
+test parallel_axis_and_rotated_full_tensor ... ok
+test rejects_invalid_mass_tensors_without_editing_scene ... ok
+test com_rebase_overflow_leaves_the_scene_unchanged ... ok
+test changing_com_preserves_velocity_field_and_applied_wrench ... ok
+test singular_inertia_is_finite_and_fixed_mass_retains_properties ... ok
+test articulated_com_edits_keep_joint_rates_and_fk_consistent ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_mass_wake.rs (target/debug/deps/runtime_mass_wake-1415f7f4ce0d068c)
+
+running 3 tests
+test nonwaking_com_edit_preserves_velocity_field_and_wrench_application_point ... ok
+test rejected_mass_edits_leave_descriptors_state_and_activation_unchanged ... ok
+test mass_rebuilds_activate_only_the_requested_body_and_noops_preserve_identity ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_nonwaking.rs (target/debug/deps/runtime_nonwaking-5fb18c9606555abb)
+
+running 3 tests
+test fixed_bodies_and_zero_wrenches_do_not_activate ... ok
+test velocity_and_wrench_flags_only_change_requested_activation ... ok
+test invalid_nonwaking_edits_preserve_state_and_activation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_pose_batch.rs (target/debug/deps/runtime_pose_batch-0799e7aa706c51e0)
+
+running 5 tests
+test single_body_teleport_preserves_revolute_winding_for_equivalent_quaternions ... ok
+test group_teleport_is_order_independent_and_preserves_joint_rates_and_winding ... ok
+test root_only_batch_moves_descendants_and_resets_only_its_tree ... ok
+test fixed_root_batch_moves_its_dynamic_descendants ... ok
+test invalid_pose_batches_are_atomic ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_readout.rs (target/debug/deps/runtime_readout-da081b79498f56d9)
+
+running 4 tests
+test state_edit_identity_distinguishes_edits_from_solver_commits ... ok
+test collider_reparenting_invalidates_both_components_atomically ... ok
+test body_state_edits_follow_only_the_edited_joint_component ... ok
+test structure_stamps_follow_old_and_new_joint_components ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/spherical_cone.rs (target/debug/deps/spherical_cone-33a1f1f6155cfccf)
+
+running 5 tests
+test antipodal_and_invalid_inputs_fail_explicitly_without_nan_rows ... ok
+test asymmetric_diagonal_swing_is_elliptical_not_rectangular ... ok
+test zero_and_disabled_extents_have_distinct_rows ... ok
+test circular_cones_equal_primary_direction_angle_for_all_axes ... ok
+test cone_rows_match_angular_derivatives_and_do_not_oppose_twist ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

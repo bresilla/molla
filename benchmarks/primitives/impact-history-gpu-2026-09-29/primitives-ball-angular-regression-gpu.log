@@ -1,0 +1,635 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.89s
+     Running tests/standalone_limit_precision.rs (target/debug/deps/standalone_limit_precision-45d42070e011dd09)
+
+running 1 test
+test gpu_ball_points_publish_authored_state_after_bound_edits ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+quaternion_point_publication ball=true joint=0 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=1 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=2 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=3 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=4 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=5 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=6 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=7 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=8 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=9 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=10 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=11 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=12 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=13 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=14 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=15 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=16 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=17 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=18 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=19 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=20 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=21 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=22 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=23 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=24 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=25 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=26 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=27 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=28 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=29 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=30 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=31 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=32 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=33 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=34 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=35 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=36 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=37 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=38 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=39 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=40 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=41 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=42 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=43 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=44 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=45 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=46 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=47 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=48 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=49 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=50 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=51 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=52 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=53 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=54 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=55 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=56 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=57 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=58 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=59 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=60 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=61 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=62 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=63 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=64 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=65 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=66 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=67 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=68 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=69 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=70 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=71 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=72 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=73 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=74 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=75 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=76 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=77 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=78 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=79 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=80 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=81 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=82 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=83 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=84 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=85 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=86 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=87 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=88 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=89 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=90 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=91 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=92 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=93 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=94 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=95 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=0 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=1 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=2 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=3 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=4 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=5 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=6 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=7 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=8 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=9 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=10 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=11 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=12 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=13 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=14 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=15 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=16 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=17 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=18 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=19 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=20 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=21 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=22 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=23 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=24 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=25 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=26 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=27 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=28 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=29 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=30 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=31 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=32 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=33 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=34 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=35 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=36 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=37 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=38 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=39 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=40 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=41 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=42 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=43 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=44 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=45 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=46 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=47 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=48 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=49 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=50 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=51 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=52 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=53 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=54 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=55 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=56 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=57 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=58 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=59 translation_error=0.000000000e0 rotation_error=1.439298929e-15
+quaternion_point_publication ball=true joint=60 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=61 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=62 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=63 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=64 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=65 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=66 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=67 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=68 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=69 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=70 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=71 translation_error=0.000000000e0 rotation_error=1.315538159e-15
+quaternion_point_publication ball=true joint=72 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=73 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=74 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=75 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=76 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=77 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=78 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=79 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=80 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=81 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=82 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=83 translation_error=0.000000000e0 rotation_error=2.169245176e-15
+quaternion_point_publication ball=true joint=84 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=85 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=86 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=87 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=88 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=89 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=90 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=91 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=92 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=93 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=94 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=95 translation_error=0.000000000e0 rotation_error=9.464470689e-16
+quaternion_point_publication ball=true joint=0 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=1 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=2 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=3 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=4 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=5 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=6 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=7 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=8 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=9 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=10 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=11 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=12 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=13 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=14 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=15 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=16 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=17 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=18 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=19 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=20 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=21 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=22 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=23 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=24 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=25 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=26 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=27 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=28 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=29 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=30 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=31 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=32 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=33 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=34 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=35 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=36 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=37 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=38 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=39 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=40 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=41 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=42 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=43 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=44 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=45 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=46 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=47 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=48 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=49 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=50 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=51 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=52 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=53 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=54 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=55 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=56 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=57 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=58 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=59 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=60 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=61 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=62 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=63 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=64 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=65 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=66 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=67 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=68 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=69 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=70 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=71 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=72 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=73 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=74 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=75 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=76 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=77 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=78 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=79 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=80 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=81 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=82 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=83 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=84 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=85 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=86 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=87 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=88 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=89 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=90 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=91 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=92 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=93 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=94 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=95 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=0 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=1 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=2 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=3 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=4 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=5 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=6 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=7 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=8 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=9 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=10 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=11 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=12 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=13 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=14 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=15 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=16 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=17 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=18 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=19 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=20 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=21 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=22 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=23 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=24 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=25 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=26 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=27 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=28 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=29 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=30 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=31 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=32 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=33 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=34 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=35 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=36 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=37 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=38 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=39 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=40 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=41 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=42 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=43 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=44 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=45 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=46 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=47 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=48 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=49 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=50 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=51 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=52 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=53 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=54 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=55 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=56 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=57 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=58 translation_error=0.000000000e0 rotation_error=1.302047202e-15
+quaternion_point_publication ball=true joint=59 translation_error=0.000000000e0 rotation_error=2.182707498e-15
+quaternion_point_publication ball=true joint=60 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=61 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=62 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=63 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=64 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=65 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=66 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=67 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=68 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=69 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=70 translation_error=0.000000000e0 rotation_error=1.120325196e-15
+quaternion_point_publication ball=true joint=71 translation_error=0.000000000e0 rotation_error=2.879264740e-15
+quaternion_point_publication ball=true joint=72 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=73 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=74 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=75 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=76 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=77 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=78 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=79 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=80 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=81 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=82 translation_error=0.000000000e0 rotation_error=3.431491757e-15
+quaternion_point_publication ball=true joint=83 translation_error=0.000000000e0 rotation_error=1.622514604e-15
+quaternion_point_publication ball=true joint=84 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=85 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=86 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=87 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=88 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=89 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=90 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=91 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=92 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=93 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+quaternion_point_publication ball=true joint=94 translation_error=0.000000000e0 rotation_error=1.136159124e-15
+quaternion_point_publication ball=true joint=95 translation_error=0.000000000e0 rotation_error=7.705640167e-16
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 16.39s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.09s
+     Running tests/runtime_d6_angular_mass.rs (target/debug/deps/runtime_d6_angular_mass-130d77b786e52dba)
+
+running 2 tests
+test gpu_standalone_narrow_hinges_advance_to_opposite_stop_and_hold ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } dt=0.00005 width=1e-8 steps=8
+standalone_narrow_acceleration case=0 error=1.067353265e-7
+standalone_narrow_acceleration case=1 error=1.524588364e-7
+standalone_narrow_acceleration case=2 error=5.320249381e-8
+standalone_narrow_acceleration case=3 error=5.990694409e-8
+standalone_narrow_acceleration case=4 error=9.426358974e-7
+standalone_narrow_acceleration case=5 error=8.268166274e-7
+standalone_narrow_acceleration case=6 error=7.864675303e-7
+standalone_narrow_acceleration case=7 error=9.173109511e-7
+standalone_narrow_acceleration case=8 error=2.824613445e-7
+standalone_narrow_acceleration case=9 error=2.498265493e-7
+standalone_narrow_acceleration case=10 error=2.764241834e-7
+standalone_narrow_acceleration case=11 error=1.686006591e-7
+standalone_narrow_acceleration case=12 error=9.363154182e-7
+standalone_narrow_acceleration case=13 error=8.100417476e-7
+standalone_narrow_acceleration case=14 error=8.435995881e-7
+standalone_narrow_acceleration case=15 error=8.810969438e-7
+standalone_narrow_acceleration case=16 error=2.514516633e-7
+standalone_narrow_acceleration case=17 error=2.838920849e-7
+standalone_narrow_acceleration case=18 error=1.349499837e-7
+standalone_narrow_acceleration case=19 error=1.158173984e-7
+standalone_narrow_acceleration case=20 error=8.458870163e-7
+standalone_narrow_acceleration case=21 error=7.696016447e-7
+standalone_narrow_acceleration case=22 error=8.269088879e-7
+standalone_narrow_acceleration case=23 error=8.753500255e-7
+standalone_narrow_acceleration case=24 error=2.693822771e-7
+standalone_narrow_acceleration case=25 error=1.922238272e-7
+standalone_narrow_acceleration case=26 error=3.320665097e-8
+standalone_narrow_acceleration case=27 error=3.144522866e-7
+standalone_narrow_acceleration case=28 error=8.049767809e-7
+standalone_narrow_acceleration case=29 error=8.493811760e-7
+standalone_narrow_acceleration case=30 error=7.286525141e-7
+standalone_narrow_acceleration case=31 error=7.533231055e-7
+retained_rotation_advance case=0 error=5.734566575e-16
+retained_rotation_advance case=1 error=5.688598753e-16
+retained_rotation_advance case=2 error=9.527043843e-16
+retained_rotation_advance case=3 error=5.054992841e-16
+retained_rotation_advance case=4 error=2.798577292e-15
+retained_rotation_advance case=5 error=2.249571853e-15
+retained_rotation_advance case=6 error=2.699372427e-15
+retained_rotation_advance case=7 error=2.339549722e-15
+retained_rotation_advance case=8 error=4.626480598e-16
+retained_rotation_advance case=9 error=3.670569938e-16
+retained_rotation_advance case=10 error=3.303817180e-16
+retained_rotation_advance case=11 error=2.335893892e-16
+retained_rotation_advance case=12 error=3.011775722e-15
+retained_rotation_advance case=13 error=1.896045617e-15
+retained_rotation_advance case=14 error=2.845488021e-15
+retained_rotation_advance case=15 error=2.331313461e-15
+retained_rotation_advance case=16 error=7.993199615e-16
+retained_rotation_advance case=17 error=3.546653177e-16
+retained_rotation_advance case=18 error=4.940887142e-16
+retained_rotation_advance case=19 error=3.546653177e-16
+retained_rotation_advance case=20 error=2.686212441e-15
+retained_rotation_advance case=21 error=2.058221442e-15
+retained_rotation_advance case=22 error=2.722107826e-15
+retained_rotation_advance case=23 error=2.349612348e-15
+retained_rotation_advance case=24 error=3.709229145e-16
+retained_rotation_advance case=25 error=7.267209098e-16
+retained_rotation_advance case=26 error=9.387115326e-16
+retained_rotation_advance case=27 error=6.984778772e-16
+retained_rotation_advance case=28 error=2.733756885e-15
+retained_rotation_advance case=29 error=2.163154963e-15
+retained_rotation_advance case=30 error=3.103788263e-15
+retained_rotation_advance case=31 error=1.980248964e-15
+narrow_stop_hold case=0 endpoint_error=1.110223025e-15 angular_rate=1.236292597e-11
+narrow_stop_hold case=1 endpoint_error=2.220446049e-16 angular_rate=9.200761250e-12
+narrow_stop_hold case=2 endpoint_error=3.552713679e-15 angular_rate=1.076049092e-11
+narrow_stop_hold case=3 endpoint_error=0.000000000e0 angular_rate=1.724330543e-11
+narrow_stop_hold case=4 endpoint_error=3.552713679e-15 angular_rate=1.924274903e-11
+narrow_stop_hold case=5 endpoint_error=0.000000000e0 angular_rate=3.662948802e-11
+narrow_stop_hold case=6 endpoint_error=3.552713679e-15 angular_rate=1.357762320e-10
+narrow_stop_hold case=7 endpoint_error=0.000000000e0 angular_rate=3.325471373e-11
+narrow_stop_hold case=8 endpoint_error=6.661338148e-16 angular_rate=1.125763389e-11
+narrow_stop_hold case=9 endpoint_error=0.000000000e0 angular_rate=1.305227858e-11
+narrow_stop_hold case=10 endpoint_error=3.552713679e-15 angular_rate=1.514173788e-11
+narrow_stop_hold case=11 endpoint_error=0.000000000e0 angular_rate=9.036767523e-12
+narrow_stop_hold case=12 endpoint_error=3.552713679e-15 angular_rate=2.069653720e-11
+narrow_stop_hold case=13 endpoint_error=0.000000000e0 angular_rate=1.037800722e-11
+narrow_stop_hold case=14 endpoint_error=8.881784197e-16 angular_rate=2.474249375e-12
+narrow_stop_hold case=15 endpoint_error=0.000000000e0 angular_rate=1.358342576e-11
+narrow_stop_hold case=16 endpoint_error=6.661338148e-16 angular_rate=1.102639145e-11
+narrow_stop_hold case=17 endpoint_error=0.000000000e0 angular_rate=1.424194035e-11
+narrow_stop_hold case=18 endpoint_error=8.881784197e-16 angular_rate=1.973751174e-11
+narrow_stop_hold case=19 endpoint_error=0.000000000e0 angular_rate=9.106686009e-12
+narrow_stop_hold case=20 endpoint_error=3.552713679e-15 angular_rate=2.373400665e-11
+narrow_stop_hold case=21 endpoint_error=2.220446049e-16 angular_rate=9.898339460e-12
+narrow_stop_hold case=22 endpoint_error=3.552713679e-15 angular_rate=1.463285059e-10
+narrow_stop_hold case=23 endpoint_error=0.000000000e0 angular_rate=3.634617042e-11
+narrow_stop_hold case=24 endpoint_error=1.554312234e-15 angular_rate=1.471504539e-11
+narrow_stop_hold case=25 endpoint_error=2.220446049e-16 angular_rate=6.611616024e-12
+narrow_stop_hold case=26 endpoint_error=3.552713679e-15 angular_rate=1.262669480e-11
+narrow_stop_hold case=27 endpoint_error=0.000000000e0 angular_rate=1.592965316e-11
+narrow_stop_hold case=28 endpoint_error=1.110223025e-15 angular_rate=1.300380114e-11
+narrow_stop_hold case=29 endpoint_error=0.000000000e0 angular_rate=3.931702309e-11
+narrow_stop_hold case=30 endpoint_error=3.552713679e-15 angular_rate=1.384994198e-10
+narrow_stop_hold case=31 endpoint_error=0.000000000e0 angular_rate=3.323797694e-11
+ok
+test gpu_standalone_narrow_hinges_preserve_authored_stop_response ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } dt=0.00005 width=1e-8
+angular_mass case=0 reversed=false rate_error=5.336766328e-12 linear_error=1.166346605e-11 pose_error=2.827377466e-7 rotation_error=1.189716899e-7
+angular_mass case=1 reversed=false rate_error=7.622941820e-12 linear_error=1.162747450e-11 pose_error=2.845637390e-7 rotation_error=1.164455754e-7
+angular_mass case=2 reversed=false rate_error=2.660124688e-12 linear_error=1.103896773e-11 pose_error=2.863972281e-7 rotation_error=1.139376715e-7
+angular_mass case=3 reversed=false rate_error=2.995347204e-12 linear_error=4.428624330e-12 pose_error=2.845637390e-7 rotation_error=1.164455754e-7
+angular_mass case=4 reversed=false rate_error=4.713179487e-11 linear_error=5.901271828e-11 pose_error=1.295562147e-7 rotation_error=3.568463334e-8
+angular_mass case=5 reversed=false rate_error=4.134083137e-11 linear_error=5.895757289e-11 pose_error=1.275842468e-7 rotation_error=3.830843799e-8
+angular_mass case=6 reversed=false rate_error=3.932337652e-11 linear_error=5.944871191e-11 pose_error=1.256249574e-7 rotation_error=4.097062001e-8
+angular_mass case=7 reversed=false rate_error=4.586554756e-11 linear_error=6.551734130e-11 pose_error=1.275842468e-7 rotation_error=3.830843799e-8
+angular_mass case=8 reversed=true rate_error=1.412306722e-11 linear_error=8.948017689e-12 pose_error=3.602240407e-7 rotation_error=6.961266286e-8
+angular_mass case=9 reversed=true rate_error=1.249132747e-11 linear_error=1.213402514e-11 pose_error=3.622046443e-7 rotation_error=6.763220776e-8
+angular_mass case=10 reversed=true rate_error=1.382120917e-11 linear_error=1.273650402e-11 pose_error=3.641937929e-7 rotation_error=6.568998208e-8
+angular_mass case=11 reversed=true rate_error=8.430032957e-12 linear_error=9.952702512e-12 pose_error=3.622046443e-7 rotation_error=6.763220776e-8
+angular_mass case=12 reversed=true rate_error=4.681577091e-11 linear_error=3.459220279e-11 pose_error=9.796313591e-8 rotation_error=1.366982276e-7
+angular_mass case=13 reversed=true rate_error=4.050208738e-11 linear_error=5.309422713e-11 pose_error=9.603315693e-8 rotation_error=1.384422511e-7
+angular_mass case=14 reversed=true rate_error=4.217997941e-11 linear_error=4.757428346e-11 pose_error=9.413834548e-8 rotation_error=1.402104627e-7
+angular_mass case=15 reversed=true rate_error=4.405484719e-11 linear_error=4.538429174e-11 pose_error=9.603315693e-8 rotation_error=1.384422511e-7
+angular_mass case=16 reversed=false rate_error=1.257258317e-11 linear_error=1.739854690e-11 pose_error=5.511273412e-8 rotation_error=8.383363212e-8
+angular_mass case=17 reversed=false rate_error=1.419460424e-11 linear_error=1.670596021e-11 pose_error=5.706198727e-8 rotation_error=8.569527471e-8
+angular_mass case=18 reversed=false rate_error=6.747499185e-12 linear_error=1.509043187e-11 pose_error=5.903973115e-8 rotation_error=8.761389312e-8
+angular_mass case=19 reversed=false rate_error=5.790869921e-12 linear_error=5.794027398e-12 pose_error=5.706198727e-8 rotation_error=8.569527471e-8
+angular_mass case=20 reversed=false rate_error=4.229435081e-11 linear_error=6.488910370e-11 pose_error=2.069054330e-7 rotation_error=1.050118372e-7
+angular_mass case=21 reversed=false rate_error=3.848008224e-11 linear_error=5.139384063e-11 pose_error=2.067771919e-7 rotation_error=1.022010840e-7
+angular_mass case=22 reversed=false rate_error=4.134544440e-11 linear_error=5.109623213e-11 pose_error=2.066753943e-7 rotation_error=9.939592107e-8
+angular_mass case=23 reversed=false rate_error=4.376750127e-11 linear_error=6.565560928e-11 pose_error=2.067771919e-7 rotation_error=1.022010840e-7
+angular_mass case=24 reversed=true rate_error=1.346911386e-11 linear_error=1.198840672e-11 pose_error=3.457218669e-7 rotation_error=1.375945678e-8
+angular_mass case=25 reversed=true rate_error=9.611191362e-12 linear_error=1.462764098e-11 pose_error=3.468056858e-7 rotation_error=1.147621050e-8
+angular_mass case=26 reversed=true rate_error=1.660332549e-12 linear_error=9.620407891e-12 pose_error=3.479063484e-7 rotation_error=9.324680804e-9
+angular_mass case=27 reversed=true rate_error=1.572261433e-11 linear_error=2.072606141e-11 pose_error=3.468056858e-7 rotation_error=1.147621050e-8
+angular_mass case=28 reversed=true rate_error=4.024883904e-11 linear_error=4.853094013e-11 pose_error=2.019566556e-7 rotation_error=7.720991553e-8
+angular_mass case=29 reversed=true rate_error=4.246905880e-11 linear_error=5.766294377e-11 pose_error=2.021846132e-7 rotation_error=7.757379976e-8
+angular_mass case=30 reversed=true rate_error=3.643262570e-11 linear_error=4.122070429e-11 pose_error=2.024470656e-7 rotation_error=7.801848031e-8
+angular_mass case=31 reversed=true rate_error=3.766615528e-11 linear_error=4.273785623e-11 pose_error=2.021846132e-7 rotation_error=7.757379976e-8
+standalone_narrow_acceleration case=0 error=1.067353265e-7
+standalone_narrow_acceleration case=1 error=1.524588364e-7
+standalone_narrow_acceleration case=2 error=5.320249381e-8
+standalone_narrow_acceleration case=3 error=5.990694409e-8
+standalone_narrow_acceleration case=4 error=9.426358974e-7
+standalone_narrow_acceleration case=5 error=8.268166274e-7
+standalone_narrow_acceleration case=6 error=7.864675303e-7
+standalone_narrow_acceleration case=7 error=9.173109511e-7
+standalone_narrow_acceleration case=8 error=2.824613445e-7
+standalone_narrow_acceleration case=9 error=2.498265493e-7
+standalone_narrow_acceleration case=10 error=2.764241834e-7
+standalone_narrow_acceleration case=11 error=1.686006591e-7
+standalone_narrow_acceleration case=12 error=9.363154182e-7
+standalone_narrow_acceleration case=13 error=8.100417476e-7
+standalone_narrow_acceleration case=14 error=8.435995881e-7
+standalone_narrow_acceleration case=15 error=8.810969438e-7
+standalone_narrow_acceleration case=16 error=2.514516633e-7
+standalone_narrow_acceleration case=17 error=2.838920849e-7
+standalone_narrow_acceleration case=18 error=1.349499837e-7
+standalone_narrow_acceleration case=19 error=1.158173984e-7
+standalone_narrow_acceleration case=20 error=8.458870163e-7
+standalone_narrow_acceleration case=21 error=7.696016447e-7
+standalone_narrow_acceleration case=22 error=8.269088879e-7
+standalone_narrow_acceleration case=23 error=8.753500255e-7
+standalone_narrow_acceleration case=24 error=2.693822771e-7
+standalone_narrow_acceleration case=25 error=1.922238272e-7
+standalone_narrow_acceleration case=26 error=3.320665097e-8
+standalone_narrow_acceleration case=27 error=3.144522866e-7
+standalone_narrow_acceleration case=28 error=8.049767809e-7
+standalone_narrow_acceleration case=29 error=8.493811760e-7
+standalone_narrow_acceleration case=30 error=7.286525141e-7
+standalone_narrow_acceleration case=31 error=7.533231055e-7
+retained_rotation_advance case=0 error=5.734566575e-16
+retained_rotation_advance case=1 error=5.688598753e-16
+retained_rotation_advance case=2 error=9.527043843e-16
+retained_rotation_advance case=3 error=5.054992841e-16
+retained_rotation_advance case=4 error=2.798577292e-15
+retained_rotation_advance case=5 error=2.249571853e-15
+retained_rotation_advance case=6 error=2.699372427e-15
+retained_rotation_advance case=7 error=2.339549722e-15
+retained_rotation_advance case=8 error=4.626480598e-16
+retained_rotation_advance case=9 error=3.670569938e-16
+retained_rotation_advance case=10 error=3.303817180e-16
+retained_rotation_advance case=11 error=2.335893892e-16
+retained_rotation_advance case=12 error=3.011775722e-15
+retained_rotation_advance case=13 error=1.896045617e-15
+retained_rotation_advance case=14 error=2.845488021e-15
+retained_rotation_advance case=15 error=2.331313461e-15
+retained_rotation_advance case=16 error=7.993199615e-16
+retained_rotation_advance case=17 error=3.546653177e-16
+retained_rotation_advance case=18 error=4.940887142e-16
+retained_rotation_advance case=19 error=3.546653177e-16
+retained_rotation_advance case=20 error=2.686212441e-15
+retained_rotation_advance case=21 error=2.058221442e-15
+retained_rotation_advance case=22 error=2.722107826e-15
+retained_rotation_advance case=23 error=2.349612348e-15
+retained_rotation_advance case=24 error=3.709229145e-16
+retained_rotation_advance case=25 error=7.267209098e-16
+retained_rotation_advance case=26 error=9.387115326e-16
+retained_rotation_advance case=27 error=6.984778772e-16
+retained_rotation_advance case=28 error=2.733756885e-15
+retained_rotation_advance case=29 error=2.163154963e-15
+retained_rotation_advance case=30 error=3.103788263e-15
+retained_rotation_advance case=31 error=1.980248964e-15
+standalone_narrow_retained case=0 violation=0.000000000e0
+standalone_narrow_retained case=1 violation=0.000000000e0
+standalone_narrow_retained case=2 violation=0.000000000e0
+standalone_narrow_retained case=3 violation=0.000000000e0
+standalone_narrow_retained case=4 violation=0.000000000e0
+standalone_narrow_retained case=5 violation=0.000000000e0
+standalone_narrow_retained case=6 violation=0.000000000e0
+standalone_narrow_retained case=7 violation=0.000000000e0
+standalone_narrow_retained case=8 violation=0.000000000e0
+standalone_narrow_retained case=9 violation=0.000000000e0
+standalone_narrow_retained case=10 violation=0.000000000e0
+standalone_narrow_retained case=11 violation=0.000000000e0
+standalone_narrow_retained case=12 violation=0.000000000e0
+standalone_narrow_retained case=13 violation=0.000000000e0
+standalone_narrow_retained case=14 violation=0.000000000e0
+standalone_narrow_retained case=15 violation=0.000000000e0
+standalone_narrow_retained case=16 violation=0.000000000e0
+standalone_narrow_retained case=17 violation=0.000000000e0
+standalone_narrow_retained case=18 violation=0.000000000e0
+standalone_narrow_retained case=19 violation=0.000000000e0
+standalone_narrow_retained case=20 violation=0.000000000e0
+standalone_narrow_retained case=21 violation=0.000000000e0
+standalone_narrow_retained case=22 violation=0.000000000e0
+standalone_narrow_retained case=23 violation=0.000000000e0
+standalone_narrow_retained case=24 violation=0.000000000e0
+standalone_narrow_retained case=25 violation=0.000000000e0
+standalone_narrow_retained case=26 violation=0.000000000e0
+standalone_narrow_retained case=27 violation=0.000000000e0
+standalone_narrow_retained case=28 violation=0.000000000e0
+standalone_narrow_retained case=29 violation=0.000000000e0
+standalone_narrow_retained case=30 violation=0.000000000e0
+standalone_narrow_retained case=31 violation=0.000000000e0
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 15.76s
+

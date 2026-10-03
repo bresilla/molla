@@ -417,7 +417,7 @@ fn deduplicated_pending_jobs_preserve_1024_jobs_and_relative_active_ranges() {
             &[&first.frame],
             &mut shifted_pool,
             &specs,
-            &[3..8],
+            std::slice::from_ref(&(3..8)),
             stamp(0),
             |encoder, inputs, out| {
                 encoder.copy_buffer_to_buffer(

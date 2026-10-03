@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.04s
+     Running tests/runtime_contact_breakage_gpu.rs (target/debug/deps/runtime_contact_breakage_gpu-7255456fbf074124)
+
+running 1 test
+test sequential_contact_breaks_preserve_global_sample_times_and_frame_means ... 
+thread 'sequential_contact_breaks_preserve_global_sample_times_and_frame_means' (778792) panicked at crates/molla-solvers/tests/runtime_contact_breakage_gpu.rs:388:9:
+substep=1 joint=JointHandle(7) GPU=DVec3(0.0, 70.00000762939453, 0.0) CPU=DVec3(3.789548625305811e-14, 31.099999999999547, 0.0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    sequential_contact_breaks_preserve_global_sample_times_and_frame_means
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 39.61s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_contact_breakage_gpu`
+make: *** [Makefile:109: test-gpu] Error 101

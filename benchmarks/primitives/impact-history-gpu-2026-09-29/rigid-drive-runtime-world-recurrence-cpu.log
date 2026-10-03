@@ -1,0 +1,34 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error: `<` is interpreted as a start of generic arguments for `usize`, not a comparison
+   --> crates/molla-solvers/tests/runtime_rigid_loop_drives.rs:166:39
+    |
+166 |                     if c.axis as usize<3 {
+    |                                       ^--- interpreted as generic arguments
+    |                                       |
+    |                                       not interpreted as comparison
+    |
+help: try comparing the cast value
+    |
+166 |                     if (c.axis as usize)<3 {
+    |                        +               +
+
+error: `<` is interpreted as a start of generic arguments for `usize`, not a comparison
+   --> crates/molla-solvers/tests/runtime_rigid_loop_drives.rs:217:39
+    |
+217 |                     if c.axis as usize<3 {c.world_position+=c.direction*(h*next);}
+    |                                       ^--- interpreted as generic arguments
+    |                                       |
+    |                                       not interpreted as comparison
+    |
+help: try comparing the cast value
+    |
+217 |                     if (c.axis as usize)<3 {c.world_position+=c.direction*(h*next);}
+    |                        +               +
+
+error: could not compile `molla-solvers` (test "runtime_rigid_loop_drives") due to 2 previous errors
+make: *** [Makefile:93: test] Error 101

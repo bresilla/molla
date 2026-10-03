@@ -1,0 +1,28 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.63s
+     Running tests/runtime_motor_models.rs (target/debug/deps/runtime_motor_models-b95efbc521bf0804)
+
+running 4 tests
+
+thread 'cpu_d6_motor_models_match_each_authored_axis' (1938095) panicked at crates/molla-solvers/tests/runtime_motor_models.rs:402:17:
+pose frame=2 axis=5 error=0.0000001032382731180714: Oracle { parent: None, child: BodyHandle(187), joint: JointHandle(188), kind: D6, inertia: 14.0, motor: JointMotor { mode: PositionVelocity, target_position: 0.4, target_velocity: 0.7, stiffness: 12.0, damping: 3.0, max_force: inf, model: Acceleration }, position: 0.047589401028326754, velocity: 0.6839341019632289, load_acceleration: 0.0 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_d6_motor_models_match_each_authored_axis ... FAILED
+test cpu_stiff_motor_models_match_independent_scalar_dynamics ... ok
+test cpu_motor_edits_rebuilds_and_reactions_match_scalar_dynamics ... ok
+test cpu_motor_models_match_independent_scalar_dynamics ... ok
+
+failures:
+
+failures:
+    cpu_d6_motor_models_match_each_authored_axis
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.94s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_motor_models`
+make: *** [Makefile:87: test] Error 101

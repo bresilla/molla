@@ -161,7 +161,7 @@ impl FftKernel {
         let bytes = (n * core::mem::size_of::<Complex32>()) as u64;
         let buf_a = mk_storage(device, "molla::fft buf a", bytes);
         let buf_b = mk_storage(device, "molla::fft buf b", bytes);
-        queue.write_buffer(&buf_a, 0, bytemuck::cast_slice(input));
+        molla_core::gpu_write_buffer!(queue, &buf_a, 0, bytemuck::cast_slice(input));
 
         let final_buf = self.run_1d_passes(device, queue, &buf_a, &buf_b, n, 1, n, inverse)?;
         readback_into(device, queue, final_buf, output, bytes)?;
@@ -205,7 +205,7 @@ impl FftKernel {
         let bytes = (total * core::mem::size_of::<Complex32>()) as u64;
         let buf_a = mk_storage(device, "molla::fft 2d buf a", bytes);
         let buf_b = mk_storage(device, "molla::fft 2d buf b", bytes);
-        queue.write_buffer(&buf_a, 0, bytemuck::cast_slice(input));
+        molla_core::gpu_write_buffer!(queue, &buf_a, 0, bytemuck::cast_slice(input));
 
         // Pass 1: 1D FFT along rows (one independent FFT per row).
         let after_rows: &wgpu::Buffer = if width > 1 {
@@ -325,7 +325,7 @@ impl FftKernel {
         let bytes = (total * core::mem::size_of::<Complex32>()) as u64;
         let buf_a = mk_storage(device, "molla::fft 3d z buf a", bytes);
         let buf_b = mk_storage(device, "molla::fft 3d z buf b", bytes);
-        queue.write_buffer(&buf_a, 0, bytemuck::cast_slice(&z_pencils));
+        molla_core::gpu_write_buffer!(queue, &buf_a, 0, bytemuck::cast_slice(&z_pencils));
         let after = self.run_1d_passes(
             device,
             queue,
@@ -396,13 +396,16 @@ impl FftKernel {
                 _pad0: 0,
                 _pad1: 0,
             };
-            let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::fft uniforms"),
-                size: core::mem::size_of::<Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&ubuf, 0, bytemuck::bytes_of(&uniforms));
+            let ubuf = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::fft uniforms"),
+                    size: core::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &ubuf, 0, bytemuck::bytes_of(&uniforms));
 
             let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("molla::fft io bg"),
@@ -473,13 +476,16 @@ impl FftKernel {
             _pad0: 0,
             _pad1: 0,
         };
-        let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::fft transpose uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&ubuf, 0, bytemuck::bytes_of(&uniforms));
+        let ubuf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::fft transpose uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &ubuf, 0, bytemuck::bytes_of(&uniforms));
 
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::fft transpose io"),
@@ -536,14 +542,17 @@ fn check_pow2(n: usize, ctx: &str) -> Result<()> {
 }
 
 fn mk_storage(device: &wgpu::Device, label: &str, bytes: u64) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: bytes,
-        usage: wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_DST
-            | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    })
+    molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }
+    )
 }
 
 fn readback_into(
@@ -553,12 +562,15 @@ fn readback_into(
     dst: &mut [Complex32],
     bytes: u64,
 ) -> Result<()> {
-    let stage = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("molla::fft readback"),
-        size: bytes,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+    let stage = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("molla::fft readback"),
+            size: bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }
+    );
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("molla::fft readback encoder"),
     });
@@ -578,7 +590,7 @@ fn readback_into(
     receiver
         .recv()
         .map_err(|e| Error::Gpu(format!("fft readback recv: {e:?}")))??;
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let bytes_read: &[Complex32] = bytemuck::cast_slice(&data);
     dst.copy_from_slice(bytes_read);
     drop(data);

@@ -4,4 +4,7 @@
 mod engine;
 
 #[cfg(feature = "gpu")]
+mod program_cache;
+
+#[cfg(feature = "gpu")]
 pub use engine::{AdapterInfo, Backend, DeviceHealth, DeviceLoss, Engine};

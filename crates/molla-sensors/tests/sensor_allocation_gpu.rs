@@ -165,6 +165,51 @@ fn mesh_bvh_construction_reserves_only_occupied_nodes() {
 }
 
 #[test]
+#[ignore = "requires GPU through make test-gpu"]
+fn cloud_input_descriptors_reuse_handles_without_allocating() {
+    use molla_math::Real;
+    use molla_sensors::readback::DeviceBuffer;
+    use molla_sensors::{CloudInput, CloudPoint, CloudRaster};
+    let engine = Engine::new_gpu().unwrap();
+    let points =
+        DeviceBuffer::from_host(&engine, vec![CloudPoint::default()], BufferUsage::Storage)
+            .unwrap();
+    let vectors = DeviceBuffer::from_host(&engine, vec![Vec3::ZERO], BufferUsage::Storage).unwrap();
+    let distance =
+        DeviceBuffer::from_host(&engine, vec![0. as Real], BufferUsage::Storage).unwrap();
+    let shape = DeviceBuffer::from_host(&engine, vec![0i32], BufferUsage::Storage).unwrap();
+    let raster = CloudRaster {
+        sensor_id: 1,
+        rows: 1,
+        columns: 1,
+        subrays: 1,
+        source_offset: 0,
+        angles: None,
+    };
+    for _ in 0..32 {
+        let (input, counts) = measure(|| {
+            std::hint::black_box(CloudInput::Points(points.readback_source(0..1).unwrap()))
+        });
+        assert_eq!(counts, Counts::default());
+        drop(input);
+        let (input, counts) = measure(|| {
+            std::hint::black_box(CloudInput::Rays {
+                channels: [
+                    vectors.readback_source(0..1).unwrap(),
+                    vectors.readback_source(0..1).unwrap(),
+                    vectors.readback_source(0..1).unwrap(),
+                    distance.readback_source(0..1).unwrap(),
+                    shape.readback_source(0..1).unwrap(),
+                ],
+                raster,
+            })
+        });
+        assert_eq!(counts, Counts::default());
+        drop(input);
+    }
+}
+
+#[test]
 #[ignore = "requires GPU"]
 fn constructor_host_allocation_failure_returns_error_and_allows_retry() {
     use molla_sensors::{
@@ -699,7 +744,7 @@ fn full_output_and_input_capacity_preserves_completion_leases_and_inline_iterati
                 &[&seed.frame],
                 &mut pool_a,
                 &specs,
-                &[0..0],
+                std::slice::from_ref(&(0..0)),
                 Default::default(),
                 |_, _, _| Ok(0),
             )
@@ -730,7 +775,7 @@ fn full_output_and_input_capacity_preserves_completion_leases_and_inline_iterati
                 &[&seed.frame],
                 &mut pool_b,
                 &specs,
-                &[0..0],
+                std::slice::from_ref(&(0..0)),
                 Default::default(),
                 |_, _, _| Ok(0),
             )
@@ -743,7 +788,7 @@ fn full_output_and_input_capacity_preserves_completion_leases_and_inline_iterati
                 &[&seed.frame],
                 &mut pool_b,
                 &specs,
-                &[0..0],
+                std::slice::from_ref(&(0..0)),
                 Default::default(),
                 |_, _, _| Ok(0)
             )

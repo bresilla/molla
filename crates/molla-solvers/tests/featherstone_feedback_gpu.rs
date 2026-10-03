@@ -297,7 +297,7 @@ fn stiff_coupled_feedback_trajectory_stays_bounded_on_gpu() {
 
 #[test]
 #[ignore = "requires GPU through make test-gpu"]
-fn stable_feedback_rejects_unsupported_modes_and_faults_nonfinite_gains() {
+fn stable_feedback_requires_rigorous_dynamics_and_faults_nonfinite_gains() {
     let engine = Engine::new(Backend::AutoGpu).unwrap();
     let device = engine.device().unwrap();
     let queue = engine.queue().unwrap();
@@ -330,18 +330,18 @@ fn stable_feedback_rejects_unsupported_modes_and_faults_nonfinite_gains() {
     gpu.rigorous_d_solve = true;
     control.joint_target_mode.host_mut().unwrap()[0] = JointTargetMode::Position as u32;
     control.joint_target_mode.upload(queue).unwrap();
-    assert!(
-        gpu.step(
-            &model,
-            &input,
-            &control,
-            &Contacts::with_capacity(0),
-            0.001,
-            &mut output
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("scalar")
+    gpu.step(
+        &model,
+        &input,
+        &control,
+        &Contacts::with_capacity(0),
+        0.001,
+        &mut output,
+    )
+    .unwrap();
+    assert_eq!(
+        gpu_readback::read::<u32>(&engine, gpu.gpu_status_buffer().unwrap(), 1)[0],
+        0
     );
     control.joint_target_mode.host_mut().unwrap()[0] = JointTargetMode::None as u32;
     control.joint_target_mode.upload(queue).unwrap();

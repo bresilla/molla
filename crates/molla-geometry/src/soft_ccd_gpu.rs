@@ -123,11 +123,11 @@ pub fn vt_ccd_batch_gpu(
         "molla::soft_ccd verts",
         bytemuck::cast_slice(&verts),
     );
-    queue.write_buffer(&verts_buf, 0, bytemuck::cast_slice(&verts));
+    molla_core::gpu_write_buffer!(queue, &verts_buf, 0, bytemuck::cast_slice(&verts));
     let t0_buf = make_storage(&device, "molla::soft_ccd tri0", bytemuck::cast_slice(&t0));
-    queue.write_buffer(&t0_buf, 0, bytemuck::cast_slice(&t0));
+    molla_core::gpu_write_buffer!(queue, &t0_buf, 0, bytemuck::cast_slice(&t0));
     let t1_buf = make_storage(&device, "molla::soft_ccd tri1", bytemuck::cast_slice(&t1));
-    queue.write_buffer(&t1_buf, 0, bytemuck::cast_slice(&t1));
+    molla_core::gpu_write_buffer!(queue, &t1_buf, 0, bytemuck::cast_slice(&t1));
 
     let mut out = Buffer::from_vec(vec![-1.0 as Real; n], BufferUsage::StorageReadWrite);
     out.ensure_device(&device)?;
@@ -190,13 +190,16 @@ fn dispatch(
             resource: out_buf.as_entire_binding(),
         }],
     });
-    let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("molla::soft_ccd uniforms"),
-        size: core::mem::size_of::<Uniforms>() as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+    let uniform_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("molla::soft_ccd uniforms"),
+            size: core::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
+    molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
     let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("molla::soft_ccd uniforms bg"),
         layout: &kernel.layout_uniforms,
@@ -228,12 +231,15 @@ fn dispatch(
 
 fn make_storage(device: &wgpu::Device, label: &str, data: &[u8]) -> wgpu::Buffer {
     let size = (data.len().max(16)) as u64;
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+    molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    )
 }
 
 fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntry> {

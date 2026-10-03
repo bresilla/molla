@@ -1,0 +1,829 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.92s
+     Running tests/runtime_rigid_loop_drives.rs (target/debug/deps/runtime_rigid_loop_drives-ded95ec92747fef1)
+
+running 4 tests
+test gpu_rigid_loop_finite_force_cap_overflow_rejects_without_publication_and_recovers ... ok
+test gpu_rigid_loop_force_drives_match_independent_implicit_oracle ... rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 60Hz/1 steps
+rigid-loop Force controls: 24 rotated hinge/slider/D6 closures, masses .01/1/100, all modes/brakes/caps/edits; 240Hz/4 steps
+ok
+test gpu_rigid_loop_force_drives_share_live_friction_response ... D6 Force controls with live friction: 96 frames, masses .01/1/100, static hold/capped slide/brake/reversal, independent impulse/rate/reaction oracle
+ok
+test gpu_rigid_loop_motor_brake_breaking_and_repair_retire_and_restore_controls ... Force motor + brake breaking/repair: 24 rotated axis closures, capture=false, event oracle, broken-row retirement and live-control repair verified
+Force motor + brake breaking/repair: 24 rotated axis closures, capture=true, event oracle, broken-row retirement and live-control repair verified
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 75.05s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.98s
+     Running tests/runtime_rigid_axis_loops.rs (target/debug/deps/runtime_rigid_axis_loops-39fcc59d278367ac)
+
+running 4 tests
+test gpu_rigid_axis_loop_break_channels_and_explicit_repair_preserve_state ... 24 rigid axis closures: force/torque/both breaks, capture=false, exact repair state and follow-up step passed
+24 rigid axis closures: force/torque/both breaks, capture=true, exact repair state and follow-up step passed
+ok
+test gpu_rigid_axis_loops_match_independent_floating_impulse_projection ... 48 floating hinge/slider/D6 pairs: independent five/six-row impulse, COM, full inertia and both-anchor wrenches passed
+ok
+test gpu_rigid_axis_loops_match_independent_hard_bound_motion_and_wrenches ... rigid-axis loops hz=60 substeps=1 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=60 substeps=4 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=1 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=4 limits=[-0.004, 0.006]: 24 world closures, both bounds and live limit edits passed
+ok
+test gpu_rigid_axis_loops_match_nonzero_equal_bound_motion_and_wrenches ... rigid-axis loops hz=60 substeps=1 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=60 substeps=4 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=1 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+rigid-axis loops hz=240 substeps=4 limits=[0.003, 0.003]: 24 world closures, both bounds and live limit edits passed
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 131.01s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.01s
+     Running tests/runtime_rigid_fixed_loops.rs (target/debug/deps/runtime_rigid_fixed_loops-1b2770fb0f62b928)
+
+running 3 tests
+test gpu_rigid_fixed_loop_break_channels_and_explicit_repair_preserve_state ... ok
+test gpu_rigid_fixed_loop_projection_matches_independent_six_dimensional_impulse ... ok
+test gpu_rigid_fixed_loops_preserve_rotated_frames_and_balance_anchor_wrenches ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 110.49s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.03s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 13 tests
+test coupled_constraint_gpu::tests::bilateral_coupling_prevents_premature_sliding ... ok
+test coupled_constraint_gpu::tests::bounded_effort_and_invalid_domains_are_explicit ... island=0 diagnostic=[524288, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+ok
+test coupled_constraint_gpu::tests::bounded_feedback_couples_to_friction_and_publishes_physical_slip ... ok
+test coupled_constraint_gpu::tests::contradictory_bilateral_rows_fail_closed ... island=0 diagnostic=[524288, 4096, 1065353216, 1] residual=1
+ok
+test coupled_constraint_gpu::tests::manufactured_mixed_kkt_permutations_cross_workgroups ... ok
+test coupled_constraint_gpu::tests::mixed_constraints_match_analytic_impulses_across_scales ... ok
+test coupled_constraint_gpu::tests::mixed_constructor_rejects_invalid_domain_buffers_and_capacity ... ok
+test coupled_constraint_gpu::tests::redundant_allocation_matches_minimum_norm_across_scales_rotations_and_order ... ok
+test coupled_constraint_gpu::tests::redundant_bilateral_rows_keep_inactive_stop_exactly_zero ... ok
+test coupled_constraint_gpu::tests::redundant_bounded_allocation_matches_independent_capped_minimum_norm ... ok
+test coupled_constraint_gpu::tests::retained_device_sequence_changes_domains_counts_and_status ... ok
+test coupled_constraint_gpu::tests::sticky_faults_retire_and_recover_mixed_outputs ... island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[131072, 0, 0, 0] residual=0
+island=0 diagnostic=[131072, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[262144, 0, 1065353216, 1073741826] residual=1
+island=0 diagnostic=[262144, 0, 1065353216, 1073741826] residual=1
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+ok
+test coupled_constraint_gpu::tests::zero_response_scalar_domains_fail_only_when_unbounded ... island=0 diagnostic=[524288, 0, 0, 0] residual=0
+island=0 diagnostic=[524288, 0, 0, 0] residual=0
+ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 213 filtered out; finished in 15.37s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 7 tests
+test contact_response_gpu::coupled_tests::bounded_feedback_response_preserves_contact_capacity_and_physical_mass_response ... ok
+test contact_response_gpu::coupled_tests::common_articulated_response_matches_mixed_analytic_solution ... ok
+test contact_response_gpu::coupled_tests::device_generated_distance_rows_share_contact_response_without_double_prediction ... ok
+test contact_response_gpu::coupled_tests::device_generated_locked_cone_rows_share_off_center_contact_response ... ok
+test contact_response_gpu::coupled_tests::device_generated_scalar_stop_couples_distance_and_contact_rows ... ok
+test contact_response_gpu::coupled_tests::retained_predictor_increment_survives_rounded_rates_in_mixed_response ... ok
+test contact_response_gpu::coupled_tests::scalar_response_faults_recover_and_inactive_joint_rows_retire ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 219 filtered out; finished in 49.05s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: function `apply` is never used
+   --> crates/molla-solvers/src/distance_constraints.rs:216:15
+    |
+216 | pub(crate) fn apply(
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.82s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 11 tests
+test impact_constraints_gpu::tests::bounded_scalars_match_independent_coupled_box_oracle_and_validate_domains ... island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+243 coupled box/bilateral feedback systems plus prescribed null-response effort and invalid domains passed
+ok
+test impact_constraints_gpu::tests::coupled_manifolds_scalar_rows_and_block_permutations ... ok
+test impact_constraints_gpu::tests::faults_are_sticky_and_counts_clear_old_solutions ... island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[134217728, 0, 0, 0], residual=0
+island=0, diagnostic=[67108864, 0, 0, 0], residual=0
+island=0, diagnostic=[268435456, 0, 0, 0], residual=0
+ok
+test impact_constraints_gpu::tests::invalid_capacity_padding_materials_and_separating_contacts_fail_closed ... island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+ok
+test impact_constraints_gpu::tests::iteration_exhaustion_and_external_halt_do_not_publish_valid_solutions ... island=0, diagnostic=[268435456, 1, 1052770304, 0], residual=0.375
+ok
+test impact_constraints_gpu::tests::midpoint_oblique_mass_friction_restitution_sweep ... checking fixture 0
+checking fixture 1
+checking fixture 2
+checking fixture 3
+checking fixture 4
+checking fixture 5
+checking fixture 6
+checking fixture 7
+checking fixture 8
+checking fixture 9
+checking fixture 10
+checking fixture 11
+checking fixture 12
+checking fixture 13
+checking fixture 14
+checking fixture 15
+checking fixture 16
+checking fixture 17
+checking fixture 18
+checking fixture 19
+checking fixture 20
+checking fixture 21
+checking fixture 22
+checking fixture 23
+checking fixture 24
+checking fixture 25
+checking fixture 26
+checking fixture 27
+checking fixture 28
+checking fixture 29
+checking fixture 30
+checking fixture 31
+checking fixture 32
+checking fixture 33
+checking fixture 34
+checking fixture 35
+checking fixture 36
+checking fixture 37
+checking fixture 38
+checking fixture 39
+checking fixture 40
+checking fixture 41
+checking fixture 42
+checking fixture 43
+checking fixture 44
+checking fixture 45
+checking fixture 46
+checking fixture 47
+checking fixture 48
+checking fixture 49
+checking fixture 50
+checking fixture 51
+checking fixture 52
+checking fixture 53
+checking fixture 54
+checking fixture 55
+checking fixture 56
+checking fixture 57
+checking fixture 58
+checking fixture 59
+checking fixture 60
+checking fixture 61
+checking fixture 62
+checking fixture 63
+checking fixture 64
+checking fixture 65
+checking fixture 66
+checking fixture 67
+checking fixture 68
+checking fixture 69
+checking fixture 70
+checking fixture 71
+checking fixture 72
+checking fixture 73
+checking fixture 74
+checking fixture 75
+checking fixture 76
+checking fixture 77
+checking fixture 78
+checking fixture 79
+checking fixture 80
+checking fixture 81
+checking fixture 82
+checking fixture 83
+checking fixture 84
+checking fixture 85
+checking fixture 86
+checking fixture 87
+checking fixture 88
+checking fixture 89
+checking fixture 90
+checking fixture 91
+checking fixture 92
+checking fixture 93
+checking fixture 94
+checking fixture 95
+checking fixture 96
+checking fixture 97
+checking fixture 98
+checking fixture 99
+checking fixture 100
+checking fixture 101
+checking fixture 102
+checking fixture 103
+checking fixture 104
+checking fixture 105
+checking fixture 106
+checking fixture 107
+checking fixture 108
+checking fixture 109
+checking fixture 110
+checking fixture 111
+checking fixture 112
+checking fixture 113
+checking fixture 114
+checking fixture 115
+checking fixture 116
+checking fixture 117
+checking fixture 118
+checking fixture 119
+checking fixture 120
+checking fixture 121
+checking fixture 122
+checking fixture 123
+checking fixture 124
+checking fixture 125
+checking fixture 126
+checking fixture 127
+checking fixture 128
+checking fixture 129
+checking fixture 130
+checking fixture 131
+checking fixture 132
+checking fixture 133
+checking fixture 134
+checking fixture 135
+checking fixture 136
+checking fixture 137
+checking fixture 138
+checking fixture 139
+checking fixture 140
+checking fixture 141
+checking fixture 142
+checking fixture 143
+checking fixture 144
+checking fixture 145
+checking fixture 146
+checking fixture 147
+checking fixture 148
+checking fixture 149
+checking fixture 150
+checking fixture 151
+checking fixture 152
+checking fixture 153
+checking fixture 154
+checking fixture 155
+checking fixture 156
+checking fixture 157
+checking fixture 158
+checking fixture 159
+checking fixture 160
+checking fixture 161
+checking fixture 162
+checking fixture 163
+checking fixture 164
+checking fixture 165
+checking fixture 166
+checking fixture 167
+checking fixture 168
+checking fixture 169
+checking fixture 170
+checking fixture 171
+checking fixture 172
+checking fixture 173
+checking fixture 174
+checking fixture 175
+checking fixture 176
+checking fixture 177
+checking fixture 178
+checking fixture 179
+checking fixture 180
+checking fixture 181
+checking fixture 182
+checking fixture 183
+checking fixture 184
+checking fixture 185
+checking fixture 186
+checking fixture 187
+checking fixture 188
+checking fixture 189
+checking fixture 190
+checking fixture 191
+checking fixture 192
+checking fixture 193
+checking fixture 194
+checking fixture 195
+checking fixture 196
+checking fixture 197
+checking fixture 198
+checking fixture 199
+checking fixture 200
+checking fixture 201
+checking fixture 202
+checking fixture 203
+checking fixture 204
+checking fixture 205
+checking fixture 206
+checking fixture 207
+checking fixture 208
+checking fixture 209
+checking fixture 210
+checking fixture 211
+checking fixture 212
+checking fixture 213
+checking fixture 214
+checking fixture 215
+checking fixture 216
+checking fixture 217
+checking fixture 218
+checking fixture 219
+checking fixture 220
+checking fixture 221
+checking fixture 222
+checking fixture 223
+checking fixture 224
+checking fixture 225
+checking fixture 226
+checking fixture 227
+checking fixture 228
+checking fixture 229
+checking fixture 230
+checking fixture 231
+checking fixture 232
+checking fixture 233
+checking fixture 234
+checking fixture 235
+checking fixture 236
+checking fixture 237
+checking fixture 238
+checking fixture 239
+checking fixture 240
+checking fixture 241
+checking fixture 242
+checking fixture 243
+checking fixture 244
+checking fixture 245
+checking fixture 246
+checking fixture 247
+checking fixture 248
+checking fixture 249
+checking fixture 250
+checking fixture 251
+checking fixture 252
+checking fixture 253
+checking fixture 254
+checking fixture 255
+checking fixture 256
+checking fixture 257
+checking fixture 258
+checking fixture 259
+checking fixture 260
+checking fixture 261
+checking fixture 262
+checking fixture 263
+checking fixture 264
+checking fixture 265
+checking fixture 266
+checking fixture 267
+checking fixture 268
+checking fixture 269
+checking fixture 270
+checking fixture 271
+checking fixture 272
+checking fixture 273
+checking fixture 274
+checking fixture 275
+checking fixture 276
+checking fixture 277
+checking fixture 278
+checking fixture 279
+checking fixture 280
+checking fixture 281
+checking fixture 282
+checking fixture 283
+checking fixture 284
+checking fixture 285
+checking fixture 286
+checking fixture 287
+checking fixture 288
+checking fixture 289
+checking fixture 290
+checking fixture 291
+checking fixture 292
+checking fixture 293
+checking fixture 294
+checking fixture 295
+checking fixture 296
+checking fixture 297
+checking fixture 298
+checking fixture 299
+checking fixture 300
+checking fixture 301
+checking fixture 302
+checking fixture 303
+checking fixture 304
+checking fixture 305
+checking fixture 306
+checking fixture 307
+checking fixture 308
+checking fixture 309
+checking fixture 310
+checking fixture 311
+checking fixture 312
+checking fixture 313
+checking fixture 314
+checking fixture 315
+checking fixture 316
+checking fixture 317
+checking fixture 318
+checking fixture 319
+checking fixture 320
+checking fixture 321
+checking fixture 322
+checking fixture 323
+checking fixture 324
+checking fixture 325
+checking fixture 326
+checking fixture 327
+checking fixture 328
+checking fixture 329
+checking fixture 330
+checking fixture 331
+checking fixture 332
+checking fixture 333
+checking fixture 334
+checking fixture 335
+checking fixture 336
+checking fixture 337
+checking fixture 338
+checking fixture 339
+checking fixture 340
+checking fixture 341
+checking fixture 342
+checking fixture 343
+checking fixture 344
+checking fixture 345
+checking fixture 346
+checking fixture 347
+checking fixture 348
+checking fixture 349
+checking fixture 350
+checking fixture 351
+checking fixture 352
+checking fixture 353
+checking fixture 354
+checking fixture 355
+checking fixture 356
+checking fixture 357
+checking fixture 358
+checking fixture 359
+checking fixture 360
+checking fixture 361
+checking fixture 362
+checking fixture 363
+checking fixture 364
+checking fixture 365
+checking fixture 366
+checking fixture 367
+checking fixture 368
+checking fixture 369
+checking fixture 370
+checking fixture 371
+checking fixture 372
+checking fixture 373
+checking fixture 374
+checking fixture 375
+checking fixture 376
+checking fixture 377
+checking fixture 378
+checking fixture 379
+checking fixture 380
+checking fixture 381
+checking fixture 382
+checking fixture 383
+checking fixture 384
+checking fixture 385
+checking fixture 386
+checking fixture 387
+checking fixture 388
+checking fixture 389
+checking fixture 390
+checking fixture 391
+checking fixture 392
+checking fixture 393
+checking fixture 394
+checking fixture 395
+checking fixture 396
+checking fixture 397
+checking fixture 398
+checking fixture 399
+checking fixture 400
+checking fixture 401
+checking fixture 402
+checking fixture 403
+checking fixture 404
+checking fixture 405
+checking fixture 406
+checking fixture 407
+checking fixture 408
+checking fixture 409
+checking fixture 410
+checking fixture 411
+checking fixture 412
+checking fixture 413
+checking fixture 414
+checking fixture 415
+checking fixture 416
+checking fixture 417
+checking fixture 418
+checking fixture 419
+checking fixture 420
+checking fixture 421
+checking fixture 422
+checking fixture 423
+checking fixture 424
+checking fixture 425
+checking fixture 426
+checking fixture 427
+checking fixture 428
+checking fixture 429
+checking fixture 430
+checking fixture 431
+checking fixture 432
+checking fixture 433
+checking fixture 434
+checking fixture 435
+checking fixture 436
+checking fixture 437
+checking fixture 438
+checking fixture 439
+checking fixture 440
+checking fixture 441
+checking fixture 442
+checking fixture 443
+checking fixture 444
+checking fixture 445
+checking fixture 446
+checking fixture 447
+checking fixture 448
+checking fixture 449
+checking fixture 450
+checking fixture 451
+checking fixture 452
+checking fixture 453
+checking fixture 454
+checking fixture 455
+checking fixture 456
+checking fixture 457
+checking fixture 458
+checking fixture 459
+checking fixture 460
+checking fixture 461
+checking fixture 462
+checking fixture 463
+checking fixture 464
+checking fixture 465
+checking fixture 466
+checking fixture 467
+checking fixture 468
+checking fixture 469
+checking fixture 470
+checking fixture 471
+checking fixture 472
+checking fixture 473
+checking fixture 474
+checking fixture 475
+checking fixture 476
+checking fixture 477
+checking fixture 478
+checking fixture 479
+checking fixture 480
+checking fixture 481
+checking fixture 482
+checking fixture 483
+checking fixture 484
+checking fixture 485
+checking fixture 486
+checking fixture 487
+checking fixture 488
+checking fixture 489
+checking fixture 490
+checking fixture 491
+checking fixture 492
+checking fixture 493
+checking fixture 494
+checking fixture 495
+checking fixture 496
+checking fixture 497
+checking fixture 498
+checking fixture 499
+checking fixture 500
+checking fixture 501
+checking fixture 502
+checking fixture 503
+checking fixture 504
+checking fixture 505
+checking fixture 506
+checking fixture 507
+checking fixture 508
+checking fixture 509
+checking fixture 510
+checking fixture 511
+checking fixture 512
+checking fixture 513
+checking fixture 514
+checking fixture 515
+checking fixture 516
+checking fixture 517
+checking fixture 518
+checking fixture 519
+checking fixture 520
+checking fixture 521
+checking fixture 522
+checking fixture 523
+checking fixture 524
+checking fixture 525
+checking fixture 526
+checking fixture 527
+checking fixture 528
+checking fixture 529
+checking fixture 530
+checking fixture 531
+checking fixture 532
+checking fixture 533
+checking fixture 534
+checking fixture 535
+checking fixture 536
+checking fixture 537
+checking fixture 538
+checking fixture 539
+ok
+test impact_constraints_gpu::tests::mixed_joint_rows_and_global_mode_promotion ... ok
+test impact_constraints_gpu::tests::normal_bounce_midpoint_capture_and_singular_tangents ... ok
+test impact_constraints_gpu::tests::sliding_isotropic_tangents_converge_at_runtime_tolerance ... ok
+test impact_constraints_gpu::tests::tangent_basis_covariance_and_zero_normal_capacity ... ok
+test impact_constraints_gpu::tests::uncoupled_normal_rebound_does_not_round_through_tangent_mass_scaling ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 215 filtered out; finished in 2.38s
+
+warning: function `apply` is never used
+   --> crates/molla-solvers/src/distance_constraints.rs:216:15
+    |
+216 | pub(crate) fn apply(
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 7 tests
+test contact_response_gpu::impact_tests::articulated_impacts_match_cpu_with_joint_rows_boundaries_and_endpoint_exchange ... articulated impact response peak rate error=2.6239013546355827e-5, peak Gram error=1.762245922520833e-7
+ok
+test contact_response_gpu::impact_tests::episodes_select_coupled_dynamic_groups_without_rebounding_shared_ground_neighbors ... ok
+test contact_response_gpu::impact_tests::predicted_selection_matches_cpu_with_articulation_and_accelerating_boundaries ... articulated impact response peak rate error=2.6239013546355827e-5, peak Gram error=1.762245922520833e-7
+ok
+test contact_response_gpu::impact_tests::predicted_selection_retains_sub_ulp_approach_and_retires_separating_rows ... ok
+test contact_response_gpu::impact_tests::retained_predictor_increment_survives_large_common_normal_velocity ... ok
+test contact_response_gpu::impact_tests::separating_contact_keeps_graph_connectivity_without_consuming_solve_capacity ... ok
+test contact_response_gpu::impact_tests::zero_friction_zero_penalty_predictor_change_and_fault_retirement ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 219 filtered out; finished in 4.58s
+
+warning: function `apply` is never used
+   --> crates/molla-solvers/src/distance_constraints.rs:216:15
+    |
+216 | pub(crate) fn apply(
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 8 tests
+test contact_response_gpu::position_tests::coordinate_displacement_uses_joint_frames_not_velocity_caps_or_prescribed_time ... ok
+test contact_response_gpu::position_tests::displacement_retains_sub_ulp_motion_rates_and_cached_bindings_across_faults ... ok
+test contact_response_gpu::position_tests::exported_position_gaps_survive_large_rates_and_zero_depth_onsets ... ok
+test contact_response_gpu::position_tests::generated_distance_cone_and_axis_position_rows_match_cpu_geometry ... ok
+test contact_response_gpu::position_tests::onset_position_displacements_match_cpu_articulated_scalar_oracle ... articulated position displacement peak error=4.869755827969016e-9
+ok
+test contact_response_gpu::position_tests::predictor_projection_and_redrift_reuse_all_six_state_bindings ... ok
+test contact_response_gpu::position_tests::redundant_position_rows_are_mass_scaled_and_faults_retire_displacements ... ok
+test contact_response_gpu::position_tests::solved_displacement_updates_coordinates_then_redrifts_without_advancing_boundary_twice ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 218 filtered out; finished in 52.74s
+
+warning: function `apply` is never used
+   --> crates/molla-solvers/src/distance_constraints.rs:216:15
+    |
+216 | pub(crate) fn apply(
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 3 tests
+test contact_response_gpu::partition_tests::bounded_feedback_survives_impact_friction_partition_and_physical_merge ... ok
+test contact_response_gpu::partition_tests::chained_impact_and_friction_partition_contacts_scalars_and_physical_rates ... ok
+test contact_response_gpu::partition_tests::partition_masks_preserve_joint_only_islands_and_reject_split_graphs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 223 filtered out; finished in 5.17s
+
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: function `apply` is never used
+   --> crates/molla-solvers/src/distance_constraints.rs:216:15
+    |
+216 | pub(crate) fn apply(
+    |               ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.38s
+     Running tests/runtime_restitution_gpu.rs (target/debug/deps/runtime_restitution_gpu-229ebd8fcc10f27b)
+
+running 6 tests
+test failed_impact_frame_restores_history_and_recovers_after_compaction ... ok
+test impact_reactions_break_a_joint_and_continue_without_repeating_the_episode ... ok
+test live_normal_impacts_publish_one_impulse_and_match_cpu_rebound ... ok
+test live_zero_depth_contact_retains_penalty_support_without_repeated_impacts ... ok
+test oblique_impact_reports_final_slip_and_matches_cpu_energy_and_impulse ... ok
+test reaction_capture_does_not_change_contact_momentum_transport ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 144.63s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

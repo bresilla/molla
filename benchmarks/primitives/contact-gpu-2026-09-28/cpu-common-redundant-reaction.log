@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.21s
+     Running tests/runtime_mixed_contacts_gpu.rs (target/debug/deps/runtime_mixed_contacts_gpu-6d4c48a61920f61e)
+
+running 1 test
+test runtime_locked_cone_and_contact_publish_complete_torque ... 
+thread 'runtime_locked_cone_and_contact_publish_complete_torque' (286374) panicked at crates/molla-solvers/tests/runtime_mixed_contacts_gpu.rs:379:5:
+redundant cone/contact allocation: GPU=SpatialVector { linear: DVec3(-0.19295872747898102, 0.0, 0.00026416778564453125), angular: DVec3(0.0, -0.903516948223114, 0.0) } CPU=SpatialVector { linear: DVec3(-0.20000000000019996, 0.0, -2.000177801164682e-12), angular: DVec3(0.0, -0.9000059999999, 0.0) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    runtime_locked_cone_and_contact_publish_complete_torque
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 30.50s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_mixed_contacts_gpu`
+make: *** [Makefile:85: test-gpu] Error 101

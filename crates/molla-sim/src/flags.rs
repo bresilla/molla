@@ -5,10 +5,12 @@
 pub mod BodyFlags {
     /// Body responds to forces; this is the default.
     pub const DYNAMIC: u32 = 0;
-    /// Body's pose is user-prescribed; integrators pass it through unchanged.
+    /// User-prescribed body; pose is held unless KINEMATIC_DRIVEN is also set.
     pub const KINEMATIC: u32 = 1 << 0;
     /// Body remains at its world pose with zero velocity.
     pub const FIXED: u32 = 1 << 1;
+    /// Featherstone advances kinematic COM motion from prescribed world acceleration.
+    pub const KINEMATIC_DRIVEN: u32 = 1 << 2;
     /// Bodies whose motion cannot be changed by forces or constraints.
     pub const IMMOVABLE: u32 = KINEMATIC | FIXED;
 }

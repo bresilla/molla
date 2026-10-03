@@ -1,0 +1,78 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.51s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 1 test
+test rigid_world::gpu::scale_tests::paired_fk_chains_retain_frames_after_model_upload_edits ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } paired_fk_frame_mutation=true
+distance_scale_stage_wait stage=paired-chain-refresh
+distance_scale_stage_complete stage=paired-chain-refresh
+distance_scale_stage_wait stage=paired-chain-poses
+distance_scale_stage_complete stage=paired-chain-poses
+distance_scale_stage_wait stage=paired-chain-position-tails
+distance_scale_stage_complete stage=paired-chain-position-tails
+distance_scale_stage_wait stage=paired-chain-quaternions
+distance_scale_stage_complete stage=paired-chain-quaternions
+distance_scale_stage_wait stage=paired-chain-coordinate-high
+distance_scale_stage_complete stage=paired-chain-coordinate-high
+distance_scale_stage_wait stage=paired-chain-coordinate-low
+distance_scale_stage_complete stage=paired-chain-coordinate-low
+paired_chain_coordinates expected=[0.150000001, 0.150000001, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408, 0.300000001, -0.2, 0.1, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.300000001, -0.2, 0.1, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408, 0.300000001, -0.2, 0.1, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.150000001, 0.150000001, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.300000001, -0.2, 0.1, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408, 0.300000001, -0.2, 0.1, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.300000001, -0.2, 0.1, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408] high=[0.15, 0.15, -0.055484198, 0.09103491, -0.09872416, -0.9893875, 0.3, -0.2, 0.1, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.3, -0.2, 0.1, -0.055484198, 0.09103491, -0.09872416, -0.9893875, 0.3, -0.2, 0.1, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.15, 0.15, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.3, -0.2, 0.1, -0.055484198, 0.09103491, -0.09872416, -0.9893875, 0.3, -0.2, 0.1, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.3, -0.2, 0.1, -0.055484198, 0.09103491, -0.09872416, -0.9893875] low=[-4.9604645e-9, -4.9604645e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -4.9604645e-9, -4.9604645e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8]
+paired_chain fixed_only=false edit=0 bodies=14 position_error=9.237055565e-14 rotation_error=1.282307593e-14
+distance_scale_stage_wait stage=paired-chain-refresh
+distance_scale_stage_complete stage=paired-chain-refresh
+distance_scale_stage_wait stage=paired-chain-poses
+distance_scale_stage_complete stage=paired-chain-poses
+distance_scale_stage_wait stage=paired-chain-position-tails
+distance_scale_stage_complete stage=paired-chain-position-tails
+distance_scale_stage_wait stage=paired-chain-quaternions
+distance_scale_stage_complete stage=paired-chain-quaternions
+distance_scale_stage_wait stage=paired-chain-coordinate-high
+distance_scale_stage_complete stage=paired-chain-coordinate-high
+distance_scale_stage_wait stage=paired-chain-coordinate-low
+distance_scale_stage_complete stage=paired-chain-coordinate-low
+paired_chain_coordinates expected=[0.150000001, 0.150000001, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408, 0.300000001, -0.2, 0.1, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.300000001, -0.2, 0.1, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408, 0.300000001, -0.2, 0.1, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.150000001, 0.150000001, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.300000001, -0.2, 0.1, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408, 0.300000001, -0.2, 0.1, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.300000001, -0.2, 0.1, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408] high=[0.15, 0.15, -0.055484198, 0.09103491, -0.09872416, -0.9893875, 0.3, -0.2, 0.1, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.3, -0.2, 0.1, -0.055484198, 0.09103491, -0.09872416, -0.9893875, 0.3, -0.2, 0.1, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.15, 0.15, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.3, -0.2, 0.1, -0.055484198, 0.09103491, -0.09872416, -0.9893875, 0.3, -0.2, 0.1, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.3, -0.2, 0.1, -0.055484198, 0.09103491, -0.09872416, -0.9893875] low=[-4.9604645e-9, -4.9604645e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -4.9604645e-9, -4.9604645e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8]
+paired_chain fixed_only=false edit=1 bodies=14 position_error=4.263256415e-14 rotation_error=5.676015213e-15
+distance_scale_stage_wait stage=paired-chain-refresh
+distance_scale_stage_complete stage=paired-chain-refresh
+distance_scale_stage_wait stage=paired-chain-poses
+distance_scale_stage_complete stage=paired-chain-poses
+distance_scale_stage_wait stage=paired-chain-position-tails
+distance_scale_stage_complete stage=paired-chain-position-tails
+distance_scale_stage_wait stage=paired-chain-quaternions
+distance_scale_stage_complete stage=paired-chain-quaternions
+distance_scale_stage_wait stage=paired-chain-coordinate-high
+distance_scale_stage_complete stage=paired-chain-coordinate-high
+distance_scale_stage_wait stage=paired-chain-coordinate-low
+distance_scale_stage_complete stage=paired-chain-coordinate-low
+paired_chain_coordinates expected=[0.150000001, 0.150000001, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408, 0.300000001, -0.2, 0.1, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.300000001, -0.2, 0.1, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408, 0.300000001, -0.2, 0.1, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.150000001, 0.150000001, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.300000001, -0.2, 0.1, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408, 0.300000001, -0.2, 0.1, 0.05548419741424958, -0.09103491028528884, 0.09872415889729, 0.9893875324647408, 0.300000001, -0.2, 0.1, -0.05548419741424958, 0.09103491028528884, -0.09872415889729, -0.9893875324647408] high=[0.15, 0.15, -0.055484198, 0.09103491, -0.09872416, -0.9893875, 0.3, -0.2, 0.1, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.3, -0.2, 0.1, -0.055484198, 0.09103491, -0.09872416, -0.9893875, 0.3, -0.2, 0.1, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.15, 0.15, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.3, -0.2, 0.1, -0.055484198, 0.09103491, -0.09872416, -0.9893875, 0.3, -0.2, 0.1, 0.055484198, -0.09103491, 0.09872416, 0.9893875, 0.3, -0.2, 0.1, -0.055484198, 0.09103491, -0.09872416, -0.9893875] low=[-4.9604645e-9, -4.9604645e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -4.9604645e-9, -4.9604645e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, -6.1956007e-10, 1.2876443e-9, 2.2791717e-9, 2.025771e-8, -1.0920929e-8, 2.9802323e-9, -1.4901161e-9, 6.1956007e-10, -1.2876443e-9, -2.2791717e-9, -2.025771e-8]
+paired_chain fixed_only=false edit=2 bodies=14 position_error=3.708144902e-14 rotation_error=7.993605777e-15
+distance_scale_stage_wait stage=paired-chain-refresh
+distance_scale_stage_complete stage=paired-chain-refresh
+distance_scale_stage_wait stage=paired-chain-poses
+distance_scale_stage_complete stage=paired-chain-poses
+distance_scale_stage_wait stage=paired-chain-position-tails
+distance_scale_stage_complete stage=paired-chain-position-tails
+distance_scale_stage_wait stage=paired-chain-quaternions
+distance_scale_stage_complete stage=paired-chain-quaternions
+
+thread 'rigid_world::gpu::scale_tests::paired_fk_chains_retain_frames_after_model_upload_edits' (405774) panicked at crates/molla-solvers/src/rigid_distance_scale_gpu_tests.rs:212:56:
+called `Result::unwrap()` on an `Err` value: Storage("buffer has no device mirror")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    rigid_world::gpu::scale_tests::paired_fk_chains_retain_frames_after_model_upload_edits
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 239 filtered out; finished in 90.46s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:538: test-primitives-frame-reference-gpu] Error 101

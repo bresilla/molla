@@ -1,0 +1,109 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.41s
+     Running tests/xpbd_boxes.rs (target/debug/deps/xpbd_boxes-f2a7356b6f85b08c)
+
+running 7 tests
+test per_shape_material_overrides_default ... ok
+test sphere_on_box ... ok
+test box_settles_on_plane ... ok
+sphere pyramid: bodies=14, max contacts after warmup=21, y range=[0.250, 0.957], max speed after warmup=0.002, final max speed=0.001
+test sphere_pyramid_high_contact_stays_finite_and_supported ... ok
+box stack: bottom y=0.499 top y=9.489 peak top y after warmup=9.489 top |v|=0.000
+test box_stack_settles ... ok
+external substep stack: bottom_y=0.500 top_v=0.000
+test external_substeps_box_stack ... ok
+test brick_wall_high_contact_stays_finite_and_bounded ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s
+
+     Running tests/xpbd_capsules.rs (target/debug/deps/xpbd_capsules-9e9215fd71291636)
+
+running 3 tests
+capsule lying: y=0.2000 |v|=0.0000
+test capsule_settles_on_plane ... ok
+two parallel capsules: dx=2.7759
+test capsule_capsule_parallel_no_overlap_after_settling ... ok
+capsule stack: y0=0.1998 y1=0.5997 v0=0.0000 v1=0.0000
+capsule stack poses=[Transform { position: DVec3(-8.182577195098154e-7, 0.19982136101627454, 0.0), rotation: DQuat(0.0, 0.0, -0.7071067827413454, 0.7071067796317496) }, Transform { position: DVec3(1.56090230504073e-5, 0.599732813016727, 0.0), rotation: DQuat(0.0, 0.0, -0.7071067835187573, 0.7071067788543378) }] velocities=[SpatialVector { linear: DVec3(1.8978964217539912e-7, -2.984455300443978e-11, 0.0), angular: DVec3(0.0, 0.0, -7.15899193279518e-7) }, SpatialVector { linear: DVec3(1.3851680303560655e-6, 2.596703699323572e-10, 0.0), angular: DVec3(0.0, 0.0, -2.15397821110758e-6) }]
+test capsule_stack_two ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/xpbd_cylinders.rs (target/debug/deps/xpbd_cylinders-270545b5d41aa889)
+
+running 2 tests
+capsule-on-box: y=1.1996
+test capsule_on_box_via_gjk ... ok
+vertical cylinder: y=0.4000 |v|=0.0000
+test cylinder_settles_on_plane ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/xpbd_equality.rs (target/debug/deps/xpbd_equality-7f5fa397c2954cb4)
+
+running 6 tests
+weld: dist=0.0000 rot-dot=1.0000
+test weld_keeps_orientation_aligned ... ok
+equality restitution: max_contacts=8, closure_err=0.0000e0, bottom_vy=0.33193, top_vy=0.33193, min_y=0.15573
+test equality_connect_preserves_restitution_bounce_velocity ... ok
+connect: anchor at DVec3(0.0, 5.0, 0.0), free at DVec3(0.0, 5.0, 0.0), dist 0.0000
+test connect_pins_two_bodies_under_gravity ... ok
+ball joint demo: pin_err=0.0000 thigh x range=[-0.032, 0.032]
+test humanoid_ball_joint_swings_under_gravity ... ok
+four-bar: max pivot error=6.7551e-6, top y range=[1.4804, 2.5196]
+test four_bar_closed_loop_keeps_pivots_bounded_under_gravity ... ok
+double four-bar: max pivot error=3.5720e-5, max speed=2.4355, shared y range=[2.2819, 2.2900]
+test double_four_bar_shared_link_keeps_multi_loop_closure_bounded ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+     Running tests/xpbd_floor.rs (target/debug/deps/xpbd_floor-c267fec37dff03c2)
+
+running 4 tests
+rigid restitution: e=0 peak=0.2500, max_vy=0.0000; e=0.8 peak=0.8601, max_vy=3.4716
+test rigid_restitution_controls_first_bounce_height ... ok
+test sphere_settles_on_plane ... ok
+test two_spheres_dont_overlap ... ok
+stack settled: bottom y=0.489 top y=3.474 peak top y=3.474
+test stack_settles_without_growing ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/xpbd_impact_substeps.rs (target/debug/deps/xpbd_impact_substeps-a1e9adfb507a4955)
+
+running 1 test
+substeps 1: max y after touchdown = 0.5027, final y = 0.5000, vy = 0.0000
+substeps 4 step 28: y = 0.49602, vy = -1.42196, contacts = 0
+substeps 4 step 29: y = 0.50103, vy = 0.41768, contacts = 4
+substeps 4 step 30: y = 0.50297, vy = 0.36865, contacts = 0
+substeps 4 step 31: y = 0.50466, vy = 0.31961, contacts = 0
+substeps 4: max y after touchdown = 0.5097, final y = 0.5000, vy = 0.0000
+test restitution_zero_drop_settles_under_internal_substeps ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/xpbd_mixed_primitives.rs (target/debug/deps/xpbd_mixed_primitives-2867d401c8310ea5)
+
+running 2 tests
+test mixed_primitive_drop_stays_finite_and_above_floor ... ok
+socket/bolt dense contact: max_contacts=6, final_pos=DVec3(0.025253540258851438, 1.160003042316936, -0.016430943831529477), lateral=0.0301, max_lateral=0.1071, |v|=0.0158, |w|=0.0470
+test procedural_socket_bolt_dense_contact_stays_finite_and_caged ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/xpbd_trimesh.rs (target/debug/deps/xpbd_trimesh-65d6c534c5197669)
+
+running 2 tests
+sphere on triangle: y=0.5000 |v|=0.0001
+test sphere_settles_on_triangle ... ok
+sphere on trimesh quad: y=0.5000
+test sphere_on_trimesh_quad_floor ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

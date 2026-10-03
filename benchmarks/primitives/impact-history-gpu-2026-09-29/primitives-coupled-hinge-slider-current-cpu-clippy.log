@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.77s
+     Running tests/runtime_motor_coupling.rs (target/debug/deps/runtime_motor_coupling-f9d99d90e62fd045)
+
+running 1 test
+coupled_motor_feedback_modes=[false, true]
+coupled_motor_prepare_begin stable=false cases=72
+coupled_motor_prepare_complete stable=false seconds=0.000081
+coupled_motor_complete stable=false cases=72 frames=40 dt=0.0004 substeps=4 peak_coordinate=1.5178830414797062e-17 peak_rate=1.8318679906315083e-15 peak_reaction=2.5295321393059567e-12
+coupled_motor_prepare_begin stable=true cases=72
+coupled_motor_prepare_complete stable=true seconds=0.000033
+coupled_motor_complete stable=true cases=72 frames=40 dt=0.02 substeps=4 peak_coordinate=1.304512053934559e-15 peak_rate=4.773959005888173e-15 peak_reaction=8.242295734817162e-13
+test coupled_motor_models_match_two_body_inverse_mass ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.67s
+
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.51s

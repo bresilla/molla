@@ -10,4 +10,6 @@ pub mod tile_mcgp;
 pub mod tile_stream_compaction;
 
 #[cfg(feature = "gpu")]
-pub use radix_sort::{RadixSortKernel, RadixSortKernel64, radix_sort_pairs, radix_sort_pairs_u64};
+pub use radix_sort::{
+    RadixSortDispatch, RadixSortKernel, RadixSortKernel64, radix_sort_pairs, radix_sort_pairs_u64,
+};

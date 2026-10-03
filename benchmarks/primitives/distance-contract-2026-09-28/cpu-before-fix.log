@@ -1,0 +1,30 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.56s
+     Running tests/runtime_distance_contract.rs (target/debug/deps/runtime_distance_contract-2ac2510fe3e9089e)
+
+running 2 tests
+
+thread 'cpu_distance_runtime_mutation_and_unrelated_compaction' (3004336) panicked at crates/molla-solvers/tests/runtime_distance_contract.rs:109:64:
+called `Result::unwrap()` on an `Err` value: Build("axis is not a freedom of this joint kind")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_distance_runtime_mutation_and_unrelated_compaction ... FAILED
+
+thread 'cpu_distance_endpoint_exchange_including_coincident_positive_bounds' (3004335) panicked at crates/molla-solvers/tests/runtime_distance_contract.rs:62:17:
+case=0 frame=0 body=0 dp=4.8, v0=SpatialVector { linear: DVec3(-288.0, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }, v1=SpatialVector { linear: DVec3(288.0, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }
+test cpu_distance_endpoint_exchange_including_coincident_positive_bounds ... FAILED
+
+failures:
+
+failures:
+    cpu_distance_endpoint_exchange_including_coincident_positive_bounds
+    cpu_distance_runtime_mutation_and_unrelated_compaction
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_distance_contract`
+make: *** [Makefile:64: test] Error 101

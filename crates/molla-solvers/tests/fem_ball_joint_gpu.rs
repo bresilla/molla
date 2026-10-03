@@ -10,6 +10,8 @@ use molla_kernels::soft_rigid_solve::{
 use molla_math::{Mat3, Vec3};
 use wgpu::util::DeviceExt;
 
+#[path = "common/fem_readback.rs"]
+mod fem_readback;
 #[path = "common/gpu_readback.rs"]
 #[allow(dead_code)]
 mod gpu_readback;
@@ -496,7 +498,7 @@ fn fem_four_bar_closure_survives_gpu_substeps_and_contact_gather() {
             0
         );
         assert!(system.rigid_state().body_q.host().is_err());
-        let poses = gpu_readback::body_poses(&engine, &system, 4);
+        let poses = fem_readback::body_poses(&engine, &system, 4);
         let a = poses[2].position + poses[2].rotation * Vec3::new(0.0, -0.5, 0.0);
         let b = poses[3].position + poses[3].rotation * Vec3::X;
         gaps.push((a - b).length());

@@ -413,18 +413,24 @@ impl BarrierNewtonGpu {
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC;
         let init_u32 = |label: &str, data: &[u32]| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(data),
-                usage: wgpu::BufferUsages::STORAGE,
-            })
+            molla_core::gpu_buffer_init!(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(data),
+                    usage: wgpu::BufferUsages::STORAGE,
+                }
+            )
         };
         let init_f32 = |label: &str, data: &[f32]| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(data),
-                usage: wgpu::BufferUsages::STORAGE,
-            })
+            molla_core::gpu_buffer_init!(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(data),
+                    usage: wgpu::BufferUsages::STORAGE,
+                }
+            )
         };
         let a_ids: Vec<u32> = springs.iter().map(|s| s.a).collect();
         let b_ids: Vec<u32> = springs.iter().map(|s| s.b).collect();
@@ -457,59 +463,77 @@ impl BarrierNewtonGpu {
                 &entries
             },
         );
-        let ob_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("bn.obstacles"),
-            contents: bytemuck::cast_slice(&ob_rows),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let ob_buf = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("bn.obstacles"),
+                contents: bytemuck::cast_slice(&ob_rows),
+                usage: wgpu::BufferUsages::STORAGE,
+            }
+        );
         let dummy_u4 = [[0u32; 4]];
-        let tri_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("bn.tris"),
-            contents: bytemuck::cast_slice(if tri_rows.is_empty() {
-                &dummy_u4[..]
-            } else {
-                &tri_rows
-            }),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-        let edge_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("bn.edges"),
-            contents: bytemuck::cast_slice(if edge_rows.is_empty() {
-                &dummy_u4[..]
-            } else {
-                &edge_rows
-            }),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let tri_buf = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("bn.tris"),
+                contents: bytemuck::cast_slice(if tri_rows.is_empty() {
+                    &dummy_u4[..]
+                } else {
+                    &tri_rows
+                }),
+                usage: wgpu::BufferUsages::STORAGE,
+            }
+        );
+        let edge_buf = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("bn.edges"),
+                contents: bytemuck::cast_slice(if edge_rows.is_empty() {
+                    &dummy_u4[..]
+                } else {
+                    &edge_rows
+                }),
+                usage: wgpu::BufferUsages::STORAGE,
+            }
+        );
         let pinned_buf = init_u32("bn.pinned", &pinned_mask);
-        let tet_ids_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("bn.tet_ids"),
-            contents: bytemuck::cast_slice(if tet_id_rows.is_empty() {
-                &dummy_u4[..]
-            } else {
-                &tet_id_rows
-            }),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let tet_ids_buf = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("bn.tet_ids"),
+                contents: bytemuck::cast_slice(if tet_id_rows.is_empty() {
+                    &dummy_u4[..]
+                } else {
+                    &tet_id_rows
+                }),
+                usage: wgpu::BufferUsages::STORAGE,
+            }
+        );
         let dummy_f2 = [[0.0f32; 2]];
-        let tet_kv_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("bn.tet_kv_v0"),
-            contents: bytemuck::cast_slice(if tet_kv_v0.is_empty() {
-                &dummy_f2[..]
-            } else {
-                &tet_kv_v0
-            }),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let tet_kv_buf = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("bn.tet_kv_v0"),
+                contents: bytemuck::cast_slice(if tet_kv_v0.is_empty() {
+                    &dummy_f2[..]
+                } else {
+                    &tet_kv_v0
+                }),
+                usage: wgpu::BufferUsages::STORAGE,
+            }
+        );
 
         let slab = (n.max(1) * 16) as u64;
         let mk = |label: &str, bytes: u64| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(16),
-                usage: usage_rw,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(16),
+                    usage: usage_rw,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let x_pos = mk("bn.x", slab);
         let vel = mk("bn.v", slab);
@@ -559,29 +583,38 @@ impl BarrierNewtonGpu {
             .next_power_of_two()
             .max(64) as u32;
         let cand_cap = pair_capacity as u64;
-        let cand_meta = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bn.cand_meta"),
-            size: 16,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mk_cand = |label: &str| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: cand_cap * 4,
+        let cand_meta = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("bn.cand_meta"),
+                size: 16,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
-            })
+            }
+        );
+        let mk_cand = |label: &str| {
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: cand_cap * 4,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let cand_vt = (mk_cand("bn.cand_vt_a"), mk_cand("bn.cand_vt_b"));
         let cand_ee = (mk_cand("bn.cand_ee_a"), mk_cand("bn.cand_ee_b"));
         let mk_lag = |label: &str, stride: u64| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: cand_cap * 16 * stride,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: cand_cap * 16 * stride,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let lag_meta = mk_lag("bn.lag_meta", 1);
         let lag_wts = mk_lag("bn.lag_wts", 1);
@@ -612,15 +645,18 @@ impl BarrierNewtonGpu {
             u64::from(2 * grid_slots) * u64::from(GRID_CAP) * 4,
         );
         let p0: Vec<[f32; 4]> = positions.iter().map(|p| [p[0], p[1], p[2], 0.0]).collect();
-        queue.write_buffer(&x_pos, 0, bytemuck::cast_slice(&p0));
-        queue.write_buffer(&vel, 0, &vec![0u8; slab as usize]);
+        molla_core::gpu_write_buffer!(queue, &x_pos, 0, bytemuck::cast_slice(&p0));
+        molla_core::gpu_write_buffer!(queue, &vel, 0, &vec![0u8; slab as usize]);
 
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bn.uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("bn.uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         fn entry(binding: u32, buf: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
             wgpu::BindGroupEntry {
                 binding,
@@ -753,8 +789,7 @@ impl BarrierNewtonGpu {
             grid_cap: GRID_CAP,
             pair_source: u32::from(self.params.use_lbvh && self.lbvh.is_some()),
         };
-        self.queue
-            .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&u));
+        molla_core::gpu_write_buffer!(self.queue, &self.uniform_buf, 0, bytemuck::bytes_of(&u));
     }
 
     fn run(&self, names: &[(&str, u32)]) {
@@ -781,12 +816,15 @@ impl BarrierNewtonGpu {
     }
 
     fn read_scalars(&self) -> Result<[f32; 16]> {
-        let stage = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bn.stage"),
-            size: 64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("bn.stage"),
+                size: 64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -803,7 +841,7 @@ impl BarrierNewtonGpu {
             .map_err(|e| Error::Gpu(format!("bn poll: {e:?}")))?;
         rx.recv()
             .map_err(|e| Error::Gpu(format!("bn recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = molla_core::gpu_readback!(slice);
         let v: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         stage.unmap();
@@ -846,7 +884,7 @@ impl BarrierNewtonGpu {
         // frames, λ and anchors for the whole step — the IPC
         // semi-implicit lag, now on device.
         if self.params.friction_mu > 0.0 && self.tri_count > 0 {
-            self.queue.write_buffer(&self.pair_count_buf, 0, &[0u8; 16]);
+            molla_core::gpu_write_buffer!(self.queue, &self.pair_count_buf, 0, &[0u8; 16]);
             let g_cap = self.pair_capacity.div_ceil(WG).max(1);
             if self.params.use_lbvh && self.lbvh.is_some() {
                 // (candidate buffers are filled by the LBVH block
@@ -953,7 +991,7 @@ impl BarrierNewtonGpu {
             if self.tri_count > 0 {
                 // Zero only the per-iterate slots (count + overflow) —
                 // slots [2]/[3] hold the step-level friction lag.
-                self.queue.write_buffer(&self.pair_count_buf, 0, &[0u8; 8]);
+                molla_core::gpu_write_buffer!(self.queue, &self.pair_count_buf, 0, &[0u8; 8]);
                 if self.params.use_lbvh && self.lbvh.is_some() {
                     let g_cand = self.pair_capacity.div_ceil(WG).max(1);
                     self.run(&[
@@ -1087,12 +1125,15 @@ impl BarrierNewtonGpu {
     fn read_vec3(&self, buf: &wgpu::Buffer) -> Result<Vec<[f32; 3]>> {
         let n = self.vertex_count as usize;
         let bytes = (n.max(1) * 16) as u64;
-        let stage = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bn.stage_v"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("bn.stage_v"),
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -1109,7 +1150,7 @@ impl BarrierNewtonGpu {
             .map_err(|e| Error::Gpu(format!("bn poll v: {e:?}")))?;
         rx.recv()
             .map_err(|e| Error::Gpu(format!("bn recv v: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = molla_core::gpu_readback!(slice);
         let v: Vec<[f32; 4]> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         stage.unmap();
@@ -1134,8 +1175,7 @@ impl BarrierNewtonGpu {
             return Err(Error::Solver("barrier_newton: velocity length".into()));
         }
         let rows: Vec<[f32; 4]> = v.iter().map(|v| [v[0], v[1], v[2], 0.0]).collect();
-        self.queue
-            .write_buffer(&self.vel, 0, bytemuck::cast_slice(&rows));
+        molla_core::gpu_write_buffer!(self.queue, &self.vel, 0, bytemuck::cast_slice(&rows));
         Ok(())
     }
 }

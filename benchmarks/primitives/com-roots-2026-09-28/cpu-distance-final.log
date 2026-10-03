@@ -1,0 +1,74 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.63s
+     Running tests/runtime_com_roots.rs (target/debug/deps/runtime_com_roots-00add1c400d4889b)
+
+running 1 test
+test cpu_com_edits_reseed_implicit_roots_and_preserve_physical_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/runtime_distance.rs (target/debug/deps/runtime_distance-fc9eb91b71251f3a)
+
+running 11 tests
+test offset_anchor_uses_full_inertia_and_com_moment_arm ... ok
+test zero_minimum_without_maximum_is_free_at_coincident_anchors ... ok
+test infeasible_fixed_constraint_fails_atomically_and_invalidates_readout ... ok
+test zero_maximum_alone_locks_all_translation ... ok
+test distance_and_scalar_stop_share_the_articulated_response ... ok
+test coincident_equality_blocks_translation_but_not_rotation ... ok
+test invalid_bounds_are_atomic_and_mutation_invalidates_readings ... ok
+test equality_transfers_load_between_unequal_masses ... ok
+test independent_bounds_remain_slack_and_stop_only_at_their_bound ... ok
+test closed_triangle_and_redundant_link_preserve_linear_momentum ... ok
+distance pendulum: dt=0.016666666666666666, substeps=8, duration=10s, peak=0.00004367498082613608
+distance pendulum: dt=0.008333333333333333, substeps=8, duration=10s, peak=0.000010919132098718975
+distance pendulum: dt=0.004166666666666667, substeps=8, duration=10s, peak=0.000002729806060086659
+test world_pendulum_holds_length_for_ten_seconds ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.75s
+
+     Running tests/runtime_distance_contract.rs (target/debug/deps/runtime_distance_contract-2ac2510fe3e9089e)
+
+running 4 tests
+test cpu_distance_runtime_mutation_and_unrelated_compaction ... ok
+unconstrained rotating offset COM: one-second peak momentum error=0.00000000000000007850462293418876
+test cpu_rotating_offset_com_free_body_preserves_linear_momentum ... ok
+distance endpoint exchange case=0 duration=1s peak position=0
+distance endpoint exchange case=1 duration=1s peak position=0
+distance endpoint exchange case=2 duration=1s peak position=0
+distance endpoint exchange case=3 duration=1s peak position=0
+distance endpoint exchange case=4 duration=1s peak position=0
+distance endpoint exchange case=5 duration=1s peak position=0
+distance endpoint exchange case=6 duration=1s peak position=0
+distance endpoint exchange case=7 duration=1s peak position=0
+distance endpoint exchange case=8 duration=1s peak position=0
+distance endpoint exchange case=9 duration=1s peak position=0
+test cpu_distance_endpoint_exchange_including_coincident_positive_bounds ... ok
+distance scale sweep: cases=40 dt=0.016666666666666666 substeps=8 duration=10s peak relative length=0.000000000000004683753385137379, 1s analytic position=0.000000000000017763568394002505, quasi-static relative reaction=0.0000000000000004440892098500626
+distance scale sweep: cases=40 dt=0.008333333333333333 substeps=8 duration=10s peak relative length=0.000000000000003642919299551295, 1s analytic position=0.00000000000003064215547965432, quasi-static relative reaction=0.0000000000000004440892098500626
+test cpu_distance_length_mass_scales_and_analytic_reactions has been running for over 60 seconds
+distance scale sweep: cases=40 dt=0.004166666666666667 substeps=8 duration=10s peak relative length=0.000000000000003642919299551295, 1s analytic position=0.00000000000003730349362740526, quasi-static relative reaction=0.0000000000000004440892098500626
+test cpu_distance_length_mass_scales_and_analytic_reactions ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 72.97s
+
+     Running tests/runtime_distance_sleep.rs (target/debug/deps/runtime_distance_sleep-99a709d6ded6c240)
+
+running 3 tests
+test cpu_distance_automatic_sleep_and_fixed_boundary_wake ... ok
+test cpu_distance_sleep_keeps_other_islands_active_and_preserves_nonwaking_edits ... ok
+test cpu_distance_kinematic_boundary_preserves_prescribed_state_and_prevents_sleep ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

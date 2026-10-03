@@ -1,0 +1,22 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+error[E0599]: no method named `replace_body` found for struct `RigidScene` in the current scope
+    --> crates/molla-sim/tests/runtime_readout.rs:278:10
+     |
+ 278 |     fork.replace_body(b, body).unwrap();
+     |          ^^^^^^^^^^^^
+     |
+help: there is a method `remove_body` with a similar name, but with different arguments
+    --> crates/molla-sim/src/runtime.rs:1740:5
+     |
+1740 |     pub fn remove_body(&mut self, id: BodyHandle) -> Result<()> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `molla-sim` (test "runtime_readout") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+make: *** [Makefile:89: test] Error 101

@@ -1,0 +1,113 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.37s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 13 tests
+test coupled_constraint_gpu::tests::bilateral_coupling_prevents_premature_sliding ... ok
+test coupled_constraint_gpu::tests::bounded_effort_and_invalid_domains_are_explicit ... island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+ok
+test coupled_constraint_gpu::tests::bounded_feedback_couples_to_friction_and_publishes_physical_slip ... ok
+test coupled_constraint_gpu::tests::contradictory_bilateral_rows_fail_closed ... island=0 diagnostic=[524288, 4096, 1065353216, 1] residual=1
+ok
+test coupled_constraint_gpu::tests::manufactured_mixed_kkt_permutations_cross_workgroups ... ok
+test coupled_constraint_gpu::tests::mixed_constraints_match_analytic_impulses_across_scales ... ok
+test coupled_constraint_gpu::tests::mixed_constructor_rejects_invalid_domain_buffers_and_capacity ... ok
+test coupled_constraint_gpu::tests::redundant_allocation_matches_minimum_norm_across_scales_rotations_and_order ... ok
+test coupled_constraint_gpu::tests::redundant_bilateral_rows_keep_inactive_stop_exactly_zero ... ok
+test coupled_constraint_gpu::tests::redundant_bounded_allocation_matches_independent_capped_minimum_norm ... ok
+test coupled_constraint_gpu::tests::retained_device_sequence_changes_domains_counts_and_status ... ok
+test coupled_constraint_gpu::tests::sticky_faults_retire_and_recover_mixed_outputs ... island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[131072, 0, 0, 0] residual=0
+island=0 diagnostic=[131072, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[262144, 0, 1065353216, 1073741826] residual=1
+island=0 diagnostic=[262144, 0, 1065353216, 1073741826] residual=1
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+ok
+test coupled_constraint_gpu::tests::zero_response_scalar_domains_fail_only_when_unbounded ... island=0 diagnostic=[524288, 0, 0, 0] residual=0
+island=0 diagnostic=[524288, 0, 0, 0] residual=0
+ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 213 filtered out; finished in 16.56s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 7 tests
+test coulomb_disk_gpu::tests::coupled_disk_gpu_device_sequence_regimes_and_contact_retirement ... ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_matches_cpu_and_retires_batched_island_slots ... coupled disk batch: peak iterations=23
+ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_rotations_permutations_and_reciprocal_scales ... disk basis/permutation/scale: 30 cases, peak host KKT=9.977477124566751e-8
+ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_validation_sticky_faults_and_reset ... ok
+test coulomb_disk_gpu::tests::nearly_loaded_static_disks_cancel_slip_across_scales_and_directions ... nearly loaded static peak slip=6.717164069414139e-8
+ok
+test coulomb_disk_gpu::tests::rank_deficient_grams_pass_and_indefinite_null_blocks_fail ... ok
+test coulomb_disk_gpu::tests::rounded_disk_boundary_gap_matches_f64 ... disk boundary squared-gap peak error=1.9210221126225147e-14
+ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 219 filtered out; finished in 6.40s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 7 tests
+test contact_response_gpu::coupled_tests::bounded_feedback_response_preserves_contact_capacity_and_physical_mass_response ... ok
+test contact_response_gpu::coupled_tests::common_articulated_response_matches_mixed_analytic_solution ... ok
+test contact_response_gpu::coupled_tests::device_generated_distance_rows_share_contact_response_without_double_prediction ... ok
+test contact_response_gpu::coupled_tests::device_generated_locked_cone_rows_share_off_center_contact_response ... ok
+test contact_response_gpu::coupled_tests::device_generated_scalar_stop_couples_distance_and_contact_rows ... ok
+test contact_response_gpu::coupled_tests::retained_predictor_increment_survives_rounded_rates_in_mixed_response ... ok
+test contact_response_gpu::coupled_tests::scalar_response_faults_recover_and_inactive_joint_rows_retire ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 219 filtered out; finished in 48.59s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 3 tests
+test contact_response_gpu::partition_tests::bounded_feedback_survives_impact_friction_partition_and_physical_merge ... ok
+test contact_response_gpu::partition_tests::chained_impact_and_friction_partition_contacts_scalars_and_physical_rates ... ok
+test contact_response_gpu::partition_tests::partition_masks_preserve_joint_only_islands_and_reject_split_graphs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 223 filtered out; finished in 5.15s
+
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.43s
+     Running tests/runtime_restitution_gpu.rs (target/debug/deps/runtime_restitution_gpu-229ebd8fcc10f27b)
+
+running 6 tests
+test failed_impact_frame_restores_history_and_recovers_after_compaction ... ok
+test impact_reactions_break_a_joint_and_continue_without_repeating_the_episode ... ok
+test live_normal_impacts_publish_one_impulse_and_match_cpu_rebound ... ok
+test live_zero_depth_contact_retains_penalty_support_without_repeated_impacts ... ok
+test oblique_impact_reports_final_slip_and_matches_cpu_energy_and_impulse ... ok
+test reaction_capture_does_not_change_contact_momentum_transport ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 141.50s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

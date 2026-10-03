@@ -1,0 +1,98 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.33s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 5 tests
+test contact_response_gpu::coupled_tests::common_articulated_response_matches_mixed_analytic_solution ... ok
+test contact_response_gpu::coupled_tests::device_generated_distance_rows_share_contact_response_without_double_prediction ... ok
+test contact_response_gpu::coupled_tests::device_generated_locked_cone_rows_share_off_center_contact_response ... ok
+test contact_response_gpu::coupled_tests::device_generated_scalar_stop_couples_distance_and_contact_rows ... ok
+test contact_response_gpu::coupled_tests::scalar_response_faults_recover_and_inactive_joint_rows_retire ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 23.48s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+warning: field `scalar_export` is never read
+  --> crates/molla-solvers/src/distance_gpu.rs:68:5
+   |
+54 | pub(crate) struct DistanceGpu {
+   |                   ----------- field in this struct
+...
+68 |     scalar_export: Option<ScalarExport>,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `pipeline`, `rows`, `jacobians`, and `directions` are never read
+  --> crates/molla-solvers/src/distance_gpu.rs:72:5
+   |
+71 | struct ScalarExport {
+   |        ------------ fields in this struct
+72 |     pipeline: wgpu::ComputePipeline,
+   |     ^^^^^^^^
+73 |     rows: wgpu::Buffer,
+   |     ^^^^
+74 |     jacobians: wgpu::Buffer,
+   |     ^^^^^^^^^
+75 |     directions: wgpu::Buffer,
+   |     ^^^^^^^^^^
+
+warning: associated items `new_for_coupling`, `scalar_buffers`, `scalar_publication`, and `prepare_scalar_rows` are never used
+   --> crates/molla-solvers/src/distance_gpu.rs:127:19
+    |
+ 93 | impl DistanceGpu {
+    | ---------------- associated items in this implementation
+...
+127 |     pub(crate) fn new_for_coupling(
+    |                   ^^^^^^^^^^^^^^^^
+...
+588 |     pub(crate) fn scalar_buffers(
+    |                   ^^^^^^^^^^^^^^
+...
+600 |     pub(crate) fn scalar_publication(
+    |                   ^^^^^^^^^^^^^^^^^^
+...
+623 |     pub(crate) fn prepare_scalar_rows(
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `ScalarJointPublication` is never constructed
+ --> crates/molla-solvers/src/scalar_joint_publication_gpu.rs:4:19
+  |
+4 | pub(crate) struct ScalarJointPublication {
+  |                   ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `new` and `encode` are never used
+  --> crates/molla-solvers/src/scalar_joint_publication_gpu.rs:13:19
+   |
+11 | impl ScalarJointPublication {
+   | --------------------------- associated items in this implementation
+12 |     #[allow(clippy::too_many_arguments)]
+13 |     pub(super) fn new(
+   |                   ^^^
+...
+64 |     pub(crate) fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+   |                   ^^^^^^
+
+warning: `molla-solvers` (lib) generated 5 warnings
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
+     Running tests/contact_islands_gpu.rs (target/debug/deps/contact_islands_gpu-26ebfd66d59f4e30)
+
+running 5 tests
+test contact_island_faults_retire_outputs_and_reset_at_explicit_boundary ... ok
+test deterministic_contact_islands_match_cpu_across_100_queued_graph_changes ... ok
+test mixed_graph_validation_capacity_and_sticky_recovery ... ok
+test mixed_joint_contact_graphs_preserve_joint_only_and_boundary_only_islands ... ok
+test reversed_cross_workgroup_chains_keep_one_whole_articulation_component ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.76s
+

@@ -1,0 +1,7 @@
+gate_start=test-primitives date=2026-10-01T23:03:33+02:00
+gate_end=test-primitives exit=0 date=2026-10-01T23:08:27+02:00
+gate_start=check-all date=2026-10-01T23:08:27+02:00
+gate_end=check-all exit=0 date=2026-10-01T23:09:31+02:00
+waiting_for_owned_original_gpu timeout_pid=212516 make_pid=212517
+owned_original_gpu_processes_stopped date=2026-10-01T23:46:02+02:00 exit_not_observed=true
+gate_start=test-all date=2026-10-01T23:46:02+02:00

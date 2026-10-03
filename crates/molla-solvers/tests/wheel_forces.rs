@@ -783,12 +783,19 @@ fn pressure_shear_clears_on_teleport_and_ground_loss() {
             w.wheels.remove_ground(ground);
             w.step(0.001).unwrap();
             w.wheels.register_ground(&w.scene, ground, None).unwrap();
-            w.scene.set_body_velocity(chassis, SpatialVector::ZERO).unwrap();
-            w.scene.set_body_velocity(wheel, SpatialVector::ZERO).unwrap();
+            w.scene
+                .set_body_velocity(chassis, SpatialVector::ZERO)
+                .unwrap();
+            w.scene
+                .set_body_velocity(wheel, SpatialVector::ZERO)
+                .unwrap();
         }
         w.step(0.001).unwrap();
         let force = w.wheels.samples(&w.scene)[0].output.force[0];
-        assert!(force.abs() < 1e-10, "teleport={teleport} residual force={force}");
+        assert!(
+            force.abs() < 1e-10,
+            "teleport={teleport} residual force={force}"
+        );
     }
 }
 
@@ -802,10 +809,16 @@ fn a_trailer_braked_by_joint_damping_stays_parked() {
     w.scene
         .set_body_mass_properties(
             chassis,
-            MassProperties { mass: 6100.0, local_com: Vec3::ZERO, inertia: Mat3::from_diagonal(Vec3::new(15000.0, 20000.0, 15000.0)) },
+            MassProperties {
+                mass: 6100.0,
+                local_com: Vec3::ZERO,
+                inertia: Mat3::from_diagonal(Vec3::new(15000.0, 20000.0, 15000.0)),
+            },
         )
         .unwrap();
-    let mut ground_desc = ColliderDesc::new(ColliderGeometry::Cuboid { half_extents: Vec3::new(100.0, 0.01, 100.0) });
+    let mut ground_desc = ColliderDesc::new(ColliderGeometry::Cuboid {
+        half_extents: Vec3::new(100.0, 0.01, 100.0),
+    });
     ground_desc.friction = 1.0;
     let ground = w.scene.insert_collider(ground_desc).unwrap();
     w.wheels.register_ground(&w.scene, ground, None).unwrap();
@@ -814,7 +827,14 @@ fn a_trailer_braked_by_joint_damping_stays_parked() {
     for (x, z) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
         let wheel = body(&mut w, 140.0);
         w.scene
-            .set_body_mass_properties(wheel, MassProperties { mass: 140.0, local_com: Vec3::ZERO, inertia: Mat3::IDENTITY * 34.0 })
+            .set_body_mass_properties(
+                wheel,
+                MassProperties {
+                    mass: 140.0,
+                    local_com: Vec3::ZERO,
+                    inertia: Mat3::IDENTITY * 34.0,
+                },
+            )
             .unwrap();
         let spin = w
             .scene
@@ -834,7 +854,9 @@ fn a_trailer_braked_by_joint_damping_stays_parked() {
         config.tire.radius = radius;
         config.supported_mass = 6700.0 / 4.0;
         w.wheels.configure_pressure_tire(wheel, config).unwrap();
-        w.scene.set_joint_brake(spin, JointAxis::AngX, 5.0e5).unwrap();
+        w.scene
+            .set_joint_brake(spin, JointAxis::AngX, 5.0e5)
+            .unwrap();
         spins.push(spin);
     }
     let start = w.scene.body_pose(chassis).unwrap().position;
@@ -844,7 +866,11 @@ fn a_trailer_braked_by_joint_damping_stays_parked() {
         }
         let v = w.scene.body_velocity(chassis).unwrap().linear;
         let at = w.scene.body_pose(chassis).unwrap().position;
-        assert!(v.length() < 0.05, "t={second}s braked trailer moving at {v:?}, drift {:?}", at - start);
+        assert!(
+            v.length() < 0.05,
+            "t={second}s braked trailer moving at {v:?}, drift {:?}",
+            at - start
+        );
     }
 }
 
@@ -860,10 +886,16 @@ fn a_braked_tandem_on_rocking_bogies_stays_parked() {
     w.scene
         .set_body_mass_properties(
             chassis,
-            MassProperties { mass: 5500.0, local_com: Vec3::ZERO, inertia: Mat3::from_diagonal(Vec3::new(12000.0, 16000.0, 12000.0)) },
+            MassProperties {
+                mass: 5500.0,
+                local_com: Vec3::ZERO,
+                inertia: Mat3::from_diagonal(Vec3::new(12000.0, 16000.0, 12000.0)),
+            },
         )
         .unwrap();
-    let mut ground_desc = ColliderDesc::new(ColliderGeometry::Cuboid { half_extents: Vec3::new(100.0, 0.01, 100.0) });
+    let mut ground_desc = ColliderDesc::new(ColliderGeometry::Cuboid {
+        half_extents: Vec3::new(100.0, 0.01, 100.0),
+    });
     ground_desc.friction = 1.0;
     let ground = w.scene.insert_collider(ground_desc).unwrap();
     w.wheels.register_ground(&w.scene, ground, None).unwrap();
@@ -872,7 +904,14 @@ fn a_braked_tandem_on_rocking_bogies_stays_parked() {
     for z in [1.0, -1.0] {
         let bogie = body(&mut w, 300.0);
         w.scene
-            .set_body_mass_properties(bogie, MassProperties { mass: 300.0, local_com: Vec3::ZERO, inertia: Mat3::IDENTITY * 60.0 })
+            .set_body_mass_properties(
+                bogie,
+                MassProperties {
+                    mass: 300.0,
+                    local_com: Vec3::ZERO,
+                    inertia: Mat3::IDENTITY * 60.0,
+                },
+            )
             .unwrap();
         let pivot = w
             .scene
@@ -885,11 +924,20 @@ fn a_braked_tandem_on_rocking_bogies_stays_parked() {
                 frame_child: Transform::IDENTITY,
             })
             .unwrap();
-        w.scene.set_joint_limits(pivot, JointAxis::AngX, Some([-0.1, 0.1])).unwrap();
+        w.scene
+            .set_joint_limits(pivot, JointAxis::AngX, Some([-0.1, 0.1]))
+            .unwrap();
         for x in [0.7, -0.7] {
             let wheel = body(&mut w, 140.0);
             w.scene
-                .set_body_mass_properties(wheel, MassProperties { mass: 140.0, local_com: Vec3::ZERO, inertia: Mat3::IDENTITY * 34.0 })
+                .set_body_mass_properties(
+                    wheel,
+                    MassProperties {
+                        mass: 140.0,
+                        local_com: Vec3::ZERO,
+                        inertia: Mat3::IDENTITY * 34.0,
+                    },
+                )
                 .unwrap();
             let spin = w
                 .scene
@@ -909,7 +957,9 @@ fn a_braked_tandem_on_rocking_bogies_stays_parked() {
             config.tire.radius = radius;
             config.supported_mass = 6700.0 / 4.0;
             w.wheels.configure_pressure_tire(wheel, config).unwrap();
-            w.scene.set_joint_brake(spin, JointAxis::AngX, 5.0e5).unwrap();
+            w.scene
+                .set_joint_brake(spin, JointAxis::AngX, 5.0e5)
+                .unwrap();
         }
     }
     // A front support leg on the ground.
@@ -928,7 +978,10 @@ fn a_braked_tandem_on_rocking_bogies_stays_parked() {
         }
         let at = w.scene.body_pose(chassis).unwrap().position;
         let along = Vec3::new(at.x - start.x, 0.0, at.z - start.z);
-        assert!(along.length() < 0.15, "t={second}s braked tandem rolled {along:?}");
+        assert!(
+            along.length() < 0.15,
+            "t={second}s braked tandem rolled {along:?}"
+        );
     }
     let v = w.scene.body_velocity(chassis).unwrap().linear;
     assert!(v.length() < 0.02, "braked tandem still moving at {v:?}");

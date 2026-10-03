@@ -522,6 +522,42 @@ fn scalar_equality_limits_resist_effort_and_preserve_authored_motor() {
 }
 
 #[test]
+fn scalar_equality_lock_clears_existing_motion_and_can_be_released() {
+    for (kind, axis) in [
+        (JointType::Revolute, JointAxis::AngX),
+        (JointType::Prismatic, JointAxis::LinX),
+    ] {
+        for velocity in [-3.0, 3.0] {
+            let mut world = world();
+            let b = body(&mut world, 1.0);
+            let j = joint(&mut world, None, b, kind);
+            let dof = offset(&world, j);
+            world
+                .scene
+                .set_generalized_velocities_with_wake(&[velocity], true)
+                .unwrap();
+            world
+                .scene
+                .set_joint_motor(j, axis, effort(10.0, 10.0))
+                .unwrap();
+            world
+                .scene
+                .set_joint_limits(j, axis, Some([0.2, 0.2]))
+                .unwrap();
+            for _ in 0..3 {
+                world.step(0.01).unwrap();
+                near(world.scene.state().joint_q.host().unwrap()[0], 0.2);
+                near(world.scene.state().joint_qd.host().unwrap()[dof], 0.0);
+                assert_eq!(world.scene.body_velocity(b).unwrap(), SpatialVector::ZERO);
+            }
+            world.scene.set_joint_limits(j, axis, None).unwrap();
+            world.step(0.01).unwrap();
+            assert!(world.scene.state().joint_qd.host().unwrap()[dof] > 0.0);
+        }
+    }
+}
+
+#[test]
 fn low_level_acceleration_controls_survive_dormancy_without_authoring() {
     let mut world = world();
     let b = body(&mut world, 1.0);

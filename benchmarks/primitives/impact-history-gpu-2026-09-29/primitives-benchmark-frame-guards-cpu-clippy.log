@@ -1,0 +1,31 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.50s
+     Running tests/primitives_benchmark_contract.rs (target/debug/deps/primitives_benchmark_contract-1cf6d161f604d288)
+
+running 3 tests
+test benchmark_guard_rejects_unadvanced_and_wrong_step_counts ... ok
+test benchmark_guard_rejects_a_successful_step_with_quarantine ... ok
+test all_benchmark_fixtures_advance_exactly_without_quarantine ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/primitives_benchmark_settings.rs (target/debug/deps/primitives_benchmark_settings-41ba7710cd65fb10)
+
+running 7 tests
+test cargo_bench_preserves_full_performance_defaults ... ok
+test cargo_test_and_explicit_smoke_keep_all_cases_and_both_backends ... ok
+test help_exits_without_selecting_or_executing_cases ... ok
+test explicit_overrides_survive_mode_selection_and_flag_order ... ok
+test total_frame_count_overflow_is_rejected_before_worker_start ... ok
+test invalid_values_and_missing_arguments_fail_closed ... ok
+test worker_keeps_one_case_and_inherits_smoke_mode_explicitly ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.32s

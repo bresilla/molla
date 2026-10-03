@@ -1,0 +1,46 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.67s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 1 test
+test coulomb_disk_gpu::tests::coupled_disk_gpu_matches_cpu_and_retires_batched_island_slots ... island=3 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=10 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=17 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=24 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=31 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=38 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=45 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=52 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=59 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=66 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=73 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=80 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=87 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=94 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=101 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=108 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=115 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=122 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+island=129 fixture=3 fault=524288 iterations=8192 residual=5.4249796e-7 phase=1
+
+thread 'coulomb_disk_gpu::tests::coupled_disk_gpu_matches_cpu_and_retires_batched_island_slots' (3879396) panicked at crates/molla-solvers/src/coulomb_disk_gpu_tests.rs:272:9:
+assertion `left == right` failed: step=0
+  left: 524288
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    coulomb_disk_gpu::tests::coupled_disk_gpu_matches_cpu_and_retires_batched_island_slots
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 95 filtered out; finished in 0.32s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:127: test-primitives-friction-gpu] Error 101

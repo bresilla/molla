@@ -52,7 +52,9 @@ pub fn recognize(
         hi: Vec3,
     }
     let mut objects: std::collections::BTreeMap<u64, Acc> = Default::default();
-    let pixels = (width as usize * height as usize).min(depth.len()).min(shape.len());
+    let pixels = (width as usize * height as usize)
+        .min(depth.len())
+        .min(shape.len());
     for index in 0..pixels {
         let (s, d) = (shape[index], depth[index]);
         if s == NO_SHAPE || !d.is_finite() {

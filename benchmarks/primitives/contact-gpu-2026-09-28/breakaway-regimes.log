@@ -1,0 +1,32 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.22s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 1 test
+test contact_response_gpu::tests::device_contact_friction_breaks_away_when_load_crosses_static_bound ... CPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0
+CPU breakaway step=1763 regimes=[3, 3, 3, 3] vx=4.040426366076164e-3
+GPU breakaway step=0 regimes=[2, 2, 2, 2] vx=0e0, CPU vx=0e0
+GPU breakaway step=1762 regimes=[3, 3, 3, 3] vx=4.037168342620134e-3, CPU vx=9.504154173717132e-5
+GPU contact trajectory: case=Breakaway, peak drift=1.1907216310501099e0, settled creep=1.1907015154065448e0, CPU position error=2.9166793914340064e-3, orientation error=1.3646730415870492e-5, velocity error=4.708086026111094e-3
+integrated published-impulse host KKT peak=9.998402195816574e-8
+GPU breakaway: first sliding step=1762, force=11.81 N
+
+thread 'contact_response_gpu::tests::device_contact_friction_breaks_away_when_load_crosses_static_bound' (3930132) panicked at crates/molla-solvers/src/contact_response_gpu_tests.rs:887:5:
+assertion failed: peak_position < 3e-5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    contact_response_gpu::tests::device_contact_friction_breaks_away_when_load_crosses_static_bound
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 106 filtered out; finished in 13.12s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:70: test] Error 101

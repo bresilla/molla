@@ -1,5 +1,8 @@
 //! Completed device cloud transforms/compaction, CPU reference and selected-prefix collection.
 
+#[path = "support/cloud_benchmark_sizes.rs"]
+mod cloud_benchmark_sizes;
+
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use molla_compute::Engine;
 use molla_math::{Quat, Transform, Vec3};
@@ -18,7 +21,11 @@ fn bench_cloud(c: &mut Criterion) {
     group
         .sample_size(10)
         .measurement_time(Duration::from_secs(5));
-    for n in [1024usize, 65_536, 1_000_003] {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let smoke = cloud_benchmark_sizes::is_smoke(&args);
+    let sizes = cloud_benchmark_sizes::sizes(&args);
+    eprintln!("sensor cloud args={args:?} sizes={sizes:?} smoke={smoke}");
+    for &n in sizes {
         let values: Vec<_> = (0..n)
             .map(|i| {
                 let mut p = CloudPoint::new(

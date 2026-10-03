@@ -1,0 +1,26 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+error: expected one of `,`, `:`, or `}`, found `::`
+   --> /home/bresilla/data/code/OUSD/molla/crates/molla-kernels/src/soft_rigid_solve/coupled_newton.rs:261:23
+    |
+253 |         Ok(Self {
+    |            ---- while parsing this struct
+...
+261 |             molla_core::gpu_buffer_init!(unity: device,&wgpu::util::BufferInitDescriptor {
+    |             ----------^^ expected one of `,`, `:`, or `}`
+    |             |
+    |             while parsing this struct field
+
+error: expected identifier, found `&`
+   --> /home/bresilla/data/code/OUSD/molla/crates/molla-kernels/src/soft_rigid_solve/coupled_newton.rs:261:56
+    |
+253 |         Ok(Self {
+    |            ---- while parsing this struct
+...
+261 |             molla_core::gpu_buffer_init!(unity: device,&wgpu::util::BufferInitDescriptor {
+    |                                                        ^ expected identifier
+
+make: *** [Makefile:369: fmt-files] Error 1

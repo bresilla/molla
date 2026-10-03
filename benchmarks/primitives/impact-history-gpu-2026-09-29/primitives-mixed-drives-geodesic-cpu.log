@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.41s
+     Running tests/runtime_mixed_drives.rs (target/debug/deps/runtime_mixed_drives-176906c1ad83a70c)
+
+running 1 test
+
+thread 'cpu_mixed_linear_angular_drives_with_contact_match_independent_oracles' (845299) panicked at crates/molla-solvers/tests/runtime_mixed_drives.rs:227:13:
+frame=103 case=5 pose_error=1.009943256802263e-8 rate_error=6.7871471484273925e-12 actual=SpatialVector { linear: DVec3(0.27333333333324694, 1.6036596963558974e-15, -3.429153954715114e-33), angular: DVec3(-8.018298481779484e-15, 6.764339576751516e-12, 0.5358180429352999) } expected_linear=DVec3(0.27333333333333276, 0.0, 0.0) expected_angular=DVec3(0.0, 0.0, 0.5358180429358558)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_mixed_linear_angular_drives_with_contact_match_independent_oracles ... FAILED
+
+failures:
+
+failures:
+    cpu_mixed_linear_angular_drives_with_contact_match_independent_oracles
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_mixed_drives`
+make: *** [Makefile:321: test-primitives-mixed-drives-cpu] Error 101

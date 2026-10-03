@@ -570,6 +570,10 @@ fn find_pairs_ee_grid(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(WG)
 fn filter_pairs_vt_cand(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c = gid.x;
+    if (cand_meta[0] > arrayLength(&cand_vt_a)) {
+        if (c == 0u) { atomicStore(&pair_count[1], 1u); }
+        return;
+    }
     if (c >= cand_meta[0]) { return; }
     var a = cand_vt_a[c];
     var b = cand_vt_b[c];
@@ -598,6 +602,10 @@ fn filter_pairs_vt_cand(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(WG)
 fn filter_pairs_ee_cand(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c = gid.x;
+    if (cand_meta[1] > arrayLength(&cand_ee_a)) {
+        if (c == 0u) { atomicStore(&pair_count[1], 1u); }
+        return;
+    }
     if (c >= cand_meta[1]) { return; }
     var i = cand_ee_a[c];
     var j = cand_ee_b[c];

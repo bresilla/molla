@@ -128,21 +128,27 @@ impl ScanKernel {
             cache: None,
         });
 
-        let group_sums = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::scan group_sums"),
-            size: (MAX_GROUPS as u64) * core::mem::size_of::<u32>() as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let group_sums = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::scan group_sums"),
+                size: (MAX_GROUPS as u64) * core::mem::size_of::<u32>() as u64,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
-        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::scan uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniforms = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::scan uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         Self {
             device,
@@ -195,22 +201,28 @@ impl ScanKernel {
         // Run an inclusive scan into a transient buffer, then read its
         // last u32 back.
         let bytes = (n as u64) * core::mem::size_of::<u32>() as u64;
-        let scratch = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::scan::total_sum scratch"),
-            size: bytes.max(16),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let scratch = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::scan::total_sum scratch"),
+                size: bytes.max(16),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         self.inclusive_scan_u32(input, &scratch, n)?;
 
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::scan::total_sum staging"),
-            size: core::mem::size_of::<u32>() as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let staging = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::scan::total_sum staging"),
+                size: core::mem::size_of::<u32>() as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -237,7 +249,7 @@ impl ScanKernel {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("scan::total_sum recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("scan::total_sum map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = molla_core::gpu_readback!(slice);
         let last = u32::from_le_bytes([mapped[0], mapped[1], mapped[2], mapped[3]]);
         drop(mapped);
         staging.unmap();
@@ -268,8 +280,7 @@ impl ScanKernel {
             num_groups,
             _pad: 0,
         };
-        self.queue
-            .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
+        molla_core::gpu_write_buffer!(self.queue, &self.uniforms, 0, bytemuck::bytes_of(&u));
 
         let bg_data = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::scan data bg"),

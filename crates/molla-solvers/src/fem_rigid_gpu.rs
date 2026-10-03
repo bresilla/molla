@@ -53,7 +53,7 @@ fn sampled_contact_capacity(
     let row_bytes = (12 * dofs as u64)
         .max(std::mem::size_of::<molla_kernels::soft_rigid_contact::SoftRigidContactGpu>() as u64);
     let bytes = (128 * 1024 * 1024_u64)
-        .min(u64::from(limits.max_storage_buffer_binding_size))
+        .min(limits.max_storage_buffer_binding_size)
         .min(limits.max_buffer_size);
     let rows = (bytes / row_bytes).min(u64::from(limits.max_compute_workgroups_per_dimension) * 64);
     let capacity = rows
@@ -175,9 +175,11 @@ mod device_limits_tests {
 
     #[test]
     fn patch_limits_preserve_requests_and_reject_unsupported_devices() {
-        let mut supported = wgpu::Limits::default();
-        supported.max_bind_groups = 7;
-        supported.max_storage_buffers_per_shader_stage = 51;
+        let supported = wgpu::Limits {
+            max_bind_groups: 7,
+            max_storage_buffers_per_shader_stage: 51,
+            ..Default::default()
+        };
         let original = wgpu::Limits::default();
         let mut request = original.clone();
         request_material_contact_patch_device_limits(&mut request, &supported).unwrap();
@@ -442,12 +444,7 @@ impl FemRigidGpuSystem {
                 .host()?
                 .iter()
                 .any(|&v| v != 0)
-            || scene
-                .rigid_model
-                .joint_enabled
-                .host()?
-                .iter()
-                .any(|&v| v == 0)
+            || scene.rigid_model.joint_enabled.host()?.contains(&0)
             || scene
                 .rigid_model
                 .body_flags
@@ -516,24 +513,30 @@ impl FemRigidGpuSystem {
                 weights: [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 0.0],
             }));
         }
-        let surface = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("FEM surface features"),
-            contents: if sample_surface {
-                bytemuck::cast_slice(&samples)
-            } else {
-                bytemuck::cast_slice(&nodes)
-            },
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let surface = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("FEM surface features"),
+                contents: if sample_surface {
+                    bytemuck::cast_slice(&samples)
+                } else {
+                    bytemuck::cast_slice(&nodes)
+                },
+                usage: wgpu::BufferUsages::STORAGE,
+            }
+        );
         let shape_count = scene.shapes.len();
         if scene.shapes.is_empty() {
             scene.shapes.push(bytemuck::Zeroable::zeroed());
         }
-        let shapes = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("FEM rigid primitives"),
-            contents: bytemuck::cast_slice(&scene.shapes),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let shapes = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("FEM rigid primitives"),
+                contents: bytemuck::cast_slice(&scene.shapes),
+                usage: wgpu::BufferUsages::STORAGE,
+            }
+        );
         molla_sim::eval_fk(&scene.rigid_model, &mut scene.rigid_state)?;
         molla_sim::eval_body_velocities(&scene.rigid_model, &mut scene.rigid_state)?;
         scene.soft_model.upload_to_device(device, queue)?;

@@ -1,4 +1,4 @@
-//! CPU rigid-world stepping and stable-handle contact readout.
+//! Rigid-world stepping and stable-handle contact readout.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -14,6 +14,11 @@ use molla_sim::Contacts;
 use molla_sim::runtime::{BodyHandle, ColliderHandle, RigidScene, SceneStamp};
 
 use crate::FeatherstoneSolver;
+pub use crate::cone_constraints::{BallAnchorReading, ConeReading};
+use crate::distance_constraints::ConstraintReadings;
+pub use crate::distance_constraints::{DistanceBound, DistanceReading};
+use crate::joint_reactions::ReactionFrame;
+pub use crate::joint_reactions::{JointReaction, JointReactionSample};
 use crate::penalty_contact::ContactForce;
 
 #[path = "rigid_sleep.rs"]
@@ -22,6 +27,16 @@ mod sleep;
 #[path = "rigid_settling.rs"]
 mod settling;
 pub use settling::SleepSettings;
+
+#[path = "rigid_breakage.rs"]
+mod breakage;
+pub use breakage::JointBreakEvent;
+
+#[cfg(feature = "gpu")]
+#[path = "rigid_world_gpu.rs"]
+mod gpu;
+#[cfg(feature = "gpu")]
+pub use gpu::{GpuContactCapacity, GpuRuntimeDiagnostics};
 
 #[cfg(test)]
 #[path = "rigid_bounds_tests.rs"]
@@ -46,11 +61,22 @@ pub struct RigidWorld {
     pipeline: CollisionPipeline,
     bounds: molla_geometry::shape_world::SceneShapeBounds,
     contacts: Contacts,
+    impacts: crate::rigid_impact::ImpactCache,
     contact_revision: Option<SceneStamp>,
     queries: Mutex<CpuRaycaster>,
     quarantined: Vec<BodyHandle>,
     sleeping: sleep::SleepingGroups,
     settling: settling::Settling,
+    distance_readings: BTreeMap<molla_sim::runtime::JointHandle, DistanceReading>,
+    cone_readings: BTreeMap<molla_sim::runtime::JointHandle, ConeReading>,
+    distance_stamp: Option<molla_sim::runtime::DynamicsStamp>,
+    reaction_readout: bool,
+    reaction_frame: ReactionFrame,
+    reaction_stamp: Option<molla_sim::runtime::DynamicsStamp>,
+    break_events: Vec<JointBreakEvent>,
+    completed_steps: u64,
+    #[cfg(feature = "gpu")]
+    gpu: Option<gpu::RuntimeGpu>,
 }
 
 impl RigidWorld {
@@ -59,6 +85,7 @@ impl RigidWorld {
     }
 
     pub fn from_scene(scene: RigidScene) -> Result<Self> {
+        Self::validate_cone_geometry(&scene)?;
         Ok(Self {
             scene,
             solver: FeatherstoneSolver::new_cpu()
@@ -71,16 +98,91 @@ impl RigidWorld {
             pipeline: CollisionPipeline::new().with_sensor_overlaps(true),
             bounds: molla_geometry::shape_world::SceneShapeBounds::default(),
             contacts: Contacts::with_capacity(64),
+            impacts: crate::rigid_impact::ImpactCache::default(),
             contact_revision: None,
             queries: Mutex::new(CpuRaycaster::default()),
             quarantined: Vec::new(),
             sleeping: sleep::SleepingGroups::default(),
             settling: settling::Settling::default(),
+            distance_readings: BTreeMap::new(),
+            cone_readings: BTreeMap::new(),
+            distance_stamp: None,
+            reaction_readout: false,
+            reaction_frame: ReactionFrame::default(),
+            reaction_stamp: None,
+            break_events: Vec::new(),
+            completed_steps: 0,
+            #[cfg(feature = "gpu")]
+            gpu: None,
         })
     }
 
     pub fn step(&mut self, dt: Real) -> Result<()> {
-        self.step_filtered(dt, |_, _| false)
+        self.step_entry(dt, |_, _| false)
+    }
+
+    /// Enable substep reaction reconstruction and frame means/peaks.
+    pub fn set_reaction_readout(&mut self, enabled: bool) -> Result<()> {
+        self.reaction_readout = enabled;
+        self.reaction_frame = ReactionFrame::default();
+        self.reaction_stamp = None;
+        Ok(())
+    }
+
+    pub fn reaction_readout_enabled(&self) -> bool {
+        self.reaction_readout
+    }
+
+    /// Solved frame's mean and peak loads; sleeping joints have no sample.
+    pub fn joint_reaction(&self, joint: molla_sim::runtime::JointHandle) -> Option<&JointReaction> {
+        (self.reaction_readout && self.reaction_stamp == Some(self.scene.dynamics_stamp()))
+            .then(|| self.reaction_frame.means.get(&joint))
+            .flatten()
+    }
+
+    pub fn joint_reaction_samples(&self) -> Option<&[JointReactionSample]> {
+        (self.reaction_readout && self.reaction_stamp == Some(self.scene.dynamics_stamp()))
+            .then_some(self.reaction_frame.samples.as_slice())
+    }
+
+    /// Valid solved frame's radial reaction on the child, in world coordinates and N.
+    /// Wholly sleeping links have no sample for an unsolved frame.
+    pub fn distance_reading(
+        &self,
+        joint: molla_sim::runtime::JointHandle,
+    ) -> Option<&DistanceReading> {
+        if self.scene.joint(joint)?.kind != molla_sim::JointType::Distance {
+            return None;
+        }
+        (self.distance_stamp == Some(self.scene.dynamics_stamp()))
+            .then(|| self.distance_readings.get(&joint))
+            .flatten()
+    }
+
+    /// Valid solved frame's rigid external ball anchor state; cone torque is separate.
+    pub fn ball_anchor_reading(
+        &self,
+        joint: molla_sim::runtime::JointHandle,
+    ) -> Option<BallAnchorReading> {
+        if self.distance_stamp != Some(self.scene.dynamics_stamp())
+            || !self.scene.rigid_ball_joints().any(|(id, _)| id == joint)
+        {
+            return None;
+        }
+        self.distance_readings
+            .get(&joint)
+            .map(|reading| BallAnchorReading {
+                separation: reading.separation,
+                force: reading.force,
+                sample_dt: reading.sample_dt,
+            })
+    }
+
+    /// Valid solved frame's cone state and world-space child torque in Nm.
+    pub fn cone_reading(&self, joint: molla_sim::runtime::JointHandle) -> Option<&ConeReading> {
+        (self.distance_stamp == Some(self.scene.dynamics_stamp()))
+            .then(|| self.cone_readings.get(&joint))
+            .flatten()
     }
 
     /// Bodies isolated before the latest step attempt with a valid time increment.
@@ -156,7 +258,10 @@ impl RigidWorld {
         wake: bool,
     ) -> Result<()> {
         molla_geometry::mass_properties::set_body_additional_mass_with_wake(
-            &mut self.scene, id, additional, wake,
+            &mut self.scene,
+            id,
+            additional,
+            wake,
         )
     }
 
@@ -230,6 +335,46 @@ impl RigidWorld {
         dt: Real,
         excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
     ) -> Result<()> {
+        #[cfg(feature = "gpu")]
+        if self.gpu.is_some() && self.scene.model().shape_count != 0 {
+            return Err(Error::Solver("GPU rigid runtime does not yet support host contact filter callbacks; use scene collision permissions".into()));
+        }
+        self.step_entry(dt, excluded)
+    }
+
+    fn step_entry(
+        &mut self,
+        dt: Real,
+        excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
+    ) -> Result<()> {
+        let next = self
+            .completed_steps
+            .checked_add(1)
+            .ok_or_else(|| Error::Solver("runtime step counter overflow".into()))?;
+        self.step_filtered_inner(dt, excluded)?;
+        self.completed_steps = next;
+        Ok(())
+    }
+
+    pub fn completed_steps(&self) -> u64 {
+        self.completed_steps
+    }
+
+    fn step_filtered_inner(
+        &mut self,
+        dt: Real,
+        excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
+    ) -> Result<()> {
+        self.distance_stamp = None;
+        self.reaction_stamp = None;
+        Self::validate_cone_geometry(&self.scene)?;
+        #[cfg(feature = "gpu")]
+        if self.gpu.is_some() {
+            return self.step_gpu(dt);
+        }
+        if self.scene.breakable_joints().next().is_some() {
+            return self.step_breakable_cpu(dt, excluded, |_, _, _, _| Ok(()), false);
+        }
         if dt.is_finite() && dt > 0.0 {
             self.devices.before_step(&mut self.scene, dt)?;
         }
@@ -240,7 +385,11 @@ impl RigidWorld {
         }
         if self.sleeping.any_valid(&self.scene, &self.wheels) {
             self.step_sleeping(dt, excluded)?;
-            self.devices.after_step(&self.scene, self.solver.joint_efforts())?;
+            self.devices
+                .after_step(&self.scene, self.solver.joint_efforts())?;
+            if self.reaction_readout {
+                self.reaction_stamp = Some(self.scene.dynamics_stamp());
+            }
         } else {
             self.step_with_forces_inner(dt, excluded, |_, _, _, _| Ok(()), false)?;
         }
@@ -256,10 +405,46 @@ impl RigidWorld {
         excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
         forces: impl FnMut(&RigidScene, &molla_sim::State, Real, &mut [SpatialVector]) -> Result<()>,
     ) -> Result<()> {
+        let next = self
+            .completed_steps
+            .checked_add(1)
+            .ok_or_else(|| Error::Solver("runtime step counter overflow".into()))?;
+        self.step_with_forces_entry(dt, excluded, forces)?;
+        self.completed_steps = next;
+        Ok(())
+    }
+
+    fn step_with_forces_entry(
+        &mut self,
+        dt: Real,
+        excluded: impl FnMut(Option<BodyHandle>, Option<BodyHandle>) -> bool,
+        forces: impl FnMut(&RigidScene, &molla_sim::State, Real, &mut [SpatialVector]) -> Result<()>,
+    ) -> Result<()> {
+        self.distance_stamp = None;
+        self.reaction_stamp = None;
+        Self::validate_cone_geometry(&self.scene)?;
+        #[cfg(feature = "gpu")]
+        if self.gpu.is_some() {
+            return Err(Error::Solver(
+                "GPU rigid runtime does not yet support host force callbacks".into(),
+            ));
+        }
+        if self.scene.breakable_joints().next().is_some() {
+            return self.step_breakable_cpu(dt, excluded, forces, true);
+        }
         if dt.is_finite() && dt > 0.0 {
             self.devices.before_step(&mut self.scene, dt)?;
         }
         self.step_with_forces_inner(dt, excluded, forces, true)
+    }
+
+    fn validate_cone_geometry(scene: &RigidScene) -> Result<()> {
+        for (id, joint, limits) in scene.cone_joints() {
+            if crate::distance_constraints::enabled(scene, id, joint) {
+                crate::cone_constraints::geometry(scene, scene.state(), joint, limits)?;
+            }
+        }
+        Ok(())
     }
 
     fn step_with_forces_inner(
@@ -288,8 +473,15 @@ impl RigidWorld {
         let weight = 1.0 / self.solver.substeps.max(1) as Real;
         let mut substep = 0usize;
         let mut next = scene.model().state()?;
+        let mut readings = ConstraintReadings::default();
+        let capture = self.reaction_readout;
+        let mut reaction_frame = ReactionFrame::default();
+        let mut reaction_substep = 0usize;
+        let compliant = std::cell::RefCell::new(Vec::new());
         let bounds = self.bounds.prepare(scene);
-        self.solver.step_with_collision_response(
+        let common = crate::mixed_constraints::needed(scene)?;
+        let impacts = std::cell::RefCell::new(self.impacts.clone());
+        self.solver.step_with_collision_constraints(
             scene.model(),
             scene.state(),
             scene.control(),
@@ -333,21 +525,92 @@ impl RigidWorld {
                 }
                 let mut response =
                     crate::articulated_response::ArticulatedResponse::new(scene.model(), state);
-                wheels.apply(scene, &mut response, sub_dt, wrenches, &mut wheel_step, |a, b| {
-                    excluded.borrow_mut()(a, b)
-                })?;
+                wheels.apply(
+                    scene,
+                    &mut response,
+                    sub_dt,
+                    wrenches,
+                    &mut wheel_step,
+                    |a, b| excluded.borrow_mut()(a, b),
+                )?;
                 let reactions = crate::loop_forces::apply(scene, &mut response, sub_dt, wrenches)?;
                 devices.record_reactions(&reactions, weight, substep == 0);
+                if capture {
+                    *compliant.borrow_mut() = reactions;
+                }
                 devices.apply(scene, state, wrenches, weight)?;
                 substep += 1;
                 track_step.apply(scene, &mut response, contacts, sub_dt, wrenches)?;
                 forces(scene, state, sub_dt, wrenches)?;
+                impacts.borrow_mut().prepare(scene, state, contacts)?;
                 response.export_mass(mass_seed)
             },
             Some(&bounds),
+            common,
+            |solver, input, output, sub_dt| {
+                let resting = impacts.borrow_mut().resting_selection(scene, None)?;
+                let mut next_readings = if common {
+                    solver.correct_mixed_cpu(scene, input, output, sub_dt, Some(&resting))?
+                } else {
+                    crate::distance_constraints::apply_selected(
+                        scene,
+                        solver,
+                        input,
+                        output,
+                        sub_dt,
+                        Some(&resting),
+                    )?
+                };
+                let position_reference = solver.correct_impact_cpu(
+                    &mut impacts.borrow_mut(),
+                    scene,
+                    input,
+                    output,
+                    sub_dt,
+                    &mut next_readings,
+                    None,
+                )?;
+                if capture {
+                    for sample in crate::joint_reactions::sample_cpu(
+                        scene,
+                        input,
+                        output,
+                        sub_dt,
+                        reaction_substep,
+                        &next_readings,
+                        &compliant.borrow(),
+                        solver.contact_forces(),
+                        None,
+                    )? {
+                        reaction_frame.add(sample, dt)?;
+                    }
+                    reaction_substep += 1;
+                }
+                crate::rigid_momentum::transport(
+                    scene.model(),
+                    input,
+                    output,
+                    sub_dt,
+                    position_reference.as_ref(),
+                    None,
+                )?;
+                crate::distance_constraints::refresh_readings(scene, output, &mut next_readings)?;
+                readings.accumulate(next_readings, weight, dt);
+                Ok(())
+            },
         )?;
         self.scene.commit_step(next)?;
-        self.devices.after_step(&self.scene, self.solver.joint_efforts())?;
+        self.impacts = impacts.into_inner();
+        self.impacts.record_published(&self.scene);
+        self.distance_readings = readings.distance;
+        self.cone_readings = readings.cones;
+        self.distance_stamp = Some(self.scene.dynamics_stamp());
+        self.devices
+            .after_step(&self.scene, self.solver.joint_efforts())?;
+        if capture {
+            self.reaction_frame = reaction_frame;
+            self.reaction_stamp = Some(self.scene.dynamics_stamp());
+        }
         self.tracks = track_step;
         self.sleeping.clear();
         if custom_forces {
@@ -391,9 +654,11 @@ impl RigidWorld {
                 {
                     continue;
                 }
-                connections.push(reading.bodies.map(|body| {
-                    body.and_then(|id| handles.get(id.index()).copied().flatten())
-                }));
+                connections.push(
+                    reading
+                        .bodies
+                        .map(|body| body.and_then(|id| handles.get(id.index()).copied().flatten())),
+                );
             }
         }
         for sample in self.wheels.samples(scene) {

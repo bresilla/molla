@@ -123,7 +123,7 @@ impl CoupledNewtonKernel {
             || !(1..=64).contains(&dofs)
             || dimension > u64::from(u32::MAX)
             || dimension * 4 > limits.max_buffer_size
-            || dimension * 4 > u64::from(limits.max_storage_buffer_binding_size)
+            || dimension * 4 > limits.max_storage_buffer_binding_size
             || dimension.div_ceil(64) > u64::from(limits.max_compute_workgroups_per_dimension)
             || limits.max_storage_buffers_per_shader_stage < 20
             || limits.max_bindings_per_bind_group < 21
@@ -165,7 +165,7 @@ impl CoupledNewtonKernel {
         ];
         for (i, (buffer, size)) in inputs.iter().zip(minimum).enumerate() {
             if buffer.size() < size
-                || buffer.size() > u64::from(limits.max_storage_buffer_binding_size)
+                || buffer.size() > limits.max_storage_buffer_binding_size
                 || !buffer.usage().contains(wgpu::BufferUsages::STORAGE)
                 || inputs
                     .iter()
@@ -241,14 +241,17 @@ impl CoupledNewtonKernel {
             })
         });
         let allocate = |label, size| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                mapped_at_creation: false,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    mapped_at_creation: false,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                }
+            )
         };
         Ok(Self {
             particles,
@@ -258,11 +261,14 @@ impl CoupledNewtonKernel {
             layout,
             pipelines,
             gmres,
-            unity: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Newton unscaled residual weights"),
-                contents: bytemuck::cast_slice(&vec![1.0_f32; dimension as usize]),
-                usage: wgpu::BufferUsages::STORAGE,
-            }),
+            unity: molla_core::gpu_buffer_init!(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("Newton unscaled residual weights"),
+                    contents: bytemuck::cast_slice(&vec![1.0_f32; dimension as usize]),
+                    usage: wgpu::BufferUsages::STORAGE,
+                }
+            ),
             inputs: inputs.map(Clone::clone),
             packed: allocate("Newton packed vector", dimension * 4),
             rhs: allocate("Newton right hand side", dimension * 4),
@@ -386,11 +392,14 @@ impl CoupledNewtonKernel {
             bytes[(slot * stride) as usize..(slot * stride + 48) as usize]
                 .copy_from_slice(bytemuck::bytes_of(&params));
         }
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: &bytes,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: &bytes,
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let mut entries: Vec<_> = self
             .inputs
             .iter()

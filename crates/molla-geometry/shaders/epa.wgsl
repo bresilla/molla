@@ -353,7 +353,10 @@ fn push_edge(a: u32, b: u32) -> u32 {
 
 @compute @workgroup_size(64)
 fn epa_solve(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
+    epa_pair(gid.x);
+}
+
+fn epa_pair(i: u32) {
     if (i >= u.pair_count) { return; }
     // Default: write a zero status so callers see "no contact" for
     // pairs we skipped.

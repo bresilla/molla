@@ -67,7 +67,7 @@ fn nonwaking_com_edit_preserves_velocity_field_and_wrench_application_point() {
     scene.add_body_wrench(a, force).unwrap();
     scene.control_mut().body_external_f.host_mut().unwrap()[0] = force;
     let activation = [scene.activation_stamp(a), scene.activation_stamp(b)];
-    let rates = scene.state().joint_qd.host().unwrap().to_vec();
+    let mut rates = scene.state().joint_qd.host().unwrap().to_vec();
     let point = Vec3::new(1.0, 2.0, 3.0);
     let velocity = scene.body_velocity_at_point(a, point).unwrap();
     let replacement = MassProperties {
@@ -78,6 +78,7 @@ fn nonwaking_com_edit_preserves_velocity_field_and_wrench_application_point() {
         .set_body_mass_components_with_wake(a, replacement, replacement, false)
         .unwrap();
     assert_eq!(scene.body_velocity_at_point(a, point).unwrap(), velocity);
+    rates[..3].copy_from_slice(&scene.body_velocity(a).unwrap().linear.to_array());
     assert_eq!(scene.state().joint_qd.host().unwrap(), rates);
     for actual in [
         scene.state().body_f.host().unwrap()[0],

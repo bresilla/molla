@@ -60,11 +60,14 @@ impl TetVolumeMonitor {
             compilation_options: Default::default(),
             cache: None,
         });
-        let diagnostics = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("tet volume lifetime minimum"),
-            contents: bytemuck::cast_slice(&[f32::INFINITY.to_bits(), u32::MAX]),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
+        let diagnostics = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("tet volume lifetime minimum"),
+                contents: bytemuck::cast_slice(&[f32::INFINITY.to_bits(), u32::MAX]),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            }
+        );
         Self {
             layout,
             pipeline,
@@ -100,11 +103,14 @@ impl TetVolumeMonitor {
         {
             return Err(Error::Build("invalid GPU tet volume buffers".into()));
         }
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("tet volume parameters"),
-            contents: bytemuck::cast_slice(&[b.tet_count, b.particle_count, 0, 0]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("tet volume parameters"),
+                contents: bytemuck::cast_slice(&[b.tet_count, b.particle_count, 0, 0]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let buffers = [
             b.positions,
             b.reference,

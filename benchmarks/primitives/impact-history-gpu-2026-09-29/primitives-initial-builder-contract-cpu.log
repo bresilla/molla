@@ -1,0 +1,43 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+error[E0560]: struct `JointMotor` has no field named `motor_model`
+   --> crates/molla-sim/tests/runtime_builder.rs:79:29
+    |
+ 79 |                             motor_model: MotorModel::Acceleration,
+    |                             ^^^^^^^^^^^ `JointMotor` does not have this field
+...
+103 |         let expected = populate!(sequential, kind);
+    |                        --------------------------- in this macro invocation
+    |
+    = note: all struct fields are already assigned
+    = note: this error originates in the macro `populate` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0560]: struct `JointMotor` has no field named `motor_model`
+   --> crates/molla-sim/tests/runtime_builder.rs:79:29
+    |
+ 79 |                             motor_model: MotorModel::Acceleration,
+    |                             ^^^^^^^^^^^ `JointMotor` does not have this field
+...
+105 |         let handles = populate!(builder, kind);
+    |                       ------------------------ in this macro invocation
+    |
+    = note: all struct fields are already assigned
+    = note: this error originates in the macro `populate` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0609]: no field `shape_type` on type `&Model`
+   --> crates/molla-sim/tests/runtime_builder.rs:126:13
+    |
+126 |             shape_type,
+    |             ^^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `particle_count`, `particle_mass`, `particle_inv_mass`, `particle_radius`, `particle_flags` ... and 95 others
+
+Some errors have detailed explanations: E0560, E0609.
+For more information about an error, try `rustc --explain E0560`.
+error: could not compile `molla-sim` (test "runtime_builder") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+make: *** [Makefile:129: test] Error 101

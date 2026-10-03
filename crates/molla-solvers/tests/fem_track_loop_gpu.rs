@@ -12,9 +12,12 @@ use std::sync::Arc;
 #[path = "common/reinforced_track.rs"]
 mod reinforced_track;
 
+#[path = "common/fem_readback.rs"]
+mod fem_readback;
 #[path = "common/gpu_readback.rs"]
 mod gpu_readback;
-use gpu_readback::{body_poses, read};
+use fem_readback::body_poses;
+use gpu_readback::read;
 
 #[test]
 #[ignore = "requires a real GPU through make test-gpu"]

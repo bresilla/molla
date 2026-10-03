@@ -1,0 +1,11 @@
+--- benchmarks/primitives/engine-program-cache-2026-10-01/empty-dependency-source-sha256.txt	2026-10-02 15:50:21.213473535 +0200
++++ benchmarks/primitives/engine-program-cache-2026-10-01/fixed-reaction-source-sha256.txt	2026-10-02 16:12:27.260314889 +0200
+@@ -1017,7 +1017,7 @@
+ bd65837f4766f88f8260e1ac5f2afa0260bc796a6334ae81a08a3c84acebc994  crates/molla-solvers/src/rigid_contact_activation_gpu.rs
+ 0f06fa14c93ba68755f1cb7921bb20b8d06f564ae20a866a8fc7189b8e1220cf  crates/molla-solvers/src/rigid_contact_activation_gpu_tests.rs
+ f55195bd24842058ea066cdd45ebe0de0b2a207d444cd5292f3940c77a716728  crates/molla-solvers/src/rigid_contact_precision_gpu.rs
+-23a78ad86c84ff0d66328588399ac990c39f510e8c175f11a8220ba0549d0b76  crates/molla-solvers/src/rigid_contact_reaction_tests.rs
++0263933af1fdd8c1c0185393f15d022f1954ed8ebd216561f8f8f1d91e8427f3  crates/molla-solvers/src/rigid_contact_reaction_tests.rs
+ a69d3853f825720c01b134f5208ca98ac8a783c6b25c00ad6bb18dc55b598488  crates/molla-solvers/src/rigid_contacts_gpu.rs
+ 93466663bc11e75a727ade0308dd3c4815eda83246464678b8de61ae98b8599c  crates/molla-solvers/src/rigid_damping_gpu.rs
+ 371857e3ad7fda11c509a9eb04286d2b14c1b85d82c396641c6baa4fd844f123  crates/molla-solvers/src/rigid_distance_scale_gpu_tests.rs

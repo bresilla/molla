@@ -29,10 +29,20 @@ pub enum CopterCommand {
     Off,
     /// Velocity in the heading frame (forward, left, up; m/s) and yaw rate
     /// about up (rad/s, counter-clockwise).
-    Velocity { forward: Real, left: Real, up: Real, yaw_rate: Real },
+    Velocity {
+        forward: Real,
+        left: Real,
+        up: Real,
+        yaw_rate: Real,
+    },
     /// Roll (right side down) and pitch (nose down) in rad, yaw rate and
     /// climb rate.
-    Attitude { roll: Real, pitch: Real, yaw_rate: Real, climb: Real },
+    Attitude {
+        roll: Real,
+        pitch: Real,
+        yaw_rate: Real,
+        climb: Real,
+    },
 }
 
 /// Limits and loop gains of a copter controller.
@@ -164,7 +174,16 @@ fn mixer_inverse(rotors: &[Rotor]) -> Result<DMat4> {
 }
 
 impl Copters {
-    pub fn insert(&mut self, scene: &RigidScene, propellers: &Propellers, spec: CopterSpec) -> Result<CopterId> {
+    pub(super) fn is_empty(&self) -> bool {
+        self.copters.is_empty()
+    }
+
+    pub fn insert(
+        &mut self,
+        scene: &RigidScene,
+        propellers: &Propellers,
+        spec: CopterSpec,
+    ) -> Result<CopterId> {
         if scene.body(spec.body).is_none() {
             return Err(Error::Build("copter body is missing".into()));
         }
@@ -174,21 +193,24 @@ impl Copters {
         mixer_inverse(&rotors(propellers, scene, &spec)?)?;
         self.next += 1;
         let id = CopterId(self.next);
-        self.copters.insert(id, Copter {
-            spec,
-            command: CopterCommand::Off,
-            disturbance: Vec3::ZERO,
-            last: None,
-            reading: CopterReading {
+        self.copters.insert(
+            id,
+            Copter {
+                spec,
                 command: CopterCommand::Off,
-                roll: 0.0,
-                pitch: 0.0,
-                velocity: [0.0; 3],
-                yaw_rate: 0.0,
-                thrust: 0.0,
-                saturated: false,
+                disturbance: Vec3::ZERO,
+                last: None,
+                reading: CopterReading {
+                    command: CopterCommand::Off,
+                    roll: 0.0,
+                    pitch: 0.0,
+                    velocity: [0.0; 3],
+                    yaw_rate: 0.0,
+                    thrust: 0.0,
+                    saturated: false,
+                },
             },
-        });
+        );
         Ok(id)
     }
 
@@ -199,12 +221,18 @@ impl Copters {
     pub fn command(&mut self, id: CopterId, command: CopterCommand) -> Result<()> {
         let finite = match command {
             CopterCommand::Off => true,
-            CopterCommand::Velocity { forward, left, up, yaw_rate } => {
-                [forward, left, up, yaw_rate].iter().all(|v| v.is_finite())
-            }
-            CopterCommand::Attitude { roll, pitch, yaw_rate, climb } => {
-                [roll, pitch, yaw_rate, climb].iter().all(|v| v.is_finite())
-            }
+            CopterCommand::Velocity {
+                forward,
+                left,
+                up,
+                yaw_rate,
+            } => [forward, left, up, yaw_rate].iter().all(|v| v.is_finite()),
+            CopterCommand::Attitude {
+                roll,
+                pitch,
+                yaw_rate,
+                climb,
+            } => [roll, pitch, yaw_rate, climb].iter().all(|v| v.is_finite()),
         };
         if !finite {
             return Err(Error::Build("copter command must be finite".into()));
@@ -226,7 +254,12 @@ impl Copters {
     }
 
     /// Sets every controlled rotor's speed for the coming step of `dt`.
-    pub(crate) fn before_step(&mut self, scene: &RigidScene, propellers: &mut Propellers, dt: Real) -> Result<()> {
+    pub(crate) fn before_step(
+        &mut self,
+        scene: &RigidScene,
+        propellers: &mut Propellers,
+        dt: Real,
+    ) -> Result<()> {
         for copter in self.copters.values_mut() {
             if scene.body(copter.spec.body).is_none() {
                 continue;
@@ -253,11 +286,20 @@ fn horizontal(v: Vec3, up: Vec3) -> Option<Vec3> {
 /// `½·vee(Aᵀ·B − Bᵀ·A)`: the rotation error from `A` to `B` in `B`'s frame.
 fn rotation_error(desired: Mat3, current: Mat3) -> Vec3 {
     let m = desired.transpose() * current - current.transpose() * desired;
-    Vec3::new(m.y_axis.z - m.z_axis.y, m.z_axis.x - m.x_axis.z, m.x_axis.y - m.y_axis.x) * 0.25
+    Vec3::new(
+        m.y_axis.z - m.z_axis.y,
+        m.z_axis.x - m.x_axis.z,
+        m.x_axis.y - m.y_axis.x,
+    ) * 0.25
 }
 
 /// Rotor speeds for this step from the body state and the command.
-fn control(scene: &RigidScene, copter: &mut Copter, rotors: &[Rotor], dt: Real) -> Result<Vec<Real>> {
+fn control(
+    scene: &RigidScene,
+    copter: &mut Copter,
+    rotors: &[Rotor],
+    dt: Real,
+) -> Result<Vec<Real>> {
     let spec = &copter.spec;
     let limits = spec.limits;
     let pose = scene.body_pose(spec.body)?;
@@ -269,7 +311,9 @@ fn control(scene: &RigidScene, copter: &mut Copter, rotors: &[Rotor], dt: Real) 
     let rotation: Quat = pose.rotation * spec.frame.rotation;
     let current = Mat3::from_quat(rotation);
     let [fx, fy, fz] = [current.x_axis, current.y_axis, current.z_axis];
-    let heading = horizontal(fx, up).or_else(|| horizontal(-fz, up)).unwrap_or(Vec3::X);
+    let heading = horizontal(fx, up)
+        .or_else(|| horizontal(-fz, up))
+        .unwrap_or(Vec3::X);
     let left = up.cross(heading);
     let v = velocity.linear;
     let rate = rotation.conjugate() * velocity.angular;
@@ -278,7 +322,9 @@ fn control(scene: &RigidScene, copter: &mut Copter, rotors: &[Rotor], dt: Real) 
         let observed = (v - last_v) / dt - last_thrust - gravity;
         let blend = (dt / limits.disturbance_time.max(dt)).min(1.0);
         let estimate = copter.disturbance + (observed - copter.disturbance) * blend;
-        let along = estimate.dot(up).clamp(-MAX_LIFT_DISTURBANCE * g, MAX_LIFT_DISTURBANCE * g);
+        let along = estimate
+            .dot(up)
+            .clamp(-MAX_LIFT_DISTURBANCE * g, MAX_LIFT_DISTURBANCE * g);
         let across = (estimate - up * estimate.dot(up)).clamp_length_max(g * limits.max_tilt.tan());
         copter.disturbance = across + up * along;
     }
@@ -297,7 +343,12 @@ fn control(scene: &RigidScene, copter: &mut Copter, rotors: &[Rotor], dt: Real) 
             copter.last = Some((v, Vec3::ZERO));
             return Ok(vec![0.0; rotors.len()]);
         }
-        CopterCommand::Velocity { forward, left: side, up: climb, yaw_rate } => {
+        CopterCommand::Velocity {
+            forward,
+            left: side,
+            up: climb,
+            yaw_rate,
+        } => {
             let mut horizontal_v = heading * forward + left * side;
             let speed = horizontal_v.length();
             if speed > limits.max_speed {
@@ -317,10 +368,16 @@ fn control(scene: &RigidScene, copter: &mut Copter, rotors: &[Rotor], dt: Real) 
             let desired = Mat3::from_cols(y.cross(z), y, z);
             (desired, mass.mass * force.dot(fz).max(0.0), yaw_rate)
         }
-        CopterCommand::Attitude { roll, pitch, yaw_rate, climb } => {
+        CopterCommand::Attitude {
+            roll,
+            pitch,
+            yaw_rate,
+            climb,
+        } => {
             let tilt = |a: Real| a.clamp(-limits.max_tilt, limits.max_tilt);
             let level = Mat3::from_cols(heading, left, up);
-            let desired = level * Mat3::from_rotation_y(tilt(pitch)) * Mat3::from_rotation_x(tilt(roll));
+            let desired =
+                level * Mat3::from_rotation_y(tilt(pitch)) * Mat3::from_rotation_x(tilt(roll));
             let climb = climb.clamp(-limits.max_climb, limits.max_climb);
             let vertical = g + (climb - v.dot(up)) * limits.velocity_gain;
             let lift = fz.dot(up).max(0.2);

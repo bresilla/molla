@@ -7,6 +7,28 @@ pub use molla_core as core;
 pub use molla_math as math;
 
 #[cfg(feature = "gpu")]
+mod cone_geometry;
+#[cfg(feature = "gpu")]
+pub use cone_geometry::{
+    ConeGeometryDispatch, ConeGeometryKernel, ConeGpuGeometry, ConeGpuRequest,
+};
+
+#[cfg(feature = "gpu")]
+mod compliant_loop_rows;
+#[cfg(feature = "gpu")]
+pub use compliant_loop_rows::{
+    COMPLIANT_LOOP_ROW_FAULT, CompliantLoopBindings, CompliantLoopDispatch, CompliantLoopKernel,
+    CompliantLoopRequest, CompliantLoopRow,
+};
+
+#[cfg(feature = "gpu")]
+mod quaternion_fk;
+#[cfg(feature = "gpu")]
+pub use quaternion_fk::{
+    GpuQuaternionPair, QuaternionFkBindings, QuaternionFkDispatch, QuaternionFkKernel,
+};
+
+#[cfg(feature = "gpu")]
 mod annotation;
 #[cfg(feature = "gpu")]
 pub use annotation::{AnnotationBindings, AnnotationKernel};
@@ -44,8 +66,6 @@ mod cloud_grid;
 #[cfg(feature = "gpu")]
 pub use cloud_grid::{CloudGridBindings, CloudGridKernel, CloudGridParams};
 #[cfg(feature = "gpu")]
-mod gmres;
-#[cfg(feature = "gpu")]
 mod clamping_dc_motor;
 #[cfg(feature = "gpu")]
 mod clamping_max_effort;
@@ -74,6 +94,8 @@ mod fft;
 #[cfg(feature = "gpu")]
 mod frame_transform;
 #[cfg(feature = "gpu")]
+mod gmres;
+#[cfg(feature = "gpu")]
 mod hydroelastic;
 #[cfg(feature = "gpu")]
 mod implicit_mpm;
@@ -86,6 +108,8 @@ mod jacobian;
 #[cfg(feature = "gpu")]
 mod lidar_scan;
 #[cfg(feature = "gpu")]
+pub mod momentum;
+#[cfg(feature = "gpu")]
 mod muscle;
 #[cfg(feature = "gpu")]
 pub(crate) mod optim_adam;
@@ -96,7 +120,11 @@ mod raycast;
 #[cfg(feature = "gpu")]
 mod raycast_merge;
 #[cfg(feature = "gpu")]
+mod reaction_wrenches;
+#[cfg(feature = "gpu")]
 mod rnea;
+#[cfg(feature = "gpu")]
+pub use reaction_wrenches::{ReactionWrenchBuffers, ReactionWrenchDispatch, ReactionWrenchKernel};
 #[cfg(feature = "gpu")]
 mod robust_loss;
 #[cfg(feature = "gpu")]
@@ -104,25 +132,21 @@ mod scan;
 #[cfg(feature = "gpu")]
 mod scene_bounds;
 #[cfg(feature = "gpu")]
-mod scene_trace;
-#[cfg(feature = "gpu")]
 mod scene_rebuild;
+#[cfg(feature = "gpu")]
+mod scene_trace;
 #[cfg(feature = "gpu")]
 mod sensor_bindings;
 #[cfg(feature = "gpu")]
 mod soft_bvh_gpu;
 #[cfg(feature = "gpu")]
-mod soft_vt_contact;
+pub mod soft_rigid_bounds;
 #[cfg(feature = "gpu")]
 pub mod soft_rigid_contact;
 #[cfg(feature = "gpu")]
-pub mod soft_rigid_bounds;
-#[cfg(feature = "gpu")]
 pub mod soft_rigid_solve;
 #[cfg(feature = "gpu")]
-pub mod tet_volume;
-#[cfg(feature = "gpu")]
-pub mod momentum;
+mod soft_vt_contact;
 #[cfg(feature = "gpu")]
 mod sparse_gpu;
 #[cfg(feature = "gpu")]
@@ -133,6 +157,8 @@ mod sparse_grid_delete;
 pub(crate) mod sparse_grid_insert;
 #[cfg(feature = "gpu")]
 mod splat_raytrace;
+#[cfg(feature = "gpu")]
+pub mod tet_volume;
 #[cfg(feature = "gpu")]
 mod tiled_camera;
 #[cfg(feature = "gpu")]
@@ -183,8 +209,6 @@ pub use barrier_newton::{
 #[cfg(feature = "gpu")]
 pub use bsr_solve::{BsrCgResult, BsrGmresResult, bsr_cg_gpu, bsr_gmres_gpu};
 #[cfg(feature = "gpu")]
-pub use gmres::{GpuGmres, GpuGmresDiagnostics, GpuGmresSettings};
-#[cfg(feature = "gpu")]
 pub use clamping_dc_motor::ClampingDcMotorKernel;
 #[cfg(feature = "gpu")]
 pub use clamping_max_effort::ClampingMaxEffortKernel;
@@ -200,7 +224,7 @@ pub use contact_reduction::{
 #[cfg(feature = "gpu")]
 pub use contact_sensor::{ContactAggregateBindings, ContactAggregateKernel};
 #[cfg(feature = "gpu")]
-pub use crba::MassMatrixKernel;
+pub use crba::{MassMatrixDispatch, MassMatrixKernel};
 #[cfg(feature = "gpu")]
 pub use dahl_friction::DahlFrictionKernel;
 pub use dahl_oracle::{DahlConfig, dahl_oracle_step};
@@ -222,6 +246,8 @@ pub use fft::{Complex32, FftKernel};
 #[cfg(feature = "gpu")]
 pub use frame_transform::{FrameTransformBindings, FrameTransformKernel};
 #[cfg(feature = "gpu")]
+pub use gmres::{GpuGmres, GpuGmresDiagnostics, GpuGmresSettings};
+#[cfg(feature = "gpu")]
 pub use hydroelastic::HydroelasticKernel;
 #[cfg(feature = "gpu")]
 pub use implicit_mpm::{
@@ -241,12 +267,12 @@ pub use imu::{ImuBindings, ImuKernel};
 #[cfg(feature = "gpu")]
 pub use integrate_bodies::IntegrateBodiesKernel;
 #[cfg(feature = "gpu")]
-pub use jacobian::{JacobianKernel, JacobianRequest, jacobian_gpu};
+pub use jacobian::{JacobianDispatch, JacobianKernel, JacobianRequest, jacobian_gpu};
 #[cfg(feature = "gpu")]
 pub use lidar_scan::{LidarScanBindings, LidarScanDescriptor, LidarScanKernel};
 #[cfg(feature = "gpu")]
 pub use molla_compute_primitives::{
-    RadixSortKernel, RadixSortKernel64, radix_sort_pairs, radix_sort_pairs_u64,
+    RadixSortDispatch, RadixSortKernel, RadixSortKernel64, radix_sort_pairs, radix_sort_pairs_u64,
 };
 #[cfg(feature = "gpu")]
 pub use molla_geometry::{
@@ -277,9 +303,9 @@ pub use scan::ScanKernel;
 #[cfg(feature = "gpu")]
 pub use scene_bounds::{SceneBoundsBindings, SceneBoundsKernel};
 #[cfg(feature = "gpu")]
-pub use scene_trace::{SceneTraceBindings, SceneTraceKernel};
-#[cfg(feature = "gpu")]
 pub use scene_rebuild::SceneRebuildKernel;
+#[cfg(feature = "gpu")]
+pub use scene_trace::{SceneTraceBindings, SceneTraceKernel};
 #[cfg(feature = "gpu")]
 pub use soft_bvh_gpu::SoftBvhGpu;
 #[cfg(feature = "gpu")]

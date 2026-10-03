@@ -100,11 +100,14 @@ impl SceneTraceKernel {
             binding: i as u32,
             resource: buffers[i].as_entire_binding(),
         });
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("molla::scene trace immutable params"),
-            contents: bytemuck::cast_slice(&parameters),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("molla::scene trace immutable params"),
+                contents: bytemuck::cast_slice(&parameters),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         SceneTraceBindings {
             buffers: buffers.map(Clone::clone),
             parameters,

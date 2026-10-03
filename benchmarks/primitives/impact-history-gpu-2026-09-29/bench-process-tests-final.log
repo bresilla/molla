@@ -1,0 +1,16 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.51s
+     Running tests/primitives_benchmark_process.rs (target/debug/deps/primitives_benchmark_process-7c41ff5dc874e267)
+
+running 3 tests
+test worker_fixture ... ignored, subprocess fixture invoked by the supervisor tests
+test timed_out_worker_is_terminated_and_reaped ... ok
+test completed_workers_preserve_success_and_failure_status ... ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.20s
+

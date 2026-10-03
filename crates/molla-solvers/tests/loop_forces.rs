@@ -50,7 +50,11 @@ fn loop_joint_does_not_project_and_survives_tree_edits() {
         .unwrap();
     assert_eq!(w.scene.body_pose(b).unwrap(), before);
     assert!(w.scene.joint_index(j).is_none());
-    assert!(w.scene.set_joint_softness(j, None).is_err());
+    w.scene.set_joint_softness(j, None).unwrap();
+    assert_eq!(w.scene.body_pose(b).unwrap(), before);
+    assert_eq!(w.scene.rigid_ball_joints().count(), 1);
+    w.scene.set_joint_softness(j, Some(softness())).unwrap();
+    assert_eq!(w.scene.rigid_ball_joints().count(), 0);
     for _ in 0..120 {
         w.step(1.0 / 120.0).unwrap();
     }

@@ -126,13 +126,16 @@ impl CoupledPatch {
         let mut metadata = [0.0_f32; 207];
         metadata[190] = 1.0;
         let upload = |label, data: &[u8]| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: data,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-            })
+            molla_core::gpu_buffer_init!(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: data,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                }
+            )
         };
         let input = upload(
             "material/contact patch metadata",
@@ -170,8 +173,8 @@ impl CoupledPatch {
             || rows >= 1 << 24
             || particles >= 1 << 24
             || !(1..=64).contains(&dofs)
-            || bindings.contacts.size() % 80 != 0
-            || bindings.rigid_velocity.size() % 4 != 0
+            || !bindings.contacts.size().is_multiple_of(80)
+            || !bindings.rigid_velocity.size().is_multiple_of(4)
             || bindings.rows.size() != rows * 32
             || bindings.projected.size() != rows * 3 * dofs * 4
             || bindings.response.size() != bindings.projected.size()

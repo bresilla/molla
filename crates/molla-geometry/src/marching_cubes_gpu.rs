@@ -47,14 +47,14 @@ pub fn marching_cubes_gpu(
     // SDF grid (f32) + the Lorensen tables, uploaded from the CPU constants.
     let sdf_f32: Vec<f32> = sdf.data.iter().map(|&d| d as f32).collect();
     let sdf_buf = make_storage(&device, "molla::mc sdf", bytemuck::cast_slice(&sdf_f32));
-    queue.write_buffer(&sdf_buf, 0, bytemuck::cast_slice(&sdf_f32));
+    molla_core::gpu_write_buffer!(queue, &sdf_buf, 0, bytemuck::cast_slice(&sdf_f32));
 
     let edge_buf = make_storage(&device, "molla::mc edge", bytemuck::cast_slice(&EDGE_TABLE));
-    queue.write_buffer(&edge_buf, 0, bytemuck::cast_slice(&EDGE_TABLE));
+    molla_core::gpu_write_buffer!(queue, &edge_buf, 0, bytemuck::cast_slice(&EDGE_TABLE));
 
     let tri_flat: Vec<i32> = TRI_TABLE.iter().flatten().map(|&x| x as i32).collect();
     let tri_buf = make_storage(&device, "molla::mc tri", bytemuck::cast_slice(&tri_flat));
-    queue.write_buffer(&tri_buf, 0, bytemuck::cast_slice(&tri_flat));
+    molla_core::gpu_write_buffer!(queue, &tri_buf, 0, bytemuck::cast_slice(&tri_flat));
 
     let mut out_verts = Buffer::from_vec(
         vec![0.0 as Real; cell_count * CELL_STRIDE],
@@ -159,13 +159,16 @@ fn dispatch(
             },
         ],
     });
-    let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("molla::mc uniforms"),
-        size: core::mem::size_of::<Uniforms>() as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+    let uniform_buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("molla::mc uniforms"),
+            size: core::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
+    molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
     let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("molla::mc uniforms bg"),
         layout: &kernel.layout_uniforms,
@@ -254,12 +257,15 @@ impl MarchingCubesKernel {
 
 fn make_storage(device: &wgpu::Device, label: &str, data: &[u8]) -> wgpu::Buffer {
     let size = (data.len().max(16)) as u64;
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+    molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    )
 }
 
 fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntry> {

@@ -1,0 +1,39 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.27s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 2 tests
+test contact_response_gpu::partition_tests::chained_impact_and_friction_partition_contacts_scalars_and_physical_rates ... 
+thread 'contact_response_gpu::partition_tests::chained_impact_and_friction_partition_contacts_scalars_and_physical_rates' (712824) panicked at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-29.0.4/src/backend/wgpu_core.rs:1081:30:
+wgpu error: Validation Error
+
+Caused by:
+  In Device::create_shader_module, label = 'physical response merge'
+    
+Shader 'physical response merge' parsing error: name `active` is a reserved keyword
+   ┌─ wgsl:20:28
+   │
+20 │ fn valid_scalar(s: Scalar, active: bool) -> bool {
+   │                            ^^^^^^ definition of `active`
+
+
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test contact_response_gpu::partition_tests::partition_masks_preserve_joint_only_islands_and_reject_split_graphs ... ok
+
+failures:
+
+failures:
+    contact_response_gpu::partition_tests::chained_impact_and_friction_partition_contacts_scalars_and_physical_rates
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 200 filtered out; finished in 1.89s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:164: test-primitives-impact-partition-gpu] Error 101

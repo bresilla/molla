@@ -45,7 +45,7 @@ impl GlobalContactBridge {
             || !(1..=64).contains(&dofs)
             || dimension > u64::from(u32::MAX)
             || dimension.div_ceil(64) > u64::from(limits.max_compute_workgroups_per_dimension)
-            || dimension * 4 > u64::from(limits.max_storage_buffer_binding_size)
+            || dimension * 4 > limits.max_storage_buffer_binding_size
             || dimension * 4 > limits.max_buffer_size
             || limits.max_storage_buffers_per_shader_stage < 13
             || limits.max_bindings_per_bind_group < 14
@@ -114,14 +114,17 @@ impl GlobalContactBridge {
         .try_into()
         .unwrap();
         let allocate = |label, size| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                mapped_at_creation: false,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    mapped_at_creation: false,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                }
+            )
         };
         let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("global material scale"),
@@ -166,11 +169,14 @@ impl GlobalContactBridge {
         });
         let contacts = allocate("compact Newton contacts", u64::from(capacity) * 80);
         let impulses = allocate("Newton contact multipliers", u64::from(capacity) * 16);
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&[source_rows, capacity, particles, dofs]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&[source_rows, capacity, particles, dofs]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let projection_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("feasible Newton impulses"),
             source: wgpu::ShaderSource::Wgsl(

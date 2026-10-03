@@ -1,0 +1,21 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.89s
+     Running tests/runtime_com_roots.rs (target/debug/deps/runtime_com_roots-d606b3d019b1a690)
+
+running 2 tests
+test gpu_authored_free_and_d6_frames_preserve_free_system_momentum ... authored root Free frames=60 substeps=4 relative momentum errors=[0.00010256808502914725, 6.619318282829433e-5]
+authored root Free frames=120 substeps=4 relative momentum errors=[5.164630381266744e-5, 3.2433949256296376e-5]
+authored root Free frames=240 substeps=4 relative momentum errors=[2.5056724271787793e-5, 1.6510220441413732e-5]
+authored root D6 frames=60 substeps=4 relative momentum errors=[0.00010256808502914725, 6.619318282829433e-5]
+authored root D6 frames=120 substeps=4 relative momentum errors=[5.164630381266744e-5, 3.2433949256296376e-5]
+authored root D6 frames=240 substeps=4 relative momentum errors=[2.5056724271787793e-5, 1.6510220441413732e-5]
+ok
+test gpu_com_edits_reseed_implicit_roots_and_preserve_physical_state ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 32.63s
+

@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.83s
+     Running tests/runtime_contact_reactions_gpu.rs (target/debug/deps/runtime_contact_reactions_gpu-3b22507b7b14d93f)
+
+running 1 test
+test supported_contact_reactions_include_normal_tangent_and_immovable_endpoint_loads ... 
+thread 'supported_contact_reactions_include_normal_tangent_and_immovable_endpoint_loads' (4126838) panicked at crates/molla-solvers/tests/runtime_contact_reactions_gpu.rs:30:10:
+called `Result::unwrap()` on an `Err` value: Build("world joint and immovable body duplicate the root constraint")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    supported_contact_reactions_include_normal_tangent_and_immovable_endpoint_loads
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 31.68s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_contact_reactions_gpu`
+make: *** [Makefile:84: test-gpu] Error 101

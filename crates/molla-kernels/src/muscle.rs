@@ -127,20 +127,26 @@ impl MuscleKernel {
 
         let dof_total = model.joint_dof_total.max(1) as u32;
         let joint_count = model.joint_count as u32;
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::muscle uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let torque_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::muscle joint_muscle_torque"),
-            size: (dof_total as u64) * (core::mem::size_of::<f32>() as u64),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::muscle uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let torque_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::muscle joint_muscle_torque"),
+                size: (dof_total as u64) * (core::mem::size_of::<f32>() as u64),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
 
         Self {
             pipeline_activation,
@@ -174,7 +180,7 @@ impl MuscleKernel {
             dof_total: self.dof_total,
             dt,
         };
-        queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&u));
+        molla_core::gpu_write_buffer!(queue, &self.uniform_buf, 0, bytemuck::bytes_of(&u));
     }
 
     fn make_bind_groups(
@@ -267,6 +273,7 @@ impl MuscleKernel {
             pass.set_bind_group(3, &bg_o, &[]);
             let groups = (model.muscle_count as u32).div_ceil(WORKGROUP_SIZE);
             pass.dispatch_workgroups(groups.max(1), 1, 1);
+            molla_core::gpu_metrics::record_dispatch();
         }
         queue.submit(std::iter::once(encoder.finish()));
         Ok(())
@@ -315,6 +322,7 @@ impl MuscleKernel {
             pass.set_bind_group(3, &bg_o, &[]);
             let groups = (model.joint_count as u32).div_ceil(WORKGROUP_SIZE);
             pass.dispatch_workgroups(groups.max(1), 1, 1);
+            molla_core::gpu_metrics::record_dispatch();
         }
         queue.submit(std::iter::once(encoder.finish()));
         Ok(())

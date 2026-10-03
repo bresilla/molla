@@ -38,7 +38,12 @@ impl NearestHit {
 pub trait RayQuery {
     /// Nearest hits of rays from `origins` along unit `directions` within
     /// `max_distance`, one per ray.
-    fn cast(&mut self, origins: &[Vec3], directions: &[Vec3], max_distance: Real) -> Result<Vec<NearestHit>>;
+    fn cast(
+        &mut self,
+        origins: &[Vec3],
+        directions: &[Vec3],
+        max_distance: Real,
+    ) -> Result<Vec<NearestHit>>;
 }
 
 /// [`RayQuery`] on a [`SensorScene`] with a GPU [`Raycaster`]; each cast
@@ -51,11 +56,27 @@ pub struct SceneRays<'a> {
 }
 
 impl RayQuery for SceneRays<'_> {
-    fn cast(&mut self, origins: &[Vec3], directions: &[Vec3], max_distance: Real) -> Result<Vec<NearestHit>> {
-        let hits = self
-            .raycaster
-            .cast_scene(self.engine, self.scene, self.state, origins, directions, max_distance)?;
-        Ok(hits.iter().map(|h| NearestHit { t: h.t, body: h.body_id }).collect())
+    fn cast(
+        &mut self,
+        origins: &[Vec3],
+        directions: &[Vec3],
+        max_distance: Real,
+    ) -> Result<Vec<NearestHit>> {
+        let hits = self.raycaster.cast_scene(
+            self.engine,
+            self.scene,
+            self.state,
+            origins,
+            directions,
+            max_distance,
+        )?;
+        Ok(hits
+            .iter()
+            .map(|h| NearestHit {
+                t: h.t,
+                body: h.body_id,
+            })
+            .collect())
     }
 }
 
@@ -68,15 +89,25 @@ pub struct RigidRays<'a> {
 }
 
 impl RayQuery for RigidRays<'_> {
-    fn cast(&mut self, origins: &[Vec3], directions: &[Vec3], max_distance: Real) -> Result<Vec<NearestHit>> {
+    fn cast(
+        &mut self,
+        origins: &[Vec3],
+        directions: &[Vec3],
+        max_distance: Real,
+    ) -> Result<Vec<NearestHit>> {
         origins
             .iter()
             .zip(directions)
             .map(|(&origin, &direction)| {
-                let hit = self.caster.cast_ray(self.scene, origin, direction, max_distance)?;
+                let hit = self
+                    .caster
+                    .cast_ray(self.scene, origin, direction, max_distance)?;
                 Ok(hit.map_or(NearestHit::MISS, |h| NearestHit {
                     t: h.distance,
-                    body: h.body.and_then(|b| self.scene.body_index(b)).unwrap_or(BodyId::NONE),
+                    body: h
+                        .body
+                        .and_then(|b| self.scene.body_index(b))
+                        .unwrap_or(BodyId::NONE),
                 }))
             })
             .collect()
@@ -92,9 +123,9 @@ fn with_scene_rays<T>(
     state: &State,
     f: impl FnOnce(&mut SceneRays<'_>) -> Result<T>,
 ) -> Result<T> {
-    let raycaster = raycaster
-        .as_mut()
-        .ok_or_else(|| Error::Build("ray sensor built for a host ray query has no GPU raycaster".into()))?;
+    let raycaster = raycaster.as_mut().ok_or_else(|| {
+        Error::Build("ray sensor built for a host ray query has no GPU raycaster".into())
+    })?;
     f(&mut SceneRays {
         engine,
         raycaster,
@@ -179,7 +210,11 @@ pub fn cone_rays(rays: u32, aperture: Real) -> Vec<Vec3> {
     let half = 0.5 * aperture;
     for i in 0..ring {
         let around = std::f64::consts::TAU * i as Real / ring as Real;
-        out.push(Vec3::new(half.cos(), half.sin() * around.cos(), half.sin() * around.sin()));
+        out.push(Vec3::new(
+            half.cos(),
+            half.sin() * around.cos(),
+            half.sin() * around.sin(),
+        ));
     }
     out
 }
@@ -202,10 +237,17 @@ impl DistanceSensors {
 
     /// Sensors that cast through a host [`RayQuery`] with [`Self::update_with`].
     pub fn host(specs: Vec<DistanceSpec>) -> Result<Self> {
-        if specs.iter().any(|s| s.rays == 0 || !(s.max_range > 0.0) || !s.aperture.is_finite()) {
-            return Err(Error::Build("distance sensor: rays, range or aperture invalid".into()));
+        if specs.iter().any(|s| {
+            s.rays == 0 || s.max_range.is_nan() || s.max_range <= 0.0 || !s.aperture.is_finite()
+        }) {
+            return Err(Error::Build(
+                "distance sensor: rays, range or aperture invalid".into(),
+            ));
         }
-        let rays = specs.iter().map(|s| cone_rays(s.rays, s.aperture)).collect();
+        let rays = specs
+            .iter()
+            .map(|s| cone_rays(s.rays, s.aperture))
+            .collect();
         Ok(Self {
             specs,
             rays,
@@ -226,13 +268,19 @@ impl DistanceSensors {
         poses: &[Transform],
     ) -> Result<Vec<DistanceReading>> {
         let mut raycaster = self.raycaster.take();
-        let out = with_scene_rays(&mut raycaster, engine, scene, state, |rays| self.update_with(rays, poses));
+        let out = with_scene_rays(&mut raycaster, engine, scene, state, |rays| {
+            self.update_with(rays, poses)
+        });
         self.raycaster = raycaster;
         out
     }
 
     /// Readings for sensors at `poses` (world, one per spec).
-    pub fn update_with(&self, query: &mut dyn RayQuery, poses: &[Transform]) -> Result<Vec<DistanceReading>> {
+    pub fn update_with(
+        &self,
+        query: &mut dyn RayQuery,
+        poses: &[Transform],
+    ) -> Result<Vec<DistanceReading>> {
         if poses.len() != self.specs.len() {
             return Err(Error::Build("distance sensor: one pose per sensor".into()));
         }
@@ -250,13 +298,21 @@ impl DistanceSensors {
         for (spec, rays) in self.specs.iter().zip(&self.rays) {
             let own = &hits[offset..offset + rays.len()];
             offset += rays.len();
-            let in_range = |t: Real| if t <= spec.max_range { t } else { Real::INFINITY };
+            let in_range = |t: Real| {
+                if t <= spec.max_range {
+                    t
+                } else {
+                    Real::INFINITY
+                }
+            };
             let (distance, body) = match spec.kind {
                 DistanceKind::Laser => (in_range(own[0].t), own[0].body),
-                DistanceKind::Sonar => own
-                    .iter()
-                    .map(|h| (in_range(h.t), h.body))
-                    .fold((Real::INFINITY, BodyId::NONE), |a, b| if b.0 < a.0 { b } else { a }),
+                DistanceKind::Sonar => own.iter().map(|h| (in_range(h.t), h.body)).fold(
+                    (Real::INFINITY, BodyId::NONE),
+                    |a, b| {
+                        if b.0 < a.0 { b } else { a }
+                    },
+                ),
                 DistanceKind::InfraRed => {
                     let width = (spec.gaussian_width * spec.aperture).max(1e-9);
                     let (mut sum, mut weights) = (0.0, 0.0);
@@ -266,7 +322,14 @@ impl DistanceSensors {
                         weights += w;
                     }
                     let mean = sum / weights;
-                    (if mean < spec.max_range { mean } else { Real::INFINITY }, own[0].body)
+                    (
+                        if mean < spec.max_range {
+                            mean
+                        } else {
+                            Real::INFINITY
+                        },
+                        own[0].body,
+                    )
                 }
             };
             out.push(DistanceReading {
@@ -368,7 +431,9 @@ impl LightSensors {
         if poses.len() != self.lookups.len()
             || poses.len() * environment.sources.len() > self.capacity
         {
-            return Err(Error::Build("light sensor: poses or sources exceed the batch".into()));
+            return Err(Error::Build(
+                "light sensor: poses or sources exceed the batch".into(),
+            ));
         }
         let (mut origins, mut directions, mut reach) = (Vec::new(), Vec::new(), Vec::new());
         for pose in poses {
@@ -405,7 +470,9 @@ impl LightSensors {
                 direct += cos
                     * match *source {
                         LightSource::Directional { irradiance, .. } => irradiance,
-                        LightSource::Point { intensity, .. } => intensity / reach[ray].max(1e-3).powi(2),
+                        LightSource::Point { intensity, .. } => {
+                            intensity / reach[ray].max(1e-3).powi(2)
+                        }
                     };
                 visible += 1;
             }
@@ -479,7 +546,10 @@ pub struct Radars {
     capacity: usize,
 }
 
-fn host_arrays(model: &Model, state: &State) -> Result<(Vec<Transform>, Vec<molla_math::SpatialVector>, Vec<Vec3>)> {
+fn host_arrays(
+    model: &Model,
+    state: &State,
+) -> Result<(Vec<Transform>, Vec<molla_math::SpatialVector>, Vec<Vec3>)> {
     Ok((
         state.body_q.host()?.to_vec(),
         state.body_qd.host()?.to_vec(),
@@ -541,7 +611,9 @@ impl Radars {
         targets: &[RadarTarget],
     ) -> Result<Vec<RadarDetection>> {
         if targets.len() > self.capacity {
-            return Err(Error::Build("radar: more targets than the batch holds".into()));
+            return Err(Error::Build(
+                "radar: more targets than the batch holds".into(),
+            ));
         }
         let (body_q, body_qd, com) = host_arrays(model, state)?;
         let point_velocity = |body: BodyId, at: Vec3| -> Vec3 {
@@ -571,11 +643,14 @@ impl Radars {
             let local = inverse * offset;
             let azimuth = local.y.atan2(local.x);
             let elevation = local.z.atan2(local.x.hypot(local.y));
-            if azimuth.abs() > 0.5 * spec.horizontal_fov || elevation.abs() > 0.5 * spec.vertical_fov {
+            if azimuth.abs() > 0.5 * spec.horizontal_fov
+                || elevation.abs() > 0.5 * spec.vertical_fov
+            {
                 continue;
             }
             let direction = offset / distance;
-            let radial_speed = (point_velocity(target.body, centre) - sensor_velocity).dot(direction);
+            let radial_speed =
+                (point_velocity(target.body, centre) - sensor_velocity).dot(direction);
             if radial_speed.abs() < spec.min_radial_speed {
                 continue;
             }
@@ -632,9 +707,35 @@ pub fn joint_reading(model: &Model, state: &State, joint: usize) -> Result<Joint
     let has_coord = coord[joint + 1] > coord[joint];
     let has_dof = dof[joint + 1] > dof[joint];
     Ok(JointReading {
-        position: if has_coord { q[coord[joint] as usize] } else { 0.0 },
-        velocity: if has_dof { qd[dof[joint] as usize] } else { 0.0 },
+        position: if has_coord {
+            q[coord[joint] as usize]
+        } else {
+            0.0
+        },
+        velocity: if has_dof {
+            qd[dof[joint] as usize]
+        } else {
+            0.0
+        },
     })
+}
+
+/// Range finder (depth camera): a tiled camera that traces only depth,
+/// metres along each pixel ray.
+pub fn range_finder(
+    width: u32,
+    height: u32,
+    fov_y: Real,
+    max_range: Real,
+) -> crate::tiled_camera::TiledCameraConfig {
+    crate::tiled_camera::TiledCameraConfig {
+        width,
+        height,
+        fov_y_radians: fov_y as f32,
+        channels: crate::tiled_camera::CameraChannels::DEPTH,
+        max_distance: max_range as f32,
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]
@@ -670,7 +771,10 @@ mod tests {
 
         let distance = DistanceSensors::host(vec![DistanceSpec::default()]).unwrap();
         let reading = distance.update_with(&mut rays, &[at]).unwrap()[0];
-        assert!((reading.distance - 5.0).abs() < 1e-9 && reading.body == BodyId::NONE, "{reading:?}");
+        assert!(
+            (reading.distance - 5.0).abs() < 1e-9 && reading.body == BodyId::NONE,
+            "{reading:?}"
+        );
 
         let light = LightSensors::host(vec![Vec::new()]);
         let sun = |towards: Vec3| LightEnvironment {
@@ -681,10 +785,17 @@ mod tests {
             sky: 0.0,
             up: Vec3::Z,
         };
-        let shaded = light.update_with(&mut rays, &[at], &sun(Vec3::new(1.0, 0.0, 0.1))).unwrap()[0];
+        let shaded = light
+            .update_with(&mut rays, &[at], &sun(Vec3::new(1.0, 0.0, 0.1)))
+            .unwrap()[0];
         assert_eq!((shaded.visible, shaded.direct), (0, 0.0));
-        let lit = light.update_with(&mut rays, &[at], &sun(Vec3::new(1.0, 0.0, 1.0))).unwrap()[0];
-        assert!(lit.visible == 1 && (lit.direct - 100.0 * 0.5f64.sqrt()).abs() < 1e-9, "{lit:?}");
+        let lit = light
+            .update_with(&mut rays, &[at], &sun(Vec3::new(1.0, 0.0, 1.0)))
+            .unwrap()[0];
+        assert!(
+            lit.visible == 1 && (lit.direct - 100.0 * 0.5f64.sqrt()).abs() < 1e-9,
+            "{lit:?}"
+        );
 
         let radar = RadarSpec {
             horizontal_fov: 1.2,
@@ -695,16 +806,32 @@ mod tests {
             cross_section: 1.0,
         }];
         let seen = Radars::host()
-            .update_with(&mut rays, scene.model(), scene.state(), &radar, at, BodyId::NONE, &target)
+            .update_with(
+                &mut rays,
+                scene.model(),
+                scene.state(),
+                &radar,
+                at,
+                BodyId::NONE,
+                &target,
+            )
             .unwrap();
         let d = 125f64.sqrt();
         assert_eq!(seen.len(), 1, "{seen:?}");
-        assert!((seen[0].distance - d).abs() < 1e-9 && (seen[0].radial_speed - 10.0 / d).abs() < 1e-9);
+        assert!(
+            (seen[0].distance - d).abs() < 1e-9 && (seen[0].radial_speed - 10.0 / d).abs() < 1e-9
+        );
     }
 
     #[test]
     fn lookup_interpolates_and_clamps() {
-        let table = [[0.0, 1000.0], [0.1, 1000.0], [0.2, 400.0], [0.3, 50.0], [0.37, 30.0]];
+        let table = [
+            [0.0, 1000.0],
+            [0.1, 1000.0],
+            [0.2, 400.0],
+            [0.3, 50.0],
+            [0.37, 30.0],
+        ];
         assert_eq!(lookup(&table, 0.05), 1000.0);
         assert!((lookup(&table, 0.15) - 700.0).abs() < 1e-9);
         assert_eq!(lookup(&table, 5.0), 30.0);
@@ -722,23 +849,5 @@ mod tests {
             assert!((ray.length() - 1.0).abs() < 1e-12);
         }
         assert_eq!(cone_rays(1, 0.4), vec![Vec3::X]);
-    }
-}
-
-/// Range finder (depth camera): a tiled camera that traces only depth,
-/// metres along each pixel ray.
-pub fn range_finder(
-    width: u32,
-    height: u32,
-    fov_y: Real,
-    max_range: Real,
-) -> crate::tiled_camera::TiledCameraConfig {
-    crate::tiled_camera::TiledCameraConfig {
-        width,
-        height,
-        fov_y_radians: fov_y as f32,
-        channels: crate::tiled_camera::CameraChannels::DEPTH,
-        max_distance: max_range as f32,
-        ..Default::default()
     }
 }

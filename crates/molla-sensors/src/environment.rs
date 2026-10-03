@@ -260,7 +260,10 @@ mod tests {
             Vec3::new(0.0, 0.0, 1000.0),
         ] {
             let fix = reference.enu_to_geodetic(enu);
-            assert!((reference.geodetic_to_enu(fix) - enu).length() < 1e-6, "{enu:?}");
+            assert!(
+                (reference.geodetic_to_enu(fix) - enu).length() < 1e-6,
+                "{enu:?}"
+            );
         }
         let north = reference.enu_to_geodetic(Vec3::new(0.0, 1000.0, 0.0));
         // One kilometre north is about 0.00899° of latitude at 52°N.
@@ -302,17 +305,30 @@ mod tests {
         assert!((reading.north - Vec3::X).length() < 1e-12);
         assert!(near(reading.heading_rad, 0.0, 1e-12));
         let facing_west = Quat::from_rotation_z(PI);
-        assert!(near(compass(&frame, facing_west).heading_rad, 1.5 * PI, 1e-12));
+        assert!(near(
+            compass(&frame, facing_west).heading_rad,
+            1.5 * PI,
+            1e-12
+        ));
 
-        let attitude = Quat::from_rotation_z(0.3) * Quat::from_rotation_y(0.2) * Quat::from_rotation_x(0.1);
+        let attitude =
+            Quat::from_rotation_z(0.3) * Quat::from_rotation_y(0.2) * Quat::from_rotation_x(0.1);
         let unit = inertial_unit(&frame, attitude);
-        assert!(near(unit.yaw, 0.3, 1e-12) && near(unit.pitch, 0.2, 1e-12) && near(unit.roll, 0.1, 1e-12));
+        assert!(
+            near(unit.yaw, 0.3, 1e-12)
+                && near(unit.pitch, 0.2, 1e-12)
+                && near(unit.roll, 0.1, 1e-12)
+        );
 
         let bevy = WorldFrame::Y_UP_NEG_Z_NORTH;
         // Sensor +X along -Z (north) with +Z up along +Y: yaw 90° in ENU.
         let north_up = Quat::from_mat3(&Mat3::from_cols(Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y));
         let unit = inertial_unit(&bevy, north_up);
-        assert!(near(unit.yaw, FRAC_PI_2, 1e-12) && near(unit.pitch, 0.0, 1e-12) && near(unit.roll, 0.0, 1e-12));
+        assert!(
+            near(unit.yaw, FRAC_PI_2, 1e-12)
+                && near(unit.pitch, 0.0, 1e-12)
+                && near(unit.roll, 0.0, 1e-12)
+        );
         assert!(near(compass(&bevy, north_up).heading_rad, 0.0, 1e-12));
     }
 }

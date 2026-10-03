@@ -1,0 +1,65 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.87s
+     Running tests/featherstone_mixed_distance.rs (target/debug/deps/featherstone_mixed_distance-805e37d04c6df793)
+
+running 2 tests
+test gpu_mixed_radial_intervals_preserve_authored_bounds_and_physical_response ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } dt=0.00001 width=1e-8 cases=48
+mixed_radial_precision case=0 acceleration_error=3.301163336e-7 angular_error=1.293803279e-7 position_error=7.904878272e-18 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=1 acceleration_error=1.521929136e-7 angular_error=9.572866778e-8 position_error=1.903858355e-17 rotation_error=1.200187966e-15 violation=0.000000000e0
+mixed_radial_precision case=2 acceleration_error=3.301163336e-7 angular_error=1.293803279e-7 position_error=7.904878272e-18 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=3 acceleration_error=3.301163336e-7 angular_error=1.293803279e-7 position_error=7.904878272e-18 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=4 acceleration_error=3.301163336e-7 angular_error=1.293803279e-7 position_error=7.904878272e-18 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=5 acceleration_error=1.521929136e-7 angular_error=9.572866778e-8 position_error=1.903858355e-17 rotation_error=1.024239268e-15 violation=0.000000000e0
+mixed_radial_precision case=6 acceleration_error=3.301163336e-7 angular_error=1.293803279e-7 position_error=7.904878272e-18 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=7 acceleration_error=3.301163336e-7 angular_error=1.293803279e-7 position_error=7.904878272e-18 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=8 acceleration_error=1.521929136e-7 angular_error=9.572866778e-8 position_error=1.903858355e-17 rotation_error=1.024239268e-15 violation=0.000000000e0
+mixed_radial_precision case=9 acceleration_error=1.521929136e-7 angular_error=9.572866778e-8 position_error=1.903858355e-17 rotation_error=1.200187966e-15 violation=0.000000000e0
+mixed_radial_precision case=10 acceleration_error=1.521929136e-7 angular_error=9.572866778e-8 position_error=1.903858355e-17 rotation_error=1.200187966e-15 violation=0.000000000e0
+mixed_radial_precision case=11 acceleration_error=1.521929136e-7 angular_error=9.572866778e-8 position_error=1.903858355e-17 rotation_error=1.024239268e-15 violation=0.000000000e0
+mixed_radial_precision case=12 acceleration_error=6.552547864e-8 angular_error=9.491699006e-8 position_error=2.719479911e-15 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=13 acceleration_error=4.278031669e-5 angular_error=1.897059713e-5 position_error=5.511002164e-15 rotation_error=1.402772531e-15 violation=0.000000000e0
+mixed_radial_precision case=14 acceleration_error=2.460038095e-7 angular_error=9.199120720e-8 position_error=1.903635938e-15 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=15 acceleration_error=2.460038095e-7 angular_error=9.199120720e-8 position_error=8.158439733e-16 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=16 acceleration_error=6.552547864e-8 angular_error=9.491699006e-8 position_error=0.000000000e0 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=17 acceleration_error=4.290974144e-5 angular_error=1.891798781e-5 position_error=6.225174051e-15 rotation_error=1.282335003e-15 violation=5.995204333e-15
+mixed_radial_precision case=18 acceleration_error=6.552547864e-8 angular_error=9.491699006e-8 position_error=3.263375893e-15 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=19 acceleration_error=6.552547864e-8 angular_error=9.491699006e-8 position_error=5.438959822e-16 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=20 acceleration_error=4.290974144e-5 angular_error=1.891798781e-5 position_error=6.225174051e-15 rotation_error=1.282335003e-15 violation=5.995204333e-15
+mixed_radial_precision case=21 acceleration_error=4.278031669e-5 angular_error=1.897059713e-5 position_error=5.511002164e-15 rotation_error=1.402772531e-15 violation=5.329070518e-15
+mixed_radial_precision case=22 acceleration_error=4.278031669e-5 angular_error=1.897059713e-5 position_error=5.511002164e-15 rotation_error=1.402772531e-15 violation=5.329070518e-15
+mixed_radial_precision case=23 acceleration_error=4.290974144e-5 angular_error=1.891798781e-5 position_error=6.225174051e-15 rotation_error=1.282335003e-15 violation=5.995204333e-15
+mixed_radial_precision case=24 acceleration_error=1.165270008e-7 angular_error=6.969305843e-8 position_error=2.026970738e-18 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=25 acceleration_error=1.736017391e-7 angular_error=4.567267706e-8 position_error=1.153737247e-17 rotation_error=1.200187966e-15 violation=0.000000000e0
+mixed_radial_precision case=26 acceleration_error=1.165270008e-7 angular_error=6.969305843e-8 position_error=2.026970738e-18 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=27 acceleration_error=1.165270008e-7 angular_error=6.969305843e-8 position_error=2.026970738e-18 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=28 acceleration_error=1.165270008e-7 angular_error=6.969305843e-8 position_error=2.026970738e-18 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=29 acceleration_error=1.736017391e-7 angular_error=4.567267706e-8 position_error=1.153737247e-17 rotation_error=1.024239268e-15 violation=0.000000000e0
+mixed_radial_precision case=30 acceleration_error=1.165270008e-7 angular_error=6.969305843e-8 position_error=2.026970738e-18 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=31 acceleration_error=1.165270008e-7 angular_error=6.969305843e-8 position_error=2.026970738e-18 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=32 acceleration_error=1.736017391e-7 angular_error=4.567267706e-8 position_error=1.153737247e-17 rotation_error=1.024239268e-15 violation=0.000000000e0
+mixed_radial_precision case=33 acceleration_error=1.736017391e-7 angular_error=4.567267706e-8 position_error=1.153737247e-17 rotation_error=1.200187966e-15 violation=0.000000000e0
+mixed_radial_precision case=34 acceleration_error=1.736017391e-7 angular_error=4.567267706e-8 position_error=1.153737247e-17 rotation_error=1.200187966e-15 violation=0.000000000e0
+mixed_radial_precision case=35 acceleration_error=1.736017391e-7 angular_error=4.567267706e-8 position_error=1.153737247e-17 rotation_error=1.024239268e-15 violation=0.000000000e0
+mixed_radial_precision case=36 acceleration_error=7.752684204e-8 angular_error=7.453893700e-8 position_error=2.719479911e-15 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=37 acceleration_error=4.279880992e-5 angular_error=1.881546982e-5 position_error=5.511002164e-15 rotation_error=1.402772531e-15 violation=0.000000000e0
+mixed_radial_precision case=38 acceleration_error=7.752684204e-8 angular_error=7.453893700e-8 position_error=1.903635938e-15 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=39 acceleration_error=7.752684204e-8 angular_error=7.453893700e-8 position_error=8.158439733e-16 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=40 acceleration_error=7.752684204e-8 angular_error=7.453893700e-8 position_error=0.000000000e0 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=41 acceleration_error=4.294489640e-5 angular_error=1.907508650e-5 position_error=6.225174051e-15 rotation_error=1.282335003e-15 violation=5.995204333e-15
+mixed_radial_precision case=42 acceleration_error=7.752684204e-8 angular_error=7.453893700e-8 position_error=3.263375893e-15 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=43 acceleration_error=7.752684204e-8 angular_error=7.453893700e-8 position_error=5.438959822e-16 rotation_error=5.306694624e-16 violation=0.000000000e0
+mixed_radial_precision case=44 acceleration_error=4.294489640e-5 angular_error=1.907508650e-5 position_error=6.225174051e-15 rotation_error=1.282335003e-15 violation=5.995204333e-15
+mixed_radial_precision case=45 acceleration_error=4.279880992e-5 angular_error=1.881546982e-5 position_error=5.511002164e-15 rotation_error=1.402772531e-15 violation=5.329070518e-15
+mixed_radial_precision case=46 acceleration_error=4.279880992e-5 angular_error=1.881546982e-5 position_error=5.511002164e-15 rotation_error=1.402772531e-15 violation=5.329070518e-15
+mixed_radial_precision case=47 acceleration_error=4.294489640e-5 angular_error=1.907508650e-5 position_error=6.225174051e-15 rotation_error=1.282335003e-15 violation=5.995204333e-15
+ok
+test gpu_mixed_stops_keep_slack_distance_free_and_react_at_maximum ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 28.47s
+

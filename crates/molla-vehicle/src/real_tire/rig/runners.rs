@@ -269,13 +269,25 @@ fn evaluate_persistent_inner<T: Terrain + ?Sized, const CACHED: bool>(
     }
     let mut next = history.clone();
     let sanitized = sanitize_brush_params(params);
-    let geometry = (sanitized.radius, sanitized.width, sanitized.segments, sanitized.width_segments);
+    let geometry = (
+        sanitized.radius,
+        sanitized.width,
+        sanitized.segments,
+        sanitized.width_segments,
+    );
     if next.geometry != Some(geometry) {
         next.reset();
         next.geometry = Some(geometry);
-        next.profile = brush_profile(sanitized.radius, sanitized.width, sanitized.segments, sanitized.width_segments);
-        next.cells
-            .resize(sanitized.segments * sanitized.width_segments, TreadBristle::default());
+        next.profile = brush_profile(
+            sanitized.radius,
+            sanitized.width,
+            sanitized.segments,
+            sanitized.width_segments,
+        );
+        next.cells.resize(
+            sanitized.segments * sanitized.width_segments,
+            TreadBristle::default(),
+        );
     }
     let output = evaluate_brush_inner::<T, CACHED>(
         params,
@@ -292,15 +304,30 @@ fn evaluate_persistent_inner<T: Terrain + ?Sized, const CACHED: bool>(
     Ok(output)
 }
 
-fn brush_profile(radius: f64, width: f64, segments: usize, width_segments: usize) -> std::sync::Arc<[[f64; 3]]> {
-    (0..segments).flat_map(|i| {
-        let signed = if i > segments / 2 { i as f64 - segments as f64 } else { i as f64 };
-        let theta = signed * (std::f64::consts::TAU / segments as f64);
-        let (x, y) = (radius * theta.sin(), -radius * theta.cos());
-        (0..width_segments).map(move |strip| {
-            [x, y, ((strip as f64 + 0.5) / width_segments as f64 - 0.5) * width]
+fn brush_profile(
+    radius: f64,
+    width: f64,
+    segments: usize,
+    width_segments: usize,
+) -> std::sync::Arc<[[f64; 3]]> {
+    (0..segments)
+        .flat_map(|i| {
+            let signed = if i > segments / 2 {
+                i as f64 - segments as f64
+            } else {
+                i as f64
+            };
+            let theta = signed * (std::f64::consts::TAU / segments as f64);
+            let (x, y) = (radius * theta.sin(), -radius * theta.cos());
+            (0..width_segments).map(move |strip| {
+                [
+                    x,
+                    y,
+                    ((strip as f64 + 0.5) / width_segments as f64 - 0.5) * width,
+                ]
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn evaluate_brush_impl<T: Terrain + ?Sized>(
@@ -359,10 +386,15 @@ fn evaluate_brush_inner<T: Terrain + ?Sized, const CACHED: bool>(
     let terrain_mu_ref =
         finite_positive_or(terrain.friction(), material.mu_static.max(1.0e-3), 1.0e-6);
 
-    let depths: Vec<_> = profile.iter().map(|&[x, y, z]| {
-        terrain.height(state.hub_pos[0] + heading[0] * x + side[0] * z,
-            state.hub_pos[2] + heading[2] * x + side[2] * z) - (state.hub_pos[1] + y)
-    }).collect();
+    let depths: Vec<_> = profile
+        .iter()
+        .map(|&[x, y, z]| {
+            terrain.height(
+                state.hub_pos[0] + heading[0] * x + side[0] * z,
+                state.hub_pos[2] + heading[2] * x + side[2] * z,
+            ) - (state.hub_pos[1] + y)
+        })
+        .collect();
     if depths.iter().any(|p| !p.is_finite()) {
         return Err("non-finite brush terrain height");
     }
@@ -440,9 +472,8 @@ fn evaluate_brush_inner<T: Terrain + ?Sized, const CACHED: bool>(
         let fn_i = normal_per_area_per_m * penetration * cell_area * camber_pressure_bias;
         let normal_pressure = fn_i / cell_area.max(1.0e-9);
         let (load_mu_factor, load_stiffness_factor) = factors.load(normal_pressure);
-        let shear_k_eff = params.tread_shear_stiffness
-            * load_stiffness_factor
-            * factors.inflation();
+        let shear_k_eff =
+            params.tread_shear_stiffness * load_stiffness_factor * factors.inflation();
         let profile = patch_gain * brush_bristle_profile(local_x, leading_x, patch_extent, arc_len);
         let bristle_disp_long = slip_ratio_cell * params.radius * profile;
         let bristle_disp_lat = lateral_slip_speed_cell / denom_cell * params.radius * profile;
@@ -502,7 +533,11 @@ fn evaluate_brush_inner<T: Terrain + ?Sized, const CACHED: bool>(
             } else {
                 smooth_combined_brush_force(trial_long, trial_lat, static_cap, dynamic_cap)
             };
-        let rolling_direction = if v_long_cell == 0.0 { 0.0 } else { v_long_cell.signum() };
+        let rolling_direction = if v_long_cell == 0.0 {
+            0.0
+        } else {
+            v_long_cell.signum()
+        };
         let rolling_i = cell_material.rolling_resistance * fn_i * rolling_direction;
         rolling_resistance_force += rolling_i;
 

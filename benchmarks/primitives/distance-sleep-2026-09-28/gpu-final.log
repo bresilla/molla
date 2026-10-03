@@ -1,0 +1,17 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.92s
+     Running tests/runtime_distance_sleep.rs (target/debug/deps/runtime_distance_sleep-7f54b115e6421721)
+
+running 3 tests
+test gpu_distance_automatic_sleep_and_fixed_boundary_wake ... ok
+test gpu_distance_kinematic_boundary_matches_cpu_without_model_recompilation ... kinematic distance force=0N one-second CPU/GPU position peak=0.0000018057797907327454, force error peak=0.027872498765952762, impulse error=0.0000537330468774276
+kinematic distance force=8N one-second CPU/GPU position peak=0.00000033434188629101455, force error peak=0.025215406021787942, impulse error=0.00005168842722710477
+ok
+test gpu_distance_sleep_keeps_other_islands_active_and_preserves_nonwaking_edits ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 23.22s
+

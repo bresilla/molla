@@ -54,9 +54,9 @@ use molla::geometry::CollisionPipeline;
 use molla::math::{Quat as MQuat, Vec3 as MVec3};
 use molla::prelude as mp;
 use molla::sensors::{
-    AerialScanMetadata, BodyContactReading, BoundingBox2D, CameraChannels,
-    ContactSensor, ImuMount, ImuReading, ImuSensor, Raycaster,
-    ScanMetadata, SensorCommandBatch, TiledCamera, TiledCameraConfig,
+    AerialScanMetadata, BodyContactReading, BoundingBox2D, CameraChannels, ContactSensor, ImuMount,
+    ImuReading, ImuSensor, Raycaster, ScanMetadata, SensorCommandBatch, TiledCamera,
+    TiledCameraConfig,
 };
 use molla::solvers::{
     FeatherstoneSolver, IkConfig, IkObjective, IkSolver, Solver as _, SphConfig, SphSimulation,
@@ -68,17 +68,20 @@ mod viewer_readback_tests;
 #[cfg(test)]
 mod viewer_sensor_tests;
 
-mod sensor_preview;
-mod viewer_controls;
-mod sensor_timing;
-mod sensor_lab;
-mod lidar_preview;
-mod camera_preview;
 mod annotation_preview;
+mod camera_preview;
+mod lidar_preview;
+mod sensor_lab;
+mod sensor_preview;
+mod sensor_timing;
+mod viewer_controls;
 use annotation_preview::AnnotationPreview;
 use camera_preview::{CameraPreview, CameraRequest};
 use lidar_preview::LidarPreview;
-use sensor_preview::{SensorPreview, ViewerSensorClock, preview_pool_config, sensor_preview_pane, sensor_preview_scroll};
+use sensor_preview::{
+    SensorPreview, ViewerSensorClock, preview_pool_config, sensor_preview_pane,
+    sensor_preview_scroll,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[global_allocator]
@@ -498,12 +501,26 @@ fn main() {
         .add_systems(Update, update_lidar_v2_example.after(step_simulation))
         .add_systems(Update, draw_lidar_v2_gizmos.after(update_lidar_v2_example))
         .add_systems(Update, update_aerial_lidar_example.after(step_simulation))
-        .add_systems(Update, draw_aerial_lidar_gizmos.after(update_aerial_lidar_example))
+        .add_systems(
+            Update,
+            draw_aerial_lidar_gizmos.after(update_aerial_lidar_example),
+        )
         .add_systems(Update, update_solar_sky_example)
         .add_systems(Update, draw_solar_sky_gizmos)
-        .add_systems(Update, update_synth_annotation_example.after(step_simulation))
-        .add_systems(Update, draw_synth_annotation_gizmos.after(update_synth_annotation_example))
-        .add_systems(Update, update_sensor_lab_motion.after(step_simulation).before(sync_transforms))
+        .add_systems(
+            Update,
+            update_synth_annotation_example.after(step_simulation),
+        )
+        .add_systems(
+            Update,
+            draw_synth_annotation_gizmos.after(update_synth_annotation_example),
+        )
+        .add_systems(
+            Update,
+            update_sensor_lab_motion
+                .after(step_simulation)
+                .before(sync_transforms),
+        )
         .add_systems(Update, update_sensor_lab.after(update_sensor_lab_motion))
         .add_systems(Update, draw_sensor_lab.after(update_sensor_lab))
         .add_systems(Update, update_tire_lab_example)
@@ -2114,7 +2131,10 @@ impl Scene {
     ];
 
     fn sensor_only(self) -> bool {
-        matches!(self, Self::LidarV2 | Self::AerialLidarPass | Self::SyntheticAnnotation | Self::SensorLab)
+        matches!(
+            self,
+            Self::LidarV2 | Self::AerialLidarPass | Self::SyntheticAnnotation | Self::SensorLab
+        )
     }
 
     fn label(self) -> &'static str {
@@ -2278,7 +2298,9 @@ impl Scene {
 
     fn description(self) -> &'static str {
         match self {
-            Scene::SensorLab => "A prescribed moving triangle-mesh occluder shares one GPU sensor scene with independently scheduled LiDAR and camera queries. An IMU follows its analytic body velocity. The pane controls rates, scan layout and FOV, displays camera/IMU data and sample timing; colored LiDAR hits reveal occlusion of the stationary sphere. This is a sensing calibration fixture, not a dynamics solver.",
+            Scene::SensorLab => {
+                "A prescribed moving triangle-mesh occluder shares one GPU sensor scene with independently scheduled LiDAR and camera queries. An IMU follows its analytic body velocity. The pane controls rates, scan layout and FOV, displays camera/IMU data and sample timing; colored LiDAR hits reveal occlusion of the stationary sphere. This is a sensing calibration fixture, not a dynamics solver."
+            }
             Scene::Pile => {
                 "Drops a mixed pile of rigid bodies onto the floor to exercise basic contact, friction, and settling. The expected behavior is a noisy stack that loses energy and comes to rest without exploding or drifting away."
             }
@@ -4113,9 +4135,12 @@ impl Sim {
         let queue = self.engine.queue().unwrap().clone();
         for state in [&mut self.state_a, &mut self.state_b] {
             readback_buffer(&mut state.body_q, &device, &queue).expect("reset body pose readback");
-            readback_buffer(&mut state.body_qd, &device, &queue).expect("reset body velocity readback");
-            readback_buffer(&mut state.particle_q, &device, &queue).expect("reset particle position readback");
-            readback_buffer(&mut state.particle_qd, &device, &queue).expect("reset particle velocity readback");
+            readback_buffer(&mut state.body_qd, &device, &queue)
+                .expect("reset body velocity readback");
+            readback_buffer(&mut state.particle_q, &device, &queue)
+                .expect("reset particle position readback");
+            readback_buffer(&mut state.particle_qd, &device, &queue)
+                .expect("reset particle velocity readback");
         }
 
         self.state_a
@@ -4346,7 +4371,9 @@ enum ScriptAction {
 const SCRIPT_DRAG_STEPS: u64 = 8;
 
 fn script_point(text: &str) -> Option<Vec<f32>> {
-    text.split('/').map(|part| part.trim().parse::<f32>().ok()).collect()
+    text.split('/')
+        .map(|part| part.trim().parse::<f32>().ok())
+        .collect()
 }
 
 /// Expands one scripted entry into its per-frame primitive actions.
@@ -4477,13 +4504,20 @@ fn run_viewer_script(
             ScriptAction::Button(pressed) => {
                 pointer.1.write(MouseButtonInput {
                     button: MouseButton::Left,
-                    state: if *pressed { ButtonState::Pressed } else { ButtonState::Released },
+                    state: if *pressed {
+                        ButtonState::Pressed
+                    } else {
+                        ButtonState::Released
+                    },
                     window: window_entity,
                 });
             }
             ScriptAction::Resize(size) => {
                 window.resolution.set(size.x, size.y);
-                eprintln!("viewer script: frame {frame} requested {}x{}", size.x, size.y);
+                eprintln!(
+                    "viewer script: frame {frame} requested {}x{}",
+                    size.x, size.y
+                );
             }
         }
     }
@@ -4771,7 +4805,9 @@ fn step_simulation(
     }
     run.step_once = false;
     if sim.scene.sensor_only() {
-        for _ in 0..SUBSTEPS_PER_FRAME { sim.sensor_clock.advance(); }
+        for _ in 0..SUBSTEPS_PER_FRAME {
+            sim.sensor_clock.advance();
+        }
         return;
     }
     // GPU IK arm scene is purely kinematic; `update_gpu_ik_arm`
@@ -4984,13 +5020,17 @@ fn step_simulation(
         readback_buffer(&mut state_a.body_q, &device, &queue).expect("body pose readback");
         readback_buffer(&mut state_a.body_qd, &device, &queue).expect("body velocity readback");
         if model.joint_dof_total > 0 {
-            readback_buffer(&mut state_a.joint_q, &device, &queue).expect("joint position readback");
-            readback_buffer(&mut state_a.joint_qd, &device, &queue).expect("joint velocity readback");
+            readback_buffer(&mut state_a.joint_q, &device, &queue)
+                .expect("joint position readback");
+            readback_buffer(&mut state_a.joint_qd, &device, &queue)
+                .expect("joint velocity readback");
         }
         // Synchronize device-owned particle results for the renderer.
         if model.particle_count > 0 {
-            readback_buffer(&mut state_a.particle_q, &device, &queue).expect("particle position readback");
-            readback_buffer(&mut state_a.particle_qd, &device, &queue).expect("particle velocity readback");
+            readback_buffer(&mut state_a.particle_q, &device, &queue)
+                .expect("particle position readback");
+            readback_buffer(&mut state_a.particle_qd, &device, &queue)
+                .expect("particle velocity readback");
         }
         total_download_us += d0.elapsed().as_secs_f64() * 1_000_000.0;
         sensor_clock.advance();
@@ -5988,244 +6028,275 @@ fn control_pane(
         let anchor = PaneAnchor::RightRail(RailZone::Start);
         Pane2::new(PANE_SCENE, title, anchor, accent_color)
             .resize(PaneResize::BOTH)
-            .show(ctx, |ui| sensor_preview_scroll(ui, scene, |ui| {
-                scene_description_pane(ui, scene, &mut description_pane);
-                match scene {
-                    Scene::Lidar => lidar_pane(ui, &mut lidar_config, lidar_state),
-                    Scene::Imu => imu_pane(ui, imu_state),
-                    Scene::Contact => contact_pane(ui, contact_state),
-                    Scene::LidarV2 => lidar_v2_pane(ui, &pane_states.lidar_v2),
-                    Scene::AerialLidarPass => aerial_lidar_pane(ui, &pane_states.aerial_lidar),
-                    Scene::SyntheticAnnotation => synth_annotation_pane(ui, &pane_states.annotation),
-                    Scene::SensorLab => sensor_lab_pane(ui, &mut pane_states.sensor_lab),
-                    Scene::Arm => arm_pane(ui, &mut pane_states.arm, &sim, &mut pending),
-                    Scene::Shapes => shapes_pane(ui, &sim),
-                    Scene::GpuIkArm => gpu_ik_pane(ui, &mut pane_states.gpu_ik, &sim),
-                    Scene::GpuNarrowPhase => gpu_np_pane(ui, &mut pane_states.gpu_np, accent_color),
-                    Scene::Camera => camera_pane(ui, &mut pane_states.camera, anchor, accent_color),
-                    Scene::Actuator => actuator_pane(ui, &mut pane_states.actuator),
-                    Scene::Quadrotor => quadrotor_pane(ui, &mut pane_states.quad),
-                    Scene::BroadPhase => gpu_bp_pane(ui, &mut pane_states.gpu_bp, accent_color),
-                    Scene::VbdCloth => {
-                        vbd_cloth_pane(ui, &mut pane_states.vbd, &mut sim, accent_color)
+            .show(ctx, |ui| {
+                sensor_preview_scroll(ui, scene, |ui| {
+                    scene_description_pane(ui, scene, &mut description_pane);
+                    match scene {
+                        Scene::Lidar => lidar_pane(ui, &mut lidar_config, lidar_state),
+                        Scene::Imu => imu_pane(ui, imu_state),
+                        Scene::Contact => contact_pane(ui, contact_state),
+                        Scene::LidarV2 => lidar_v2_pane(ui, &pane_states.lidar_v2),
+                        Scene::AerialLidarPass => aerial_lidar_pane(ui, &pane_states.aerial_lidar),
+                        Scene::SyntheticAnnotation => {
+                            synth_annotation_pane(ui, &pane_states.annotation)
+                        }
+                        Scene::SensorLab => sensor_lab_pane(ui, &mut pane_states.sensor_lab),
+                        Scene::Arm => arm_pane(ui, &mut pane_states.arm, &sim, &mut pending),
+                        Scene::Shapes => shapes_pane(ui, &sim),
+                        Scene::GpuIkArm => gpu_ik_pane(ui, &mut pane_states.gpu_ik, &sim),
+                        Scene::GpuNarrowPhase => {
+                            gpu_np_pane(ui, &mut pane_states.gpu_np, accent_color)
+                        }
+                        Scene::Camera => {
+                            camera_pane(ui, &mut pane_states.camera, anchor, accent_color)
+                        }
+                        Scene::Actuator => actuator_pane(ui, &mut pane_states.actuator),
+                        Scene::Quadrotor => quadrotor_pane(ui, &mut pane_states.quad),
+                        Scene::BroadPhase => gpu_bp_pane(ui, &mut pane_states.gpu_bp, accent_color),
+                        Scene::VbdCloth => {
+                            vbd_cloth_pane(ui, &mut pane_states.vbd, &mut sim, accent_color)
+                        }
+                        Scene::ReferencePendulum => {
+                            reference_pendulum_pane(ui, &mut pane_states.reference_pendulum, &sim)
+                        }
+                        Scene::DiffArm => diff_arm_pane(ui, &mut pane_states.diff_arm),
+                        Scene::DiffArm6 => diff_arm6_pane(ui, &mut pane_states.diff_arm6),
+                        Scene::MeshTools => {
+                            mesh_tools_pane(ui, &mut pane_states.mesh, &mut pending, scene)
+                        }
+                        Scene::NeuralPolicy => neural_policy_pane(ui, &mut pane_states.neural),
+                        Scene::NeuralLstm => neural_lstm_pane(ui, &mut pane_states.neural_lstm),
+                        Scene::Cable => {
+                            cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color)
+                        }
+                        Scene::Mpm => mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color),
+                        Scene::Jelly => jelly_pane(
+                            ui,
+                            &mut pane_states.jelly,
+                            &mut sim,
+                            &mut pending,
+                            accent_color,
+                        ),
+                        Scene::Pendulum => pendulum_pane(ui, &pane_states.pendulum),
+                        Scene::Conveyor => conveyor_pane(ui, &mut pane_states.conveyor),
+                        Scene::ClothBending => {
+                            cloth_bending_pane(ui, &mut pane_states.cloth_bend, &mut pending, scene)
+                        }
+                        Scene::ClothRollers => {
+                            cloth_rollers_pane(ui, &mut warp_states.cloth_rollers)
+                        }
+                        Scene::ClothTwist => cloth_twist_pane(ui, &mut pane_states.cloth_twist),
+                        Scene::CableBundleHysteresis => {
+                            cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color)
+                        }
+                        Scene::MpmSnowBall => {
+                            mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+                        }
+                        Scene::MpmTwoWay => {
+                            mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+                        }
+                        Scene::MpmMultiMaterial => {
+                            mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+                        }
+                        Scene::MpmBeamTwist => {
+                            mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+                        }
+                        Scene::CartPole => {
+                            cartpole_pane(ui, &mut pane_states.cartpole, accent_color)
+                        }
+                        Scene::CartPoleSwarm => cartpole_swarm_pane(ui, &sim),
+                        Scene::FourBar => fourbar_pane(ui, &mut pane_states.fourbar),
+                        Scene::DiffBall => {
+                            diff_ball_pane(ui, &mut pane_states.diff_ball, accent_color)
+                        }
+                        Scene::DiffSpring => {
+                            diff_spring_pane(ui, &mut pane_states.diff_spring, accent_color)
+                        }
+                        Scene::SoftbodyDrop => softbody_drop_pane(ui, &mut sim),
+                        Scene::ClothCollar => cloth_collar_pane(ui, &mut sim),
+                        Scene::FastSoftImpact => fast_soft_impact_pane(ui, &mut sim),
+                        Scene::BarrierCloth
+                        | Scene::PpfCurtain
+                        | Scene::PpfTwist
+                        | Scene::PpfFriction
+                        | Scene::PpfHang
+                        | Scene::PpfStack
+                        | Scene::PpfTrampoline
+                        | Scene::PpfTrapped
+                        | Scene::PpfNeedle
+                        | Scene::PpfBelt
+                        | Scene::PpfNoodle
+                        | Scene::PpfWoven
+                        | Scene::PpfKnot
+                        | Scene::PpfDomino
+                        | Scene::PpfCards
+                        | Scene::PpfCodim
+                        | Scene::PpfFitting
+                        | Scene::PpfRibbon
+                        | Scene::PpfPdrdChain => barrier_cloth_pane(ui, &mut sim),
+                        Scene::SoftBrake => soft_brake_pane(ui, &mut sim),
+                        Scene::FemHeat => fem_heat_pane(ui, &mut pane_states.fem_heat),
+                        Scene::FemHeatP2 => fem_heat_p2_pane(ui, &mut pane_states.fem_heat_p2),
+                        Scene::FemBeam => fem_beam_pane(ui, &mut pane_states.fem_beam),
+                        Scene::FemDiffBeam => {
+                            fem_diff_beam_pane(ui, &mut pane_states.fem_diff_beam)
+                        }
+                        Scene::FemStokes => fem_stokes_pane(ui, &mut pane_states.fem_stokes),
+                        Scene::TireDynamics => {
+                            tire_dynamics_pane(ui, &mut pane_states.tire_dynamics)
+                        }
+                        Scene::TireTraction => {
+                            tire_traction_pane(ui, &mut pane_states.tire_traction, accent_color)
+                        }
+                        Scene::TireRealistic => {
+                            tire_realistic_pane(ui, &mut pane_states.tire_realistic, accent_color)
+                        }
+                        Scene::SoilCompaction => {
+                            soil_compaction_pane(ui, &mut pane_states.soil_compaction)
+                        }
+                        Scene::WarpRaycast => warp_raycast_pane(ui, &mut warp_states.raycast),
+                        Scene::WarpRaymarch => warp_raymarch_pane(ui, &mut warp_states.raymarch),
+                        Scene::WarpMesh => warp_mesh_pane(ui, &mut warp_states.mesh),
+                        Scene::WarpMeshIntersect => {
+                            warp_mesh_intersect_pane(ui, &mut warp_states.mesh_intersect)
+                        }
+                        Scene::WarpSampleMesh => {
+                            warp_sample_mesh_pane(ui, &mut warp_states.sample_mesh)
+                        }
+                        Scene::WarpMarchingCubes => {
+                            warp_marching_cubes_pane(ui, &mut warp_states.marching_cubes)
+                        }
+                        Scene::WarpNvdb => warp_nvdb_pane(ui, &mut warp_states.nvdb),
+                        Scene::WarpDem => warp_dem_pane(ui, &mut warp_states),
+                        Scene::WarpFluid => warp_fluid_pane(ui, &mut warp_states),
+                        Scene::WarpSph => warp_sph_pane(ui, &mut warp_states),
+                        Scene::WarpTileFft => warp_tile_fft_pane(ui, &mut warp_states.tile_fft),
+                        Scene::WarpTileMlp => warp_tile_mlp_pane(ui, &mut warp_states.tile_mlp),
+                        Scene::WarpTileNbody => {
+                            warp_tile_nbody_pane(ui, &mut warp_states.tile_nbody)
+                        }
+                        Scene::WarpTileCholesky => {
+                            warp_tile_cholesky_pane(ui, &mut warp_states.tile_cholesky)
+                        }
+                        Scene::WarpParticleRepulsion => {
+                            warp_repulsion_pane(ui, &mut warp_states.repulsion)
+                        }
+                        Scene::WarpFemDiffusion => {
+                            warp_fem_diffusion_pane(ui, &mut warp_states.fem_diff)
+                        }
+                        Scene::WarpFemDiffusion3D => {
+                            warp_fem_diffusion_3d_pane(ui, &mut warp_states.fem_diff3d)
+                        }
+                        Scene::WarpFemConvDiff => {
+                            warp_fem_convdiff_pane(ui, &mut warp_states.fem_convdiff)
+                        }
+                        Scene::WarpFemConvDiffDg => {
+                            warp_fem_convdiff_dg_pane(ui, &mut warp_states.fem_convdiff_dg)
+                        }
+                        Scene::WarpFemTaylorGreen => {
+                            warp_fem_taylor_pane(ui, &mut warp_states.fem_taylor)
+                        }
+                        Scene::WarpFemKelvinHelmholtz => {
+                            warp_fem_kh_pane(ui, &mut warp_states.fem_kh)
+                        }
+                        Scene::WarpFemStreamlines => {
+                            warp_fem_streamlines_pane(ui, &mut warp_states.fem_streamlines)
+                        }
+                        Scene::WarpFemStokesTransfer => {
+                            warp_fem_stokes_transfer_pane(ui, &mut warp_states.fem_stokes_transfer)
+                        }
+                        Scene::WarpFemDeformedGeometry => {
+                            warp_fem_deformed_pane(ui, &mut warp_states.fem_deformed)
+                        }
+                        Scene::WarpFemDistortion => {
+                            warp_fem_distortion_pane(ui, &mut warp_states.fem_distortion)
+                        }
+                        Scene::WarpFemElasticOpt => {
+                            warp_fem_elastic_opt_pane(ui, &mut warp_states.fem_elastic_opt)
+                        }
+                        Scene::WarpFemMixedElasticity => warp_fem_mixed_elasticity_pane(
+                            ui,
+                            &mut warp_states.fem_mixed_elasticity,
+                        ),
+                        Scene::WarpFemNonconformingContact => warp_fem_nonconforming_contact_pane(
+                            ui,
+                            &mut warp_states.fem_nonconforming_contact,
+                        ),
+                        Scene::WarpFftFluid => warp_fft_fluid_pane(ui, &mut warp_states.fft_fluid),
+                        Scene::WarpDistortion3D => {
+                            warp_distortion_3d_pane(ui, &mut warp_states.distortion_3d)
+                        }
+                        Scene::WarpApicFluid => {
+                            warp_apic_fluid_pane(ui, &mut warp_states.apic_fluid)
+                        }
+                        Scene::WarpWave => warp_wave_pane(ui, &mut warp_states.wave),
+                        Scene::WarpDiffRay => warp_diff_ray_pane(ui, &mut warp_states.diff_ray),
+                        Scene::WarpTileFilter => {
+                            warp_tile_filter_pane(ui, &mut warp_states.tile_filter)
+                        }
+                        Scene::WarpTileCompaction => {
+                            warp_tile_compaction_pane(ui, &mut warp_states.tile_compaction)
+                        }
+                        Scene::AdamLandscape => {
+                            adam_landscape_pane(ui, &mut warp_states.adam_landscape)
+                        }
+                        Scene::WarpTileMatmul => {
+                            warp_tile_matmul_pane(ui, &mut warp_states.tile_matmul)
+                        }
+                        Scene::WarpTileConvolution => {
+                            warp_tile_convolution_pane(ui, &mut warp_states.tile_convolution)
+                        }
+                        Scene::WarpTileMcgp => warp_tile_mcgp_pane(ui, &mut warp_states.tile_mcgp),
+                        Scene::ImplicitMpmBingham => {
+                            implicit_mpm_bingham_pane(ui, &mut warp_states.implicit_mpm_bingham)
+                        }
+                        Scene::WarpStableFluid => {
+                            warp_stable_fluid_pane(ui, &mut warp_states.stable_fluid)
+                        }
+                        Scene::JellyDampingFall => {
+                            jelly_damping_fall_pane(ui, &mut warp_states.jelly_damping)
+                        }
+                        Scene::DgBurgersShock => dg_burgers_pane(ui, &mut warp_states.dg_burgers),
+                        Scene::ShallowWaterDamBreak => {
+                            swe_dam_break_pane(ui, &mut warp_states.swe_dam_break)
+                        }
+                        Scene::ImplicitMpmFull27 => {
+                            implicit_mpm_full27_pane(ui, &mut warp_states.implicit_mpm_full27)
+                        }
+                        Scene::SplatPoseRecovery => {
+                            splat_pose_recovery_pane(ui, &mut warp_states.splat_pose)
+                        }
+                        Scene::AmrHeat => amr_heat_pane(ui, &mut warp_states.amr_heat),
+                        Scene::Magnetostatics => {
+                            magnetostatics_pane(ui, &mut warp_states.magnetostatics)
+                        }
+                        Scene::ClothPokerCards => {
+                            cloth_poker_cards_pane(ui, &mut warp_states.cloth_poker_cards)
+                        }
+                        Scene::SoftbodyHanging => {
+                            softbody_hanging_pane(ui, &mut warp_states.softbody_hanging)
+                        }
+                        Scene::CableTwist => cable_twist_pane(ui, &mut warp_states.cable_twist),
+                        Scene::IkCustom => ik_custom_pane(ui, &mut warp_states.ik_custom),
+                        Scene::IkCubeStacking => {
+                            ik_cube_stacking_pane(ui, &mut warp_states.ik_cube_stacking)
+                        }
+                        Scene::DiffsimDrone => {
+                            diffsim_drone_pane(ui, &mut warp_states.diffsim_drone)
+                        }
+                        Scene::FluidCheckpointOptimization => {
+                            fluid_checkpoint_pane(ui, &mut warp_states.fluid_checkpoint)
+                        }
+                        Scene::NavierStokesPerturbationOptimization => {
+                            ns_perturbation_pane(ui, &mut warp_states.ns_perturbation)
+                        }
+                        Scene::WarpFftPoisson2d => {
+                            warp_fft_poisson_2d_pane(ui, &mut warp_states.fft_poisson_2d)
+                        }
+                        _ => {}
                     }
-                    Scene::ReferencePendulum => {
-                        reference_pendulum_pane(ui, &mut pane_states.reference_pendulum, &sim)
-                    }
-                    Scene::DiffArm => diff_arm_pane(ui, &mut pane_states.diff_arm),
-                    Scene::DiffArm6 => diff_arm6_pane(ui, &mut pane_states.diff_arm6),
-                    Scene::MeshTools => {
-                        mesh_tools_pane(ui, &mut pane_states.mesh, &mut pending, scene)
-                    }
-                    Scene::NeuralPolicy => neural_policy_pane(ui, &mut pane_states.neural),
-                    Scene::NeuralLstm => neural_lstm_pane(ui, &mut pane_states.neural_lstm),
-                    Scene::Cable => cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color),
-                    Scene::Mpm => mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color),
-                    Scene::Jelly => jelly_pane(
-                        ui,
-                        &mut pane_states.jelly,
-                        &mut sim,
-                        &mut pending,
-                        accent_color,
-                    ),
-                    Scene::Pendulum => pendulum_pane(ui, &pane_states.pendulum),
-                    Scene::Conveyor => conveyor_pane(ui, &mut pane_states.conveyor),
-                    Scene::ClothBending => {
-                        cloth_bending_pane(ui, &mut pane_states.cloth_bend, &mut pending, scene)
-                    }
-                    Scene::ClothRollers => cloth_rollers_pane(ui, &mut warp_states.cloth_rollers),
-                    Scene::ClothTwist => cloth_twist_pane(ui, &mut pane_states.cloth_twist),
-                    Scene::CableBundleHysteresis => {
-                        cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color)
-                    }
-                    Scene::MpmSnowBall => {
-                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
-                    }
-                    Scene::MpmTwoWay => mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color),
-                    Scene::MpmMultiMaterial => {
-                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
-                    }
-                    Scene::MpmBeamTwist => {
-                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
-                    }
-                    Scene::CartPole => cartpole_pane(ui, &mut pane_states.cartpole, accent_color),
-                    Scene::CartPoleSwarm => cartpole_swarm_pane(ui, &sim),
-                    Scene::FourBar => fourbar_pane(ui, &mut pane_states.fourbar),
-                    Scene::DiffBall => diff_ball_pane(ui, &mut pane_states.diff_ball, accent_color),
-                    Scene::DiffSpring => {
-                        diff_spring_pane(ui, &mut pane_states.diff_spring, accent_color)
-                    }
-                    Scene::SoftbodyDrop => softbody_drop_pane(ui, &mut sim),
-                    Scene::ClothCollar => cloth_collar_pane(ui, &mut sim),
-                    Scene::FastSoftImpact => fast_soft_impact_pane(ui, &mut sim),
-                    Scene::BarrierCloth
-                    | Scene::PpfCurtain
-                    | Scene::PpfTwist
-                    | Scene::PpfFriction
-                    | Scene::PpfHang
-                    | Scene::PpfStack
-                    | Scene::PpfTrampoline
-                    | Scene::PpfTrapped
-                    | Scene::PpfNeedle
-                    | Scene::PpfBelt
-                    | Scene::PpfNoodle
-                    | Scene::PpfWoven
-                    | Scene::PpfKnot
-                    | Scene::PpfDomino
-                    | Scene::PpfCards
-                    | Scene::PpfCodim
-                    | Scene::PpfFitting
-                    | Scene::PpfRibbon
-                    | Scene::PpfPdrdChain => barrier_cloth_pane(ui, &mut sim),
-                    Scene::SoftBrake => soft_brake_pane(ui, &mut sim),
-                    Scene::FemHeat => fem_heat_pane(ui, &mut pane_states.fem_heat),
-                    Scene::FemHeatP2 => fem_heat_p2_pane(ui, &mut pane_states.fem_heat_p2),
-                    Scene::FemBeam => fem_beam_pane(ui, &mut pane_states.fem_beam),
-                    Scene::FemDiffBeam => fem_diff_beam_pane(ui, &mut pane_states.fem_diff_beam),
-                    Scene::FemStokes => fem_stokes_pane(ui, &mut pane_states.fem_stokes),
-                    Scene::TireDynamics => tire_dynamics_pane(ui, &mut pane_states.tire_dynamics),
-                    Scene::TireTraction => {
-                        tire_traction_pane(ui, &mut pane_states.tire_traction, accent_color)
-                    }
-                    Scene::TireRealistic => {
-                        tire_realistic_pane(ui, &mut pane_states.tire_realistic, accent_color)
-                    }
-                    Scene::SoilCompaction => {
-                        soil_compaction_pane(ui, &mut pane_states.soil_compaction)
-                    }
-                    Scene::WarpRaycast => warp_raycast_pane(ui, &mut warp_states.raycast),
-                    Scene::WarpRaymarch => warp_raymarch_pane(ui, &mut warp_states.raymarch),
-                    Scene::WarpMesh => warp_mesh_pane(ui, &mut warp_states.mesh),
-                    Scene::WarpMeshIntersect => {
-                        warp_mesh_intersect_pane(ui, &mut warp_states.mesh_intersect)
-                    }
-                    Scene::WarpSampleMesh => {
-                        warp_sample_mesh_pane(ui, &mut warp_states.sample_mesh)
-                    }
-                    Scene::WarpMarchingCubes => {
-                        warp_marching_cubes_pane(ui, &mut warp_states.marching_cubes)
-                    }
-                    Scene::WarpNvdb => warp_nvdb_pane(ui, &mut warp_states.nvdb),
-                    Scene::WarpDem => warp_dem_pane(ui, &mut warp_states),
-                    Scene::WarpFluid => warp_fluid_pane(ui, &mut warp_states),
-                    Scene::WarpSph => warp_sph_pane(ui, &mut warp_states),
-                    Scene::WarpTileFft => warp_tile_fft_pane(ui, &mut warp_states.tile_fft),
-                    Scene::WarpTileMlp => warp_tile_mlp_pane(ui, &mut warp_states.tile_mlp),
-                    Scene::WarpTileNbody => warp_tile_nbody_pane(ui, &mut warp_states.tile_nbody),
-                    Scene::WarpTileCholesky => {
-                        warp_tile_cholesky_pane(ui, &mut warp_states.tile_cholesky)
-                    }
-                    Scene::WarpParticleRepulsion => {
-                        warp_repulsion_pane(ui, &mut warp_states.repulsion)
-                    }
-                    Scene::WarpFemDiffusion => {
-                        warp_fem_diffusion_pane(ui, &mut warp_states.fem_diff)
-                    }
-                    Scene::WarpFemDiffusion3D => {
-                        warp_fem_diffusion_3d_pane(ui, &mut warp_states.fem_diff3d)
-                    }
-                    Scene::WarpFemConvDiff => {
-                        warp_fem_convdiff_pane(ui, &mut warp_states.fem_convdiff)
-                    }
-                    Scene::WarpFemConvDiffDg => {
-                        warp_fem_convdiff_dg_pane(ui, &mut warp_states.fem_convdiff_dg)
-                    }
-                    Scene::WarpFemTaylorGreen => {
-                        warp_fem_taylor_pane(ui, &mut warp_states.fem_taylor)
-                    }
-                    Scene::WarpFemKelvinHelmholtz => warp_fem_kh_pane(ui, &mut warp_states.fem_kh),
-                    Scene::WarpFemStreamlines => {
-                        warp_fem_streamlines_pane(ui, &mut warp_states.fem_streamlines)
-                    }
-                    Scene::WarpFemStokesTransfer => {
-                        warp_fem_stokes_transfer_pane(ui, &mut warp_states.fem_stokes_transfer)
-                    }
-                    Scene::WarpFemDeformedGeometry => {
-                        warp_fem_deformed_pane(ui, &mut warp_states.fem_deformed)
-                    }
-                    Scene::WarpFemDistortion => {
-                        warp_fem_distortion_pane(ui, &mut warp_states.fem_distortion)
-                    }
-                    Scene::WarpFemElasticOpt => {
-                        warp_fem_elastic_opt_pane(ui, &mut warp_states.fem_elastic_opt)
-                    }
-                    Scene::WarpFemMixedElasticity => {
-                        warp_fem_mixed_elasticity_pane(ui, &mut warp_states.fem_mixed_elasticity)
-                    }
-                    Scene::WarpFemNonconformingContact => warp_fem_nonconforming_contact_pane(
-                        ui,
-                        &mut warp_states.fem_nonconforming_contact,
-                    ),
-                    Scene::WarpFftFluid => warp_fft_fluid_pane(ui, &mut warp_states.fft_fluid),
-                    Scene::WarpDistortion3D => {
-                        warp_distortion_3d_pane(ui, &mut warp_states.distortion_3d)
-                    }
-                    Scene::WarpApicFluid => warp_apic_fluid_pane(ui, &mut warp_states.apic_fluid),
-                    Scene::WarpWave => warp_wave_pane(ui, &mut warp_states.wave),
-                    Scene::WarpDiffRay => warp_diff_ray_pane(ui, &mut warp_states.diff_ray),
-                    Scene::WarpTileFilter => {
-                        warp_tile_filter_pane(ui, &mut warp_states.tile_filter)
-                    }
-                    Scene::WarpTileCompaction => {
-                        warp_tile_compaction_pane(ui, &mut warp_states.tile_compaction)
-                    }
-                    Scene::AdamLandscape => {
-                        adam_landscape_pane(ui, &mut warp_states.adam_landscape)
-                    }
-                    Scene::WarpTileMatmul => {
-                        warp_tile_matmul_pane(ui, &mut warp_states.tile_matmul)
-                    }
-                    Scene::WarpTileConvolution => {
-                        warp_tile_convolution_pane(ui, &mut warp_states.tile_convolution)
-                    }
-                    Scene::WarpTileMcgp => warp_tile_mcgp_pane(ui, &mut warp_states.tile_mcgp),
-                    Scene::ImplicitMpmBingham => {
-                        implicit_mpm_bingham_pane(ui, &mut warp_states.implicit_mpm_bingham)
-                    }
-                    Scene::WarpStableFluid => {
-                        warp_stable_fluid_pane(ui, &mut warp_states.stable_fluid)
-                    }
-                    Scene::JellyDampingFall => {
-                        jelly_damping_fall_pane(ui, &mut warp_states.jelly_damping)
-                    }
-                    Scene::DgBurgersShock => dg_burgers_pane(ui, &mut warp_states.dg_burgers),
-                    Scene::ShallowWaterDamBreak => {
-                        swe_dam_break_pane(ui, &mut warp_states.swe_dam_break)
-                    }
-                    Scene::ImplicitMpmFull27 => {
-                        implicit_mpm_full27_pane(ui, &mut warp_states.implicit_mpm_full27)
-                    }
-                    Scene::SplatPoseRecovery => {
-                        splat_pose_recovery_pane(ui, &mut warp_states.splat_pose)
-                    }
-                    Scene::AmrHeat => amr_heat_pane(ui, &mut warp_states.amr_heat),
-                    Scene::Magnetostatics => {
-                        magnetostatics_pane(ui, &mut warp_states.magnetostatics)
-                    }
-                    Scene::ClothPokerCards => {
-                        cloth_poker_cards_pane(ui, &mut warp_states.cloth_poker_cards)
-                    }
-                    Scene::SoftbodyHanging => {
-                        softbody_hanging_pane(ui, &mut warp_states.softbody_hanging)
-                    }
-                    Scene::CableTwist => cable_twist_pane(ui, &mut warp_states.cable_twist),
-                    Scene::IkCustom => ik_custom_pane(ui, &mut warp_states.ik_custom),
-                    Scene::IkCubeStacking => {
-                        ik_cube_stacking_pane(ui, &mut warp_states.ik_cube_stacking)
-                    }
-                    Scene::DiffsimDrone => diffsim_drone_pane(ui, &mut warp_states.diffsim_drone),
-                    Scene::FluidCheckpointOptimization => {
-                        fluid_checkpoint_pane(ui, &mut warp_states.fluid_checkpoint)
-                    }
-                    Scene::NavierStokesPerturbationOptimization => {
-                        ns_perturbation_pane(ui, &mut warp_states.ns_perturbation)
-                    }
-                    Scene::WarpFftPoisson2d => {
-                        warp_fft_poisson_2d_pane(ui, &mut warp_states.fft_poisson_2d)
-                    }
-                    _ => {}
-                }
-            }));
+                })
+            });
     }
 }
 

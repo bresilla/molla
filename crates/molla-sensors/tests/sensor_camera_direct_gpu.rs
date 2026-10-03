@@ -608,8 +608,15 @@ fn cancellation_bad_inputs_empty_scene_and_device_loss_do_not_publish_old_images
     {
         let mut batch = SensorCommandBatch::new(&engine).unwrap();
         assert!(
-            c.encode_scene(&mut batch, &engine, &scene, &state, &mut foreign_pool, stamp(0))
-                .is_err()
+            c.encode_scene(
+                &mut batch,
+                &engine,
+                &scene,
+                &state,
+                &mut foreign_pool,
+                stamp(0)
+            )
+            .is_err()
         );
         assert!(batch.submit().unwrap().index.is_none());
     }

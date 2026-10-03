@@ -1,0 +1,43 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.08s
+     Running tests/runtime_distance_gpu.rs (target/debug/deps/runtime_distance_gpu-5313068753ba1220)
+
+running 9 tests
+test hardware_engine::hardware_engine_identity_is_shared_within_the_test_executable ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_distance_gpu_offset_rotated_frames_full_inertia_and_loop ... 
+thread 'runtime_distance_gpu_offset_rotated_frames_full_inertia_and_loop' (3579623) panicked at crates/molla-solvers/tests/runtime_distance_gpu.rs:268:9:
+redundant row reactions at frame 0: CPU DVec3(1.323363087698703, -0.6617265323132526, 0.13239186962909116), GPU DVec3(2.6929666996002197, -1.3465287685394287, 0.26935264468193054); peak position=0.000000025064683919310624
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test runtime_distance_gpu_resolves_anchors_with_identical_position_high_parts ... ok
+test runtime_distance_gpu_resolves_sub_ulp_bound_gaps ... ok
+test runtime_distance_gpu_retains_warm_resources_and_tracks_mutation ... 
+thread 'runtime_distance_gpu_retains_warm_resources_and_tracks_mutation' (3583978) panicked at crates/molla-solvers/tests/runtime_distance_gpu.rs:468:5:
+assertion `left == right` failed
+  left: 33
+ right: 29
+FAILED
+test runtime_distance_gpu_scalar_stop_couples_to_other_articulation ... ok
+test runtime_distance_gpu_shared_response_and_independent_bounds ... ok
+test runtime_distance_gpu_world_pendulum_ten_seconds_and_short_parity ... GPU distance pendulum dt=0.016666666666666666 substeps=8 duration=10s peak=0.00004368619578998256 one-second-parity=0.0000002604374182225006
+GPU distance pendulum dt=0.008333333333333333 substeps=8 duration=10s peak=0.000010945252770566682 one-second-parity=0.0000012470209793607734
+GPU distance pendulum dt=0.004166666666666667 substeps=8 duration=10s peak=0.0000027554345281011194 one-second-parity=0.0000006026849030206428
+ok
+test runtime_distance_gpu_zero_equality_failure_and_resume_are_atomic ... ok
+
+failures:
+
+failures:
+    runtime_distance_gpu_offset_rotated_frames_full_inertia_and_loop
+    runtime_distance_gpu_retains_warm_resources_and_tracks_mutation
+
+test result: FAILED. 7 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 407.81s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_distance_gpu`
+make: *** [Makefile:170: test-gpu] Error 101

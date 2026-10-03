@@ -138,7 +138,7 @@ fn native_scale_contact_preparation_has_bounded_completion_and_correct_response(
             quadratic(&j, &j, &lower, n)
         })
         .collect();
-    let native_rows = (128 * 1024 * 1024 / (3 * n * 4)) as usize;
+    let native_rows = 128 * 1024 * 1024 / (3 * n * 4);
     for (count, dense) in [(65, true), (native_rows, false), (native_rows, true)] {
         let mut contacts = vec![absent; count];
         for r in 0..count {

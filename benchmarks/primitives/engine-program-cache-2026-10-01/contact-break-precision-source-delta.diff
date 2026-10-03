@@ -1,0 +1,11 @@
+--- benchmarks/primitives/engine-program-cache-2026-10-01/fixed-reaction-source-sha256.txt	2026-10-02 16:12:27.260314889 +0200
++++ benchmarks/primitives/engine-program-cache-2026-10-01/contact-break-precision-source-sha256.txt	2026-10-02 16:47:05.176785901 +0200
+@@ -1191,7 +1191,7 @@
+ 7398f07c9e15d7730dd21255819e4884784bf23baa1478801d1a15882c1ce83e  crates/molla-solvers/tests/runtime_cone_capability.rs
+ 1398924b3ee3dec5701847b1250ca5da658aa73133a6992ad18f861204448121  crates/molla-solvers/tests/runtime_cone_limits.rs
+ 9b397411a8bae288467f0bca1f75cd672af77ae98878a1475a5f6ece1fce6654  crates/molla-solvers/tests/runtime_constraint_readout.rs
+-037c01608c00c7fe86a1c10e2ae388ea25f1a2e3b707fe8ed92a6c01d366ac62  crates/molla-solvers/tests/runtime_contact_breakage_gpu.rs
++454bf0c80d81b5f2b0f6ff1987767e55d072a0258c375262d8de997812a22a7e  crates/molla-solvers/tests/runtime_contact_breakage_gpu.rs
+ 6ba3e5a5549850cfc38ba024cef09fa5b349fb09111b95b9c8abd6345f85b178  crates/molla-solvers/tests/runtime_contact_reactions_gpu.rs
+ 4c9e5de39e1c5366a8f93d3b256029c55a411fc7dc94fecfa857db67873c3ecb  crates/molla-solvers/tests/runtime_contact_sleep.rs
+ a24591f9bc7f91041bda0a336833b5d0e2f42a014c9d24349d39f49ca838276a  crates/molla-solvers/tests/runtime_contacts_gpu.rs

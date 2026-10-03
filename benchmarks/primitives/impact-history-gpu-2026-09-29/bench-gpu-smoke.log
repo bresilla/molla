@@ -1,0 +1,51 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `release` profile [optimized] target(s) in 0.09s
+     Running benches/runtime_primitives.rs (target/release/deps/runtime_primitives-c87dd9596ff6fd06)
+benchmark_schema=2	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	build_profile=release
+case_process_start	primitive=distance	instances=1	backend=gpu
+benchmark_schema=2	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=distance	instances=1	backend=gpu
+case_ok	primitive=distance	instances=1	backend=gpu	bodies=1	articulations=1	warmup=2	steps=4	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=33.915723559	wall_seconds=0.018845255	max_step_seconds=0.004749234	device_timeline_seconds=Some(0.018868224000000003)	state_upload_bytes=592	state_readout_bytes=2720	boundary_buffer_bytes=529984	boundary_allocations=0	model_compilations=Some(2)	break_events=0	encoded_dispatches=144	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=cone	instances=1	backend=gpu
+benchmark_schema=2	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=cone	instances=1	backend=gpu
+case_ok	primitive=cone	instances=1	backend=gpu	bodies=1	articulations=1	warmup=2	steps=4	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=33.918335190	wall_seconds=0.017035478	max_step_seconds=0.004279873	device_timeline_seconds=Some(0.017052672)	state_upload_bytes=496	state_readout_bytes=2624	boundary_buffer_bytes=529152	boundary_allocations=0	model_compilations=Some(2)	break_events=0	encoded_dispatches=144	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=d6	instances=1	backend=gpu
+benchmark_schema=2	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=d6	instances=1	backend=gpu
+Error: "warmup step 0: solver error: GPU stable feedback requires scalar drive coordinates"
+case_process_error	primitive=d6	instances=1	backend=gpu	status=exit status: 1
+case_process_start	primitive=reaction	instances=1	backend=gpu
+benchmark_schema=2	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=reaction	instances=1	backend=gpu
+case_ok	primitive=reaction	instances=1	backend=gpu	bodies=1	articulations=1	warmup=2	steps=4	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=33.461985936	wall_seconds=0.006019929	max_step_seconds=0.001528630	device_timeline_seconds=Some(0.006034432)	state_upload_bytes=384	state_readout_bytes=2384	boundary_buffer_bytes=527728	boundary_allocations=0	model_compilations=Some(2)	break_events=0	encoded_dispatches=80	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=break	instances=1	backend=gpu
+benchmark_schema=2	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=break	instances=1	backend=gpu
+case_ok	primitive=break	instances=1	backend=gpu	bodies=1	articulations=1	warmup=2	steps=4	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=33.869841448	wall_seconds=0.026323972	max_step_seconds=0.014410291	device_timeline_seconds=Some(0.026340352)	state_upload_bytes=584	state_readout_bytes=2152	boundary_buffer_bytes=527776	boundary_allocations=0	model_compilations=Some(4)	break_events=1	encoded_dispatches=97	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=friction	instances=1	backend=gpu
+benchmark_schema=2	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=friction	instances=1	backend=gpu
+case_ok	primitive=friction	instances=1	backend=gpu	bodies=1	articulations=1	warmup=2	steps=4	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=36.922372026	wall_seconds=0.061089950	max_step_seconds=0.015720216	device_timeline_seconds=Some(0.061403136000000004)	state_upload_bytes=592	state_readout_bytes=233056	boundary_buffer_bytes=671328	boundary_allocations=0	model_compilations=Some(2)	break_events=0	encoded_dispatches=1680	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_process_start	primitive=mixed	instances=1	backend=gpu
+benchmark_schema=2	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=mixed	instances=1	backend=gpu
+Error: "warmup step 0: solver error: GPU stable feedback requires scalar drive coordinates"
+case_process_error	primitive=mixed	instances=1	backend=gpu	status=exit status: 1
+Error: "one or more primitive benchmark cases failed; see case_process_error records"
+error: bench failed, to rerun pass `-p molla-solvers --bench runtime_primitives`
+
+Caused by:
+  process didn't exit successfully: `/home/bresilla/data/code/OUSD/molla/target/release/deps/runtime_primitives-c87dd9596ff6fd06 --backend gpu --counts 1 --warmup 2 --steps 4 --bench` (exit status: 1)
+make: *** [Makefile:339: bench-primitives] Error 1

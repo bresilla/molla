@@ -1,0 +1,76 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/radix_sort_gpu.rs (target/debug/deps/radix_sort_gpu-04d0e3ea97727d3c)
+
+running 8 tests
+test radix_sort_all_equal_keys_preserves_order ... ok
+test radix_sort_already_sorted_input_is_idempotent ... ok
+test radix_sort_high_byte_only_keys ... ok
+test radix_sort_paired_duplicates_are_stable ... ok
+test radix_sort_random_100k_matches_reference ... ok
+test radix_sort_random_1k_matches_reference ... ok
+test radix_sort_reverse_sorted_input_works ... ok
+test retained_sorts_keep_independent_uniforms_and_scratch_across_queued_updates ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.71s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.43s
+     Running tests/contact_islands_gpu.rs (target/debug/deps/contact_islands_gpu-26ebfd66d59f4e30)
+
+running 4 tests
+test contact_island_faults_retire_outputs_and_reset_at_explicit_boundary ... ok
+test deterministic_contact_islands_match_cpu_across_100_queued_graph_changes ... ok
+test mixed_joint_contact_graphs_preserve_joint_only_and_boundary_only_islands ... ok
+test reversed_cross_workgroup_chains_keep_one_whole_articulation_component ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.45s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 8 tests
+test coupled_constraint_gpu::tests::bilateral_coupling_prevents_premature_sliding ... ok
+test coupled_constraint_gpu::tests::contradictory_bilateral_rows_fail_closed ... ok
+test coupled_constraint_gpu::tests::manufactured_mixed_kkt_permutations_cross_workgroups ... ok
+test coupled_constraint_gpu::tests::mixed_constraints_match_analytic_impulses_across_scales ... ok
+test coupled_constraint_gpu::tests::mixed_constructor_rejects_invalid_domain_buffers_and_capacity ... ok
+test coupled_constraint_gpu::tests::retained_device_sequence_changes_domains_counts_and_status ... ok
+test coupled_constraint_gpu::tests::sticky_faults_retire_and_recover_mixed_outputs ... ok
+test coupled_constraint_gpu::tests::zero_response_scalar_domains_fail_only_when_unbounded ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 116 filtered out; finished in 6.51s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 6 tests
+test coulomb_disk_gpu::tests::coupled_disk_gpu_device_sequence_regimes_and_contact_retirement ... ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_matches_cpu_and_retires_batched_island_slots ... coupled disk batch: peak iterations=23
+ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_rotations_permutations_and_reciprocal_scales ... disk basis/permutation/scale: 30 cases, peak host KKT=9.977477124566751e-8
+ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_validation_sticky_faults_and_reset ... ok
+test coulomb_disk_gpu::tests::nearly_loaded_static_disks_cancel_slip_across_scales_and_directions ... nearly loaded static peak slip=6.717164069414139e-8
+ok
+test coulomb_disk_gpu::tests::rounded_disk_boundary_gap_matches_f64 ... disk boundary squared-gap peak error=1.9210221126225147e-14
+ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 118 filtered out; finished in 3.48s
+

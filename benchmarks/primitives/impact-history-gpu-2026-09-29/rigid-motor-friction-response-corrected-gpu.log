@@ -1,0 +1,39 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.75s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 7 tests
+test contact_response_gpu::coupled_tests::bounded_feedback_response_preserves_contact_capacity_and_physical_mass_response ... ok
+test contact_response_gpu::coupled_tests::common_articulated_response_matches_mixed_analytic_solution ... ok
+test contact_response_gpu::coupled_tests::device_generated_distance_rows_share_contact_response_without_double_prediction ... ok
+test contact_response_gpu::coupled_tests::device_generated_locked_cone_rows_share_off_center_contact_response ... ok
+test contact_response_gpu::coupled_tests::device_generated_scalar_stop_couples_distance_and_contact_rows ... 
+thread 'contact_response_gpu::coupled_tests::device_generated_scalar_stop_couples_distance_and_contact_rows' (527344) panicked at crates/molla-solvers/src/coupled_response_gpu_tests.rs:843:36:
+called `Result::unwrap()` on an `Err` value: Gpu("no compatible wgpu adapter: No suitable graphics adapter found; noop not requested, vulkan drivers/libraries could not be loaded, metal support not compiled in, dx12 support not compiled in, gl not requested, webgpu support not compiled in")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test contact_response_gpu::coupled_tests::retained_predictor_increment_survives_rounded_rates_in_mixed_response ... 
+thread 'contact_response_gpu::coupled_tests::retained_predictor_increment_survives_rounded_rates_in_mixed_response' (527345) panicked at crates/molla-solvers/src/coupled_response_gpu_tests.rs:87:36:
+called `Result::unwrap()` on an `Err` value: Gpu("no compatible wgpu adapter: No suitable graphics adapter found; noop not requested, vulkan drivers/libraries could not be loaded, metal support not compiled in, dx12 support not compiled in, gl not requested, webgpu support not compiled in")
+FAILED
+test contact_response_gpu::coupled_tests::scalar_response_faults_recover_and_inactive_joint_rows_retire ... 
+thread 'contact_response_gpu::coupled_tests::scalar_response_faults_recover_and_inactive_joint_rows_retire' (527346) panicked at crates/molla-solvers/src/coupled_response_gpu_tests.rs:208:40:
+called `Result::unwrap()` on an `Err` value: Gpu("no compatible wgpu adapter: No suitable graphics adapter found; noop not requested, vulkan drivers/libraries could not be loaded, metal support not compiled in, dx12 support not compiled in, gl not requested, webgpu support not compiled in")
+FAILED
+
+failures:
+
+failures:
+    contact_response_gpu::coupled_tests::device_generated_scalar_stop_couples_distance_and_contact_rows
+    contact_response_gpu::coupled_tests::retained_predictor_increment_survives_rounded_rates_in_mixed_response
+    contact_response_gpu::coupled_tests::scalar_response_faults_recover_and_inactive_joint_rows_retire
+
+test result: FAILED. 4 passed; 3 failed; 0 ignored; 0 measured; 217 filtered out; finished in 45.38s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:237: test-primitives-coupled-response-gpu] Error 101

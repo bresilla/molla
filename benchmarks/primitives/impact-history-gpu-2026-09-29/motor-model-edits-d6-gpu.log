@@ -1,0 +1,28 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running tests/runtime_motor_models.rs (target/debug/deps/runtime_motor_models-34c051b0a7658cea)
+
+running 4 tests
+test gpu_d6_motor_models_match_each_authored_axis ... ok
+test gpu_motor_edits_rebuilds_and_reactions_match_scalar_dynamics ... 
+thread 'gpu_motor_edits_rebuilds_and_reactions_match_scalar_dynamics' (1940624) panicked at crates/molla-solvers/tests/runtime_motor_models.rs:278:17:
+reaction at frame=10: actual=DVec3(0.0, 0.0, -0.06976318359375), expected=DVec3(-0.0, -0.0, -0.07000000000079165): Oracle { parent: None, child: BodyHandle(163), joint: JointHandle(164), kind: Revolute, inertia: 2000.0, motor: JointMotor { mode: Position, target_position: -0.3, target_velocity: -0.5, stiffness: 12.0, damping: 3.0, max_force: 0.07, model: Acceleration }, position: 0.029925858176906982, velocity: 0.13290246229793845, load_acceleration: 0.3 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test gpu_motor_models_match_independent_scalar_dynamics ... ok
+test gpu_stiff_motor_models_match_independent_scalar_dynamics ... ok
+
+failures:
+
+failures:
+    gpu_motor_edits_rebuilds_and_reactions_match_scalar_dynamics
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 61.08s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_motor_models`
+make: *** [Makefile:110: test-gpu] Error 101

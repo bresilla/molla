@@ -1,0 +1,28 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+warning: method `scalar_position_buffers` is never used
+   --> crates/molla-solvers/src/distance_gpu.rs:727:19
+    |
+ 95 | impl DistanceGpu {
+    | ---------------- method in this implementation
+...
+727 |     pub(crate) fn scalar_position_buffers(
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (lib) generated 1 warning
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running tests/featherstone_scalar_equality_gpu.rs (target/debug/deps/featherstone_scalar_equality_gpu-2d94fda0198ae390)
+
+running 3 tests
+test predictor_retains_small_increments_and_velocity_overrides_gpu ... ok
+test scalar_equality_clears_velocity_and_holds_nonzero_coordinate_gpu ... ok
+test scalar_equality_transmits_child_load_to_floating_parent_gpu ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 406.75s
+

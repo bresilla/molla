@@ -15,6 +15,7 @@ fn material(ke: f64, kd: f64) -> ContactMaterial {
         friction_stiffness: 1000.0,
         friction_smoothing: 0.01,
         friction_combine: CoefficientCombineRule::Average,
+        friction: None,
     }
 }
 

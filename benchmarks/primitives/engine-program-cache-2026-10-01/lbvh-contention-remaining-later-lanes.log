@@ -1,0 +1,1039 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 7 tests
+test impact_episodes_gpu::tests::frame_rollback_sticky_fault_and_capacity_failure_preserve_history ... ok
+test impact_episodes_gpu::tests::history_rehash_and_dense_shape_remapping_retain_pair_identity ... ok
+test impact_episodes_gpu::tests::invalid_episode_configuration_and_failed_history_shrink_are_fail_closed ... ok
+test impact_episodes_gpu::tests::normal_preparation_episode_suppression_and_force_gather_share_one_encoder ... ok
+test impact_episodes_gpu::tests::one_hundred_queued_manifold_changes_match_pair_reference_across_workgroups ... ok
+test impact_episodes_gpu::tests::onset_suppression_does_not_hide_invalid_force_or_material_inputs ... ok
+test impact_episodes_gpu::tests::onset_suppression_pair_reordering_separation_and_normal_changes ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 247 filtered out; finished in 2.52s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 11 tests
+test impact_constraints_gpu::tests::bounded_scalars_match_independent_coupled_box_oracle_and_validate_domains ... island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+243 coupled box/bilateral feedback systems plus prescribed null-response effort and invalid domains passed
+ok
+test impact_constraints_gpu::tests::coupled_manifolds_scalar_rows_and_block_permutations ... ok
+test impact_constraints_gpu::tests::faults_are_sticky_and_counts_clear_old_solutions ... island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[134217728, 0, 0, 0], residual=0
+island=0, diagnostic=[67108864, 0, 0, 0], residual=0
+island=0, diagnostic=[268435456, 0, 0, 0], residual=0
+ok
+test impact_constraints_gpu::tests::invalid_capacity_padding_materials_and_separating_contacts_fail_closed ... island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+island=0, diagnostic=[33554432, 0, 0, 0], residual=0
+ok
+test impact_constraints_gpu::tests::iteration_exhaustion_and_external_halt_do_not_publish_valid_solutions ... island=0, diagnostic=[268435456, 1, 1052770304, 0], residual=0.375
+ok
+test impact_constraints_gpu::tests::midpoint_oblique_mass_friction_restitution_sweep ... checking fixture 0
+checking fixture 1
+checking fixture 2
+checking fixture 3
+checking fixture 4
+checking fixture 5
+checking fixture 6
+checking fixture 7
+checking fixture 8
+checking fixture 9
+checking fixture 10
+checking fixture 11
+checking fixture 12
+checking fixture 13
+checking fixture 14
+checking fixture 15
+checking fixture 16
+checking fixture 17
+checking fixture 18
+checking fixture 19
+checking fixture 20
+checking fixture 21
+checking fixture 22
+checking fixture 23
+checking fixture 24
+checking fixture 25
+checking fixture 26
+checking fixture 27
+checking fixture 28
+checking fixture 29
+checking fixture 30
+checking fixture 31
+checking fixture 32
+checking fixture 33
+checking fixture 34
+checking fixture 35
+checking fixture 36
+checking fixture 37
+checking fixture 38
+checking fixture 39
+checking fixture 40
+checking fixture 41
+checking fixture 42
+checking fixture 43
+checking fixture 44
+checking fixture 45
+checking fixture 46
+checking fixture 47
+checking fixture 48
+checking fixture 49
+checking fixture 50
+checking fixture 51
+checking fixture 52
+checking fixture 53
+checking fixture 54
+checking fixture 55
+checking fixture 56
+checking fixture 57
+checking fixture 58
+checking fixture 59
+checking fixture 60
+checking fixture 61
+checking fixture 62
+checking fixture 63
+checking fixture 64
+checking fixture 65
+checking fixture 66
+checking fixture 67
+checking fixture 68
+checking fixture 69
+checking fixture 70
+checking fixture 71
+checking fixture 72
+checking fixture 73
+checking fixture 74
+checking fixture 75
+checking fixture 76
+checking fixture 77
+checking fixture 78
+checking fixture 79
+checking fixture 80
+checking fixture 81
+checking fixture 82
+checking fixture 83
+checking fixture 84
+checking fixture 85
+checking fixture 86
+checking fixture 87
+checking fixture 88
+checking fixture 89
+checking fixture 90
+checking fixture 91
+checking fixture 92
+checking fixture 93
+checking fixture 94
+checking fixture 95
+checking fixture 96
+checking fixture 97
+checking fixture 98
+checking fixture 99
+checking fixture 100
+checking fixture 101
+checking fixture 102
+checking fixture 103
+checking fixture 104
+checking fixture 105
+checking fixture 106
+checking fixture 107
+checking fixture 108
+checking fixture 109
+checking fixture 110
+checking fixture 111
+checking fixture 112
+checking fixture 113
+checking fixture 114
+checking fixture 115
+checking fixture 116
+checking fixture 117
+checking fixture 118
+checking fixture 119
+checking fixture 120
+checking fixture 121
+checking fixture 122
+checking fixture 123
+checking fixture 124
+checking fixture 125
+checking fixture 126
+checking fixture 127
+checking fixture 128
+checking fixture 129
+checking fixture 130
+checking fixture 131
+checking fixture 132
+checking fixture 133
+checking fixture 134
+checking fixture 135
+checking fixture 136
+checking fixture 137
+checking fixture 138
+checking fixture 139
+checking fixture 140
+checking fixture 141
+checking fixture 142
+checking fixture 143
+checking fixture 144
+checking fixture 145
+checking fixture 146
+checking fixture 147
+checking fixture 148
+checking fixture 149
+checking fixture 150
+checking fixture 151
+checking fixture 152
+checking fixture 153
+checking fixture 154
+checking fixture 155
+checking fixture 156
+checking fixture 157
+checking fixture 158
+checking fixture 159
+checking fixture 160
+checking fixture 161
+checking fixture 162
+checking fixture 163
+checking fixture 164
+checking fixture 165
+checking fixture 166
+checking fixture 167
+checking fixture 168
+checking fixture 169
+checking fixture 170
+checking fixture 171
+checking fixture 172
+checking fixture 173
+checking fixture 174
+checking fixture 175
+checking fixture 176
+checking fixture 177
+checking fixture 178
+checking fixture 179
+checking fixture 180
+checking fixture 181
+checking fixture 182
+checking fixture 183
+checking fixture 184
+checking fixture 185
+checking fixture 186
+checking fixture 187
+checking fixture 188
+checking fixture 189
+checking fixture 190
+checking fixture 191
+checking fixture 192
+checking fixture 193
+checking fixture 194
+checking fixture 195
+checking fixture 196
+checking fixture 197
+checking fixture 198
+checking fixture 199
+checking fixture 200
+checking fixture 201
+checking fixture 202
+checking fixture 203
+checking fixture 204
+checking fixture 205
+checking fixture 206
+checking fixture 207
+checking fixture 208
+checking fixture 209
+checking fixture 210
+checking fixture 211
+checking fixture 212
+checking fixture 213
+checking fixture 214
+checking fixture 215
+checking fixture 216
+checking fixture 217
+checking fixture 218
+checking fixture 219
+checking fixture 220
+checking fixture 221
+checking fixture 222
+checking fixture 223
+checking fixture 224
+checking fixture 225
+checking fixture 226
+checking fixture 227
+checking fixture 228
+checking fixture 229
+checking fixture 230
+checking fixture 231
+checking fixture 232
+checking fixture 233
+checking fixture 234
+checking fixture 235
+checking fixture 236
+checking fixture 237
+checking fixture 238
+checking fixture 239
+checking fixture 240
+checking fixture 241
+checking fixture 242
+checking fixture 243
+checking fixture 244
+checking fixture 245
+checking fixture 246
+checking fixture 247
+checking fixture 248
+checking fixture 249
+checking fixture 250
+checking fixture 251
+checking fixture 252
+checking fixture 253
+checking fixture 254
+checking fixture 255
+checking fixture 256
+checking fixture 257
+checking fixture 258
+checking fixture 259
+checking fixture 260
+checking fixture 261
+checking fixture 262
+checking fixture 263
+checking fixture 264
+checking fixture 265
+checking fixture 266
+checking fixture 267
+checking fixture 268
+checking fixture 269
+checking fixture 270
+checking fixture 271
+checking fixture 272
+checking fixture 273
+checking fixture 274
+checking fixture 275
+checking fixture 276
+checking fixture 277
+checking fixture 278
+checking fixture 279
+checking fixture 280
+checking fixture 281
+checking fixture 282
+checking fixture 283
+checking fixture 284
+checking fixture 285
+checking fixture 286
+checking fixture 287
+checking fixture 288
+checking fixture 289
+checking fixture 290
+checking fixture 291
+checking fixture 292
+checking fixture 293
+checking fixture 294
+checking fixture 295
+checking fixture 296
+checking fixture 297
+checking fixture 298
+checking fixture 299
+checking fixture 300
+checking fixture 301
+checking fixture 302
+checking fixture 303
+checking fixture 304
+checking fixture 305
+checking fixture 306
+checking fixture 307
+checking fixture 308
+checking fixture 309
+checking fixture 310
+checking fixture 311
+checking fixture 312
+checking fixture 313
+checking fixture 314
+checking fixture 315
+checking fixture 316
+checking fixture 317
+checking fixture 318
+checking fixture 319
+checking fixture 320
+checking fixture 321
+checking fixture 322
+checking fixture 323
+checking fixture 324
+checking fixture 325
+checking fixture 326
+checking fixture 327
+checking fixture 328
+checking fixture 329
+checking fixture 330
+checking fixture 331
+checking fixture 332
+checking fixture 333
+checking fixture 334
+checking fixture 335
+checking fixture 336
+checking fixture 337
+checking fixture 338
+checking fixture 339
+checking fixture 340
+checking fixture 341
+checking fixture 342
+checking fixture 343
+checking fixture 344
+checking fixture 345
+checking fixture 346
+checking fixture 347
+checking fixture 348
+checking fixture 349
+checking fixture 350
+checking fixture 351
+checking fixture 352
+checking fixture 353
+checking fixture 354
+checking fixture 355
+checking fixture 356
+checking fixture 357
+checking fixture 358
+checking fixture 359
+checking fixture 360
+checking fixture 361
+checking fixture 362
+checking fixture 363
+checking fixture 364
+checking fixture 365
+checking fixture 366
+checking fixture 367
+checking fixture 368
+checking fixture 369
+checking fixture 370
+checking fixture 371
+checking fixture 372
+checking fixture 373
+checking fixture 374
+checking fixture 375
+checking fixture 376
+checking fixture 377
+checking fixture 378
+checking fixture 379
+checking fixture 380
+checking fixture 381
+checking fixture 382
+checking fixture 383
+checking fixture 384
+checking fixture 385
+checking fixture 386
+checking fixture 387
+checking fixture 388
+checking fixture 389
+checking fixture 390
+checking fixture 391
+checking fixture 392
+checking fixture 393
+checking fixture 394
+checking fixture 395
+checking fixture 396
+checking fixture 397
+checking fixture 398
+checking fixture 399
+checking fixture 400
+checking fixture 401
+checking fixture 402
+checking fixture 403
+checking fixture 404
+checking fixture 405
+checking fixture 406
+checking fixture 407
+checking fixture 408
+checking fixture 409
+checking fixture 410
+checking fixture 411
+checking fixture 412
+checking fixture 413
+checking fixture 414
+checking fixture 415
+checking fixture 416
+checking fixture 417
+checking fixture 418
+checking fixture 419
+checking fixture 420
+checking fixture 421
+checking fixture 422
+checking fixture 423
+checking fixture 424
+checking fixture 425
+checking fixture 426
+checking fixture 427
+checking fixture 428
+checking fixture 429
+checking fixture 430
+checking fixture 431
+checking fixture 432
+checking fixture 433
+checking fixture 434
+checking fixture 435
+checking fixture 436
+checking fixture 437
+checking fixture 438
+checking fixture 439
+checking fixture 440
+checking fixture 441
+checking fixture 442
+checking fixture 443
+checking fixture 444
+checking fixture 445
+checking fixture 446
+checking fixture 447
+checking fixture 448
+checking fixture 449
+checking fixture 450
+checking fixture 451
+checking fixture 452
+checking fixture 453
+checking fixture 454
+checking fixture 455
+checking fixture 456
+checking fixture 457
+checking fixture 458
+checking fixture 459
+checking fixture 460
+checking fixture 461
+checking fixture 462
+checking fixture 463
+checking fixture 464
+checking fixture 465
+checking fixture 466
+checking fixture 467
+checking fixture 468
+checking fixture 469
+checking fixture 470
+checking fixture 471
+checking fixture 472
+checking fixture 473
+checking fixture 474
+checking fixture 475
+checking fixture 476
+checking fixture 477
+checking fixture 478
+checking fixture 479
+checking fixture 480
+checking fixture 481
+checking fixture 482
+checking fixture 483
+checking fixture 484
+checking fixture 485
+checking fixture 486
+checking fixture 487
+checking fixture 488
+checking fixture 489
+checking fixture 490
+checking fixture 491
+checking fixture 492
+checking fixture 493
+checking fixture 494
+checking fixture 495
+checking fixture 496
+checking fixture 497
+checking fixture 498
+checking fixture 499
+checking fixture 500
+checking fixture 501
+checking fixture 502
+checking fixture 503
+checking fixture 504
+checking fixture 505
+checking fixture 506
+checking fixture 507
+checking fixture 508
+checking fixture 509
+checking fixture 510
+checking fixture 511
+checking fixture 512
+checking fixture 513
+checking fixture 514
+checking fixture 515
+checking fixture 516
+checking fixture 517
+checking fixture 518
+checking fixture 519
+checking fixture 520
+checking fixture 521
+checking fixture 522
+checking fixture 523
+checking fixture 524
+checking fixture 525
+checking fixture 526
+checking fixture 527
+checking fixture 528
+checking fixture 529
+checking fixture 530
+checking fixture 531
+checking fixture 532
+checking fixture 533
+checking fixture 534
+checking fixture 535
+checking fixture 536
+checking fixture 537
+checking fixture 538
+checking fixture 539
+ok
+test impact_constraints_gpu::tests::mixed_joint_rows_and_global_mode_promotion ... ok
+test impact_constraints_gpu::tests::normal_bounce_midpoint_capture_and_singular_tangents ... ok
+test impact_constraints_gpu::tests::sliding_isotropic_tangents_converge_at_runtime_tolerance ... ok
+test impact_constraints_gpu::tests::tangent_basis_covariance_and_zero_normal_capacity ... ok
+test impact_constraints_gpu::tests::uncoupled_normal_rebound_does_not_round_through_tangent_mass_scaling ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 243 filtered out; finished in 3.65s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 7 tests
+test contact_response_gpu::impact_tests::articulated_impacts_match_cpu_with_joint_rows_boundaries_and_endpoint_exchange ... articulated impact response peak rate error=2.6231562965758903e-5, peak Gram error=1.762245922520833e-7
+ok
+test contact_response_gpu::impact_tests::episodes_select_coupled_dynamic_groups_without_rebounding_shared_ground_neighbors ... ok
+test contact_response_gpu::impact_tests::predicted_selection_matches_cpu_with_articulation_and_accelerating_boundaries ... articulated impact response peak rate error=2.6231562965758903e-5, peak Gram error=1.762245922520833e-7
+ok
+test contact_response_gpu::impact_tests::predicted_selection_retains_sub_ulp_approach_and_retires_separating_rows ... ok
+test contact_response_gpu::impact_tests::retained_predictor_increment_survives_large_common_normal_velocity ... ok
+test contact_response_gpu::impact_tests::separating_contact_keeps_graph_connectivity_without_consuming_solve_capacity ... ok
+test contact_response_gpu::impact_tests::zero_friction_zero_penalty_predictor_change_and_fault_retirement ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 247 filtered out; finished in 6.76s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 8 tests
+test contact_response_gpu::position_tests::coordinate_displacement_uses_joint_frames_not_velocity_caps_or_prescribed_time ... ok
+test contact_response_gpu::position_tests::displacement_retains_sub_ulp_motion_rates_and_cached_bindings_across_faults ... ok
+test contact_response_gpu::position_tests::exported_position_gaps_survive_large_rates_and_zero_depth_onsets ... ok
+test contact_response_gpu::position_tests::generated_distance_cone_and_axis_position_rows_match_cpu_geometry ... ok
+test contact_response_gpu::position_tests::onset_position_displacements_match_cpu_articulated_scalar_oracle ... articulated position displacement peak error=4.869755827969016e-9
+ok
+test contact_response_gpu::position_tests::predictor_projection_and_redrift_reuse_all_six_state_bindings ... ok
+test contact_response_gpu::position_tests::redundant_position_rows_are_mass_scaled_and_faults_retire_displacements ... ok
+test contact_response_gpu::position_tests::solved_displacement_updates_coordinates_then_redrifts_without_advancing_boundary_twice ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 246 filtered out; finished in 521.06s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 3 tests
+test contact_response_gpu::partition_tests::bounded_feedback_survives_impact_friction_partition_and_physical_merge ... ok
+test contact_response_gpu::partition_tests::chained_impact_and_friction_partition_contacts_scalars_and_physical_rates ... ok
+test contact_response_gpu::partition_tests::partition_masks_preserve_joint_only_islands_and_reject_split_graphs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 52.80s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/runtime_restitution_gpu.rs (target/debug/deps/runtime_restitution_gpu-cc4a760ba63dba28)
+
+running 6 tests
+test failed_impact_frame_restores_history_and_recovers_after_compaction ... ok
+test impact_reactions_break_a_joint_and_continue_without_repeating_the_episode ... ok
+test live_normal_impacts_publish_one_impulse_and_match_cpu_rebound ... ok
+test live_zero_depth_contact_retains_penalty_support_without_repeated_impacts ... ok
+test oblique_impact_reports_final_slip_and_matches_cpu_energy_and_impulse ... ok
+test reaction_capture_does_not_change_contact_momentum_transport ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 878.58s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/runtime_dispatch_metrics_gpu.rs (target/debug/deps/runtime_dispatch_metrics_gpu-de23d00c1a73a4fd)
+
+running 1 test
+test dispatch_counts_follow_substeps_and_batched_reaction_stages_not_body_count ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 104.17s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/runtime_multidof_feedback_gpu.rs (target/debug/deps/runtime_multidof_feedback_gpu-c96cf063213942db)
+
+running 1 test
+test multidof_drives_use_nonzero_coordinates_and_match_cpu_with_stable_feedback ... multidof kind=D6 stable=false phase=0 peak_pose=4.6566039913250917e-10 peak_velocity=5.159893728989247e-9 peak_reaction=1.8371237071390967e-6
+multidof kind=D6 stable=false phase=1 peak_pose=4.822496934103483e-4 peak_velocity=8.085418445533981e-7 peak_reaction=5.523005507023527e-6
+multidof kind=D6 stable=false phase=2 peak_pose=4.83028053035774e-4 peak_velocity=1.5308395494236978e-7 peak_reaction=8.135786754734393e-7
+multidof kind=D6 stable=false phase=3 peak_pose=4.8307037695333356e-4 peak_velocity=8.889079407477934e-7 peak_reaction=6.251191442222159e-6
+multidof kind=D6 stable=true phase=0 peak_pose=1.1478064628560824e-8 peak_velocity=5.574991906692228e-9 peak_reaction=2.045824128253278e-6
+multidof kind=D6 stable=true phase=1 peak_pose=4.8793673221889355e-4 peak_velocity=7.097632109002898e-7 peak_reaction=5.475573959287813e-6
+multidof kind=D6 stable=true phase=2 peak_pose=4.8300955463588134e-4 peak_velocity=1.652222704079178e-7 peak_reaction=8.585155764848996e-7
+multidof kind=D6 stable=true phase=3 peak_pose=4.8363352317102063e-4 peak_velocity=6.467560007948921e-7 peak_reaction=6.2132324749660774e-6
+multidof kind=Free stable=false phase=0 peak_pose=4.6566039913250917e-10 peak_velocity=5.159893729575872e-9 peak_reaction=1.8371237073404133e-6
+multidof kind=Free stable=false phase=1 peak_pose=4.822496934103483e-4 peak_velocity=8.085418469707972e-7 peak_reaction=5.5230054908584015e-6
+multidof kind=Free stable=false phase=2 peak_pose=4.83028053035774e-4 peak_velocity=1.530839549247412e-7 peak_reaction=8.135786740841023e-7
+multidof kind=Free stable=false phase=3 peak_pose=4.8307037695333356e-4 peak_velocity=8.889079460244222e-7 peak_reaction=6.251191485509464e-6
+multidof kind=Free stable=true phase=0 peak_pose=1.1478064786098453e-8 peak_velocity=5.574991921196646e-9 peak_reaction=2.045824135056539e-6
+multidof kind=Free stable=true phase=1 peak_pose=4.8793673221889355e-4 peak_velocity=7.097632102193894e-7 peak_reaction=5.4755739232575455e-6
+multidof kind=Free stable=true phase=2 peak_pose=4.8300955463588134e-4 peak_velocity=1.652222706429061e-7 peak_reaction=8.585155853589233e-7
+multidof kind=Free stable=true phase=3 peak_pose=4.8363352317102063e-4 peak_velocity=6.467560011311305e-7 peak_reaction=6.213232506010604e-6
+multidof kind=Ball stable=false phase=0 peak_pose=1.8015154833113795e-12 peak_velocity=5.455025060385863e-9 peak_reaction=1.9908689377506717e-6
+multidof kind=Ball stable=false phase=1 peak_pose=4.87135801523803e-4 peak_velocity=1.5002757696943132e-7 peak_reaction=2.1511341440617998e-6
+multidof kind=Ball stable=false phase=2 peak_pose=4.8117769325879835e-4 peak_velocity=3.984361929438885e-8 peak_reaction=2.3434287017117819e-7
+multidof kind=Ball stable=false phase=3 peak_pose=4.855920616094774e-4 peak_velocity=1.6707835467862977e-7 peak_reaction=2.5742590219461082e-6
+multidof kind=Ball stable=true phase=0 peak_pose=1.7890169955795517e-12 peak_velocity=5.417340707258933e-9 peak_reaction=1.97711421659748e-6
+multidof kind=Ball stable=true phase=1 peak_pose=4.866278408126625e-4 peak_velocity=1.5156286241694532e-7 peak_reaction=2.116546213397835e-6
+multidof kind=Ball stable=true phase=2 peak_pose=4.8121778514217354e-4 peak_velocity=5.435987870205296e-8 peak_reaction=2.086884397015715e-7
+multidof kind=Ball stable=true phase=3 peak_pose=4.8604155520755446e-4 peak_velocity=1.7362374527050815e-7 peak_reaction=2.3560787804694577e-6
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 200.86s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/runtime_multidof_limits.rs (target/debug/deps/runtime_multidof_limits-778e86f1d9e403fe)
+
+running 3 tests
+test gpu_d6_common_rows_satisfy_xyz_bounds_and_keep_free_response ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } route=common_rows external_fixed_loops=1
+bounded_xyz axis=0 angles=[0.0999791082294185, -0.3123765769567327, 0.112516836686828] violation=0e0
+bounded_xyz axis=1 angles=[0.4000000102506229, -0.10000003488901102, 0.20000000815773028] violation=3.4889011013561344e-8
+bounded_xyz axis=2 angles=[0.37049273971590096, -0.30140745912081934, 0.09999989554414092] violation=0e0
+bounded_xyz axis=0 angles=[0.09923048315137335, -1.5679226793865289, -0.10076638230980127] violation=0e0
+bounded_xyz axis=1 angles=[0.39999988248333074, -0.09999999774382881, 0.1999998366515783] violation=0e0
+bounded_xyz axis=2 angles=[0.2999877754781734, -1.5678111328508078, 0.09999146538428941] violation=0e0
+bounded_xyz axis=0 angles=[0.09923369035472766, 1.56792266607078, 0.5007602494242117] violation=0e0
+bounded_xyz axis=1 angles=[0.39999982380000365, 0.1000000791112344, 0.20000014704377775] violation=7.911123439674483e-8
+bounded_xyz axis=2 angles=[0.49999963249921264, 1.5678112239517648, 0.10000041836973132] violation=4.183697313170365e-7
+free_response axis=0 rate=4.999999829783271e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09997910922992967, -0.3123765724549127, 0.11251688906016229] violation=0e0
+free_response axis=0 rate=5.000000050720385e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.0999791085711228, -0.31237662986487313, 0.11251684222233364] violation=0e0
+free_response axis=1 rate=4.999999939550227e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.4000000077044918, -0.1000000060162529, 0.19999995420352776] violation=6.016252898644048e-9
+free_response axis=1 rate=4.99999992725061e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999999439409464, -0.10000000978567906, 0.20000000541343502] violation=9.785679058738062e-9
+free_response axis=2 rate=5.0000001073202585e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.370492734631598, -0.3014074124495656, 0.09999989516843073] violation=0e0
+free_response axis=2 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.3704927080013464, -0.3014074578442409, 0.09999990029973055] violation=0e0
+free_response axis=0 rate=5.000000002951275e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.0992294765015021, -1.5679226791752752, -0.10076738024295578] violation=0e0
+free_response axis=0 rate=4.999999723087215e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09922886363982517, -1.567922673332691, -0.1007676843497283] violation=0e0
+free_response axis=1 rate=5.000000113606168e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999998833422904, -0.09999999741385354, 0.1999997903328599] violation=0e0
+free_response axis=1 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999998198650649, -0.10000000107328541, 0.1999998261031938] violation=1.0732854049955165e-9
+free_response axis=2 rate=5.000000055201645e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.2999982153750381, -1.5678111451744634, 0.0999959672470125] violation=0e0
+free_response axis=2 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.2999858424292569, -1.5678111276750644, 0.0999898342920897] violation=0e0
+free_response axis=0 rate=5.0000001016510004e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09922713112074705, 1.5679226559978874, 0.5007655968913766] violation=0e0
+free_response axis=0 rate=4.9999998053568286e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09923481524993952, 1.5679226538044522, 0.5007565498623691] violation=0e0
+free_response axis=1 rate=5.000000903607081e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999998642673935, 0.09999999960587154, 0.20000011676836643] violation=0e0
+free_response axis=1 rate=5.000000193528519e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999979699928595, 0.09999998815643549, 0.20000016045843985] violation=0e0
+free_response axis=2 rate=4.999999957586271e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.49999963249921264, 1.5678112239517648, 0.10000041836973132] violation=4.183697313170365e-7
+free_response axis=2 rate=5.000000055378003e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.4999988332879108, 1.5678112085327152, 0.09999873763469307] violation=0e0
+ok
+test gpu_d6_contact_rows_satisfy_xyz_bounds_and_keep_free_response ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } route=contact_rows
+direct_contact axis=0 angles=[0.09999996726619595, -0.3131441670224049, 0.10883878358846501] violation=0e0 normal_force=2.010166645050049 torque=DVec3(0.8210243694712411, 0.1648912265232799, 0.6544261047826336)
+direct_contact axis=1 angles=[0.40000003030348275, -0.09999998431199708, 0.20000052123984213] violation=0e0 normal_force=2.010166645050049 torque=DVec3(-0.007396389818879967, -0.1461108630307706, 0.5002860641879484)
+direct_contact axis=2 angles=[0.37035800308901184, -0.30141661353903243, 0.09999999786237634] violation=0e0 normal_force=2.010166645050049 torque=DVec3(0.41450991528477504, -0.1152102080187111, 1.0249930345201972)
+bounded_xyz axis=0 angles=[0.09999995897688109, -0.3131445588314114, 0.10883822092063805] violation=0e0
+bounded_xyz axis=1 angles=[0.39999997912259166, -0.09999999817315974, 0.19999998956370948] violation=0e0
+bounded_xyz axis=2 angles=[0.37035777838201017, -0.30141689240470093, 0.09999999931128878] violation=0e0
+bounded_xyz axis=0 angles=[0.10000297149355047, -1.567930316240075, -0.09999843474959878] violation=2.9714935504687734e-6
+bounded_xyz axis=1 angles=[0.3999994219216155, -0.09999979451565877, 0.19999945565038807] violation=0e0
+bounded_xyz axis=2 angles=[0.3000005786719168, -1.5678112972976337, 0.09999942086019817] violation=0e0
+bounded_xyz axis=0 angles=[0.10000114007059348, 1.5679303996718994, 0.5000002923505978] violation=1.1400705934722088e-6
+bounded_xyz axis=1 angles=[0.3999998101160985, 0.09999991278335862, 0.2000001002304587] violation=0e0
+bounded_xyz axis=2 angles=[0.4999863094907124, 1.5678112539380864, 0.10000080746097509] violation=8.074609750829964e-7
+free_response axis=0 rate=4.9999999526025e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.0999999590234447, -0.31314455436264726, 0.10883827304136909] violation=0e0
+free_response axis=0 rate=4.999999945338684e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09999995960448427, -0.3131446041589884, 0.10883822574138736] violation=0e0
+free_response axis=1 rate=5.0000000591825286e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.4000000081301278, -0.10000000958410103, 0.19999995515796307] violation=9.584101026693936e-9
+free_response axis=1 rate=4.999999956507138e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999997503726215, -0.10000000633702415, 0.2000000102104104] violation=6.337024141545022e-9
+free_response axis=2 rate=5.0000001795759114e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.3703577732966394, -0.3014168457467838, 0.09999999888153296] violation=0e0
+free_response axis=2 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.3703577144689557, -0.30141689278780603, 0.09999999622247122] violation=0e0
+free_response axis=0 rate=5.000000053473924e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.10000297149355047, -1.567930316240075, -0.09999843474959878] violation=2.9714935504687734e-6
+free_response axis=0 rate=5.0000000541980734e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.10000255215824624, -1.5679303075818063, -0.09999839422694852] violation=2.552158246238445e-6
+free_response axis=1 rate=5.000000005330606e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999942278058287, -0.09999979418567478, 0.19999940933167346] violation=0e0
+free_response axis=1 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999993892620778, -0.09999978737075593, 0.19999946342968725] violation=0e0
+free_response axis=2 rate=4.999999989122971e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.30000250643125376, -1.5678112965682556, 0.10000133179245993] violation=1.3317924599243192e-6
+free_response axis=2 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.3000005705453859, -1.567811288440026, 0.09999984045923802] violation=0e0
+free_response axis=0 rate=4.999999883983022e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09999772392890444, 1.5679302157296, 0.5000011755639644] violation=0e0
+free_response axis=0 rate=5.000000122946584e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.10000226437945799, 1.5679303873975872, 0.4999965861081661] violation=2.2643794579807475e-6
+free_response axis=1 rate=4.999999968536587e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999998153926703, 0.09999991643850371, 0.20000005264724055] violation=0e0
+free_response axis=1 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999997481245658, 0.09999990498906916, 0.20000009633731083] violation=0e0
+free_response axis=2 rate=5.0000001006015676e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.5000067705368871, 1.5678114134102965, 0.09999716583242461] violation=0e0
+free_response axis=2 rate=4.9999999817521186e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.5000059712433115, 1.567811397991232, 0.09999548500861181] violation=0e0
+ok
+test gpu_d6_projection_satisfies_xyz_bounds_and_keeps_free_response ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+bounded_xyz axis=0 angles=[0.09999999590913311, -0.2875784227878983, 0.1125560927224715] violation=0e0
+bounded_xyz axis=1 angles=[0.3999999808251362, -0.1000000124445514, 0.19999999338145064] violation=1.2444551389378944e-8
+bounded_xyz axis=2 angles=[0.3704929443690459, -0.29859192335197343, 0.09999999584187591] violation=0e0
+bounded_xyz axis=0 angles=[0.09999917121961678, -1.5676640442752618, -0.09999894476984232] violation=0e0
+bounded_xyz axis=1 angles=[0.3999999784500366, -0.10000002741413895, 0.19999996961830202] violation=2.7414138945025535e-8
+bounded_xyz axis=2 angles=[0.2999972411557142, -1.5677813527029618, 0.09999759104005625] violation=0e0
+bounded_xyz axis=0 angles=[0.10000789913239687, 1.567664170645186, 0.5000028915197704] violation=7.899132396863018e-6
+bounded_xyz axis=1 angles=[0.3999999681895821, 0.10000001940820213, 0.20000003227999957] violation=1.9408202128756713e-8
+bounded_xyz axis=2 angles=[0.4999906221766943, 1.567781299473544, 0.10000057432946213] violation=5.74329462127432e-7
+free_response axis=0 rate=5.0000000831359866e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09999999623771126, -0.2875784182805421, 0.11255614489619259] violation=0e0
+free_response axis=0 rate=4.99999999293394e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09999999553324064, -0.2875784679839459, 0.11255609725105181] violation=0e0
+free_response axis=1 rate=4.9999999585595915e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.4000000081301278, -0.10000000958410103, 0.19999995515796307] violation=9.584101026693936e-9
+free_response axis=1 rate=5.000000203024459e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999997546289845, -0.10000000990487228, 0.20000001116484564] violation=9.904872269594911e-9
+free_response axis=2 rate=5.000000103953084e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.3704929393141388, -0.2985918766896663, 0.09999999553646377] violation=0e0
+free_response axis=2 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.37049288048086576, -0.29859192376919746, 0.09999999272987138] violation=0e0
+free_response axis=0 rate=5.000000018850845e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.09999917121961678, -1.5676640442752618, -0.09999894476984232] violation=0e0
+free_response axis=0 rate=5.000000013423027e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.10000063244907449, -1.5676640360347103, -0.0999970742750164] violation=6.324490744863409e-7
+free_response axis=1 rate=5.000000113924159e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999997675517845, -0.10000000567707643, 0.1999999175729709] violation=5.677076420074201e-9
+free_response axis=1 rate=4.999999940324822e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.3999999125659973, -0.10000000587865418, 0.1999999678284429] violation=5.87865417456257e-9
+free_response axis=2 rate=4.9999999251784395e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.30000200997824444, -1.5677813479270137, 0.1000024594314042] violation=2.4594314042003518e-6
+free_response axis=2 rate=5.000000014225724e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.2999953269814055, -1.5677813475272082, 0.09999597625520419] violation=0e0
+free_response axis=0 rate=4.9999999018836214e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.10000246244212875, 1.5676640094756185, 0.49999118841010703] violation=2.4624421287450238e-6
+free_response axis=0 rate=5.000000134747787e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=0 angles=[0.10000290469460929, 1.5676641483079925, 0.5000044063602062] violation=2.9046946092847747e-6
+free_response axis=1 rate=5.000000158885898e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999997422895406, 0.10000000868716924, 0.19999998806338118] violation=8.687169233967396e-9
+free_response axis=1 rate=5.000000231352148e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=1 angles=[0.39999993795661243, 0.10000000113488441, 0.20000003370002542] violation=1.1348844086711551e-9
+free_response axis=2 rate=4.999999965748722e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.5000037276912646, 1.567781455666621, 0.10000296242615787] violation=2.9624261578681255e-6
+free_response axis=2 rate=5.000000026138181e-2 linear_error=8.363255971750552e-10
+bounded_xyz axis=2 angles=[0.49998983074655645, 1.5677812840543501, 0.09999891007843967] violation=0e0
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 341.85s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/runtime_d6_axis_certification.rs (target/debug/deps/runtime_d6_axis_certification-f61d8aa70cb587a9)
+
+running 1 test
+test gpu_d6_each_axis_free_bounded_locked_matches_analytic_motion ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+d6_axis_cases=144 frames=240 substeps=2 masses=1,17,83 full_com_tensor=true peak_pose=0.000002703058439501248 peak_rate=0.00004017618296836422
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 121.58s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/compliant_loop_rows_gpu.rs (target/debug/deps/compliant_loop_rows_gpu-1d470e05e078ca3c)
+
+running 1 test
+test compliant_loop_rows_match_coordinate_derivatives_and_feedback_in_retained_batches ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/quaternion_fk_gpu.rs (target/debug/deps/quaternion_fk_gpu-82049d5bd9763968)
+
+running 2 tests
+test retained_fk_pairs_match_all_joint_kinds_and_prescribed_boundaries ... quaternion FK 156 joints / 18 articulations max error: [1.354472090042691e-14, 4.397774852615832e-10]
+ok
+test unjointed_and_fixed_only_models_use_current_pose_without_coordinate_storage ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.09s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/featherstone_mass_inverse_gpu.rs (target/debug/deps/featherstone_mass_inverse_gpu-475c5131121bf9c9)
+
+running 1 test
+test joint_psd_inverse_preserves_scaled_weak_modes_and_rejects_indefinite_blocks ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/runtime_loop_compliance.rs (target/debug/deps/runtime_loop_compliance-2817011fbcfa4c19)
+
+running 1 test
+test gpu_compliant_loop_numeric_edits_keep_device_resources_retained ... GPU compliant loop standing resources=[141, 700768, 41, 16, 11]; state transfer diagnostics=GpuRuntimeDiagnostics { model_compilations: 2, current_model_bind_groups_created: 40, completed_frames: 1, last_substeps: 4, last_state_upload_bytes: 1248, last_state_readback_bytes: 13780 }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 101.26s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 6 tests
+test rigid_contact_activation_gpu::tests::activation_faults_guard_publication_and_recover_without_replacing_masks ... ok
+test rigid_contact_activation_gpu::tests::boundary_only_layout_has_no_dynamic_group_or_response ... ok
+test rigid_contact_activation_gpu::tests::contact_components_wake_in_one_dispatch_and_dormant_rows_retire ... ok
+test rigid_contact_activation_gpu::tests::empty_body_layout_binds_complete_dependency_elements ... ok
+test rigid_contact_activation_gpu::tests::support_loss_motion_surface_and_sleep_dependencies_wake_components ... ok
+test rigid_contact_activation_gpu::tests::watched_colliders_retain_support_across_compiled_pieces ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 248 filtered out; finished in 0.53s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_compute-763de6d897da2e61)
+
+running 2 tests
+test engine::tests::gpu_program_cache_retains_valid_objects_without_crossing_engines ... ok
+test engine::tests::gpu_program_cache_surfaces_validation_and_retries_failed_variants ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.61s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

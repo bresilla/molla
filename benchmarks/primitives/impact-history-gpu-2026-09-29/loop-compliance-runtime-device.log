@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.61s
+     Running tests/runtime_loop_compliance.rs (target/debug/deps/runtime_loop_compliance-2817011fbcfa4c19)
+
+running 1 test
+test gpu_general_compliant_loops_match_independent_loaded_recurrence_and_edits ... 
+thread 'gpu_general_compliant_loops_match_independent_loaded_recurrence_and_edits' (3683279) panicked at crates/molla-solvers/tests/runtime_loop_compliance.rs:241:21:
+hz=60 frame=8 expected=-5.048686804422219e0 reading=JointReaction { child: SpatialVector { linear: DVec3(2.9944515228271484, -3.556635618209839, 1.9659017324447632), angular: DVec3(2.830186076607788e-7, -1.1107530326626147e-6, -2.446708094794303e-6) }, parent: SpatialVector { linear: DVec3(-2.9944515228271484, 3.556635618209839, -1.9659017324447632), angular: DVec3(-1.5012597032182384e-7, -3.151445071125636e-6, -5.466098627948668e-6) }, sample_dt: 0.016666666666666666, peak_force: 5.047887325286865, peak_torque: 2.7018977561965585e-6 } Case { parent: None, child: BodyHandle(13), joint: JointHandle(14), kind: Fixed, origin: DVec3(40.0, 2.0, -3.0), direction: DVec3(-0.5933637833613874, 0.7044663052755917, -0.38941834230865047), rotation: DQuat(-0.18662454822852997, -0.06812327793826826, 0.3360626807021292, 0.920647799997774), mass: [1.0, 3.0], position: [0.0, 0.0014818065558726734], velocity: [0.0, -0.07798926311534596], offset: 0.004, softness: JointSoftness { natural_frequency: 7.0, damping_ratio: 1.2 }, enabled: true }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_general_compliant_loops_match_independent_loaded_recurrence_and_edits
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 6.04s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_loop_compliance`
+make: *** [Makefile:112: test-gpu] Error 101

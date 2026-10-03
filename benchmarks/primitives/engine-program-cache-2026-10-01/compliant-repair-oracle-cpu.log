@@ -1,0 +1,23 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.62s
+     Running tests/runtime_break_detachment.rs (target/debug/deps/runtime_break_detachment-201c3dbeacdf1fbb)
+
+running 4 tests
+test cpu_loop_break_keeps_tree_load_sharing_and_unrelated_sleep ... ok
+test cpu_explicit_pair_filters_survive_break_and_control_actual_contact_response ... ok
+test cpu_detached_tree_and_loop_joints_leave_no_hidden_constraint ... ok
+compliant break/repair phases=4 frames=64 substeps=4 position_error=8.673617379884035e-19 velocity_error=1.1102230246251565e-16 reaction_error=5.684341886080802e-14
+test cpu_broken_compliant_loop_is_free_until_explicit_repair_restores_response ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

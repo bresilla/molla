@@ -1,0 +1,26 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.16s
+     Running tests/runtime_mixed_contacts_gpu.rs (target/debug/deps/runtime_mixed_contacts_gpu-3c8d981606b05e0f)
+
+running 1 test
+test runtime_distance_contact_uses_common_impulse_and_publishes_reactions ... live_distance_contact capture=false stage=scene
+live_distance_contact capture=false stage=gpu elapsed=1.133458ms
+live_distance_contact capture=false stage=readout elapsed=145.92773757s
+live_distance_contact capture=false stage=complete elapsed=146.025744596s
+live_distance_contact capture=true stage=scene
+live_distance_contact capture=true stage=gpu elapsed=1.044386ms
+live_distance_contact capture=true stage=readout elapsed=16.366008213s
+live_distance_contact capture=true stage=complete elapsed=16.366071549s
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 162.88s
+

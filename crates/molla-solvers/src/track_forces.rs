@@ -178,6 +178,7 @@ impl TrackForces {
         for (i, owner) in owners.iter().enumerate() {
             if owner.is_some() {
                 contacts.friction.host_mut()?[i] = 0.0;
+                contacts.static_friction.host_mut()?[i] = 0.0;
                 contacts.rolling_friction.host_mut()?[i] = 0.0;
                 contacts.torsional_friction.host_mut()?[i] = 0.0;
             }

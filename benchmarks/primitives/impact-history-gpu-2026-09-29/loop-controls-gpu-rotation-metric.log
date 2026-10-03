@@ -1,0 +1,28 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.51s
+     Running tests/runtime_loop_controls.rs (target/debug/deps/runtime_loop_controls-6d091bb7df08fa1c)
+
+running 1 test
+test gpu_compliant_loop_controls_match_coupled_linear_angular_oracle ... loop controls hz=60 substeps=1: 288 cases passed
+
+thread 'gpu_compliant_loop_controls_match_coupled_linear_angular_oracle' (3752963) panicked at crates/molla-solvers/tests/runtime_loop_controls.rs:289:21:
+load hz=60 substeps=4 frame=11 case=Case { body: BodyHandle(721), joint: JointHandle(723), kind: Revolute, origin: DVec3(1920.0, 2.0, -3.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0), inertia: 100.0, motor: JointMotor { mode: None, target_position: -0.1, target_velocity: -0.2, stiffness: 18.0, damping: 4.5, max_force: 0.0, model: Force }, position: -0.0313537225908577, velocity: 0.02551723189678911 } expected=28.250411449424654 actual=DVec3(28.259496688842773, 0.0, 0.0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_compliant_loop_controls_match_coupled_linear_angular_oracle
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 18.28s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_loop_controls`
+make: *** [Makefile:112: test-gpu] Error 101

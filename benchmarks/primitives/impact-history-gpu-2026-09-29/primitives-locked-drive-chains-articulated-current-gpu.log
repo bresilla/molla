@@ -1,0 +1,37 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.10s
+     Running tests/runtime_locked_drive_chains.rs (target/debug/deps/runtime_locked_drive_chains-0a583a43948e2e5e)
+
+running 1 test
+test gpu_partial_angular_locks_preserve_coupled_feedback_and_match_cpu ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+locked_drive_chain kind=Ball models=[Force, Force] frames=100 dt=.01 substeps=2 peak=1.41886502547095e-13
+locked_drive_chain kind=Ball models=[Force, Acceleration] frames=100 dt=.01 substeps=2 peak=2.9025393200043936e-13
+locked_drive_chain kind=Ball models=[Acceleration, Force] frames=100 dt=.01 substeps=2 peak=2.1405099914773018e-13
+locked_drive_chain kind=Ball models=[Acceleration, Acceleration] frames=100 dt=.01 substeps=2 peak=2.1102276978913172e-11
+locked_drive_chain kind=D6 models=[Force, Force] frames=100 dt=.01 substeps=2 peak=1.41886502547095e-13
+locked_drive_chain kind=D6 models=[Force, Acceleration] frames=100 dt=.01 substeps=2 peak=3.430034034579421e-13
+locked_drive_chain kind=D6 models=[Acceleration, Force] frames=100 dt=.01 substeps=2 peak=2.4241719742690293e-13
+locked_drive_chain kind=D6 models=[Acceleration, Acceleration] frames=100 dt=.01 substeps=2 peak=2.1102306914305546e-11
+locked_drive_chain_parity peak=0e0
+locked_drive_chain_prepare_begin cases=8
+locked_drive_chain_prepare_complete seconds=116.165762
+locked_drive_chain kind=Ball models=[Force, Force] frames=100 dt=.01 substeps=2 peak=8.933247182263404e-7
+locked_drive_chain kind=Ball models=[Force, Acceleration] frames=100 dt=.01 substeps=2 peak=3.3057895701127382e-6
+locked_drive_chain kind=Ball models=[Acceleration, Force] frames=100 dt=.01 substeps=2 peak=4.798184772170089e-6
+locked_drive_chain kind=Ball models=[Acceleration, Acceleration] frames=100 dt=.01 substeps=2 peak=4.564409201712749e-6
+locked_drive_chain kind=D6 models=[Force, Force] frames=100 dt=.01 substeps=2 peak=8.933247182263404e-7
+locked_drive_chain kind=D6 models=[Force, Acceleration] frames=100 dt=.01 substeps=2 peak=3.3057895701127382e-6
+locked_drive_chain kind=D6 models=[Acceleration, Force] frames=100 dt=.01 substeps=2 peak=4.798184772170089e-6
+locked_drive_chain kind=D6 models=[Acceleration, Acceleration] frames=100 dt=.01 substeps=2 peak=4.564409201712749e-6
+locked_drive_chain_parity peak=5.158854272122566e-7
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 121.29s
+

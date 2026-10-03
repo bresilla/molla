@@ -1,0 +1,33 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.62s
+     Running tests/runtime_locked_drive_planes.rs (target/debug/deps/runtime_locked_drive_planes-72fbf7c6a2d41ea4)
+
+running 1 test
+locked_drive_planes cases=24 frames=101 seconds=1.005 oracle_peak=6.636546028590902e-8 anchor_peak=0e0 lock_peak=1.6997562995806104e-6 parity_peak=0e0
+test cpu_noncoaxial_two_free_axis_chains_match_projected_initial_mobility ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.48s
+     Running tests/runtime_locked_drive_planes.rs (target/debug/deps/runtime_locked_drive_planes-13c0a66907ffb3e1)
+
+running 1 test
+test gpu_noncoaxial_two_free_axis_chains_match_initial_oracle_and_cpu ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+locked_drive_planes cases=24 frames=101 seconds=1.005 oracle_peak=6.636546028590902e-8 anchor_peak=0e0 lock_peak=1.6997562995806104e-6 parity_peak=0e0
+locked_drive_planes_prepare_begin
+locked_drive_planes_prepare_complete seconds=114.402930
+locked_drive_planes cases=24 frames=101 seconds=1.005 oracle_peak=6.56284542669403e-8 anchor_peak=0e0 lock_peak=1.7214114468175746e-6 parity_peak=1.4746088728186394e-7
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 117.92s
+

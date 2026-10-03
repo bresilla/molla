@@ -1,0 +1,17 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sim/src/joint_limit_reference.rs:17:
+         let split = |value: Real| -> Result<[f32; 2]> {
+             let high = value as f32;
+             if value.is_finite() && !high.is_finite() {
+-                return Err(Error::Build("authored joint limit exceeds f32 range".into()));
++                return Err(Error::Build(
++                    "authored joint limit exceeds f32 range".into(),
++                ));
+             }
+             Ok([
+                 high,
+make: *** [Makefile:444: fmt-check] Error 1

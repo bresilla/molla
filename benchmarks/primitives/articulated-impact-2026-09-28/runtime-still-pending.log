@@ -1,0 +1,41 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.64s
+     Running tests/runtime_restitution.rs (target/debug/deps/runtime_restitution-daf7ed01298d6c08)
+
+running 1 test
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=0, measured=1.0003597564857172e0
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=0.5, measured=1.0003597564857172e0
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=1, measured=1.0003597564857172e0
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=0, measured=9.999527497640442e-1
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=0.5, measured=9.999527497640442e-1
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=1, measured=9.999527497640442e-1
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=0, measured=1.0000290343338758e0
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=0.5, measured=1.0000290343338758e0
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=1, measured=1.0000290343338758e0
+
+thread 'cpu_normal_rebound_consumes_restitution_across_step_sizes' (572101) panicked at crates/molla-solvers/tests/runtime_restitution.rs:63:9:
+dt=1.6666666666666666e-2, restitution=0, measured=1.0003597564857172e0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_normal_rebound_consumes_restitution_across_step_sizes ... FAILED
+
+failures:
+
+failures:
+    cpu_normal_rebound_consumes_restitution_across_step_sizes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_restitution`
+make[1]: *** [Makefile:74: test] Error 101
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:145: test-primitives-restitution-cpu] Error 2

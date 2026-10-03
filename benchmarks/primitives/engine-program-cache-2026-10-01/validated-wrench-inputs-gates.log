@@ -1,0 +1,21 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0599]: no method named `end_articulation` found for struct `ModelBuilder` in the current scope
+   --> crates/molla-solvers/src/rnea.rs:469:21
+    |
+469 |             builder.end_articulation();
+    |                     ^^^^^^^^^^^^^^^^
+    |
+help: there is a method `begin_articulation` with a similar name
+    |
+469 -             builder.end_articulation();
+469 +             builder.begin_articulation();
+    |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `molla-solvers` (lib test) due to 1 previous error
+make: *** [Makefile:139: test] Error 101

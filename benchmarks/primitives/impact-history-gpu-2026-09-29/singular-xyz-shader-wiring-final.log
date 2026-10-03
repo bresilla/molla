@@ -1,0 +1,12 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.94s
+     Running `target/debug/examples/check_primitives_shaders`
+shader_wiring_ok	module=featherstone	entry_points=1
+shader_wiring_ok	module=runtime_distance	entry_points=2
+Error: "body_damping: error: name `active` is a reserved keyword\n   ┌─ wgsl:12:42\n   │\n12 │ @group(0) @binding(7) var<storage, read> active: array<u32>;\n   │                                          ^^^^^^ definition of `active`\n\n"
+make: *** [Makefile:379: check-primitives-shader-wiring] Error 1

@@ -136,7 +136,11 @@ fn pressure_distribution_diagnostics_track_patch_pressure_and_width() {
     assert_eq!(low_dist.lateral_bins.len(), 4);
     assert!(high_dist.lateral_span_m > 0.1 && low_dist.lateral_span_m > 0.1);
     for (contact, distribution) in [(&high, &high_dist), (&low, &low_dist)] {
-        let load: f64 = distribution.lateral_bins.iter().map(|bin| bin.normal_load_n).sum();
+        let load: f64 = distribution
+            .lateral_bins
+            .iter()
+            .map(|bin| bin.normal_load_n)
+            .sum();
         assert!((load - contact.normal_load).abs() < contact.normal_load * 1e-9);
     }
     assert!(
@@ -4189,14 +4193,22 @@ fn adhesion_sliding_controls_reject_bad_sign_symmetry_and_nonfinite_metrics() {
     let mut wrong_sign = report;
     wrong_sign.moment_sign_stable = false;
     assert!(!wrong_sign.passed());
-    assert!(wrong_sign.acceptance_checks().iter().any(|check|
-        check.check_id == "adhesion_sliding_moment_sign_stable" && !check.passed));
+    assert!(
+        wrong_sign
+            .acceptance_checks()
+            .iter()
+            .any(|check| check.check_id == "adhesion_sliding_moment_sign_stable" && !check.passed)
+    );
     for error in [1e-8, f64::INFINITY, f64::NAN] {
         let mut asymmetric = report;
         asymmetric.max_mirrored_moment_error_over_load_radius = error;
         assert!(!asymmetric.passed());
-        assert!(asymmetric.acceptance_checks().iter().any(|check|
-            check.check_id == "adhesion_sliding_moment_mirrored" && !check.passed));
+        assert!(
+            asymmetric
+                .acceptance_checks()
+                .iter()
+                .any(|check| check.check_id == "adhesion_sliding_moment_mirrored" && !check.passed)
+        );
     }
 }
 
@@ -8894,13 +8906,21 @@ fn brush_load_deflection_sweep() {
         p_low > p_high,
         "low-pressure patch should be longer at Fz=5 kN: low={p_low} high={p_high}"
     );
-    let params = RealTireParams { pressure_pa: 120_000.0, ..Default::default() };
+    let params = RealTireParams {
+        pressure_pa: 120_000.0,
+        ..Default::default()
+    };
     let height = solve_loaded_tire_hub_height(&params, &terrain, 0.0, 0.0, 5_000.0);
     let inner = params.radius * (std::f64::consts::PI / params.segments as f64).cos();
     let lower = 2.0 * (inner * inner - height * height).max(0.0).sqrt();
-    let upper = 2.0 * (params.radius * params.radius - height * height).max(0.0).sqrt();
-    assert!((lower - 1e-12..=upper + 1e-12).contains(&p_low),
-        "patch {p_low} outside inscribed-polygon/circle bounds [{lower}, {upper}]");
+    let upper = 2.0
+        * (params.radius * params.radius - height * height)
+            .max(0.0)
+            .sqrt();
+    assert!(
+        (lower - 1e-12..=upper + 1e-12).contains(&p_low),
+        "patch {p_low} outside inscribed-polygon/circle bounds [{lower}, {upper}]"
+    );
 }
 
 /// Hardening sweep for the reduced brush tire: over a small grid
@@ -9036,7 +9056,10 @@ fn brush_contact_hardens_invalid_inputs() {
         "sanitized bad tire input should stay finite: {out:?}"
     );
     assert!(out.normal_load >= 0.0);
-    assert!(out.contact_count <= 512 * bad_params.width_segments.clamp(1, 16), "brush grid hard cap should hold");
+    assert!(
+        out.contact_count <= 512 * bad_params.width_segments.clamp(1, 16),
+        "brush grid hard cap should hold"
+    );
 
     let empty = evaluate_brush_tire(
         &RealTireParams::default(),

@@ -1,0 +1,234 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-vehicle v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-vehicle)
+    Checking molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Checking molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Checking bevy_core_pipeline v0.18.1
+    Checking bevy_input_focus v0.18.1
+    Checking bevy_gizmos v0.18.1
+    Checking bevy_winit v0.18.1
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking bevy_pbr v0.18.1
+    Checking bevy_post_process v0.18.1
+    Checking bevy_egui v0.39.1
+error: this `if` statement can be collapsed
+  --> crates/molla-kernels/src/cone_geometry.rs:29:9
+   |
+29 | /         if let Some(scale) = angles
+30 | |             .into_iter()
+31 | |             .flatten()
+32 | |             .filter(|&a| a > 0.0)
+...  |
+44 | |         }
+   | |_________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+   = note: `-D clippy::collapsible-if` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+   |
+33 ~             .reduce(f64::min)
+34 ~             && ((scale as f32).powi(2) < f32::MIN_POSITIVE
+35 |                 || angles
+...
+38 |                     .filter(|&a| a > 0.0)
+39 ~                     .any(|a| ((scale / a) as f32).powi(2) < f32::MIN_POSITIVE))
+40 |             {
+41 |                 return Err(Error::Gpu("cone extents exceed f32 precision".into()));
+42 ~             }
+   |
+
+error: items after a test module
+   --> crates/molla-kernels/src/rnea.rs:89:1
+    |
+ 89 |   mod tests {
+    |   ^^^^^^^^^
+...
+228 |   pub struct InverseDynamicsKernel {
+    |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+240 |   impl InverseDynamicsKernel {
+    |   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+553 | / pub fn inverse_dynamics_gpu(
+554 | |     engine: &Engine,
+555 | |     model: &Model,
+556 | |     state: &State,
+...   |
+559 | |     tau_out: &mut [Real],
+560 | | ) -> Result<()> {
+    | |_______________^
+...
+596 | / fn buffer_entry<'a>(
+597 | |     binding: u32,
+598 | |     buf: Option<&'a wgpu::Buffer>,
+599 | | ) -> Result<wgpu::BindGroupEntry<'a>> {
+    | |_____________________________________^
+...
+611 |   fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
+    |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+615 |   fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+    |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#items_after_test_module
+    = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+    = help: move the items to before the test module was defined
+
+error: this `if` statement can be collapsed
+   --> crates/molla-kernels/src/soft_rigid_solve.rs:707:13
+    |
+707 | /             if index == 4 {
+708 | |                 if let Some(pipelines) = &self.block_schedule {
+709 | |                     for (pipeline, groups) in pipelines.iter().zip([
+710 | |                         self.row_count.div_ceil(64),
+...   |
+718 | |             }
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+707 ~             if index == 4
+708 ~                 && let Some(pipelines) = &self.block_schedule {
+709 |                     for (pipeline, groups) in pipelines.iter().zip([
+...
+716 |                     }
+717 ~                 }
+    |
+
+error: manual implementation of `.is_multiple_of()`
+   --> crates/molla-kernels/src/vbd_cloth/coupled_patch.rs:173:16
+    |
+173 |             || bindings.contacts.size() % 80 != 0
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace with: `!bindings.contacts.size().is_multiple_of(80)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_is_multiple_of
+    = note: `-D clippy::manual-is-multiple-of` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_is_multiple_of)]`
+
+error: manual implementation of `.is_multiple_of()`
+   --> crates/molla-kernels/src/vbd_cloth/coupled_patch.rs:174:16
+    |
+174 |             || bindings.rigid_velocity.size() % 4 != 0
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace with: `!bindings.rigid_velocity.size().is_multiple_of(4)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_is_multiple_of
+
+error: this `if` statement can be collapsed
+   --> crates/molla-kernels/src/vbd_cloth.rs:811:9
+    |
+811 | /         if mode == DispatchMode::PolishMaterial {
+812 | |             if let Some(patch) = self
+813 | |                 .coupled_patch
+814 | |                 .as_ref()
+...   |
+831 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+811 ~         if mode == DispatchMode::PolishMaterial
+812 ~             && let Some(patch) = self
+813 |                 .coupled_patch
+...
+829 |                 }
+830 ~             }
+    |
+
+error: this `if` statement can be collapsed
+   --> crates/molla-kernels/src/vbd_cloth.rs:812:13
+    |
+812 | /             if let Some(patch) = self
+813 | |                 .coupled_patch
+814 | |                 .as_ref()
+815 | |                 .filter(|patch| patch.group().is_some())
+...   |
+830 | |             }
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+815 ~                 .filter(|patch| patch.group().is_some())
+816 ~                 && (model.shape_count != 0
+817 |                     || !model.vertex_cable_bending_entries.is_empty()
+...
+821 |                         .zip(model.particle_inv_mass.device_buffer())
+822 ~                         .is_some_and(|(input, mass)| patch.matches_target(input, mass)))
+823 |                 {
+...
+827 |                     ));
+828 ~                 }
+    |
+
+error: this `if` statement can be collapsed
+    --> crates/molla-kernels/src/vbd_cloth.rs:1469:9
+     |
+1469 | /         if mode == DispatchMode::PolishMaterial {
+1470 | |             if let Some(patch) = &mut self.coupled_patch {
+1471 | |                 if patch.group().is_some() {
+1472 | |                     patch.encode_state(&mut encoder, 2);
+...    |
+1476 | |         }
+     | |_________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+help: collapse nested if block
+     |
+1469 ~         if mode == DispatchMode::PolishMaterial
+1470 ~             && let Some(patch) = &mut self.coupled_patch {
+1471 |                 if patch.group().is_some() {
+ ...
+1474 |                 }
+1475 ~             }
+     |
+
+error: this `if` statement can be collapsed
+    --> crates/molla-kernels/src/vbd_cloth.rs:1470:13
+     |
+1470 | /             if let Some(patch) = &mut self.coupled_patch {
+1471 | |                 if patch.group().is_some() {
+1472 | |                     patch.encode_state(&mut encoder, 2);
+1473 | |                     patch.select_pending = false;
+1474 | |                 }
+1475 | |             }
+     | |_____________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+help: collapse nested if block
+     |
+1470 ~             if let Some(patch) = &mut self.coupled_patch
+1471 ~                 && patch.group().is_some() {
+1472 |                     patch.encode_state(&mut encoder, 2);
+1473 |                     patch.select_pending = false;
+1474 ~                 }
+     |
+
+error: items after a test module
+    --> crates/molla-kernels/src/vbd_cloth.rs:1547:1
+     |
+1547 |   mod gradient_scratch_tests {
+     |   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1565 | / fn buffer_entry<'a>(
+1566 | |     binding: u32,
+1567 | |     buf: Option<&'a wgpu::Buffer>,
+1568 | | ) -> Result<wgpu::BindGroupEntry<'a>> {
+     | |_____________________________________^
+...
+1577 |   fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
+     |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#items_after_test_module
+     = help: move the items to before the test module was defined
+
+error: could not compile `molla-kernels` (lib) due to 8 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `molla-kernels` (lib test) due to 10 previous errors
+make: *** [Makefile:344: clippy-check] Error 101

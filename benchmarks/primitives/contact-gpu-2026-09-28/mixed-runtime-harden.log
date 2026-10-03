@@ -1,0 +1,4081 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:54:
+ use molla::math::{Quat as MQuat, Vec3 as MVec3};
+ use molla::prelude as mp;
+ use molla::sensors::{
+-    AerialScanMetadata, BodyContactReading, BoundingBox2D, CameraChannels,
+-    ContactSensor, ImuMount, ImuReading, ImuSensor, Raycaster,
+-    ScanMetadata, SensorCommandBatch, TiledCamera, TiledCameraConfig,
++    AerialScanMetadata, BodyContactReading, BoundingBox2D, CameraChannels, ContactSensor, ImuMount,
++    ImuReading, ImuSensor, Raycaster, ScanMetadata, SensorCommandBatch, TiledCamera,
++    TiledCameraConfig,
+ };
+ use molla::solvers::{
+     FeatherstoneSolver, IkConfig, IkObjective, IkSolver, Solver as _, SphConfig, SphSimulation,
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:68:
+ #[cfg(test)]
+ mod viewer_sensor_tests;
+ 
++mod annotation_preview;
++mod camera_preview;
++mod lidar_preview;
++mod sensor_lab;
+ mod sensor_preview;
+-mod viewer_controls;
+ mod sensor_timing;
+-mod sensor_lab;
+-mod lidar_preview;
+-mod camera_preview;
+-mod annotation_preview;
++mod viewer_controls;
+ use annotation_preview::AnnotationPreview;
+ use camera_preview::{CameraPreview, CameraRequest};
+ use lidar_preview::LidarPreview;
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:81:
+-use sensor_preview::{SensorPreview, ViewerSensorClock, preview_pool_config, sensor_preview_pane, sensor_preview_scroll};
++use sensor_preview::{
++    SensorPreview, ViewerSensorClock, preview_pool_config, sensor_preview_pane,
++    sensor_preview_scroll,
++};
+ 
+ #[cfg(not(target_arch = "wasm32"))]
+ #[global_allocator]
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:498:
+         .add_systems(Update, update_lidar_v2_example.after(step_simulation))
+         .add_systems(Update, draw_lidar_v2_gizmos.after(update_lidar_v2_example))
+         .add_systems(Update, update_aerial_lidar_example.after(step_simulation))
+-        .add_systems(Update, draw_aerial_lidar_gizmos.after(update_aerial_lidar_example))
++        .add_systems(
++            Update,
++            draw_aerial_lidar_gizmos.after(update_aerial_lidar_example),
++        )
+         .add_systems(Update, update_solar_sky_example)
+         .add_systems(Update, draw_solar_sky_gizmos)
+-        .add_systems(Update, update_synth_annotation_example.after(step_simulation))
+-        .add_systems(Update, draw_synth_annotation_gizmos.after(update_synth_annotation_example))
+-        .add_systems(Update, update_sensor_lab_motion.after(step_simulation).before(sync_transforms))
++        .add_systems(
++            Update,
++            update_synth_annotation_example.after(step_simulation),
++        )
++        .add_systems(
++            Update,
++            draw_synth_annotation_gizmos.after(update_synth_annotation_example),
++        )
++        .add_systems(
++            Update,
++            update_sensor_lab_motion
++                .after(step_simulation)
++                .before(sync_transforms),
++        )
+         .add_systems(Update, update_sensor_lab.after(update_sensor_lab_motion))
+         .add_systems(Update, draw_sensor_lab.after(update_sensor_lab))
+         .add_systems(Update, update_tire_lab_example)
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:2114:
+     ];
+ 
+     fn sensor_only(self) -> bool {
+-        matches!(self, Self::LidarV2 | Self::AerialLidarPass | Self::SyntheticAnnotation | Self::SensorLab)
++        matches!(
++            self,
++            Self::LidarV2 | Self::AerialLidarPass | Self::SyntheticAnnotation | Self::SensorLab
++        )
+     }
+ 
+     fn label(self) -> &'static str {
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:2278:
+ 
+     fn description(self) -> &'static str {
+         match self {
+-            Scene::SensorLab => "A prescribed moving triangle-mesh occluder shares one GPU sensor scene with independently scheduled LiDAR and camera queries. An IMU follows its analytic body velocity. The pane controls rates, scan layout and FOV, displays camera/IMU data and sample timing; colored LiDAR hits reveal occlusion of the stationary sphere. This is a sensing calibration fixture, not a dynamics solver.",
++            Scene::SensorLab => {
++                "A prescribed moving triangle-mesh occluder shares one GPU sensor scene with independently scheduled LiDAR and camera queries. An IMU follows its analytic body velocity. The pane controls rates, scan layout and FOV, displays camera/IMU data and sample timing; colored LiDAR hits reveal occlusion of the stationary sphere. This is a sensing calibration fixture, not a dynamics solver."
++            }
+             Scene::Pile => {
+                 "Drops a mixed pile of rigid bodies onto the floor to exercise basic contact, friction, and settling. The expected behavior is a noisy stack that loses energy and comes to rest without exploding or drifting away."
+             }
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:4113:
+         let queue = self.engine.queue().unwrap().clone();
+         for state in [&mut self.state_a, &mut self.state_b] {
+             readback_buffer(&mut state.body_q, &device, &queue).expect("reset body pose readback");
+-            readback_buffer(&mut state.body_qd, &device, &queue).expect("reset body velocity readback");
+-            readback_buffer(&mut state.particle_q, &device, &queue).expect("reset particle position readback");
+-            readback_buffer(&mut state.particle_qd, &device, &queue).expect("reset particle velocity readback");
++            readback_buffer(&mut state.body_qd, &device, &queue)
++                .expect("reset body velocity readback");
++            readback_buffer(&mut state.particle_q, &device, &queue)
++                .expect("reset particle position readback");
++            readback_buffer(&mut state.particle_qd, &device, &queue)
++                .expect("reset particle velocity readback");
+         }
+ 
+         self.state_a
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:4346:
+ const SCRIPT_DRAG_STEPS: u64 = 8;
+ 
+ fn script_point(text: &str) -> Option<Vec<f32>> {
+-    text.split('/').map(|part| part.trim().parse::<f32>().ok()).collect()
++    text.split('/')
++        .map(|part| part.trim().parse::<f32>().ok())
++        .collect()
+ }
+ 
+ /// Expands one scripted entry into its per-frame primitive actions.
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:4477:
+             ScriptAction::Button(pressed) => {
+                 pointer.1.write(MouseButtonInput {
+                     button: MouseButton::Left,
+-                    state: if *pressed { ButtonState::Pressed } else { ButtonState::Released },
++                    state: if *pressed {
++                        ButtonState::Pressed
++                    } else {
++                        ButtonState::Released
++                    },
+                     window: window_entity,
+                 });
+             }
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:4484:
+             ScriptAction::Resize(size) => {
+                 window.resolution.set(size.x, size.y);
+-                eprintln!("viewer script: frame {frame} requested {}x{}", size.x, size.y);
++                eprintln!(
++                    "viewer script: frame {frame} requested {}x{}",
++                    size.x, size.y
++                );
+             }
+         }
+     }
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:4771:
+     }
+     run.step_once = false;
+     if sim.scene.sensor_only() {
+-        for _ in 0..SUBSTEPS_PER_FRAME { sim.sensor_clock.advance(); }
++        for _ in 0..SUBSTEPS_PER_FRAME {
++            sim.sensor_clock.advance();
++        }
+         return;
+     }
+     // GPU IK arm scene is purely kinematic; `update_gpu_ik_arm`
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:4984:
+         readback_buffer(&mut state_a.body_q, &device, &queue).expect("body pose readback");
+         readback_buffer(&mut state_a.body_qd, &device, &queue).expect("body velocity readback");
+         if model.joint_dof_total > 0 {
+-            readback_buffer(&mut state_a.joint_q, &device, &queue).expect("joint position readback");
+-            readback_buffer(&mut state_a.joint_qd, &device, &queue).expect("joint velocity readback");
++            readback_buffer(&mut state_a.joint_q, &device, &queue)
++                .expect("joint position readback");
++            readback_buffer(&mut state_a.joint_qd, &device, &queue)
++                .expect("joint velocity readback");
+         }
+         // Synchronize device-owned particle results for the renderer.
+         if model.particle_count > 0 {
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:4992:
+-            readback_buffer(&mut state_a.particle_q, &device, &queue).expect("particle position readback");
+-            readback_buffer(&mut state_a.particle_qd, &device, &queue).expect("particle velocity readback");
++            readback_buffer(&mut state_a.particle_q, &device, &queue)
++                .expect("particle position readback");
++            readback_buffer(&mut state_a.particle_qd, &device, &queue)
++                .expect("particle velocity readback");
+         }
+         total_download_us += d0.elapsed().as_secs_f64() * 1_000_000.0;
+         sensor_clock.advance();
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/main.rs:5988:
+         let anchor = PaneAnchor::RightRail(RailZone::Start);
+         Pane2::new(PANE_SCENE, title, anchor, accent_color)
+             .resize(PaneResize::BOTH)
+-            .show(ctx, |ui| sensor_preview_scroll(ui, scene, |ui| {
+-                scene_description_pane(ui, scene, &mut description_pane);
+-                match scene {
+-                    Scene::Lidar => lidar_pane(ui, &mut lidar_config, lidar_state),
+-                    Scene::Imu => imu_pane(ui, imu_state),
+-                    Scene::Contact => contact_pane(ui, contact_state),
+-                    Scene::LidarV2 => lidar_v2_pane(ui, &pane_states.lidar_v2),
+-                    Scene::AerialLidarPass => aerial_lidar_pane(ui, &pane_states.aerial_lidar),
+-                    Scene::SyntheticAnnotation => synth_annotation_pane(ui, &pane_states.annotation),
+-                    Scene::SensorLab => sensor_lab_pane(ui, &mut pane_states.sensor_lab),
+-                    Scene::Arm => arm_pane(ui, &mut pane_states.arm, &sim, &mut pending),
+-                    Scene::Shapes => shapes_pane(ui, &sim),
+-                    Scene::GpuIkArm => gpu_ik_pane(ui, &mut pane_states.gpu_ik, &sim),
+-                    Scene::GpuNarrowPhase => gpu_np_pane(ui, &mut pane_states.gpu_np, accent_color),
+-                    Scene::Camera => camera_pane(ui, &mut pane_states.camera, anchor, accent_color),
+-                    Scene::Actuator => actuator_pane(ui, &mut pane_states.actuator),
+-                    Scene::Quadrotor => quadrotor_pane(ui, &mut pane_states.quad),
+-                    Scene::BroadPhase => gpu_bp_pane(ui, &mut pane_states.gpu_bp, accent_color),
+-                    Scene::VbdCloth => {
+-                        vbd_cloth_pane(ui, &mut pane_states.vbd, &mut sim, accent_color)
++            .show(ctx, |ui| {
++                sensor_preview_scroll(ui, scene, |ui| {
++                    scene_description_pane(ui, scene, &mut description_pane);
++                    match scene {
++                        Scene::Lidar => lidar_pane(ui, &mut lidar_config, lidar_state),
++                        Scene::Imu => imu_pane(ui, imu_state),
++                        Scene::Contact => contact_pane(ui, contact_state),
++                        Scene::LidarV2 => lidar_v2_pane(ui, &pane_states.lidar_v2),
++                        Scene::AerialLidarPass => aerial_lidar_pane(ui, &pane_states.aerial_lidar),
++                        Scene::SyntheticAnnotation => {
++                            synth_annotation_pane(ui, &pane_states.annotation)
++                        }
++                        Scene::SensorLab => sensor_lab_pane(ui, &mut pane_states.sensor_lab),
++                        Scene::Arm => arm_pane(ui, &mut pane_states.arm, &sim, &mut pending),
++                        Scene::Shapes => shapes_pane(ui, &sim),
++                        Scene::GpuIkArm => gpu_ik_pane(ui, &mut pane_states.gpu_ik, &sim),
++                        Scene::GpuNarrowPhase => {
++                            gpu_np_pane(ui, &mut pane_states.gpu_np, accent_color)
++                        }
++                        Scene::Camera => {
++                            camera_pane(ui, &mut pane_states.camera, anchor, accent_color)
++                        }
++                        Scene::Actuator => actuator_pane(ui, &mut pane_states.actuator),
++                        Scene::Quadrotor => quadrotor_pane(ui, &mut pane_states.quad),
++                        Scene::BroadPhase => gpu_bp_pane(ui, &mut pane_states.gpu_bp, accent_color),
++                        Scene::VbdCloth => {
++                            vbd_cloth_pane(ui, &mut pane_states.vbd, &mut sim, accent_color)
++                        }
++                        Scene::ReferencePendulum => {
++                            reference_pendulum_pane(ui, &mut pane_states.reference_pendulum, &sim)
++                        }
++                        Scene::DiffArm => diff_arm_pane(ui, &mut pane_states.diff_arm),
++                        Scene::DiffArm6 => diff_arm6_pane(ui, &mut pane_states.diff_arm6),
++                        Scene::MeshTools => {
++                            mesh_tools_pane(ui, &mut pane_states.mesh, &mut pending, scene)
++                        }
++                        Scene::NeuralPolicy => neural_policy_pane(ui, &mut pane_states.neural),
++                        Scene::NeuralLstm => neural_lstm_pane(ui, &mut pane_states.neural_lstm),
++                        Scene::Cable => {
++                            cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color)
++                        }
++                        Scene::Mpm => mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color),
++                        Scene::Jelly => jelly_pane(
++                            ui,
++                            &mut pane_states.jelly,
++                            &mut sim,
++                            &mut pending,
++                            accent_color,
++                        ),
++                        Scene::Pendulum => pendulum_pane(ui, &pane_states.pendulum),
++                        Scene::Conveyor => conveyor_pane(ui, &mut pane_states.conveyor),
++                        Scene::ClothBending => {
++                            cloth_bending_pane(ui, &mut pane_states.cloth_bend, &mut pending, scene)
++                        }
++                        Scene::ClothRollers => {
++                            cloth_rollers_pane(ui, &mut warp_states.cloth_rollers)
++                        }
++                        Scene::ClothTwist => cloth_twist_pane(ui, &mut pane_states.cloth_twist),
++                        Scene::CableBundleHysteresis => {
++                            cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color)
++                        }
++                        Scene::MpmSnowBall => {
++                            mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
++                        }
++                        Scene::MpmTwoWay => {
++                            mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
++                        }
++                        Scene::MpmMultiMaterial => {
++                            mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
++                        }
++                        Scene::MpmBeamTwist => {
++                            mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
++                        }
++                        Scene::CartPole => {
++                            cartpole_pane(ui, &mut pane_states.cartpole, accent_color)
++                        }
++                        Scene::CartPoleSwarm => cartpole_swarm_pane(ui, &sim),
++                        Scene::FourBar => fourbar_pane(ui, &mut pane_states.fourbar),
++                        Scene::DiffBall => {
++                            diff_ball_pane(ui, &mut pane_states.diff_ball, accent_color)
++                        }
++                        Scene::DiffSpring => {
++                            diff_spring_pane(ui, &mut pane_states.diff_spring, accent_color)
++                        }
++                        Scene::SoftbodyDrop => softbody_drop_pane(ui, &mut sim),
++                        Scene::ClothCollar => cloth_collar_pane(ui, &mut sim),
++                        Scene::FastSoftImpact => fast_soft_impact_pane(ui, &mut sim),
++                        Scene::BarrierCloth
++                        | Scene::PpfCurtain
++                        | Scene::PpfTwist
++                        | Scene::PpfFriction
++                        | Scene::PpfHang
++                        | Scene::PpfStack
++                        | Scene::PpfTrampoline
++                        | Scene::PpfTrapped
++                        | Scene::PpfNeedle
++                        | Scene::PpfBelt
++                        | Scene::PpfNoodle
++                        | Scene::PpfWoven
++                        | Scene::PpfKnot
++                        | Scene::PpfDomino
++                        | Scene::PpfCards
++                        | Scene::PpfCodim
++                        | Scene::PpfFitting
++                        | Scene::PpfRibbon
++                        | Scene::PpfPdrdChain => barrier_cloth_pane(ui, &mut sim),
++                        Scene::SoftBrake => soft_brake_pane(ui, &mut sim),
++                        Scene::FemHeat => fem_heat_pane(ui, &mut pane_states.fem_heat),
++                        Scene::FemHeatP2 => fem_heat_p2_pane(ui, &mut pane_states.fem_heat_p2),
++                        Scene::FemBeam => fem_beam_pane(ui, &mut pane_states.fem_beam),
++                        Scene::FemDiffBeam => {
++                            fem_diff_beam_pane(ui, &mut pane_states.fem_diff_beam)
++                        }
++                        Scene::FemStokes => fem_stokes_pane(ui, &mut pane_states.fem_stokes),
++                        Scene::TireDynamics => {
++                            tire_dynamics_pane(ui, &mut pane_states.tire_dynamics)
++                        }
++                        Scene::TireTraction => {
++                            tire_traction_pane(ui, &mut pane_states.tire_traction, accent_color)
++                        }
++                        Scene::TireRealistic => {
++                            tire_realistic_pane(ui, &mut pane_states.tire_realistic, accent_color)
++                        }
++                        Scene::SoilCompaction => {
++                            soil_compaction_pane(ui, &mut pane_states.soil_compaction)
++                        }
++                        Scene::WarpRaycast => warp_raycast_pane(ui, &mut warp_states.raycast),
++                        Scene::WarpRaymarch => warp_raymarch_pane(ui, &mut warp_states.raymarch),
++                        Scene::WarpMesh => warp_mesh_pane(ui, &mut warp_states.mesh),
++                        Scene::WarpMeshIntersect => {
++                            warp_mesh_intersect_pane(ui, &mut warp_states.mesh_intersect)
++                        }
++                        Scene::WarpSampleMesh => {
++                            warp_sample_mesh_pane(ui, &mut warp_states.sample_mesh)
++                        }
++                        Scene::WarpMarchingCubes => {
++                            warp_marching_cubes_pane(ui, &mut warp_states.marching_cubes)
++                        }
++                        Scene::WarpNvdb => warp_nvdb_pane(ui, &mut warp_states.nvdb),
++                        Scene::WarpDem => warp_dem_pane(ui, &mut warp_states),
++                        Scene::WarpFluid => warp_fluid_pane(ui, &mut warp_states),
++                        Scene::WarpSph => warp_sph_pane(ui, &mut warp_states),
++                        Scene::WarpTileFft => warp_tile_fft_pane(ui, &mut warp_states.tile_fft),
++                        Scene::WarpTileMlp => warp_tile_mlp_pane(ui, &mut warp_states.tile_mlp),
++                        Scene::WarpTileNbody => {
++                            warp_tile_nbody_pane(ui, &mut warp_states.tile_nbody)
++                        }
++                        Scene::WarpTileCholesky => {
++                            warp_tile_cholesky_pane(ui, &mut warp_states.tile_cholesky)
++                        }
++                        Scene::WarpParticleRepulsion => {
++                            warp_repulsion_pane(ui, &mut warp_states.repulsion)
++                        }
++                        Scene::WarpFemDiffusion => {
++                            warp_fem_diffusion_pane(ui, &mut warp_states.fem_diff)
++                        }
++                        Scene::WarpFemDiffusion3D => {
++                            warp_fem_diffusion_3d_pane(ui, &mut warp_states.fem_diff3d)
++                        }
++                        Scene::WarpFemConvDiff => {
++                            warp_fem_convdiff_pane(ui, &mut warp_states.fem_convdiff)
++                        }
++                        Scene::WarpFemConvDiffDg => {
++                            warp_fem_convdiff_dg_pane(ui, &mut warp_states.fem_convdiff_dg)
++                        }
++                        Scene::WarpFemTaylorGreen => {
++                            warp_fem_taylor_pane(ui, &mut warp_states.fem_taylor)
++                        }
++                        Scene::WarpFemKelvinHelmholtz => {
++                            warp_fem_kh_pane(ui, &mut warp_states.fem_kh)
++                        }
++                        Scene::WarpFemStreamlines => {
++                            warp_fem_streamlines_pane(ui, &mut warp_states.fem_streamlines)
++                        }
++                        Scene::WarpFemStokesTransfer => {
++                            warp_fem_stokes_transfer_pane(ui, &mut warp_states.fem_stokes_transfer)
++                        }
++                        Scene::WarpFemDeformedGeometry => {
++                            warp_fem_deformed_pane(ui, &mut warp_states.fem_deformed)
++                        }
++                        Scene::WarpFemDistortion => {
++                            warp_fem_distortion_pane(ui, &mut warp_states.fem_distortion)
++                        }
++                        Scene::WarpFemElasticOpt => {
++                            warp_fem_elastic_opt_pane(ui, &mut warp_states.fem_elastic_opt)
++                        }
++                        Scene::WarpFemMixedElasticity => warp_fem_mixed_elasticity_pane(
++                            ui,
++                            &mut warp_states.fem_mixed_elasticity,
++                        ),
++                        Scene::WarpFemNonconformingContact => warp_fem_nonconforming_contact_pane(
++                            ui,
++                            &mut warp_states.fem_nonconforming_contact,
++                        ),
++                        Scene::WarpFftFluid => warp_fft_fluid_pane(ui, &mut warp_states.fft_fluid),
++                        Scene::WarpDistortion3D => {
++                            warp_distortion_3d_pane(ui, &mut warp_states.distortion_3d)
++                        }
++                        Scene::WarpApicFluid => {
++                            warp_apic_fluid_pane(ui, &mut warp_states.apic_fluid)
++                        }
++                        Scene::WarpWave => warp_wave_pane(ui, &mut warp_states.wave),
++                        Scene::WarpDiffRay => warp_diff_ray_pane(ui, &mut warp_states.diff_ray),
++                        Scene::WarpTileFilter => {
++                            warp_tile_filter_pane(ui, &mut warp_states.tile_filter)
++                        }
++                        Scene::WarpTileCompaction => {
++                            warp_tile_compaction_pane(ui, &mut warp_states.tile_compaction)
++                        }
++                        Scene::AdamLandscape => {
++                            adam_landscape_pane(ui, &mut warp_states.adam_landscape)
++                        }
++                        Scene::WarpTileMatmul => {
++                            warp_tile_matmul_pane(ui, &mut warp_states.tile_matmul)
++                        }
++                        Scene::WarpTileConvolution => {
++                            warp_tile_convolution_pane(ui, &mut warp_states.tile_convolution)
++                        }
++                        Scene::WarpTileMcgp => warp_tile_mcgp_pane(ui, &mut warp_states.tile_mcgp),
++                        Scene::ImplicitMpmBingham => {
++                            implicit_mpm_bingham_pane(ui, &mut warp_states.implicit_mpm_bingham)
++                        }
++                        Scene::WarpStableFluid => {
++                            warp_stable_fluid_pane(ui, &mut warp_states.stable_fluid)
++                        }
++                        Scene::JellyDampingFall => {
++                            jelly_damping_fall_pane(ui, &mut warp_states.jelly_damping)
++                        }
++                        Scene::DgBurgersShock => dg_burgers_pane(ui, &mut warp_states.dg_burgers),
++                        Scene::ShallowWaterDamBreak => {
++                            swe_dam_break_pane(ui, &mut warp_states.swe_dam_break)
++                        }
++                        Scene::ImplicitMpmFull27 => {
++                            implicit_mpm_full27_pane(ui, &mut warp_states.implicit_mpm_full27)
++                        }
++                        Scene::SplatPoseRecovery => {
++                            splat_pose_recovery_pane(ui, &mut warp_states.splat_pose)
++                        }
++                        Scene::AmrHeat => amr_heat_pane(ui, &mut warp_states.amr_heat),
++                        Scene::Magnetostatics => {
++                            magnetostatics_pane(ui, &mut warp_states.magnetostatics)
++                        }
++                        Scene::ClothPokerCards => {
++                            cloth_poker_cards_pane(ui, &mut warp_states.cloth_poker_cards)
++                        }
++                        Scene::SoftbodyHanging => {
++                            softbody_hanging_pane(ui, &mut warp_states.softbody_hanging)
++                        }
++                        Scene::CableTwist => cable_twist_pane(ui, &mut warp_states.cable_twist),
++                        Scene::IkCustom => ik_custom_pane(ui, &mut warp_states.ik_custom),
++                        Scene::IkCubeStacking => {
++                            ik_cube_stacking_pane(ui, &mut warp_states.ik_cube_stacking)
++                        }
++                        Scene::DiffsimDrone => {
++                            diffsim_drone_pane(ui, &mut warp_states.diffsim_drone)
++                        }
++                        Scene::FluidCheckpointOptimization => {
++                            fluid_checkpoint_pane(ui, &mut warp_states.fluid_checkpoint)
++                        }
++                        Scene::NavierStokesPerturbationOptimization => {
++                            ns_perturbation_pane(ui, &mut warp_states.ns_perturbation)
++                        }
++                        Scene::WarpFftPoisson2d => {
++                            warp_fft_poisson_2d_pane(ui, &mut warp_states.fft_poisson_2d)
++                        }
++                        _ => {}
+                     }
+-                    Scene::ReferencePendulum => {
+-                        reference_pendulum_pane(ui, &mut pane_states.reference_pendulum, &sim)
+-                    }
+-                    Scene::DiffArm => diff_arm_pane(ui, &mut pane_states.diff_arm),
+-                    Scene::DiffArm6 => diff_arm6_pane(ui, &mut pane_states.diff_arm6),
+-                    Scene::MeshTools => {
+-                        mesh_tools_pane(ui, &mut pane_states.mesh, &mut pending, scene)
+-                    }
+-                    Scene::NeuralPolicy => neural_policy_pane(ui, &mut pane_states.neural),
+-                    Scene::NeuralLstm => neural_lstm_pane(ui, &mut pane_states.neural_lstm),
+-                    Scene::Cable => cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color),
+-                    Scene::Mpm => mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color),
+-                    Scene::Jelly => jelly_pane(
+-                        ui,
+-                        &mut pane_states.jelly,
+-                        &mut sim,
+-                        &mut pending,
+-                        accent_color,
+-                    ),
+-                    Scene::Pendulum => pendulum_pane(ui, &pane_states.pendulum),
+-                    Scene::Conveyor => conveyor_pane(ui, &mut pane_states.conveyor),
+-                    Scene::ClothBending => {
+-                        cloth_bending_pane(ui, &mut pane_states.cloth_bend, &mut pending, scene)
+-                    }
+-                    Scene::ClothRollers => cloth_rollers_pane(ui, &mut warp_states.cloth_rollers),
+-                    Scene::ClothTwist => cloth_twist_pane(ui, &mut pane_states.cloth_twist),
+-                    Scene::CableBundleHysteresis => {
+-                        cable_pane(ui, &mut pane_states.cable, &mut sim, accent_color)
+-                    }
+-                    Scene::MpmSnowBall => {
+-                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+-                    }
+-                    Scene::MpmTwoWay => mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color),
+-                    Scene::MpmMultiMaterial => {
+-                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+-                    }
+-                    Scene::MpmBeamTwist => {
+-                        mpm_pane(ui, &mut pane_states.mpm, &mut sim, accent_color)
+-                    }
+-                    Scene::CartPole => cartpole_pane(ui, &mut pane_states.cartpole, accent_color),
+-                    Scene::CartPoleSwarm => cartpole_swarm_pane(ui, &sim),
+-                    Scene::FourBar => fourbar_pane(ui, &mut pane_states.fourbar),
+-                    Scene::DiffBall => diff_ball_pane(ui, &mut pane_states.diff_ball, accent_color),
+-                    Scene::DiffSpring => {
+-                        diff_spring_pane(ui, &mut pane_states.diff_spring, accent_color)
+-                    }
+-                    Scene::SoftbodyDrop => softbody_drop_pane(ui, &mut sim),
+-                    Scene::ClothCollar => cloth_collar_pane(ui, &mut sim),
+-                    Scene::FastSoftImpact => fast_soft_impact_pane(ui, &mut sim),
+-                    Scene::BarrierCloth
+-                    | Scene::PpfCurtain
+-                    | Scene::PpfTwist
+-                    | Scene::PpfFriction
+-                    | Scene::PpfHang
+-                    | Scene::PpfStack
+-                    | Scene::PpfTrampoline
+-                    | Scene::PpfTrapped
+-                    | Scene::PpfNeedle
+-                    | Scene::PpfBelt
+-                    | Scene::PpfNoodle
+-                    | Scene::PpfWoven
+-                    | Scene::PpfKnot
+-                    | Scene::PpfDomino
+-                    | Scene::PpfCards
+-                    | Scene::PpfCodim
+-                    | Scene::PpfFitting
+-                    | Scene::PpfRibbon
+-                    | Scene::PpfPdrdChain => barrier_cloth_pane(ui, &mut sim),
+-                    Scene::SoftBrake => soft_brake_pane(ui, &mut sim),
+-                    Scene::FemHeat => fem_heat_pane(ui, &mut pane_states.fem_heat),
+-                    Scene::FemHeatP2 => fem_heat_p2_pane(ui, &mut pane_states.fem_heat_p2),
+-                    Scene::FemBeam => fem_beam_pane(ui, &mut pane_states.fem_beam),
+-                    Scene::FemDiffBeam => fem_diff_beam_pane(ui, &mut pane_states.fem_diff_beam),
+-                    Scene::FemStokes => fem_stokes_pane(ui, &mut pane_states.fem_stokes),
+-                    Scene::TireDynamics => tire_dynamics_pane(ui, &mut pane_states.tire_dynamics),
+-                    Scene::TireTraction => {
+-                        tire_traction_pane(ui, &mut pane_states.tire_traction, accent_color)
+-                    }
+-                    Scene::TireRealistic => {
+-                        tire_realistic_pane(ui, &mut pane_states.tire_realistic, accent_color)
+-                    }
+-                    Scene::SoilCompaction => {
+-                        soil_compaction_pane(ui, &mut pane_states.soil_compaction)
+-                    }
+-                    Scene::WarpRaycast => warp_raycast_pane(ui, &mut warp_states.raycast),
+-                    Scene::WarpRaymarch => warp_raymarch_pane(ui, &mut warp_states.raymarch),
+-                    Scene::WarpMesh => warp_mesh_pane(ui, &mut warp_states.mesh),
+-                    Scene::WarpMeshIntersect => {
+-                        warp_mesh_intersect_pane(ui, &mut warp_states.mesh_intersect)
+-                    }
+-                    Scene::WarpSampleMesh => {
+-                        warp_sample_mesh_pane(ui, &mut warp_states.sample_mesh)
+-                    }
+-                    Scene::WarpMarchingCubes => {
+-                        warp_marching_cubes_pane(ui, &mut warp_states.marching_cubes)
+-                    }
+-                    Scene::WarpNvdb => warp_nvdb_pane(ui, &mut warp_states.nvdb),
+-                    Scene::WarpDem => warp_dem_pane(ui, &mut warp_states),
+-                    Scene::WarpFluid => warp_fluid_pane(ui, &mut warp_states),
+-                    Scene::WarpSph => warp_sph_pane(ui, &mut warp_states),
+-                    Scene::WarpTileFft => warp_tile_fft_pane(ui, &mut warp_states.tile_fft),
+-                    Scene::WarpTileMlp => warp_tile_mlp_pane(ui, &mut warp_states.tile_mlp),
+-                    Scene::WarpTileNbody => warp_tile_nbody_pane(ui, &mut warp_states.tile_nbody),
+-                    Scene::WarpTileCholesky => {
+-                        warp_tile_cholesky_pane(ui, &mut warp_states.tile_cholesky)
+-                    }
+-                    Scene::WarpParticleRepulsion => {
+-                        warp_repulsion_pane(ui, &mut warp_states.repulsion)
+-                    }
+-                    Scene::WarpFemDiffusion => {
+-                        warp_fem_diffusion_pane(ui, &mut warp_states.fem_diff)
+-                    }
+-                    Scene::WarpFemDiffusion3D => {
+-                        warp_fem_diffusion_3d_pane(ui, &mut warp_states.fem_diff3d)
+-                    }
+-                    Scene::WarpFemConvDiff => {
+-                        warp_fem_convdiff_pane(ui, &mut warp_states.fem_convdiff)
+-                    }
+-                    Scene::WarpFemConvDiffDg => {
+-                        warp_fem_convdiff_dg_pane(ui, &mut warp_states.fem_convdiff_dg)
+-                    }
+-                    Scene::WarpFemTaylorGreen => {
+-                        warp_fem_taylor_pane(ui, &mut warp_states.fem_taylor)
+-                    }
+-                    Scene::WarpFemKelvinHelmholtz => warp_fem_kh_pane(ui, &mut warp_states.fem_kh),
+-                    Scene::WarpFemStreamlines => {
+-                        warp_fem_streamlines_pane(ui, &mut warp_states.fem_streamlines)
+-                    }
+-                    Scene::WarpFemStokesTransfer => {
+-                        warp_fem_stokes_transfer_pane(ui, &mut warp_states.fem_stokes_transfer)
+-                    }
+-                    Scene::WarpFemDeformedGeometry => {
+-                        warp_fem_deformed_pane(ui, &mut warp_states.fem_deformed)
+-                    }
+-                    Scene::WarpFemDistortion => {
+-                        warp_fem_distortion_pane(ui, &mut warp_states.fem_distortion)
+-                    }
+-                    Scene::WarpFemElasticOpt => {
+-                        warp_fem_elastic_opt_pane(ui, &mut warp_states.fem_elastic_opt)
+-                    }
+-                    Scene::WarpFemMixedElasticity => {
+-                        warp_fem_mixed_elasticity_pane(ui, &mut warp_states.fem_mixed_elasticity)
+-                    }
+-                    Scene::WarpFemNonconformingContact => warp_fem_nonconforming_contact_pane(
+-                        ui,
+-                        &mut warp_states.fem_nonconforming_contact,
+-                    ),
+-                    Scene::WarpFftFluid => warp_fft_fluid_pane(ui, &mut warp_states.fft_fluid),
+-                    Scene::WarpDistortion3D => {
+-                        warp_distortion_3d_pane(ui, &mut warp_states.distortion_3d)
+-                    }
+-                    Scene::WarpApicFluid => warp_apic_fluid_pane(ui, &mut warp_states.apic_fluid),
+-                    Scene::WarpWave => warp_wave_pane(ui, &mut warp_states.wave),
+-                    Scene::WarpDiffRay => warp_diff_ray_pane(ui, &mut warp_states.diff_ray),
+-                    Scene::WarpTileFilter => {
+-                        warp_tile_filter_pane(ui, &mut warp_states.tile_filter)
+-                    }
+-                    Scene::WarpTileCompaction => {
+-                        warp_tile_compaction_pane(ui, &mut warp_states.tile_compaction)
+-                    }
+-                    Scene::AdamLandscape => {
+-                        adam_landscape_pane(ui, &mut warp_states.adam_landscape)
+-                    }
+-                    Scene::WarpTileMatmul => {
+-                        warp_tile_matmul_pane(ui, &mut warp_states.tile_matmul)
+-                    }
+-                    Scene::WarpTileConvolution => {
+-                        warp_tile_convolution_pane(ui, &mut warp_states.tile_convolution)
+-                    }
+-                    Scene::WarpTileMcgp => warp_tile_mcgp_pane(ui, &mut warp_states.tile_mcgp),
+-                    Scene::ImplicitMpmBingham => {
+-                        implicit_mpm_bingham_pane(ui, &mut warp_states.implicit_mpm_bingham)
+-                    }
+-                    Scene::WarpStableFluid => {
+-                        warp_stable_fluid_pane(ui, &mut warp_states.stable_fluid)
+-                    }
+-                    Scene::JellyDampingFall => {
+-                        jelly_damping_fall_pane(ui, &mut warp_states.jelly_damping)
+-                    }
+-                    Scene::DgBurgersShock => dg_burgers_pane(ui, &mut warp_states.dg_burgers),
+-                    Scene::ShallowWaterDamBreak => {
+-                        swe_dam_break_pane(ui, &mut warp_states.swe_dam_break)
+-                    }
+-                    Scene::ImplicitMpmFull27 => {
+-                        implicit_mpm_full27_pane(ui, &mut warp_states.implicit_mpm_full27)
+-                    }
+-                    Scene::SplatPoseRecovery => {
+-                        splat_pose_recovery_pane(ui, &mut warp_states.splat_pose)
+-                    }
+-                    Scene::AmrHeat => amr_heat_pane(ui, &mut warp_states.amr_heat),
+-                    Scene::Magnetostatics => {
+-                        magnetostatics_pane(ui, &mut warp_states.magnetostatics)
+-                    }
+-                    Scene::ClothPokerCards => {
+-                        cloth_poker_cards_pane(ui, &mut warp_states.cloth_poker_cards)
+-                    }
+-                    Scene::SoftbodyHanging => {
+-                        softbody_hanging_pane(ui, &mut warp_states.softbody_hanging)
+-                    }
+-                    Scene::CableTwist => cable_twist_pane(ui, &mut warp_states.cable_twist),
+-                    Scene::IkCustom => ik_custom_pane(ui, &mut warp_states.ik_custom),
+-                    Scene::IkCubeStacking => {
+-                        ik_cube_stacking_pane(ui, &mut warp_states.ik_cube_stacking)
+-                    }
+-                    Scene::DiffsimDrone => diffsim_drone_pane(ui, &mut warp_states.diffsim_drone),
+-                    Scene::FluidCheckpointOptimization => {
+-                        fluid_checkpoint_pane(ui, &mut warp_states.fluid_checkpoint)
+-                    }
+-                    Scene::NavierStokesPerturbationOptimization => {
+-                        ns_perturbation_pane(ui, &mut warp_states.ns_perturbation)
+-                    }
+-                    Scene::WarpFftPoisson2d => {
+-                        warp_fft_poisson_2d_pane(ui, &mut warp_states.fft_poisson_2d)
+-                    }
+-                    _ => {}
+-                }
+-            }));
++                })
++            });
+     }
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/viewer_readback_tests.rs:14:
+     world.insert_resource(GpuBpExampleState::default());
+     world.insert_resource(ReferencePendulumState::default());
+     let scenes = std::iter::once(Scene::PpfWoven)
+-        .chain(Scene::ALL.iter().copied().filter(|scene| matches!(
+-            scene.solver_kind(),
+-            SolverKind::Barrier | SolverKind::BarrierCpu | SolverKind::BarrierCpuChains
+-        )))
++        .chain(Scene::ALL.iter().copied().filter(|scene| {
++            matches!(
++                scene.solver_kind(),
++                SolverKind::Barrier | SolverKind::BarrierCpu | SolverKind::BarrierCpuChains
++            )
++        }))
+         .chain([Scene::VbdCloth, Scene::Arm, Scene::Pile, Scene::PpfWoven]);
+     for scene in scenes {
+         eprintln!("viewer readback: {}", scene.label());
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/viewer_readback_tests.rs:24:
+         world.resource_mut::<Sim>().rebuild_scene(scene);
+-        let initial = world.resource::<Sim>().state_a.particle_q.host().unwrap().to_vec();
++        let initial = world
++            .resource::<Sim>()
++            .state_a
++            .particle_q
++            .host()
++            .unwrap()
++            .to_vec();
+         for _ in 0..2 {
+             world.run_system_once(step_simulation).unwrap();
+         }
+Diff in /home/bresilla/data/code/OUSD/molla/bin/molla_viewer/src/viewer_readback_tests.rs:29:
+         let sim = world.resource::<Sim>();
+         let particles = sim.state_a.particle_q.host().unwrap();
+         assert!(particles.iter().all(|p| p.is_finite()));
+-        assert!(sim.state_a.body_q.host().unwrap().iter().all(|p| p.position.is_finite()));
++        assert!(
++            sim.state_a
++                .body_q
++                .host()
++                .unwrap()
++                .iter()
++                .all(|p| p.position.is_finite())
++        );
+         if matches!(scene, Scene::PpfWoven | Scene::VbdCloth) {
+-            assert!(initial.iter().zip(particles).any(|(a, b)| (*a - *b).length() > 1e-8));
++            assert!(
++                initial
++                    .iter()
++                    .zip(particles)
++                    .any(|(a, b)| (*a - *b).length() > 1e-8)
++            );
+         }
+     }
+ }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-fem/src/gpu_kernels/fem_elasticity.rs:78:
+         });
+         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+             label: Some("molla::fem::elasticity asm layout"),
+-            bind_group_layouts: &[Some(&layout_mesh), Some(&layout_csr), Some(&layout_uniforms)],
++            bind_group_layouts: &[
++                Some(&layout_mesh),
++                Some(&layout_csr),
++                Some(&layout_uniforms),
++            ],
+             immediate_size: 0,
+         });
+         let pipe_assemble_tet = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-fem/src/gpu_kernels/fem_stokes.rs:76:
+         });
+         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+             label: Some("molla::fem::stokes asm layout"),
+-            bind_group_layouts: &[Some(&layout_mesh), Some(&layout_csr), Some(&layout_uniforms)],
++            bind_group_layouts: &[
++                Some(&layout_mesh),
++                Some(&layout_csr),
++                Some(&layout_uniforms),
++            ],
+             immediate_size: 0,
+         });
+         let pipe_velocity = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-geometry/src/sdf_bake_gpu.rs:60:
+         });
+         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+             label: Some("molla::sdf_bake layout"),
+-            bind_group_layouts: &[Some(&layout_mesh), Some(&layout_out), Some(&layout_uniforms)],
++            bind_group_layouts: &[
++                Some(&layout_mesh),
++                Some(&layout_out),
++                Some(&layout_uniforms),
++            ],
+             immediate_size: 0,
+         });
+         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-geometry/src/self_contact_gpu.rs:56:
+         });
+         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+             label: Some("molla::self_contact layout"),
+-            bind_group_layouts: &[Some(&layout_mesh), Some(&layout_out), Some(&layout_uniforms)],
++            bind_group_layouts: &[
++                Some(&layout_mesh),
++                Some(&layout_out),
++                Some(&layout_uniforms),
++            ],
+             immediate_size: 0,
+         });
+         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-geometry/src/shape_world.rs:35:
+                 .map(|field| field.local_aabb())
+                 .collect();
+             self.stamp = Some(stamp);
+-            self.tiles = scene.model().heightfields.iter().map(HeightfieldTiles::new).collect();
++            self.tiles = scene
++                .model()
++                .heightfields
++                .iter()
++                .map(HeightfieldTiles::new)
++                .collect();
+         }
+         PreparedShapeBounds {
+             model: scene.model(),
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-geometry/src/shape_world.rs:63:
+                     .map(|field| field.local_aabb())
+                     .collect(),
+             ),
+-            tiles: Cow::Owned(model.heightfields.iter().map(HeightfieldTiles::new).collect()),
++            tiles: Cow::Owned(
++                model
++                    .heightfields
++                    .iter()
++                    .map(HeightfieldTiles::new)
++                    .collect(),
++            ),
+         }
+     }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-geometry/src/shape_world.rs:71:
+         self.model
+     }
+ 
+-    pub(crate) fn heightfield_may_contact(&self, state: &State, field_shape: usize, other: Aabb) -> bool {
++    pub(crate) fn heightfield_may_contact(
++        &self,
++        state: &State,
++        field_shape: usize,
++        other: Aabb,
++    ) -> bool {
+         let ShapeGeometry::Heightfield { field_id } = self.model.shape_geometry[field_shape] else {
+             return true;
+         };
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-geometry/src/shape_world.rs:85:
+             return true;
+         }
+         let pose = shape_world_transform(self.model, state, field_shape).inverse();
+-        let padding = 1e-9 * (1.0 + other.min.abs().max_element()
+-            .max(other.max.abs().max_element()).max(pose.position.abs().max_element()));
++        let padding = 1e-9
++            * (1.0
++                + other
++                    .min
++                    .abs()
++                    .max_element()
++                    .max(other.max.abs().max_element())
++                    .max(pose.position.abs().max_element()));
+         let local = transformed_bounds(other.min, other.max, pose, padding);
+         tiles.may_contact(field, local)
+     }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-kernels/src/sparse_grid_delete.rs:154:
+ 
+         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+             label: Some("molla::sparse_grid_delete layout"),
+-            bind_group_layouts: &[Some(&layout_storage), Some(&layout_io), Some(&layout_uniforms)],
++            bind_group_layouts: &[
++                Some(&layout_storage),
++                Some(&layout_io),
++                Some(&layout_uniforms),
++            ],
+             immediate_size: 0,
+         });
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-kernels/src/sparse_grid_insert.rs:681:
+ 
+         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+             label: Some("molla::sparse_grid_insert layout"),
+-            bind_group_layouts: &[Some(&layout_storage), Some(&layout_io), Some(&layout_uniforms)],
++            bind_group_layouts: &[
++                Some(&layout_storage),
++                Some(&layout_io),
++                Some(&layout_uniforms),
++            ],
+             immediate_size: 0,
+         });
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-kernels/tests/tire_vehicle_gpu.rs:669:
+         tire_vehicle_brush_rows_from_spin_reference(&input).expect("brush rows from spin ref");
+     assert_eq!(out.wheels.len(), input.wheel_mounts.len());
+     assert!(out.finite);
+-    for ((wheel, spin), controls) in out.wheels.iter().zip(spin_rows.iter()).zip(&input.wheel_controls) {
++    for ((wheel, spin), controls) in out
++        .wheels
++        .iter()
++        .zip(spin_rows.iter())
++        .zip(&input.wheel_controls)
++    {
+         assert!((wheel.spin[0] - spin[0]).abs() < 1.0e-6);
+         assert!((wheel.spin[1] - spin[1]).abs() < 1.0e-6);
+         assert_eq!(wheel.hub_pos[3], controls[3]);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-kernels/tests/tire_vehicle_gpu.rs:696:
+     }
+     input.width_segments.pop();
+     assert!(tire_vehicle_brush_rows_reference(&input).is_err());
+-    let spin = tire_vehicle_wheel_spin_state_reference(&sample_wheel_spin_input()).unwrap().rows;
++    let spin = tire_vehicle_wheel_spin_state_reference(&sample_wheel_spin_input())
++        .unwrap()
++        .rows;
+     let mut input = sample_brush_rows_from_spin_input(spin);
+     for invalid in [-1.0, 0.25, 17.0, f32::NAN, f32::INFINITY] {
+         input.wheel_controls[1][3] = invalid;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/annotation.rs:12:
+     readback::{BufferLease, DeviceBuffer, ReadbackSource, ReadbackStamp},
+ };
+ use crate::{ProcessorStorageLimits, ProcessorStorageUsage};
++use arrayvec::ArrayVec;
+ use molla_compute::Engine;
+ use molla_core::{Error, Result};
+ use molla_kernels::{AnnotationBindings, AnnotationKernel};
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/annotation.rs:18:
+-use arrayvec::ArrayVec;
+ use molla_storage::{BufferElement, BufferUsage};
+ use std::{any::TypeId, ops::Range, sync::Arc};
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/cloud_processing.rs:12:
+     readback::{BufferLease, DeviceBuffer, ReadbackSource, ReadbackStamp},
+ };
+ use crate::{ProcessorStorageLimits, ProcessorStorageUsage};
++use arrayvec::ArrayVec;
+ use molla_compute::Engine;
+ use molla_core::{Error, Result};
+ use molla_kernels::{CloudDescriptor, CloudProcessBindings, CloudProcessKernel};
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/cloud_processing.rs:18:
+ use molla_math::{Real, Transform, Vec3};
+-use arrayvec::ArrayVec;
+ use molla_storage::{BufferElement, BufferUsage};
+ use std::{any::TypeId, ops::Range, sync::Arc};
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/cloud_processing.rs:804:
+         if jobs.len() > self.config.max_jobs as usize {
+             return Err(Error::Solver("cloud: job budget exceeded".into()));
+         }
+-        self.plan_metadata(jobs.iter().map(|job| {
+-            let (count, raster) = match &job.input {
+-                CloudInput::Points(source) => (self.check_source::<CloudPoint>(source)?, None),
+-                CloudInput::Rays { channels, raster } => {
+-                    let counts = [
+-                        self.check_source::<Vec3>(&channels[0])?,
+-                        self.check_source::<Vec3>(&channels[1])?,
+-                        self.check_source::<Vec3>(&channels[2])?,
+-                        self.check_source::<Real>(&channels[3])?,
+-                        self.check_source::<i32>(&channels[4])?,
+-                    ];
+-                    if counts.iter().any(|n| *n != counts[0]) {
+-                        return Err(Error::Solver("cloud: inconsistent ray channels".into()));
++        self.plan_metadata(
++            jobs.iter().map(|job| {
++                let (count, raster) = match &job.input {
++                    CloudInput::Points(source) => (self.check_source::<CloudPoint>(source)?, None),
++                    CloudInput::Rays { channels, raster } => {
++                        let counts = [
++                            self.check_source::<Vec3>(&channels[0])?,
++                            self.check_source::<Vec3>(&channels[1])?,
++                            self.check_source::<Vec3>(&channels[2])?,
++                            self.check_source::<Real>(&channels[3])?,
++                            self.check_source::<i32>(&channels[4])?,
++                        ];
++                        if counts.iter().any(|n| *n != counts[0]) {
++                            return Err(Error::Solver("cloud: inconsistent ray channels".into()));
++                        }
++                        (counts[0], Some(*raster))
+                     }
+-                    (counts[0], Some(*raster))
+-                }
+-            };
+-            Ok((count, raster, job.transform, job.filter, job.stamp))
+-        }), descriptors)
++                };
++                Ok((count, raster, job.transform, job.filter, job.stamp))
++            }),
++            descriptors,
++        )
+     }
+ 
+     /// Validates jobs into `descriptors`; returns the caller's layouts and point count.
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/device_results.rs:1533:
+         let encode = |pool: &mut SensorFramePool| {
+             let mut batch = SensorCommandBatch::new(&engine).unwrap();
+             let receipt = batch
+-                .encode_output(pool, &specs, &[0..4], Default::default(), |_, _, encoder, outputs| {
+-                    encoder.clear_buffer(&outputs[0], 0, None);
+-                    Ok(1)
+-                })
++                .encode_output(
++                    pool,
++                    &specs,
++                    &[0..4],
++                    Default::default(),
++                    |_, _, encoder, outputs| {
++                        encoder.clear_buffer(&outputs[0], 0, None);
++                        Ok(1)
++                    },
++                )
+                 .unwrap()
+                 .unwrap();
+             let submitted = batch.submit().unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/device_results.rs:1561:
+         let mut batch = SensorCommandBatch::new(&engine).unwrap();
+         assert!(
+             batch
+-                .encode_output(&mut pool, &specs, &[0..4], Default::default(), |_, _, _, _| {
+-                    panic!("must not encode")
+-                })
++                .encode_output(
++                    &mut pool,
++                    &specs,
++                    &[0..4],
++                    Default::default(),
++                    |_, _, _, _| { panic!("must not encode") }
++                )
+                 .is_err()
+         );
+         assert_eq!(pool.stats().reserved_frames, 2);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/environment.rs:260:
+             Vec3::new(0.0, 0.0, 1000.0),
+         ] {
+             let fix = reference.enu_to_geodetic(enu);
+-            assert!((reference.geodetic_to_enu(fix) - enu).length() < 1e-6, "{enu:?}");
++            assert!(
++                (reference.geodetic_to_enu(fix) - enu).length() < 1e-6,
++                "{enu:?}"
++            );
+         }
+         let north = reference.enu_to_geodetic(Vec3::new(0.0, 1000.0, 0.0));
+         // One kilometre north is about 0.00899° of latitude at 52°N.
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/environment.rs:302:
+         assert!((reading.north - Vec3::X).length() < 1e-12);
+         assert!(near(reading.heading_rad, 0.0, 1e-12));
+         let facing_west = Quat::from_rotation_z(PI);
+-        assert!(near(compass(&frame, facing_west).heading_rad, 1.5 * PI, 1e-12));
++        assert!(near(
++            compass(&frame, facing_west).heading_rad,
++            1.5 * PI,
++            1e-12
++        ));
+ 
+-        let attitude = Quat::from_rotation_z(0.3) * Quat::from_rotation_y(0.2) * Quat::from_rotation_x(0.1);
++        let attitude =
++            Quat::from_rotation_z(0.3) * Quat::from_rotation_y(0.2) * Quat::from_rotation_x(0.1);
+         let unit = inertial_unit(&frame, attitude);
+-        assert!(near(unit.yaw, 0.3, 1e-12) && near(unit.pitch, 0.2, 1e-12) && near(unit.roll, 0.1, 1e-12));
++        assert!(
++            near(unit.yaw, 0.3, 1e-12)
++                && near(unit.pitch, 0.2, 1e-12)
++                && near(unit.roll, 0.1, 1e-12)
++        );
+ 
+         let bevy = WorldFrame::Y_UP_NEG_Z_NORTH;
+         // Sensor +X along -Z (north) with +Z up along +Y: yaw 90° in ENU.
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/environment.rs:313:
+         let north_up = Quat::from_mat3(&Mat3::from_cols(Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y));
+         let unit = inertial_unit(&bevy, north_up);
+-        assert!(near(unit.yaw, FRAC_PI_2, 1e-12) && near(unit.pitch, 0.0, 1e-12) && near(unit.roll, 0.0, 1e-12));
++        assert!(
++            near(unit.yaw, FRAC_PI_2, 1e-12)
++                && near(unit.pitch, 0.0, 1e-12)
++                && near(unit.roll, 0.0, 1e-12)
++        );
+         assert!(near(compass(&bevy, north_up).heading_rad, 0.0, 1e-12));
+     }
+ }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/lib.rs:38:
+ pub mod dataset;
+ pub mod environment;
+ pub use environment::{
+-    CompassReading, Geodetic, GeoReference, Gps, GpsReading, InertialReading, WorldFrame, compass,
++    CompassReading, GeoReference, Geodetic, Gps, GpsReading, InertialReading, WorldFrame, compass,
+     inertial_unit,
+ };
+ pub mod radio;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/lib.rs:46:
+ #[cfg(feature = "gpu")]
+ pub mod ray_sensors;
+ #[cfg(feature = "gpu")]
++pub use molla_geometry::raycast_cpu::CpuRaycaster;
++#[cfg(feature = "gpu")]
+ pub use ray_sensors::{
+     DistanceKind, DistanceReading, DistanceSensors, DistanceSpec, JointReading, LightEnvironment,
+     LightReading, LightSensors, LightSource, NearestHit, RadarDetection, RadarSpec, RadarTarget,
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/lib.rs:52:
+     Radars, RayQuery, RigidRays, SceneRays, cone_rays, joint_reading, lookup, range_finder,
+ };
+-#[cfg(feature = "gpu")]
+-pub use molla_geometry::raycast_cpu::CpuRaycaster;
+ pub mod recognition;
+ pub use recognition::{RecognizedObject, recognize};
+ pub mod touch;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/radio.rs:101:
+     ) -> Vec<Delivery> {
+         let mut out = Vec::new();
+         for (emitter, channel, data) in self.queue.drain(..) {
+-            let (Some(tx), Some(tx_pose)) = (self.emitters.get(emitter), emitter_poses.get(emitter))
++            let (Some(tx), Some(tx_pose)) =
++                (self.emitters.get(emitter), emitter_poses.get(emitter))
+             else {
+                 continue;
+             };
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/radio.rs:114:
+                 if tx.kind != RadioKind::Serial && distance > tx.range.min(rx.range) {
+                     continue;
+                 }
+-                let towards = if distance > 0.0 { offset / distance } else { Vec3::X };
++                let towards = if distance > 0.0 {
++                    offset / distance
++                } else {
++                    Vec3::X
++                };
+                 if tx.kind == RadioKind::Infrared
+                     && (!within_aperture(tx_pose, -towards, tx.aperture)
+                         || !within_aperture(rx_pose, towards, rx.aperture)
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/radio.rs:191:
+         let out = medium.deliver(&[at(0.0)], &[facing_back, at(5.0)], &mut |_, _| true);
+         assert_eq!(out.iter().map(|d| d.receiver).collect::<Vec<_>>(), [0]);
+         medium.send(0, vec![1]);
+-        assert!(medium.deliver(&[at(0.0)], &[facing_back, at(5.0)], &mut |_, _| false).is_empty());
++        assert!(
++            medium
++                .deliver(&[at(0.0)], &[facing_back, at(5.0)], &mut |_, _| false)
++                .is_empty()
++        );
+ 
+         let serial = RadioEndpoint {
+             kind: RadioKind::Serial,
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:38:
+ pub trait RayQuery {
+     /// Nearest hits of rays from `origins` along unit `directions` within
+     /// `max_distance`, one per ray.
+-    fn cast(&mut self, origins: &[Vec3], directions: &[Vec3], max_distance: Real) -> Result<Vec<NearestHit>>;
++    fn cast(
++        &mut self,
++        origins: &[Vec3],
++        directions: &[Vec3],
++        max_distance: Real,
++    ) -> Result<Vec<NearestHit>>;
+ }
+ 
+ /// [`RayQuery`] on a [`SensorScene`] with a GPU [`Raycaster`]; each cast
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:51:
+ }
+ 
+ impl RayQuery for SceneRays<'_> {
+-    fn cast(&mut self, origins: &[Vec3], directions: &[Vec3], max_distance: Real) -> Result<Vec<NearestHit>> {
+-        let hits = self
+-            .raycaster
+-            .cast_scene(self.engine, self.scene, self.state, origins, directions, max_distance)?;
+-        Ok(hits.iter().map(|h| NearestHit { t: h.t, body: h.body_id }).collect())
++    fn cast(
++        &mut self,
++        origins: &[Vec3],
++        directions: &[Vec3],
++        max_distance: Real,
++    ) -> Result<Vec<NearestHit>> {
++        let hits = self.raycaster.cast_scene(
++            self.engine,
++            self.scene,
++            self.state,
++            origins,
++            directions,
++            max_distance,
++        )?;
++        Ok(hits
++            .iter()
++            .map(|h| NearestHit {
++                t: h.t,
++                body: h.body_id,
++            })
++            .collect())
+     }
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:68:
+ }
+ 
+ impl RayQuery for RigidRays<'_> {
+-    fn cast(&mut self, origins: &[Vec3], directions: &[Vec3], max_distance: Real) -> Result<Vec<NearestHit>> {
++    fn cast(
++        &mut self,
++        origins: &[Vec3],
++        directions: &[Vec3],
++        max_distance: Real,
++    ) -> Result<Vec<NearestHit>> {
+         origins
+             .iter()
+             .zip(directions)
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:75:
+             .map(|(&origin, &direction)| {
+-                let hit = self.caster.cast_ray(self.scene, origin, direction, max_distance)?;
++                let hit = self
++                    .caster
++                    .cast_ray(self.scene, origin, direction, max_distance)?;
+                 Ok(hit.map_or(NearestHit::MISS, |h| NearestHit {
+                     t: h.distance,
+-                    body: h.body.and_then(|b| self.scene.body_index(b)).unwrap_or(BodyId::NONE),
++                    body: h
++                        .body
++                        .and_then(|b| self.scene.body_index(b))
++                        .unwrap_or(BodyId::NONE),
+                 }))
+             })
+             .collect()
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:92:
+     state: &State,
+     f: impl FnOnce(&mut SceneRays<'_>) -> Result<T>,
+ ) -> Result<T> {
+-    let raycaster = raycaster
+-        .as_mut()
+-        .ok_or_else(|| Error::Build("ray sensor built for a host ray query has no GPU raycaster".into()))?;
++    let raycaster = raycaster.as_mut().ok_or_else(|| {
++        Error::Build("ray sensor built for a host ray query has no GPU raycaster".into())
++    })?;
+     f(&mut SceneRays {
+         engine,
+         raycaster,
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:179:
+     let half = 0.5 * aperture;
+     for i in 0..ring {
+         let around = std::f64::consts::TAU * i as Real / ring as Real;
+-        out.push(Vec3::new(half.cos(), half.sin() * around.cos(), half.sin() * around.sin()));
++        out.push(Vec3::new(
++            half.cos(),
++            half.sin() * around.cos(),
++            half.sin() * around.sin(),
++        ));
+     }
+     out
+ }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:202:
+ 
+     /// Sensors that cast through a host [`RayQuery`] with [`Self::update_with`].
+     pub fn host(specs: Vec<DistanceSpec>) -> Result<Self> {
+-        if specs.iter().any(|s| s.rays == 0 || !(s.max_range > 0.0) || !s.aperture.is_finite()) {
+-            return Err(Error::Build("distance sensor: rays, range or aperture invalid".into()));
++        if specs
++            .iter()
++            .any(|s| s.rays == 0 || !(s.max_range > 0.0) || !s.aperture.is_finite())
++        {
++            return Err(Error::Build(
++                "distance sensor: rays, range or aperture invalid".into(),
++            ));
+         }
+-        let rays = specs.iter().map(|s| cone_rays(s.rays, s.aperture)).collect();
++        let rays = specs
++            .iter()
++            .map(|s| cone_rays(s.rays, s.aperture))
++            .collect();
+         Ok(Self {
+             specs,
+             rays,
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:226:
+         poses: &[Transform],
+     ) -> Result<Vec<DistanceReading>> {
+         let mut raycaster = self.raycaster.take();
+-        let out = with_scene_rays(&mut raycaster, engine, scene, state, |rays| self.update_with(rays, poses));
++        let out = with_scene_rays(&mut raycaster, engine, scene, state, |rays| {
++            self.update_with(rays, poses)
++        });
+         self.raycaster = raycaster;
+         out
+     }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:233:
+ 
+     /// Readings for sensors at `poses` (world, one per spec).
+-    pub fn update_with(&self, query: &mut dyn RayQuery, poses: &[Transform]) -> Result<Vec<DistanceReading>> {
++    pub fn update_with(
++        &self,
++        query: &mut dyn RayQuery,
++        poses: &[Transform],
++    ) -> Result<Vec<DistanceReading>> {
+         if poses.len() != self.specs.len() {
+             return Err(Error::Build("distance sensor: one pose per sensor".into()));
+         }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:250:
+         for (spec, rays) in self.specs.iter().zip(&self.rays) {
+             let own = &hits[offset..offset + rays.len()];
+             offset += rays.len();
+-            let in_range = |t: Real| if t <= spec.max_range { t } else { Real::INFINITY };
++            let in_range = |t: Real| {
++                if t <= spec.max_range {
++                    t
++                } else {
++                    Real::INFINITY
++                }
++            };
+             let (distance, body) = match spec.kind {
+                 DistanceKind::Laser => (in_range(own[0].t), own[0].body),
+                 DistanceKind::Sonar => own
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:257:
+                     .iter()
+                     .map(|h| (in_range(h.t), h.body))
+-                    .fold((Real::INFINITY, BodyId::NONE), |a, b| if b.0 < a.0 { b } else { a }),
++                    .fold((Real::INFINITY, BodyId::NONE), |a, b| {
++                        if b.0 < a.0 { b } else { a }
++                    }),
+                 DistanceKind::InfraRed => {
+                     let width = (spec.gaussian_width * spec.aperture).max(1e-9);
+                     let (mut sum, mut weights) = (0.0, 0.0);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:266:
+                         weights += w;
+                     }
+                     let mean = sum / weights;
+-                    (if mean < spec.max_range { mean } else { Real::INFINITY }, own[0].body)
++                    (
++                        if mean < spec.max_range {
++                            mean
++                        } else {
++                            Real::INFINITY
++                        },
++                        own[0].body,
++                    )
+                 }
+             };
+             out.push(DistanceReading {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:368:
+         if poses.len() != self.lookups.len()
+             || poses.len() * environment.sources.len() > self.capacity
+         {
+-            return Err(Error::Build("light sensor: poses or sources exceed the batch".into()));
++            return Err(Error::Build(
++                "light sensor: poses or sources exceed the batch".into(),
++            ));
+         }
+         let (mut origins, mut directions, mut reach) = (Vec::new(), Vec::new(), Vec::new());
+         for pose in poses {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:405:
+                 direct += cos
+                     * match *source {
+                         LightSource::Directional { irradiance, .. } => irradiance,
+-                        LightSource::Point { intensity, .. } => intensity / reach[ray].max(1e-3).powi(2),
++                        LightSource::Point { intensity, .. } => {
++                            intensity / reach[ray].max(1e-3).powi(2)
++                        }
+                     };
+                 visible += 1;
+             }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:479:
+     capacity: usize,
+ }
+ 
+-fn host_arrays(model: &Model, state: &State) -> Result<(Vec<Transform>, Vec<molla_math::SpatialVector>, Vec<Vec3>)> {
++fn host_arrays(
++    model: &Model,
++    state: &State,
++) -> Result<(Vec<Transform>, Vec<molla_math::SpatialVector>, Vec<Vec3>)> {
+     Ok((
+         state.body_q.host()?.to_vec(),
+         state.body_qd.host()?.to_vec(),
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:541:
+         targets: &[RadarTarget],
+     ) -> Result<Vec<RadarDetection>> {
+         if targets.len() > self.capacity {
+-            return Err(Error::Build("radar: more targets than the batch holds".into()));
++            return Err(Error::Build(
++                "radar: more targets than the batch holds".into(),
++            ));
+         }
+         let (body_q, body_qd, com) = host_arrays(model, state)?;
+         let point_velocity = |body: BodyId, at: Vec3| -> Vec3 {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:571:
+             let local = inverse * offset;
+             let azimuth = local.y.atan2(local.x);
+             let elevation = local.z.atan2(local.x.hypot(local.y));
+-            if azimuth.abs() > 0.5 * spec.horizontal_fov || elevation.abs() > 0.5 * spec.vertical_fov {
++            if azimuth.abs() > 0.5 * spec.horizontal_fov
++                || elevation.abs() > 0.5 * spec.vertical_fov
++            {
+                 continue;
+             }
+             let direction = offset / distance;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:578:
+-            let radial_speed = (point_velocity(target.body, centre) - sensor_velocity).dot(direction);
++            let radial_speed =
++                (point_velocity(target.body, centre) - sensor_velocity).dot(direction);
+             if radial_speed.abs() < spec.min_radial_speed {
+                 continue;
+             }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:632:
+     let has_coord = coord[joint + 1] > coord[joint];
+     let has_dof = dof[joint + 1] > dof[joint];
+     Ok(JointReading {
+-        position: if has_coord { q[coord[joint] as usize] } else { 0.0 },
+-        velocity: if has_dof { qd[dof[joint] as usize] } else { 0.0 },
++        position: if has_coord {
++            q[coord[joint] as usize]
++        } else {
++            0.0
++        },
++        velocity: if has_dof {
++            qd[dof[joint] as usize]
++        } else {
++            0.0
++        },
+     })
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:670:
+ 
+         let distance = DistanceSensors::host(vec![DistanceSpec::default()]).unwrap();
+         let reading = distance.update_with(&mut rays, &[at]).unwrap()[0];
+-        assert!((reading.distance - 5.0).abs() < 1e-9 && reading.body == BodyId::NONE, "{reading:?}");
++        assert!(
++            (reading.distance - 5.0).abs() < 1e-9 && reading.body == BodyId::NONE,
++            "{reading:?}"
++        );
+ 
+         let light = LightSensors::host(vec![Vec::new()]);
+         let sun = |towards: Vec3| LightEnvironment {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:681:
+             sky: 0.0,
+             up: Vec3::Z,
+         };
+-        let shaded = light.update_with(&mut rays, &[at], &sun(Vec3::new(1.0, 0.0, 0.1))).unwrap()[0];
++        let shaded = light
++            .update_with(&mut rays, &[at], &sun(Vec3::new(1.0, 0.0, 0.1)))
++            .unwrap()[0];
+         assert_eq!((shaded.visible, shaded.direct), (0, 0.0));
+-        let lit = light.update_with(&mut rays, &[at], &sun(Vec3::new(1.0, 0.0, 1.0))).unwrap()[0];
+-        assert!(lit.visible == 1 && (lit.direct - 100.0 * 0.5f64.sqrt()).abs() < 1e-9, "{lit:?}");
++        let lit = light
++            .update_with(&mut rays, &[at], &sun(Vec3::new(1.0, 0.0, 1.0)))
++            .unwrap()[0];
++        assert!(
++            lit.visible == 1 && (lit.direct - 100.0 * 0.5f64.sqrt()).abs() < 1e-9,
++            "{lit:?}"
++        );
+ 
+         let radar = RadarSpec {
+             horizontal_fov: 1.2,
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:695:
+             cross_section: 1.0,
+         }];
+         let seen = Radars::host()
+-            .update_with(&mut rays, scene.model(), scene.state(), &radar, at, BodyId::NONE, &target)
++            .update_with(
++                &mut rays,
++                scene.model(),
++                scene.state(),
++                &radar,
++                at,
++                BodyId::NONE,
++                &target,
++            )
+             .unwrap();
+         let d = 125f64.sqrt();
+         assert_eq!(seen.len(), 1, "{seen:?}");
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:702:
+-        assert!((seen[0].distance - d).abs() < 1e-9 && (seen[0].radial_speed - 10.0 / d).abs() < 1e-9);
++        assert!(
++            (seen[0].distance - d).abs() < 1e-9 && (seen[0].radial_speed - 10.0 / d).abs() < 1e-9
++        );
+     }
+ 
+     #[test]
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/ray_sensors.rs:706:
+     fn lookup_interpolates_and_clamps() {
+-        let table = [[0.0, 1000.0], [0.1, 1000.0], [0.2, 400.0], [0.3, 50.0], [0.37, 30.0]];
++        let table = [
++            [0.0, 1000.0],
++            [0.1, 1000.0],
++            [0.2, 400.0],
++            [0.3, 50.0],
++            [0.37, 30.0],
++        ];
+         assert_eq!(lookup(&table, 0.05), 1000.0);
+         assert!((lookup(&table, 0.15) - 700.0).abs() < 1e-9);
+         assert_eq!(lookup(&table, 5.0), 30.0);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/src/recognition.rs:52:
+         hi: Vec3,
+     }
+     let mut objects: std::collections::BTreeMap<u64, Acc> = Default::default();
+-    let pixels = (width as usize * height as usize).min(depth.len()).min(shape.len());
++    let pixels = (width as usize * height as usize)
++        .min(depth.len())
++        .min(shape.len());
+     for index in 0..pixels {
+         let (s, d) = (shape[index], depth[index]);
+         if s == NO_SHAPE || !d.is_finite() {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_aux_direct_gpu.rs:920:
+         let mut blocked = SensorCommandBatch::new(&engine).unwrap();
+         assert!(
+             sensor
+-                .encode(&mut blocked, &engine, &inputs, &mut pool, Default::default())
++                .encode(
++                    &mut blocked,
++                    &engine,
++                    &inputs,
++                    &mut pool,
++                    Default::default()
++                )
+                 .unwrap()
+                 .is_none()
+         );
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_aux_direct_gpu.rs:929:
+     }
+     assert_eq!(pool.stats().backpressure, 1);
+     assert_eq!(sensor.dispatch_stats().binding_preparations, preparations);
+-    assert_eq!(contact_values(&engine, &held).channel::<u32>(0).unwrap()[1], 2);
++    assert_eq!(
++        contact_values(&engine, &held).channel::<u32>(0).unwrap()[1],
++        2
++    );
+     drop(held);
+     assert_eq!(pool.available_slots().unwrap(), 1);
+     let mut batch = SensorCommandBatch::new(&engine).unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_aux_direct_gpu.rs:951:
+         let mut batch = SensorCommandBatch::new(&engine).unwrap();
+         assert!(
+             sensor
+-                .encode(&mut batch, &engine, &inputs, &mut foreign_pool, Default::default())
++                .encode(
++                    &mut batch,
++                    &engine,
++                    &inputs,
++                    &mut foreign_pool,
++                    Default::default()
++                )
+                 .is_err()
+         );
+         assert_eq!(batch.stats().encoded_frames, 0);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_aux_direct_gpu.rs:970:
+     // Known device loss fails the pending batch and every later use.
+     let mut pending = SensorCommandBatch::new(&engine).unwrap();
+     sensor
+-        .encode(&mut pending, &engine, &inputs, &mut pool, Default::default())
++        .encode(
++            &mut pending,
++            &engine,
++            &inputs,
++            &mut pool,
++            Default::default(),
++        )
+         .unwrap()
+         .unwrap();
+     engine.destroy_device().unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_camera_direct_gpu.rs:608:
+     {
+         let mut batch = SensorCommandBatch::new(&engine).unwrap();
+         assert!(
+-            c.encode_scene(&mut batch, &engine, &scene, &state, &mut foreign_pool, stamp(0))
+-                .is_err()
++            c.encode_scene(
++                &mut batch,
++                &engine,
++                &scene,
++                &state,
++                &mut foreign_pool,
++                stamp(0)
++            )
++            .is_err()
+         );
+         assert!(batch.submit().unwrap().index.is_none());
+     }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_generic_gpu.rs:39:
+     let mover = body(&mut b, Vec3::new(10.0, 6.0, 1.0));
+     b.add_shape_sphere(mover, 0.5, Transform::IDENTITY).unwrap();
+     let hidden = body(&mut b, Vec3::new(10.0, 0.0, 1.0));
+-    b.add_shape_sphere(hidden, 0.5, Transform::IDENTITY).unwrap();
++    b.add_shape_sphere(hidden, 0.5, Transform::IDENTITY)
++        .unwrap();
+     let roof = body(&mut b, Vec3::new(0.0, -6.0, 3.0));
+     b.add_shape_box(roof, Vec3::new(1.0, 1.0, 0.1), Transform::IDENTITY)
+         .unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_generic_gpu.rs:101:
+     )
+     .unwrap();
+     let forward = at(0.0, 0.0, 1.0, Quat::IDENTITY);
+-    let skyward = at(0.0, 0.0, 1.0, Quat::from_rotation_y(-std::f64::consts::FRAC_PI_2));
++    let skyward = at(
++        0.0,
++        0.0,
++        1.0,
++        Quat::from_rotation_y(-std::f64::consts::FRAC_PI_2),
++    );
+     let readings = sensors
+-        .update(&engine, &f.scene, &f.state, &[forward, forward, forward, skyward])
++        .update(
++            &engine,
++            &f.scene,
++            &f.state,
++            &[forward, forward, forward, skyward],
++        )
+         .unwrap();
+ 
+     let face = 4.9;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_generic_gpu.rs:113:
+ 
+     // Each ray from (0, 0, 1) meets the wall face or, if it points down, the ground first.
+     let hit = |r: Vec3| {
+-        let ground = if r.z < 0.0 { -1.0 / r.z } else { Real::INFINITY };
++        let ground = if r.z < 0.0 {
++            -1.0 / r.z
++        } else {
++            Real::INFINITY
++        };
+         (face / r.x).min(ground)
+     };
+-    let ring: Vec<Real> = cone_rays(5, aperture)[1..].iter().map(|r| hit(*r)).collect();
++    let ring: Vec<Real> = cone_rays(5, aperture)[1..]
++        .iter()
++        .map(|r| hit(*r))
++        .collect();
+     let w = (-(0.3f64 / aperture).powi(2)).exp();
+     let expected = (face + w * ring.iter().sum::<Real>()) / (1.0 + 4.0 * w);
+-    assert!((readings[1].distance - expected).abs() < 2e-3, "{} vs {expected}", readings[1].distance);
++    assert!(
++        (readings[1].distance - expected).abs() < 2e-3,
++        "{} vs {expected}",
++        readings[1].distance
++    );
+     let nearest = ring.iter().copied().fold(face, Real::min);
+     assert!(nearest < face);
+-    assert!((readings[2].distance - nearest).abs() < 1e-3, "{} vs {nearest}", readings[2].distance);
++    assert!(
++        (readings[2].distance - nearest).abs() < 1e-3,
++        "{} vs {nearest}",
++        readings[2].distance
++    );
+     assert_eq!(readings[2].body, BodyId::NONE);
+ 
+     assert!(readings[3].distance.is_infinite());
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_generic_gpu.rs:145:
+         sky: 100.0,
+         up: Vec3::Z,
+     };
+-    let mut sensors = LightSensors::new(&engine, vec![Vec::new(), Vec::new(), vec![[0.0, 0.0], [2000.0, 1.0]]], 1).unwrap();
++    let mut sensors = LightSensors::new(
++        &engine,
++        vec![Vec::new(), Vec::new(), vec![[0.0, 0.0], [2000.0, 1.0]]],
++        1,
++    )
++    .unwrap();
+     let poses = [
+         at(0.0, 0.0, 1.0, up),
+         at(0.0, -6.0, 1.0, up),
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_generic_gpu.rs:152:
+         at(0.0, 3.0, 1.0, Quat::IDENTITY),
+     ];
+-    let r = sensors.update(&engine, &f.scene, &f.state, &poses, &environment).unwrap();
+-    assert!((r[0].irradiance - 1100.0).abs() < 1e-6 && r[0].visible == 1, "{r:?}");
++    let r = sensors
++        .update(&engine, &f.scene, &f.state, &poses, &environment)
++        .unwrap();
++    assert!(
++        (r[0].irradiance - 1100.0).abs() < 1e-6 && r[0].visible == 1,
++        "{r:?}"
++    );
+     assert!((r[1].direct).abs() < 1e-9 && r[1].visible == 0 && (r[1].sky - 100.0).abs() < 1e-9);
+     assert!(r[2].direct.abs() < 1e-9 && r[2].visible == 1 && (r[2].sky - 50.0).abs() < 1e-9);
+     assert!((r[2].value - 0.025).abs() < 1e-9);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_generic_gpu.rs:178:
+     let mut radars = Radars::new(&engine, targets.len()).unwrap();
+     let pose = at(0.0, 0.0, 1.0, Quat::IDENTITY);
+     let seen = radars
+-        .update(&engine, &f.scene, &f.model, &f.state, &spec, pose, BodyId::NONE, &targets)
++        .update(
++            &engine,
++            &f.scene,
++            &f.model,
++            &f.state,
++            &spec,
++            pose,
++            BodyId::NONE,
++            &targets,
++        )
+         .unwrap();
+-    assert_eq!(seen.iter().map(|d| d.body).collect::<Vec<_>>(), [f.wall, f.mover]);
++    assert_eq!(
++        seen.iter().map(|d| d.body).collect::<Vec<_>>(),
++        [f.wall, f.mover]
++    );
+ 
+     let wall = seen[0];
+     assert!((wall.distance - 26f64.sqrt()).abs() < 1e-9);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_generic_gpu.rs:202:
+         ..spec
+     };
+     let fast = radars
+-        .update(&engine, &f.scene, &f.model, &f.state, &narrow, pose, BodyId::NONE, &targets)
++        .update(
++            &engine,
++            &f.scene,
++            &f.model,
++            &f.state,
++            &narrow,
++            pose,
++            BodyId::NONE,
++            &targets,
++        )
+         .unwrap();
+     assert!(fast.is_empty(), "{fast:?}");
+     let seeing_through = RadarSpec {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_generic_gpu.rs:210:
+         ..spec
+     };
+     let all = radars
+-        .update(&engine, &f.scene, &f.model, &f.state, &seeing_through, pose, BodyId::NONE, &targets)
++        .update(
++            &engine,
++            &f.scene,
++            &f.model,
++            &f.state,
++            &seeing_through,
++            pose,
++            BodyId::NONE,
++            &targets,
++        )
+         .unwrap();
+     assert_eq!(all.len(), 3);
+ }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_resource_retention_gpu.rs:9:
+ use molla_sensors::readback::ReadbackStamp;
+ use molla_sensors::{
+     AnnotationConfig, AnnotationProcessor, CameraBatch, CameraBatchOutputPool, CameraSpec,
+-    CloudFilter, CloudGrid,
+-    CloudGridConfig, CloudGridSpec, CloudProcessor, CloudProcessorConfig, CloudRaster,
+-    ContactSensor, FrameTarget, FrameTransformSensor, ImageProcessor, ImageProcessorConfig,
+-    ImuMount, ImuSensor, LidarBatch, LidarPattern, LidarScan, PendingCloudGridInput,
+-    PendingCloudInput, PendingCloudJob, PendingCloudSource, Raycaster, ScanMetadata,
+-    SensorCommandBatch, SensorFramePool, SensorFramePoolConfig, SensorScene, ShapeLabel,
+-    TiledCameraConfig,
++    CloudFilter, CloudGrid, CloudGridConfig, CloudGridSpec, CloudProcessor, CloudProcessorConfig,
++    CloudRaster, ContactSensor, FrameTarget, FrameTransformSensor, ImageProcessor,
++    ImageProcessorConfig, ImuMount, ImuSensor, LidarBatch, LidarPattern, LidarScan,
++    PendingCloudGridInput, PendingCloudInput, PendingCloudJob, PendingCloudSource, Raycaster,
++    ScanMetadata, SensorCommandBatch, SensorFramePool, SensorFramePoolConfig, SensorScene,
++    ShapeLabel, TiledCameraConfig,
+ };
+ use molla_sim::{BodyParams, Contacts, Model, ModelBuilder, State};
+ use molla_storage::{Buffer, BufferElement, BufferUsage};
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_resource_retention_gpu.rs:149:
+     for line in trace.to_string().lines().map(str::trim) {
+         if let Some(location) = line.strip_prefix("at ") {
+             if let Some(last) = frames.last_mut() {
+-                let short = location.rsplit_once("/crates/").map_or(location, |(_, p)| p);
++                let short = location
++                    .rsplit_once("/crates/")
++                    .map_or(location, |(_, p)| p);
+                 last.1 = short.to_string();
+             }
+         } else if let Some((index, symbol)) = line.split_once(": ") {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_resource_retention_gpu.rs:613:
+             .unwrap();
+         let c = self
+             .contact
+-            .encode(&mut batch, engine, contacts, &mut self.pc, stamp(frame as u64))
++            .encode(
++                &mut batch,
++                engine,
++                contacts,
++                &mut self.pc,
++                stamp(frame as u64),
++            )
+             .unwrap()
+             .unwrap();
+         let f = self
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_resource_retention_gpu.rs:631:
+ fn assert_flat(label: &str, warm: &BTreeMap<&str, isize>, later: &BTreeMap<&str, isize>) {
+     eprintln!("{label} warm resources: {warm:?}");
+     assert!(warm["buffers"] > 0, "{label}: wgpu counters are disabled");
+-    assert_eq!(warm, later, "{label}: steady-state frames changed live GPU objects");
++    assert_eq!(
++        warm, later,
++        "{label}: steady-state frames changed live GPU objects"
++    );
+ }
+ 
+ #[test]
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_resource_retention_gpu.rs:711:
+         rays.frame(&engine, &scene, &state, frame);
+         aux.frame(&engine, &model, &aux_state, &contacts, frame);
+     }
+-    let per = |f: &mut dyn FnMut(usize)| (8..24).map(|frame| counted(|| f(frame)).1).collect::<Vec<_>>();
++    let per = |f: &mut dyn FnMut(usize)| {
++        (8..24)
++            .map(|frame| counted(|| f(frame)).1)
++            .collect::<Vec<_>>()
++    };
+     let camera_counts = per(&mut |frame| cameras.frame(&engine, &scene, &state, frame));
+     let ray_counts = per(&mut |frame| rays.frame(&engine, &scene, &state, frame));
+     let aux_counts = per(&mut |frame| aux.frame(&engine, &model, &aux_state, &contacts, frame));
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_resource_retention_gpu.rs:718:
+     let ((), camera_traces) = traced(|| cameras.frame(&engine, &scene, &state, 24));
+     let ((), ray_traces) = traced(|| rays.frame(&engine, &scene, &state, 24));
+-    let ((), aux_traces) =
+-        traced(|| aux.frame(&engine, &model, &aux_state, &contacts, 24));
++    let ((), aux_traces) = traced(|| aux.frame(&engine, &model, &aux_state, &contacts, 24));
+     for (label, counts, traces) in [
+         ("camera/image/annotation", &camera_counts, &camera_traces),
+         ("ray/lidar/cloud/grid", &ray_counts, &ray_traces),
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sensors/tests/sensor_resource_retention_gpu.rs:725:
+         ("imu/contact/frame", &aux_counts, &aux_traces),
+     ] {
+         let owners = report(label, counts, traces);
+-        assert!(!owners.contains_key("unresolved"), "{label}: unresolved frames");
++        assert!(
++            !owners.contains_key("unresolved"),
++            "{label}: unresolved frames"
++        );
+     }
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sim/tests/runtime_kind_wake.rs:29:
+         for to in kinds {
+             for wake in [false, true] {
+                 let mut scene = RigidScene::new().unwrap();
+-                let a = scene.insert_body(BodyDesc {
+-                    kind: from,
+-                    velocity: SpatialVector::new(Vec3::X, Vec3::Z),
+-                    ..Default::default()
+-                }).unwrap();
++                let a = scene
++                    .insert_body(BodyDesc {
++                        kind: from,
++                        velocity: SpatialVector::new(Vec3::X, Vec3::Z),
++                        ..Default::default()
++                    })
++                    .unwrap();
+                 let b = scene.insert_body(BodyDesc::default()).unwrap();
+                 let activation = [scene.activation_stamp(a), scene.activation_stamp(b)];
+                 let pose = scene.body_pose(a).unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sim/tests/runtime_kind_wake.rs:43:
+                 assert_eq!(scene.body(a).unwrap().kind, to);
+                 assert_eq!(scene.body_pose(a).unwrap(), pose);
+                 assert_eq!(scene.body_mass_properties(a).unwrap(), mass);
+-                assert_eq!(scene.body_velocity(a).unwrap(),
+-                    if to == BodyKind::Fixed { SpatialVector::ZERO } else { velocity });
+-                assert_eq!(scene.activation_stamp(a) != activation[0],
+-                    from != to && to != BodyKind::Fixed && wake);
++                assert_eq!(
++                    scene.body_velocity(a).unwrap(),
++                    if to == BodyKind::Fixed {
++                        SpatialVector::ZERO
++                    } else {
++                        velocity
++                    }
++                );
++                assert_eq!(
++                    scene.activation_stamp(a) != activation[0],
++                    from != to && to != BodyKind::Fixed && wake
++                );
+                 assert_eq!(scene.activation_stamp(b), activation[1]);
+                 let stamp = scene.stamp();
+                 let revision = scene.revision();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-sim/tests/runtime_kind_wake.rs:67:
+     let stamp = scene.stamp();
+     let activation = scene.activation_stamp(a);
+     for wake in [false, true] {
+-        assert!(scene.set_body_kind_with_wake(removed, BodyKind::Fixed, wake).is_err());
++        assert!(
++            scene
++                .set_body_kind_with_wake(removed, BodyKind::Fixed, wake)
++                .is_err()
++        );
+         assert_eq!(scene.stamp(), stamp);
+         assert_eq!(scene.activation_stamp(a), activation);
+     }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/devices/aero.rs:88:
+             return Err(Error::Build("drag body is missing".into()));
+         }
+         if !spec.area.is_finite() || spec.area.min_element() < 0.0 || !(spec.density >= 0.0) {
+-            return Err(Error::Build("drag areas and air density must be nonnegative".into()));
++            return Err(Error::Build(
++                "drag areas and air density must be nonnegative".into(),
++            ));
+         }
+         self.next += 1;
+         let id = DragId(self.next);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/devices/aero.rs:131:
+         let centers = scene.model().body_com.host()?;
+         let (wind, body_wind) = (self.wind, &self.body_wind);
+         for (spec, reading) in self.drags.values_mut() {
+-            let (Some(body), Some(desc)) = (scene.body_index(spec.body), scene.body(spec.body)) else {
++            let (Some(body), Some(desc)) = (scene.body_index(spec.body), scene.body(spec.body))
++            else {
+                 continue;
+             };
+             if !desc.enabled || desc.kind != BodyKind::Dynamic {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/joint_drives.rs:68:
+             unit
+         })
+         .collect();
+-    let responses = joint_mass.factor(articulation, count)?.solve_batch(&units)?;
++    let responses = joint_mass
++        .factor(articulation, count)?
++        .solve_batch(&units)?;
+     let qd = state.joint_qd.host()?;
+     let n = drives.len();
+     let coupling = |i: usize, j: usize| {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/joint_drives.rs:98:
+                 continue;
+             }
+             let residual = rhs[i] - (0..n).map(|j| matrix[i * n + j] * torques[j]).sum::<Real>();
+-            let limit = limits.get(drives[i]).copied().unwrap_or(Real::INFINITY).abs();
++            let limit = limits
++                .get(drives[i])
++                .copied()
++                .unwrap_or(Real::INFINITY)
++                .abs();
+             let next = (torques[i] + residual / diagonal).clamp(-limit, limit);
+             change = change.max((next - torques[i]).abs());
+             torques[i] = next;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/joint_drives.rs:117:
+         }
+         efforts[dof].drive = torques[i];
+     }
+-    if acceleration[first..first + count].iter().any(|a| !a.is_finite()) {
++    if acceleration[first..first + count]
++        .iter()
++        .any(|a| !a.is_finite())
++    {
+         return Err(Error::Solver("non-finite velocity drive reaction".into()));
+     }
+     Ok(())
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/joint_mass.rs:99:
+     }
+ 
+     pub(crate) fn with_seed(
+-        model: &'a Model, state: &'a State, seed: Option<MassSeed<'_>>,
++        model: &'a Model,
++        state: &'a State,
++        seed: Option<MassSeed<'_>>,
+     ) -> Result<Self> {
+         let mut result = Self::new(model, state);
+         if let Some(seed) = seed {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/joint_mass.rs:125:
+     }
+ 
+     pub(crate) fn cached_cholesky(&self, articulation: usize, n: usize) -> Option<(Real, &[Real])> {
+-        self.entries.get(articulation)?.as_ref()?.factor.as_ref()?.full_rank_cholesky(n)
++        self.entries
++            .get(articulation)?
++            .as_ref()?
++            .factor
++            .as_ref()?
++            .full_rank_cholesky(n)
+     }
+ 
+     pub(crate) fn retain_cholesky(
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/pressure_tire.rs:128:
+ }
+ 
+ impl Terrain for FrictionPlane<'_> {
+-    fn height(&self, _: Real, _: Real) -> Real { 0.0 }
+-    fn normal(&self, _: Real, _: Real) -> [Real; 3] { [0.0, 1.0, 0.0] }
+-    fn friction(&self) -> Real { self.reference }
++    fn height(&self, _: Real, _: Real) -> Real {
++        0.0
++    }
++    fn normal(&self, _: Real, _: Real) -> [Real; 3] {
++        [0.0, 1.0, 0.0]
++    }
++    fn friction(&self) -> Real {
++        self.reference
++    }
+     fn friction_at(&self, x: Real, z: Real) -> Real {
+         self.sample.map_or(self.reference, |sample| {
+             sample(self.origin + self.forward * x + self.side * z)
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/rigid_impulse.rs:225:
+         let MassDecomposition::Cholesky(factor) = &self.decomposition else {
+             return None;
+         };
+-        (self.n == n && self.scale.is_finite() && self.scale > 0.0
++        (self.n == n
++            && self.scale.is_finite()
++            && self.scale > 0.0
+             && factor.iter().all(|v| v.is_finite())
+-            && (0..n).all(|i| factor[i * n + i] > 0.0
+-                && factor[i * n + i].powi(2) > 1e-12))
+-            .then_some((self.scale, factor.as_slice()))
++            && (0..n).all(|i| factor[i * n + i] > 0.0 && factor[i * n + i].powi(2) > 1e-12))
++        .then_some((self.scale, factor.as_slice()))
+     }
+ 
+     pub(crate) fn into_full_rank(self) -> Option<Self> {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/rigid_impulse.rs:355:
+                         .iter()
+                         .zip(&whitened[col])
+                         .map(|(a, b)| a * b)
+-                        .sum::<Real>() / self.scale;
++                        .sum::<Real>()
++                        / self.scale;
+                     response[row * count + col] += value;
+                     if row != col {
+                         response[col * count + row] += value;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/rigid_impulse.rs:433:
+                 }
+                 let diagonal = coefficients[i];
+                 if diagonal.abs() < 1e-30 {
+-                    return Err(Error::Build(format!("forward_sub: zero diagonal at row {i}")));
++                    return Err(Error::Build(format!(
++                        "forward_sub: zero diagonal at row {i}"
++                    )));
+                 }
+                 for lane in 0..LANES {
+                     values[lane] /= diagonal;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/rigid_impulse.rs:475:
+             }
+         }
+         for pivot in [0.0, -1.0, 1e-7, 1e-6, f64::NAN, f64::INFINITY] {
+-            assert!(
+-                MassFactor::from_cholesky(vec![1.0, 0.0, 0.0, pivot], 2, 1.0).is_none()
+-            );
++            assert!(MassFactor::from_cholesky(vec![1.0, 0.0, 0.0, pivot], 2, 1.0).is_none());
+         }
+         for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+             assert!(MassFactor::from_cholesky(vec![1.0], 1, scale).is_none());
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/rigid_impulse.rs:574:
+             assert!(factor.add_gram(&[vec![1.0, 2.0]], &mut []).is_err());
+             factor.add_gram(&[], &mut []).unwrap();
+             let mut response = [7.0; 4];
+-            factor.add_gram(&[vec![0.0; 2], vec![0.0; 2]], &mut response).unwrap();
++            factor
++                .add_gram(&[vec![0.0; 2], vec![0.0; 2]], &mut response)
++                .unwrap();
+             assert_eq!(response, [7.0; 4]);
+         }
+     }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/wheel_forces/sleeping.rs:24:
+ 
+ impl GroundSurface<'_> {
+     pub fn sample(&self, point: Vec3) -> Real {
+-        self.grid.and_then(|grid| grid.sample(self.pose.inverse_transform_point(point)))
++        self.grid
++            .and_then(|grid| grid.sample(self.pose.inverse_transform_point(point)))
+             .unwrap_or(self.fallback)
+     }
+ }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/src/wheel_forces/sleeping.rs:149:
+                     (hub - hit.point).dot(hit.normal),
+                     hit.surface.reference,
+                     None,
+-                    hit.surface.grid.map(|_| &friction_at as &dyn Fn(Vec3) -> Real),
++                    hit.surface
++                        .grid
++                        .map(|_| &friction_at as &dyn Fn(Vec3) -> Real),
+                 )?;
+                 (output, Some(pressure))
+             } else {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:2:
+ //! the rigid world, against analytic answers.
+ 
+ use molla_math::{Mat3, Quat, SpatialVector, Transform, Vec3};
+-use molla_sim::runtime::{BodyDesc, BodyHandle, BodyKind, ColliderDesc, ColliderGeometry, JointDesc};
++use molla_sim::runtime::{
++    BodyDesc, BodyHandle, BodyKind, ColliderDesc, ColliderGeometry, JointDesc,
++};
+ use molla_sim::{BodyParams, JointType, MassProperties};
+ use molla_solvers::devices::{
+-    AIR_DENSITY, BeltSpec, ConnectorSpec, CopterCommand, CopterId, CopterLimits, CopterSpec, DragSpec,
+-    MotorCommand, MotorLimits, MotorSpec, PropellerSpec,
++    AIR_DENSITY, BeltSpec, ConnectorSpec, CopterCommand, CopterId, CopterLimits, CopterSpec,
++    DragSpec, MotorCommand, MotorLimits, MotorSpec, PropellerSpec,
+ };
+ use molla_solvers::rigid_world::RigidWorld;
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:32:
+ fn arm(gravity: bool) -> (RigidWorld, BodyHandle, molla_sim::runtime::JointHandle) {
+     let mut w = RigidWorld::new().unwrap();
+     w.scene
+-        .set_gravity(if gravity { Vec3::new(0.0, 0.0, -9.81) } else { Vec3::ZERO })
++        .set_gravity(if gravity {
++            Vec3::new(0.0, 0.0, -9.81)
++        } else {
++            Vec3::ZERO
++        })
+         .unwrap();
+     let post = body(&mut w, Vec3::ZERO, 1000.0);
+     w.scene.set_body_kind(post, BodyKind::Fixed).unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:66:
+     };
+     w.devices
+         .motors
+-        .insert(&w.scene, joint, MotorSpec { limits, max_force: 100.0 })
++        .insert(
++            &w.scene,
++            joint,
++            MotorSpec {
++                limits,
++                max_force: 100.0,
++            },
++        )
+         .unwrap();
+-    w.devices.motors.command(joint, MotorCommand::Position(0.5)).unwrap();
++    w.devices
++        .motors
++        .command(joint, MotorCommand::Position(0.5))
++        .unwrap();
+     run(&mut w, 0.2);
+     let moving = w.devices.motors.reading(joint).unwrap();
+     assert!((moving.velocity - 1.0).abs() < 1e-3, "{moving:?}");
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:76:
+     run(&mut w, 1.3);
+     let settled = w.devices.motors.reading(joint).unwrap();
+     assert!((settled.position - 0.5).abs() < 1e-3, "{settled:?}");
+-    assert!(settled.velocity.abs() < 1e-3 && settled.force.abs() < 1e-3, "{settled:?}");
++    assert!(
++        settled.velocity.abs() < 1e-3 && settled.force.abs() < 1e-3,
++        "{settled:?}"
++    );
+ }
+ 
+ #[test]
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:84:
+     let (mut w, _, joint) = arm(true);
+     w.devices
+         .motors
+-        .insert(&w.scene, joint, MotorSpec { max_force: 100.0, ..Default::default() })
++        .insert(
++            &w.scene,
++            joint,
++            MotorSpec {
++                max_force: 100.0,
++                ..Default::default()
++            },
++        )
+         .unwrap();
+     run(&mut w, 1.0);
+     let hold = w.devices.motors.reading(joint).unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:91:
+     assert!(hold.position.abs() < 0.02, "{hold:?}");
+-    assert!((hold.force.abs() - 2.0 * 9.81).abs() < 0.1, "m·g·L: {hold:?}");
++    assert!(
++        (hold.force.abs() - 2.0 * 9.81).abs() < 0.1,
++        "m·g·L: {hold:?}"
++    );
+ }
+ 
+ #[test]
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:97:
+     let (mut w, _, joint) = arm(false);
+     w.devices
+         .motors
+-        .insert(&w.scene, joint, MotorSpec { max_force: 100.0, ..Default::default() })
++        .insert(
++            &w.scene,
++            joint,
++            MotorSpec {
++                max_force: 100.0,
++                ..Default::default()
++            },
++        )
+         .unwrap();
+-    w.devices.motors.command(joint, MotorCommand::Force(5.0)).unwrap();
++    w.devices
++        .motors
++        .command(joint, MotorCommand::Force(5.0))
++        .unwrap();
+     run(&mut w, 1.0);
+     let spin = w.devices.motors.reading(joint).unwrap();
+     // I = I_com + m·L² = 2 + 2.
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:110:
+ #[test]
+ fn brake_damps_the_spin_exponentially() {
+     let (mut w, arm, joint) = arm(false);
+-    w.devices.motors.set_brake(&mut w.scene, joint, 4.0).unwrap();
++    w.devices
++        .motors
++        .set_brake(&mut w.scene, joint, 4.0)
++        .unwrap();
+     w.scene
+-        .set_body_velocity(arm, SpatialVector::new(Vec3::new(0.0, 0.0, -2.0), Vec3::Y * 2.0))
++        .set_body_velocity(
++            arm,
++            SpatialVector::new(Vec3::new(0.0, 0.0, -2.0), Vec3::Y * 2.0),
++        )
+         .unwrap();
+     w.step(DT).unwrap();
+     let start = w.devices.motors.reading(joint).unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:119:
+-    assert!((start.brake_force + 4.0 * start.velocity).abs() < 0.05 * start.velocity.abs(), "{start:?}");
++    assert!(
++        (start.brake_force + 4.0 * start.velocity).abs() < 0.05 * start.velocity.abs(),
++        "{start:?}"
++    );
+     run(&mut w, 1.0);
+     let later = w.devices.motors.reading(joint).unwrap();
+     // ω(t) = ω₀·e^(−c·t/I) with c = 4, I = 4.
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:123:
+     let expected = start.velocity * (-1.0f64).exp();
+-    assert!((later.velocity - expected).abs() < 0.01 * start.velocity.abs(), "{later:?} vs {expected}");
++    assert!(
++        (later.velocity - expected).abs() < 0.01 * start.velocity.abs(),
++        "{later:?} vs {expected}"
++    );
+     assert_eq!(later.brake_damping, 4.0);
+-    w.devices.motors.set_brake(&mut w.scene, joint, 0.0).unwrap();
++    w.devices
++        .motors
++        .set_brake(&mut w.scene, joint, 0.0)
++        .unwrap();
+     w.step(DT).unwrap();
+     let released = w.devices.motors.reading(joint).unwrap();
+-    assert_eq!((released.brake_damping, released.brake_force), (0.0, 0.0), "released brakes keep reporting");
++    assert_eq!(
++        (released.brake_damping, released.brake_force),
++        (0.0, 0.0),
++        "released brakes keep reporting"
++    );
+     assert!((released.velocity - later.velocity).abs() < 1e-9);
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:138:
+     let id = w
+         .devices
+         .propellers
+-        .insert(&w.scene, PropellerSpec {
+-            body: hull,
+-            frame: Transform::IDENTITY,
+-            thrust: [0.01, 0.0],
+-            torque: [0.001, 0.0],
+-            limits: MotorLimits::default(),
+-            max_torque: 10.0,
+-        })
++        .insert(
++            &w.scene,
++            PropellerSpec {
++                body: hull,
++                frame: Transform::IDENTITY,
++                thrust: [0.01, 0.0],
++                torque: [0.001, 0.0],
++                limits: MotorLimits::default(),
++                max_torque: 10.0,
++            },
++        )
+         .unwrap();
+     w.devices.propellers.set_speed(id, 10.0).unwrap();
+     run(&mut w, 1.0);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:152:
+     let reading = w.devices.propellers.reading(id).unwrap();
+-    assert!((reading.omega - 10.0).abs() < 1e-12 && (reading.thrust - 1.0).abs() < 1e-9, "{reading:?}");
++    assert!(
++        (reading.omega - 10.0).abs() < 1e-12 && (reading.thrust - 1.0).abs() < 1e-9,
++        "{reading:?}"
++    );
+     let v = w.scene.body_velocity(hull).unwrap();
+     // T/m·t along the shaft, and −Q/I·t about it.
+     assert!((v.linear.x - 0.5).abs() < 1e-6, "{v:?}");
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:177:
+     let id = w
+         .devices
+         .belts
+-        .insert(&w.scene, BeltSpec {
+-            colliders: vec![belt],
+-            direction: Vec3::X,
+-            limits: MotorLimits::default(),
+-        })
++        .insert(
++            &w.scene,
++            BeltSpec {
++                colliders: vec![belt],
++                direction: Vec3::X,
++                limits: MotorLimits::default(),
++            },
++        )
+         .unwrap();
+-    w.devices.belts.command(id, MotorCommand::Velocity(1.0)).unwrap();
++    w.devices
++        .belts
++        .command(id, MotorCommand::Velocity(1.0))
++        .unwrap();
+     run(&mut w, 2.0);
+     let v = w.scene.body_velocity(crate_body).unwrap().linear;
+-    assert!((v.x - 1.0).abs() < 0.01 && v.y.abs() < 0.01 && v.z.abs() < 1e-3, "{v:?}");
++    assert!(
++        (v.x - 1.0).abs() < 0.01 && v.y.abs() < 0.01 && v.z.abs() < 1e-3,
++        "{v:?}"
++    );
+     let reading = w.devices.belts.reading(id).unwrap();
+-    assert!((reading.velocity - 1.0).abs() < 1e-12 && (reading.position - 2.0).abs() < 1e-9, "{reading:?}");
++    assert!(
++        (reading.velocity - 1.0).abs() < 1e-12 && (reading.position - 2.0).abs() < 1e-9,
++        "{reading:?}"
++    );
+ }
+ 
+ #[test]
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:198:
+     let dock = w
+         .devices
+         .connectors
+-        .insert(&w.scene, ConnectorSpec {
+-            tensile_strength: Some(50.0),
+-            ..Default::default()
+-        })
++        .insert(
++            &w.scene,
++            ConnectorSpec {
++                tensile_strength: Some(50.0),
++                ..Default::default()
++            },
++        )
+         .unwrap();
+     let pod = body(&mut w, Vec3::new(0.005, 0.002, 0.0), 1.0);
+     let plug = w
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:208:
+         .devices
+         .connectors
+-        .insert(&w.scene, ConnectorSpec {
+-            body: Some(pod),
+-            frame: Transform::new(Vec3::ZERO, Quat::from_rotation_z(std::f64::consts::PI)),
+-            ..Default::default()
+-        })
++        .insert(
++            &w.scene,
++            ConnectorSpec {
++                body: Some(pod),
++                frame: Transform::new(Vec3::ZERO, Quat::from_rotation_z(std::f64::consts::PI)),
++                ..Default::default()
++            },
++        )
+         .unwrap();
+     w.step(DT).unwrap();
+-    assert_eq!(w.devices.connectors.reading(dock).unwrap().presence, Some(plug));
+-    assert_eq!(w.devices.connectors.reading(plug).unwrap().presence, Some(dock));
++    assert_eq!(
++        w.devices.connectors.reading(dock).unwrap().presence,
++        Some(plug)
++    );
++    assert_eq!(
++        w.devices.connectors.reading(plug).unwrap().presence,
++        Some(dock)
++    );
+     assert_eq!(w.devices.connectors.reading(dock).unwrap().linked, None);
+     w.devices.connectors.lock(dock).unwrap();
+     run(&mut w, 0.5);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:222:
+-    assert_eq!(w.devices.connectors.reading(dock).unwrap().linked, Some(plug));
+-    assert!(w.scene.body_pose(pod).unwrap().position.length() < 1e-3, "snapped flush");
++    assert_eq!(
++        w.devices.connectors.reading(dock).unwrap().linked,
++        Some(plug)
++    );
++    assert!(
++        w.scene.body_pose(pod).unwrap().position.length() < 1e-3,
++        "snapped flush"
++    );
+ 
+-    w.scene.add_body_wrench(pod, SpatialVector::new(Vec3::X * 30.0, Vec3::ZERO)).unwrap();
++    w.scene
++        .add_body_wrench(pod, SpatialVector::new(Vec3::X * 30.0, Vec3::ZERO))
++        .unwrap();
+     run(&mut w, 0.5);
+     let held = w.devices.connectors.reading(dock).unwrap();
+     assert_eq!(held.linked, Some(plug));
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:229:
+-    assert!((held.tensile - 30.0).abs() < 1.0 && held.shear < 1.0, "{held:?}");
++    assert!(
++        (held.tensile - 30.0).abs() < 1.0 && held.shear < 1.0,
++        "{held:?}"
++    );
+ 
+-    w.scene.add_body_wrench(pod, SpatialVector::new(Vec3::X * 40.0, Vec3::ZERO)).unwrap();
++    w.scene
++        .add_body_wrench(pod, SpatialVector::new(Vec3::X * 40.0, Vec3::ZERO))
++        .unwrap();
+     run(&mut w, 0.5);
+     let broken = w.devices.connectors.reading(dock).unwrap();
+     assert_eq!(broken.linked, None, "{broken:?}");
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:235:
+-    assert!(w.scene.body_pose(pod).unwrap().position.x > 0.5, "pulled away");
++    assert!(
++        w.scene.body_pose(pod).unwrap().position.x > 0.5,
++        "pulled away"
++    );
+ }
+ 
+ #[test]
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:242:
+     let dock = w
+         .devices
+         .connectors
+-        .insert(&w.scene, ConnectorSpec {
+-            auto_lock: true,
+-            ..Default::default()
+-        })
++        .insert(
++            &w.scene,
++            ConnectorSpec {
++                auto_lock: true,
++                ..Default::default()
++            },
++        )
+         .unwrap();
+     let pod = body(&mut w, Vec3::new(0.5, 0.0, 0.0), 1.0);
+     let plug = w
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:252:
+         .devices
+         .connectors
+-        .insert(&w.scene, ConnectorSpec {
+-            body: Some(pod),
+-            frame: Transform::new(Vec3::ZERO, Quat::from_rotation_z(std::f64::consts::PI)),
+-            ..Default::default()
+-        })
++        .insert(
++            &w.scene,
++            ConnectorSpec {
++                body: Some(pod),
++                frame: Transform::new(Vec3::ZERO, Quat::from_rotation_z(std::f64::consts::PI)),
++                ..Default::default()
++            },
++        )
+         .unwrap();
+     w.devices.connectors.lock(dock).unwrap();
+     w.scene
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:262:
+         .set_body_velocity(pod, SpatialVector::new(Vec3::X * -1.0, Vec3::ZERO))
+         .unwrap();
+     run(&mut w, 1.0);
+-    assert_eq!(w.devices.connectors.reading(dock).unwrap().linked, Some(plug), "auto-locked on arrival");
++    assert_eq!(
++        w.devices.connectors.reading(dock).unwrap().linked,
++        Some(plug),
++        "auto-locked on arrival"
++    );
+     assert!(w.scene.body_velocity(pod).unwrap().linear.length() < 1e-2);
+     w.devices.connectors.unlock(dock).unwrap();
+-    w.scene.add_body_wrench(pod, SpatialVector::new(Vec3::X, Vec3::ZERO)).unwrap();
++    w.scene
++        .add_body_wrench(pod, SpatialVector::new(Vec3::X, Vec3::ZERO))
++        .unwrap();
+     run(&mut w, 0.5);
+     assert_eq!(w.devices.connectors.reading(dock).unwrap().linked, None);
+     assert!(w.scene.body_velocity(pod).unwrap().linear.x > 0.4);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:273:
+ 
+ /// A 25 kg quadcopter in X layout 10 m up (Z up): diagonal rotor pairs spin
+ /// opposite ways, hovering near 151 rad/s.
+-fn quad() -> (RigidWorld, BodyHandle, CopterId, Vec<molla_solvers::devices::PropellerId>) {
++fn quad() -> (
++    RigidWorld,
++    BodyHandle,
++    CopterId,
++    Vec<molla_solvers::devices::PropellerId>,
++) {
+     let mut w = RigidWorld::new().unwrap();
+     w.scene.set_gravity(Vec3::new(0.0, 0.0, -9.81)).unwrap();
+     let hull = w
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:289:
+         })
+         .unwrap();
+     let shaft_up = Quat::from_rotation_y(-std::f64::consts::FRAC_PI_2);
+-    let rotors = [(1.0, 1.0, 1.0), (1.0, -1.0, -1.0), (-1.0, -1.0, 1.0), (-1.0, 1.0, -1.0)]
+-        .map(|(x, y, spin): (f64, f64, f64)| {
+-            w.devices
+-                .propellers
+-                .insert(&w.scene, PropellerSpec {
++    let rotors = [
++        (1.0, 1.0, 1.0),
++        (1.0, -1.0, -1.0),
++        (-1.0, -1.0, 1.0),
++        (-1.0, 1.0, -1.0),
++    ]
++    .map(|(x, y, spin): (f64, f64, f64)| {
++        w.devices
++            .propellers
++            .insert(
++                &w.scene,
++                PropellerSpec {
+                     body: hull,
+                     frame: Transform::new(Vec3::new(0.64 * x, 0.64 * y, 0.2), shaft_up),
+                     thrust: [2.7e-3 * spin, 0.0],
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:303:
+                         ..Default::default()
+                     },
+                     max_torque: f64::INFINITY,
+-                })
+-                .unwrap()
+-        })
+-        .to_vec();
++                },
++            )
++            .unwrap()
++    })
++    .to_vec();
+     let spec = CopterSpec {
+         body: hull,
+         frame: Transform::IDENTITY,
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:313:
+         propellers: rotors.clone(),
+         limits: CopterLimits::default(),
+     };
+-    let copter = w.devices.copters.insert(&w.scene, &w.devices.propellers, spec).unwrap();
++    let copter = w
++        .devices
++        .copters
++        .insert(&w.scene, &w.devices.propellers, spec)
++        .unwrap();
+     (w, hull, copter, rotors)
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:320:
+ fn velocity(forward: f64, left: f64, up: f64, yaw_rate: f64) -> CopterCommand {
+-    CopterCommand::Velocity { forward, left, up, yaw_rate }
++    CopterCommand::Velocity {
++        forward,
++        left,
++        up,
++        yaw_rate,
++    }
+ }
+ 
+ #[test]
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:325:
+ fn a_quad_hovers_climbs_flies_and_yaws() {
+     let (mut w, hull, flight, rotors) = quad();
+-    w.devices.copters.command(flight, velocity(0.0, 0.0, 0.0, 0.0)).unwrap();
++    w.devices
++        .copters
++        .command(flight, velocity(0.0, 0.0, 0.0, 0.0))
++        .unwrap();
+     run(&mut w, 5.0);
+     let hover = w.devices.copters.reading(flight).unwrap();
+     let z = w.scene.body_pose(hull).unwrap().position.z;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:331:
+-    assert!((z - 10.0).abs() < 0.05 && hover.roll.abs() < 1e-3 && hover.pitch.abs() < 1e-3, "{z} {hover:?}");
+-    assert!((hover.thrust - 25.0 * 9.81).abs() < 0.5 && !hover.saturated, "{hover:?}");
++    assert!(
++        (z - 10.0).abs() < 0.05 && hover.roll.abs() < 1e-3 && hover.pitch.abs() < 1e-3,
++        "{z} {hover:?}"
++    );
++    assert!(
++        (hover.thrust - 25.0 * 9.81).abs() < 0.5 && !hover.saturated,
++        "{hover:?}"
++    );
+     let omega = w.devices.propellers.reading(rotors[0]).unwrap().omega;
+-    assert!((omega - (25.0 * 9.81 / 4.0 / 2.7e-3f64).sqrt()).abs() < 1.0, "hover rotor speed {omega}");
+-    assert!((w.devices.propellers.reading(rotors[1]).unwrap().omega + omega).abs() < 1.0, "counter-rotating");
++    assert!(
++        (omega - (25.0 * 9.81 / 4.0 / 2.7e-3f64).sqrt()).abs() < 1.0,
++        "hover rotor speed {omega}"
++    );
++    assert!(
++        (w.devices.propellers.reading(rotors[1]).unwrap().omega + omega).abs() < 1.0,
++        "counter-rotating"
++    );
+ 
+-    w.devices.copters.command(flight, velocity(0.0, 0.0, 1.0, 0.0)).unwrap();
++    w.devices
++        .copters
++        .command(flight, velocity(0.0, 0.0, 1.0, 0.0))
++        .unwrap();
+     run(&mut w, 4.0);
+     let climb = w.devices.copters.reading(flight).unwrap();
+     assert!((climb.velocity[2] - 1.0).abs() < 0.02, "{climb:?}");
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:341:
+ 
+-    w.devices.copters.command(flight, velocity(3.0, 0.0, 0.0, 0.0)).unwrap();
++    w.devices
++        .copters
++        .command(flight, velocity(3.0, 0.0, 0.0, 0.0))
++        .unwrap();
+     run(&mut w, 1.0);
+-    assert!(w.devices.copters.reading(flight).unwrap().pitch > 0.05, "noses down to speed up");
++    assert!(
++        w.devices.copters.reading(flight).unwrap().pitch > 0.05,
++        "noses down to speed up"
++    );
+     run(&mut w, 5.0);
+     let cruise = w.devices.copters.reading(flight).unwrap();
+-    assert!((cruise.velocity[0] - 3.0).abs() < 0.05 && cruise.velocity[1].abs() < 0.05, "{cruise:?}");
++    assert!(
++        (cruise.velocity[0] - 3.0).abs() < 0.05 && cruise.velocity[1].abs() < 0.05,
++        "{cruise:?}"
++    );
+     assert!(cruise.velocity[2].abs() < 0.05, "{cruise:?}");
+ 
+-    w.devices.copters.command(flight, velocity(0.0, 0.0, 0.0, 0.5)).unwrap();
++    w.devices
++        .copters
++        .command(flight, velocity(0.0, 0.0, 0.0, 0.5))
++        .unwrap();
+     run(&mut w, 3.0);
+     let turn = w.devices.copters.reading(flight).unwrap();
+-    assert!((turn.yaw_rate - 0.5).abs() < 0.02 && turn.velocity[2].abs() < 0.05, "{turn:?}");
++    assert!(
++        (turn.yaw_rate - 0.5).abs() < 0.02 && turn.velocity[2].abs() < 0.05,
++        "{turn:?}"
++    );
+ }
+ 
+ #[test]
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:357:
+ fn attitude_mode_tilts_and_off_drops() {
+     let (mut w, hull, flight, _) = quad();
+-    let command = CopterCommand::Attitude { roll: 0.2, pitch: 0.0, yaw_rate: 0.0, climb: 0.0 };
++    let command = CopterCommand::Attitude {
++        roll: 0.2,
++        pitch: 0.0,
++        yaw_rate: 0.0,
++        climb: 0.0,
++    };
+     w.devices.copters.command(flight, command).unwrap();
+     run(&mut w, 2.0);
+     let banked = w.devices.copters.reading(flight).unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:363:
+-    assert!((banked.roll - 0.2).abs() < 0.01 && banked.pitch.abs() < 0.01, "{banked:?}");
+-    assert!(banked.velocity[1] < -1.0 && banked.velocity[2].abs() < 0.1, "slides right, holds height: {banked:?}");
+-    w.devices.copters.command(flight, CopterCommand::Off).unwrap();
++    assert!(
++        (banked.roll - 0.2).abs() < 0.01 && banked.pitch.abs() < 0.01,
++        "{banked:?}"
++    );
++    assert!(
++        banked.velocity[1] < -1.0 && banked.velocity[2].abs() < 0.1,
++        "slides right, holds height: {banked:?}"
++    );
++    w.devices
++        .copters
++        .command(flight, CopterCommand::Off)
++        .unwrap();
+     let before = w.scene.body_pose(hull).unwrap().position.z;
+     run(&mut w, 1.0);
+     let after = w.scene.body_pose(hull).unwrap().position.z;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:369:
+-    assert!((before - after - 0.5 * 9.81).abs() < 0.3, "free fall: {before} -> {after}");
++    assert!(
++        (before - after - 0.5 * 9.81).abs() < 0.3,
++        "free fall: {before} -> {after}"
++    );
+ }
+ 
+ /// A 5 m/s wind along +X on a quad with 0.4 m² of side drag: it holds its
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:378:
+     let drag = w
+         .devices
+         .aero
+-        .insert(&w.scene, DragSpec {
+-            body: hull,
+-            frame: Transform::IDENTITY,
+-            area: Vec3::new(0.4, 0.4, 0.8),
+-            density: AIR_DENSITY,
+-        })
++        .insert(
++            &w.scene,
++            DragSpec {
++                body: hull,
++                frame: Transform::IDENTITY,
++                area: Vec3::new(0.4, 0.4, 0.8),
++                density: AIR_DENSITY,
++            },
++        )
+         .unwrap();
+     w.devices.aero.set_wind(Vec3::X * 5.0).unwrap();
+-    w.devices.copters.command(flight, velocity(0.0, 0.0, 0.0, 0.0)).unwrap();
++    w.devices
++        .copters
++        .command(flight, velocity(0.0, 0.0, 0.0, 0.0))
++        .unwrap();
+     let start = w.scene.body_pose(hull).unwrap().position;
+     run(&mut w, 20.0);
+     let held = w.devices.copters.reading(flight).unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:393:
+     let load = 0.5 * AIR_DENSITY * 0.4 * 25.0;
+     assert!(held.velocity.iter().all(|v| v.abs() < 0.01), "{held:?}");
+-    assert!((held.pitch + (load / (25.0 * 9.81)).atan()).abs() < 2e-3, "leans into the wind: {held:?}");
++    assert!(
++        (held.pitch + (load / (25.0 * 9.81)).atan()).abs() < 2e-3,
++        "leans into the wind: {held:?}"
++    );
+     let pushed = w.devices.aero.reading(drag).unwrap();
+-    assert!((pushed.force.x - load).abs() < 0.05 && (pushed.airspeed.x + 5.0).abs() < 0.01, "{pushed:?}");
++    assert!(
++        (pushed.force.x - load).abs() < 0.05 && (pushed.airspeed.x + 5.0).abs() < 0.01,
++        "{pushed:?}"
++    );
+     let drift = (w.scene.body_pose(hull).unwrap().position - start).length();
+-    assert!(drift < 1.0, "the integral brings it back: drifted {drift} m");
++    assert!(
++        drift < 1.0,
++        "the integral brings it back: drifted {drift} m"
++    );
+ }
+ 
+ /// A 1 kg body with 1 m² of drag, released at rest in a 3 m/s wind without
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:408:
+     let puff = body(&mut w, Vec3::ZERO, 1.0);
+     w.devices
+         .aero
+-        .insert(&w.scene, DragSpec {
+-            body: puff,
+-            frame: Transform::IDENTITY,
+-            area: Vec3::ONE,
+-            density: AIR_DENSITY,
+-        })
++        .insert(
++            &w.scene,
++            DragSpec {
++                body: puff,
++                frame: Transform::IDENTITY,
++                area: Vec3::ONE,
++                density: AIR_DENSITY,
++            },
++        )
+         .unwrap();
+     w.devices.aero.set_wind(Vec3::X * 3.0).unwrap();
+     run(&mut w, 4.0);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:420:
+     let k = 0.5 * AIR_DENSITY;
+     let expected = 3.0 - 1.0 / (1.0 / 3.0 + k * 4.0);
+     let v = w.scene.body_velocity(puff).unwrap().linear;
+-    assert!((v.x - expected).abs() < 5e-3 && v.y.abs() < 1e-12, "{v:?} vs {expected}");
+-    w.devices.aero.set_body_wind(puff, Some(Vec3::ZERO)).unwrap();
++    assert!(
++        (v.x - expected).abs() < 5e-3 && v.y.abs() < 1e-12,
++        "{v:?} vs {expected}"
++    );
++    w.devices
++        .aero
++        .set_body_wind(puff, Some(Vec3::ZERO))
++        .unwrap();
+     let before = w.scene.body_velocity(puff).unwrap().linear.x;
+     run(&mut w, 1.0);
+     let after = w.scene.body_velocity(puff).unwrap().linear.x;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:428:
+-    assert!(after < before, "its own still air slows it: {before} -> {after}");
++    assert!(
++        after < before,
++        "its own still air slows it: {before} -> {after}"
++    );
+ }
+ 
+ /// A tipper body, its tailgate and a gate on the tailgate, each held by a
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:438:
+     w.scene.set_gravity(Vec3::new(0.0, 0.0, -9.81)).unwrap();
+     let chassis = body(&mut w, Vec3::ZERO, 2500.0);
+     w.scene.set_body_kind(chassis, BodyKind::Fixed).unwrap();
+-    let (tipper, gate, slide) =
+-        (body(&mut w, Vec3::new(0.0, 2.0, 1.5), 2000.0), body(&mut w, Vec3::new(0.0, 4.0, 1.5), 450.0), body(&mut w, Vec3::new(0.0, 4.2, 1.0), 40.0));
++    let (tipper, gate, slide) = (
++        body(&mut w, Vec3::new(0.0, 2.0, 1.5), 2000.0),
++        body(&mut w, Vec3::new(0.0, 4.0, 1.5), 450.0),
++        body(&mut w, Vec3::new(0.0, 4.2, 1.0), 40.0),
++    );
+     let hinge = |w: &mut RigidWorld, parent, child, at: Vec3, kind, limits: [f64; 2]| {
+         let joint = w
+             .scene
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:452:
+                 frame_child: Transform::IDENTITY,
+             })
+             .unwrap();
+-        let axis = if kind == JointType::Prismatic { JointAxis::LinX } else { JointAxis::AngX };
++        let axis = if kind == JointType::Prismatic {
++            JointAxis::LinX
++        } else {
++            JointAxis::AngX
++        };
+         w.scene.set_joint_limits(joint, axis, Some(limits)).unwrap();
+-        w.devices.motors.insert(&w.scene, joint, MotorSpec { max_force: 1.0e6, ..Default::default() }).unwrap();
+-        w.devices.motors.command(joint, MotorCommand::Position(limits[if limits[0] == 0.0 { 0 } else { 1 }])).unwrap();
++        w.devices
++            .motors
++            .insert(
++                &w.scene,
++                joint,
++                MotorSpec {
++                    max_force: 1.0e6,
++                    ..Default::default()
++                },
++            )
++            .unwrap();
++        w.devices
++            .motors
++            .command(
++                joint,
++                MotorCommand::Position(limits[if limits[0] == 0.0 { 0 } else { 1 }]),
++            )
++            .unwrap();
+         joint
+     };
+-    hinge(&mut w, chassis, tipper, Vec3::new(0.0, 2.0, 1.5), JointType::Revolute, [-0.87, 0.0]);
+-    hinge(&mut w, tipper, gate, Vec3::new(0.0, 2.0, 0.0), JointType::Revolute, [0.0, 0.87]);
+-    hinge(&mut w, gate, slide, Vec3::new(0.0, 0.2, -0.5), JointType::Prismatic, [0.0, 0.34]);
++    hinge(
++        &mut w,
++        chassis,
++        tipper,
++        Vec3::new(0.0, 2.0, 1.5),
++        JointType::Revolute,
++        [-0.87, 0.0],
++    );
++    hinge(
++        &mut w,
++        tipper,
++        gate,
++        Vec3::new(0.0, 2.0, 0.0),
++        JointType::Revolute,
++        [0.0, 0.87],
++    );
++    hinge(
++        &mut w,
++        gate,
++        slide,
++        Vec3::new(0.0, 0.2, -0.5),
++        JointType::Prismatic,
++        [0.0, 0.34],
++    );
+     run(&mut w, 60.0);
+     for body in [tipper, gate, slide] {
+         assert!(w.scene.body_velocity(body).unwrap().linear.length() < 1e-3);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:471:
+ fn a_motor_lifts_a_heavy_load_hung_on_its_arm_through_a_soft_joint() {
+     use molla_sim::joint_control::{JointAxes, JointSoftness};
+     let (mut w, arm, joint) = arm(true);
+-    let limits = MotorLimits { max_velocity: 1.0, ..Default::default() };
+-    w.devices.motors.insert(&w.scene, joint, MotorSpec { limits, max_force: 1.0e5 }).unwrap();
++    let limits = MotorLimits {
++        max_velocity: 1.0,
++        ..Default::default()
++    };
++    w.devices
++        .motors
++        .insert(
++            &w.scene,
++            joint,
++            MotorSpec {
++                limits,
++                max_force: 1.0e5,
++            },
++        )
++        .unwrap();
+     run(&mut w, 0.5);
+     // 500 kg two metres out: far beyond what the arm's own inertia moves in a step.
+     let load = body(&mut w, Vec3::new(2.0, 0.0, 0.0), 500.0);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/devices.rs:487:
+             frame_child: Transform::IDENTITY,
+         })
+         .unwrap();
+-    w.scene.set_joint_locked_axes(hitch, JointAxes::ALL).unwrap();
+     w.scene
+-        .set_joint_softness(hitch, Some(JointSoftness { natural_frequency: 8.0, damping_ratio: 1.0 }))
++        .set_joint_locked_axes(hitch, JointAxes::ALL)
+         .unwrap();
+-    w.devices.motors.command(joint, MotorCommand::Position(-0.5)).unwrap();
++    w.scene
++        .set_joint_softness(
++            hitch,
++            Some(JointSoftness {
++                natural_frequency: 8.0,
++                damping_ratio: 1.0,
++            }),
++        )
++        .unwrap();
++    w.devices
++        .motors
++        .command(joint, MotorCommand::Position(-0.5))
++        .unwrap();
+     run(&mut w, 2.0);
+     let reading = w.devices.motors.reading(joint).unwrap();
+     assert!((reading.position + 0.5).abs() < 0.02, "{reading:?}");
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/rigid_settling/kind.rs:8:
+             world.scene.set_gravity(Vec3::ZERO).unwrap();
+             world.sleep_bodies(&[a, other]).unwrap();
+             let pose = world.scene.body_pose(a).unwrap();
+-            world.scene.set_body_kind_with_wake(a, intermediate, false).unwrap();
++            world
++                .scene
++                .set_body_kind_with_wake(a, intermediate, false)
++                .unwrap();
+             for _ in 0..3 {
+                 world.step(0.001).unwrap();
+                 assert!(world.is_sleeping(a) && world.is_sleeping(other));
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/rigid_settling/kind.rs:15:
+                 assert_eq!(world.scene.body_pose(a).unwrap(), pose);
+             }
+-            world.scene.set_body_kind_with_wake(a, BodyKind::Dynamic, wake).unwrap();
++            world
++                .scene
++                .set_body_kind_with_wake(a, BodyKind::Dynamic, wake)
++                .unwrap();
+             assert_eq!(world.is_sleeping(a), !wake);
+             assert!(world.is_sleeping(other));
+             world.step(0.001).unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/rigid_settling/kind.rs:33:
+             world.scene.set_gravity(Vec3::ZERO).unwrap();
+             let other = body(&mut world, 10.0, BodyKind::Dynamic);
+             let joint = JointDesc {
+-                parent: Some(a), child: b, kind: JointType::Fixed,
++                parent: Some(a),
++                child: b,
++                kind: JointType::Fixed,
+                 frame_parent: Transform::from_translation(Vec3::X * 3.0),
+-                frame_child: Transform::IDENTITY, axis: Vec3::Z,
++                frame_child: Transform::IDENTITY,
++                axis: Vec3::Z,
+             };
+             if soft {
+-                world.scene.insert_loop_joint(joint, JointSoftness {
+-                    natural_frequency: 20.0, damping_ratio: 1.0,
+-                }).unwrap();
++                world
++                    .scene
++                    .insert_loop_joint(
++                        joint,
++                        JointSoftness {
++                            natural_frequency: 20.0,
++                            damping_ratio: 1.0,
++                        },
++                    )
++                    .unwrap();
+             } else {
+                 world.scene.insert_joint(joint).unwrap();
+             }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/rigid_settling/kind.rs:47:
+             world.sleep_bodies(&[a, other]).unwrap();
+-            let poses = [world.scene.body_pose(a).unwrap(), world.scene.body_pose(b).unwrap()];
+-            world.scene.set_body_kind_with_wake(b, BodyKind::Fixed, true).unwrap();
++            let poses = [
++                world.scene.body_pose(a).unwrap(),
++                world.scene.body_pose(b).unwrap(),
++            ];
++            world
++                .scene
++                .set_body_kind_with_wake(b, BodyKind::Fixed, true)
++                .unwrap();
+             assert!(world.is_sleeping(a) && world.is_sleeping(other));
+             world.step(0.001).unwrap();
+             assert!(world.is_sleeping(a) && world.is_sleeping(other));
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/rigid_settling/kind.rs:53:
+-            world.scene.set_body_kind_with_wake(b, BodyKind::Dynamic, wake).unwrap();
++            world
++                .scene
++                .set_body_kind_with_wake(b, BodyKind::Dynamic, wake)
++                .unwrap();
+             assert_eq!(world.is_sleeping(a), !wake);
+             assert_eq!(world.is_sleeping(b), !wake);
+             assert!(world.is_sleeping(other));
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/rigid_settling/kind.rs:58:
+             assert_eq!(world.is_sleeping(a), !wake);
+             assert_eq!(world.is_sleeping(b), !wake);
+             assert!(world.is_sleeping(other));
+-            assert_eq!([world.scene.body_pose(a).unwrap(), world.scene.body_pose(b).unwrap()], poses);
++            assert_eq!(
++                [
++                    world.scene.body_pose(a).unwrap(),
++                    world.scene.body_pose(b).unwrap()
++                ],
++                poses
++            );
+         }
+     }
+ }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/rigid_settling/kind.rs:68:
+     let (mut world, a, other) = two();
+     world.scene.set_gravity(Vec3::ZERO).unwrap();
+     let anchor = body(&mut world, -3.0, BodyKind::Fixed);
+-    world.scene.insert_joint(JointDesc {
+-        parent: Some(anchor), child: a, kind: JointType::Revolute,
+-        frame_parent: Transform::from_translation(Vec3::X * 3.0),
+-        frame_child: Transform::IDENTITY, axis: Vec3::Z,
+-    }).unwrap();
++    world
++        .scene
++        .insert_joint(JointDesc {
++            parent: Some(anchor),
++            child: a,
++            kind: JointType::Revolute,
++            frame_parent: Transform::from_translation(Vec3::X * 3.0),
++            frame_child: Transform::IDENTITY,
++            axis: Vec3::Z,
++        })
++        .unwrap();
+     world.sleep_bodies(&[a, other]).unwrap();
+-    world.scene.set_body_kind_with_wake(anchor, BodyKind::Kinematic, false).unwrap();
++    world
++        .scene
++        .set_body_kind_with_wake(anchor, BodyKind::Kinematic, false)
++        .unwrap();
+     assert!(world.is_sleeping(a) && world.is_sleeping(other));
+-    world.scene.set_body_velocity_with_wake(anchor, SpatialVector::new(Vec3::X, Vec3::ZERO), false).unwrap();
++    world
++        .scene
++        .set_body_velocity_with_wake(anchor, SpatialVector::new(Vec3::X, Vec3::ZERO), false)
++        .unwrap();
+     world.step(0.001).unwrap();
+     assert!(!world.is_sleeping(a));
+     assert!(world.is_sleeping(other));
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/rigid_settling/kind.rs:88:
+     let (mut world, a, other) = two();
+     world.scene.set_gravity(Vec3::ZERO).unwrap();
+     let anchor = body(&mut world, -3.0, BodyKind::Fixed);
+-    world.scene.insert_joint(JointDesc {
+-        parent: Some(anchor), child: a, kind: JointType::Revolute,
+-        frame_parent: Transform::from_translation(Vec3::X * 3.0),
+-        frame_child: Transform::IDENTITY, axis: Vec3::Z,
+-    }).unwrap();
++    world
++        .scene
++        .insert_joint(JointDesc {
++            parent: Some(anchor),
++            child: a,
++            kind: JointType::Revolute,
++            frame_parent: Transform::from_translation(Vec3::X * 3.0),
++            frame_child: Transform::IDENTITY,
++            axis: Vec3::Z,
++        })
++        .unwrap();
+     world.sleep_bodies(&[a, other]).unwrap();
+-    world.scene.set_body_kind_with_wake(anchor, BodyKind::Dynamic, false).unwrap();
++    world
++        .scene
++        .set_body_kind_with_wake(anchor, BodyKind::Dynamic, false)
++        .unwrap();
+     assert!(!world.is_sleeping(anchor));
+     world.step(0.001).unwrap();
+     assert!(!world.is_sleeping(a));
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/rigid_settling/kind.rs:105:
+ fn nonwaking_kind_edit_does_not_erase_an_earlier_wake_or_reset_other_quiet_windows() {
+     let (mut world, a, other) = two();
+     world.scene.set_gravity(Vec3::ZERO).unwrap();
+-    world.set_sleep_settings(Some(molla_solvers::rigid_world::SleepSettings {
+-        quiet_time: 0.025, ..Default::default()
+-    })).unwrap();
++    world
++        .set_sleep_settings(Some(molla_solvers::rigid_world::SleepSettings {
++            quiet_time: 0.025,
++            ..Default::default()
++        }))
++        .unwrap();
+     world.step(0.01).unwrap();
+     world.step(0.01).unwrap();
+-    world.scene.set_body_kind_with_wake(a, BodyKind::Kinematic, true).unwrap();
++    world
++        .scene
++        .set_body_kind_with_wake(a, BodyKind::Kinematic, true)
++        .unwrap();
+     world.step(0.01).unwrap();
+     assert!(world.is_sleeping(other));
+-    world.scene.set_body_kind_with_wake(a, BodyKind::Dynamic, false).unwrap();
++    world
++        .scene
++        .set_body_kind_with_wake(a, BodyKind::Dynamic, false)
++        .unwrap();
+     world.sleep_body(a).unwrap();
+-    world.scene.add_body_wrench(a, SpatialVector::new(Vec3::X, Vec3::ZERO)).unwrap();
++    world
++        .scene
++        .add_body_wrench(a, SpatialVector::new(Vec3::X, Vec3::ZERO))
++        .unwrap();
+     assert!(!world.is_sleeping(a));
+-    world.scene.set_body_kind_with_wake(a, BodyKind::Kinematic, false).unwrap();
+-    world.scene.set_body_kind_with_wake(a, BodyKind::Dynamic, false).unwrap();
++    world
++        .scene
++        .set_body_kind_with_wake(a, BodyKind::Kinematic, false)
++        .unwrap();
++    world
++        .scene
++        .set_body_kind_with_wake(a, BodyKind::Dynamic, false)
++        .unwrap();
+     assert!(!world.is_sleeping(a));
+     world.step(0.001).unwrap();
+     assert!(!world.is_sleeping(a));
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/rigid_sleep.rs:292:
+ #[test]
+ fn non_waking_motor_edits_take_effect_on_explicit_resume() {
+     let (mut world, a, b) = two();
+-    let joint = world.scene.insert_joint(JointDesc {
+-        parent: Some(a), child: b, kind: JointType::Revolute,
+-        frame_parent: Transform::from_translation(Vec3::X * 3.0), frame_child: Transform::IDENTITY, axis: Vec3::Z,
+-    }).unwrap();
+-    let motor = JointMotor { mode: JointTargetMode::Velocity, target_velocity: 2.0, damping: 5.0, ..Default::default() };
++    let joint = world
++        .scene
++        .insert_joint(JointDesc {
++            parent: Some(a),
++            child: b,
++            kind: JointType::Revolute,
++            frame_parent: Transform::from_translation(Vec3::X * 3.0),
++            frame_child: Transform::IDENTITY,
++            axis: Vec3::Z,
++        })
++        .unwrap();
++    let motor = JointMotor {
++        mode: JointTargetMode::Velocity,
++        target_velocity: 2.0,
++        damping: 5.0,
++        ..Default::default()
++    };
+     world.sleep_body(a).unwrap();
+-    world.scene.set_joint_motor_with_wake(joint, JointAxis::AngX, motor, false).unwrap();
++    world
++        .scene
++        .set_joint_motor_with_wake(joint, JointAxis::AngX, motor, false)
++        .unwrap();
+     assert!(world.is_sleeping(a) && world.is_sleeping(b));
+-    assert!(world.scene.set_joint_motor_with_wake(joint, JointAxis::AngX, JointMotor { damping: f64::NAN, ..motor }, false).is_err());
+-    assert_eq!(world.scene.joint_axis_settings(joint, JointAxis::AngX).unwrap().motor, Some(motor));
++    assert!(
++        world
++            .scene
++            .set_joint_motor_with_wake(
++                joint,
++                JointAxis::AngX,
++                JointMotor {
++                    damping: f64::NAN,
++                    ..motor
++                },
++                false
++            )
++            .is_err()
++    );
++    assert_eq!(
++        world
++            .scene
++            .joint_axis_settings(joint, JointAxis::AngX)
++            .unwrap()
++            .motor,
++        Some(motor)
++    );
+     world.step(0.001).unwrap();
+     assert_eq!(world.scene.body_velocity(b).unwrap(), SpatialVector::ZERO);
+     world.wake_body(a).unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:7:
+     let mut config = pressure_config();
+     config.tire.width_segments = 4;
+     world.wheels.configure_pressure_tire(wheel, config).unwrap();
+-    world.wheels.register_ground(&world.scene, ground, Some(FrictionGrid {
+-        origin: [-10.0, -5.0], cell_size: [20.0, 5.0],
+-        cols: 1, rows: 2, values: vec![0.0, 1.0],
+-    })).unwrap();
++    world
++        .wheels
++        .register_ground(
++            &world.scene,
++            ground,
++            Some(FrictionGrid {
++                origin: [-10.0, -5.0],
++                cell_size: [20.0, 5.0],
++                cols: 1,
++                rows: 2,
++                values: vec![0.0, 1.0],
++            }),
++        )
++        .unwrap();
+     let offset = world.scene.model().joint_dof_offset.host().unwrap()
+         [world.scene.joint_index(spin).unwrap().index()] as usize;
+     world.scene.state_mut().joint_qd.host_mut().unwrap()[offset] = 10.0;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:20:
+     let pressure = sample.pressure.as_ref().unwrap();
+     let mut torque = 0.0;
+     for cell in &pressure.cells {
+-        if cell.local_z < 0.0 { assert_eq!(cell.tangential_force, 0.0); }
+-        else { assert!(cell.tangential_force > 0.0); }
++        if cell.local_z < 0.0 {
++            assert_eq!(cell.tangential_force, 0.0);
++        } else {
++            assert!(cell.tangential_force > 0.0);
++        }
+         torque += cell.local_z * cell.tangential_force - cell.local_x * cell.lateral_force;
+     }
+     assert!(torque > 0.0);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:31:
+     for width_segments in [0, 17, usize::MAX] {
+         config.tire.width_segments = width_segments;
+         assert!(world.wheels.configure_pressure_tire(wheel, config).is_err());
+-        assert_eq!(world.wheels.pressure_tire(&world.scene, wheel).unwrap().config.tire.width_segments, 4);
++        assert_eq!(
++            world
++                .wheels
++                .pressure_tire(&world.scene, wheel)
++                .unwrap()
++                .config
++                .tire
++                .width_segments,
++            4
++        );
+     }
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:38:
+ #[test]
+ fn pressure_patch_samples_friction_on_both_sides_of_a_material_boundary() {
+     let (mut world, _, wheel, spin, ground) = fixture(true);
+-    world.wheels.configure_pressure_tire(wheel, pressure_config()).unwrap();
+-    world.wheels.register_ground(&world.scene, ground, Some(FrictionGrid {
+-        origin: [-10.0, -5.0], cell_size: [10.0, 10.0],
+-        cols: 2, rows: 1, values: vec![0.0, 1.0],
+-    })).unwrap();
++    world
++        .wheels
++        .configure_pressure_tire(wheel, pressure_config())
++        .unwrap();
++    world
++        .wheels
++        .register_ground(
++            &world.scene,
++            ground,
++            Some(FrictionGrid {
++                origin: [-10.0, -5.0],
++                cell_size: [10.0, 10.0],
++                cols: 2,
++                rows: 1,
++                values: vec![0.0, 1.0],
++            }),
++        )
++        .unwrap();
+     let offset = world.scene.model().joint_dof_offset.host().unwrap()
+         [world.scene.joint_index(spin).unwrap().index()] as usize;
+     world.scene.state_mut().joint_qd.host_mut().unwrap()[offset] = 10.0;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:73:
+ fn tilted_translated_ground_uses_collider_local_cells_and_outside_grid_fallback() {
+     for outside in [false, true] {
+         let (mut world, chassis, wheel, spin, ground) = fixture(false);
+-        world.wheels.configure_pressure_tire(wheel, pressure_config()).unwrap();
++        world
++            .wheels
++            .configure_pressure_tire(wheel, pressure_config())
++            .unwrap();
+         let rotation = Quat::from_rotation_y(0.7) * Quat::from_rotation_z(0.2);
+         let ground_pose = Transform {
+-            position: Vec3::new(2.0, 1.0, -3.0), rotation,
++            position: Vec3::new(2.0, 1.0, -3.0),
++            rotation,
+         };
+         world.scene.set_collider_pose(ground, ground_pose).unwrap();
+         let original = Transform {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:83:
+-            position: ground_pose.transform_point(Vec3::Y * 0.49), rotation,
++            position: ground_pose.transform_point(Vec3::Y * 0.49),
++            rotation,
+         };
+         world.scene.set_body_pose(chassis, original).unwrap();
+         let fallback = world.scene.collider(ground).unwrap().friction;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:87:
+         let grid = if outside {
+             FrictionGrid {
+-                origin: [-0.02, -5.0], cell_size: [0.04, 10.0],
+-                cols: 1, rows: 1, values: vec![0.0],
++                origin: [-0.02, -5.0],
++                cell_size: [0.04, 10.0],
++                cols: 1,
++                rows: 1,
++                values: vec![0.0],
+             }
+         } else {
+             FrictionGrid {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:94:
+-                origin: [-10.0, -5.0], cell_size: [10.01, 10.0],
+-                cols: 2, rows: 1, values: vec![0.0, 4.0],
++                origin: [-10.0, -5.0],
++                cell_size: [10.01, 10.0],
++                cols: 2,
++                rows: 1,
++                values: vec![0.0, 4.0],
+             }
+         };
+-        world.wheels.register_ground(&world.scene, ground, Some(grid)).unwrap();
++        world
++            .wheels
++            .register_ground(&world.scene, ground, Some(grid))
++            .unwrap();
+         let offset = world.scene.model().joint_dof_offset.host().unwrap()
+             [world.scene.joint_index(spin).unwrap().index()] as usize;
+         world.scene.state_mut().joint_qd.host_mut().unwrap()[offset] = 10.0;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:106:
+                 world.sleep_body(chassis).unwrap();
+                 let mut moved = original;
+                 moved.position += rotation * Vec3::X * 0.002;
+-                world.scene.set_body_pose_with_wake(chassis, moved, false).unwrap();
++                world
++                    .scene
++                    .set_body_pose_with_wake(chassis, moved, false)
++                    .unwrap();
+                 world.step(0.0001).unwrap();
+                 assert!(world.is_sleeping(chassis));
+             }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:118:
+             for cell in &pressure.cells {
+                 let x = cell.local_x + if sleeping { 0.002 } else { 0.0 };
+                 let mu = if outside {
+-                    if (-0.02..0.02).contains(&x) { 0.0 } else { fallback }
+-                } else if x < 0.01 { 0.0 } else { 4.0 };
++                    if (-0.02..0.02).contains(&x) {
++                        0.0
++                    } else {
++                        fallback
++                    }
++                } else if x < 0.01 {
++                    0.0
++                } else {
++                    4.0
++                };
+                 if mu == 0.0 {
+                     zero += 1;
+                     assert_eq!(cell.tangential_force, 0.0);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:126:
+                     assert_eq!(cell.lateral_force, 0.0);
+-                } else { positive += 1; }
++                } else {
++                    positive += 1;
++                }
+                 let load_ratio = (cell.normal_load / cell.area / 220_000.0).clamp(0.15, 6.0);
+                 expected += mu * load_ratio.powf(-0.07).clamp(0.72, 1.12) * cell.normal_load;
+             }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:131:
+-            assert!(zero > 0 && positive > 0, "outside={outside} sleeping={sleeping} cells={:?}", pressure.cells);
+-            assert!((pressure.grip_force - expected).abs() < 1e-8, "{} != {expected}", pressure.grip_force);
++            assert!(
++                zero > 0 && positive > 0,
++                "outside={outside} sleeping={sleeping} cells={:?}",
++                pressure.cells
++            );
++            assert!(
++                (pressure.grip_force - expected).abs() < 1e-8,
++                "{} != {expected}",
++                pressure.grip_force
++            );
+             assert_eq!(sample.dt == 0.0, sleeping);
+         }
+     }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:141:
+         let mut results = Vec::new();
+         for grid in [false, true] {
+             let (mut world, chassis, wheel, spin, ground) = fixture(true);
+-            world.wheels.configure_pressure_tire(wheel, pressure_config()).unwrap();
++            world
++                .wheels
++                .configure_pressure_tire(wheel, pressure_config())
++                .unwrap();
+             let mut material = world.scene.collider(ground).unwrap().clone();
+             material.friction = mu;
+             world.scene.replace_collider(ground, material).unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:148:
+             if grid {
+-                world.wheels.register_ground(&world.scene, ground, Some(FrictionGrid {
+-                    origin: [-10.0, -5.0], cell_size: [20.0, 10.0],
+-                    cols: 1, rows: 1, values: vec![mu],
+-                })).unwrap();
++                world
++                    .wheels
++                    .register_ground(
++                        &world.scene,
++                        ground,
++                        Some(FrictionGrid {
++                            origin: [-10.0, -5.0],
++                            cell_size: [20.0, 10.0],
++                            cols: 1,
++                            rows: 1,
++                            values: vec![mu],
++                        }),
++                    )
++                    .unwrap();
+             }
+             let offset = world.scene.model().joint_dof_offset.host().unwrap()
+                 [world.scene.joint_index(spin).unwrap().index()] as usize;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:156:
+             world.scene.state_mut().joint_qd.host_mut().unwrap()[offset] = 10.0;
+-            for _ in 0..4 { world.step(0.001).unwrap(); }
++            for _ in 0..4 {
++                world.step(0.001).unwrap();
++            }
+             let before = world.wheels.samples(&world.scene).last().unwrap().clone();
+-            assert!(world.wheels.register_ground(&world.scene, ground, Some(FrictionGrid {
+-                origin: [-10.0, -5.0], cell_size: [20.0, 10.0],
+-                cols: 1, rows: 1, values: vec![f64::NAN],
+-            })).is_err());
+-            assert_eq!(world.wheels.samples(&world.scene).last().unwrap().output.force, before.output.force);
++            assert!(
++                world
++                    .wheels
++                    .register_ground(
++                        &world.scene,
++                        ground,
++                        Some(FrictionGrid {
++                            origin: [-10.0, -5.0],
++                            cell_size: [20.0, 10.0],
++                            cols: 1,
++                            rows: 1,
++                            values: vec![f64::NAN],
++                        })
++                    )
++                    .is_err()
++            );
++            assert_eq!(
++                world
++                    .wheels
++                    .samples(&world.scene)
++                    .last()
++                    .unwrap()
++                    .output
++                    .force,
++                before.output.force
++            );
+             world.step(0.001).unwrap();
+             results.push((
+                 world.scene.body_velocity(chassis).unwrap(),
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces/footprint_material.rs:168:
+             ));
+         }
+         assert!((results[0].0.linear - results[1].0.linear).length() < 1e-10);
+-        assert!((Vec3::from_array(results[0].1.output.force) - Vec3::from_array(results[1].1.output.force)).length() < 1e-8);
+-        assert!((results[0].1.pressure.as_ref().unwrap().grip_force - results[1].1.pressure.as_ref().unwrap().grip_force).abs() < 1e-8);
++        assert!(
++            (Vec3::from_array(results[0].1.output.force)
++                - Vec3::from_array(results[1].1.output.force))
++            .length()
++                < 1e-8
++        );
++        assert!(
++            (results[0].1.pressure.as_ref().unwrap().grip_force
++                - results[1].1.pressure.as_ref().unwrap().grip_force)
++                .abs()
++                < 1e-8
++        );
+     }
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces.rs:783:
+             w.wheels.remove_ground(ground);
+             w.step(0.001).unwrap();
+             w.wheels.register_ground(&w.scene, ground, None).unwrap();
+-            w.scene.set_body_velocity(chassis, SpatialVector::ZERO).unwrap();
+-            w.scene.set_body_velocity(wheel, SpatialVector::ZERO).unwrap();
++            w.scene
++                .set_body_velocity(chassis, SpatialVector::ZERO)
++                .unwrap();
++            w.scene
++                .set_body_velocity(wheel, SpatialVector::ZERO)
++                .unwrap();
+         }
+         w.step(0.001).unwrap();
+         let force = w.wheels.samples(&w.scene)[0].output.force[0];
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces.rs:791:
+-        assert!(force.abs() < 1e-10, "teleport={teleport} residual force={force}");
++        assert!(
++            force.abs() < 1e-10,
++            "teleport={teleport} residual force={force}"
++        );
+     }
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces.rs:802:
+     w.scene
+         .set_body_mass_properties(
+             chassis,
+-            MassProperties { mass: 6100.0, local_com: Vec3::ZERO, inertia: Mat3::from_diagonal(Vec3::new(15000.0, 20000.0, 15000.0)) },
++            MassProperties {
++                mass: 6100.0,
++                local_com: Vec3::ZERO,
++                inertia: Mat3::from_diagonal(Vec3::new(15000.0, 20000.0, 15000.0)),
++            },
+         )
+         .unwrap();
+-    let mut ground_desc = ColliderDesc::new(ColliderGeometry::Cuboid { half_extents: Vec3::new(100.0, 0.01, 100.0) });
++    let mut ground_desc = ColliderDesc::new(ColliderGeometry::Cuboid {
++        half_extents: Vec3::new(100.0, 0.01, 100.0),
++    });
+     ground_desc.friction = 1.0;
+     let ground = w.scene.insert_collider(ground_desc).unwrap();
+     w.wheels.register_ground(&w.scene, ground, None).unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces.rs:814:
+     for (x, z) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+         let wheel = body(&mut w, 140.0);
+         w.scene
+-            .set_body_mass_properties(wheel, MassProperties { mass: 140.0, local_com: Vec3::ZERO, inertia: Mat3::IDENTITY * 34.0 })
++            .set_body_mass_properties(
++                wheel,
++                MassProperties {
++                    mass: 140.0,
++                    local_com: Vec3::ZERO,
++                    inertia: Mat3::IDENTITY * 34.0,
++                },
++            )
+             .unwrap();
+         let spin = w
+             .scene
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces.rs:834:
+         config.tire.radius = radius;
+         config.supported_mass = 6700.0 / 4.0;
+         w.wheels.configure_pressure_tire(wheel, config).unwrap();
+-        w.scene.set_joint_brake(spin, JointAxis::AngX, 5.0e5).unwrap();
++        w.scene
++            .set_joint_brake(spin, JointAxis::AngX, 5.0e5)
++            .unwrap();
+         spins.push(spin);
+     }
+     let start = w.scene.body_pose(chassis).unwrap().position;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces.rs:844:
+         }
+         let v = w.scene.body_velocity(chassis).unwrap().linear;
+         let at = w.scene.body_pose(chassis).unwrap().position;
+-        assert!(v.length() < 0.05, "t={second}s braked trailer moving at {v:?}, drift {:?}", at - start);
++        assert!(
++            v.length() < 0.05,
++            "t={second}s braked trailer moving at {v:?}, drift {:?}",
++            at - start
++        );
+     }
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces.rs:860:
+     w.scene
+         .set_body_mass_properties(
+             chassis,
+-            MassProperties { mass: 5500.0, local_com: Vec3::ZERO, inertia: Mat3::from_diagonal(Vec3::new(12000.0, 16000.0, 12000.0)) },
++            MassProperties {
++                mass: 5500.0,
++                local_com: Vec3::ZERO,
++                inertia: Mat3::from_diagonal(Vec3::new(12000.0, 16000.0, 12000.0)),
++            },
+         )
+         .unwrap();
+-    let mut ground_desc = ColliderDesc::new(ColliderGeometry::Cuboid { half_extents: Vec3::new(100.0, 0.01, 100.0) });
++    let mut ground_desc = ColliderDesc::new(ColliderGeometry::Cuboid {
++        half_extents: Vec3::new(100.0, 0.01, 100.0),
++    });
+     ground_desc.friction = 1.0;
+     let ground = w.scene.insert_collider(ground_desc).unwrap();
+     w.wheels.register_ground(&w.scene, ground, None).unwrap();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces.rs:872:
+     for z in [1.0, -1.0] {
+         let bogie = body(&mut w, 300.0);
+         w.scene
+-            .set_body_mass_properties(bogie, MassProperties { mass: 300.0, local_com: Vec3::ZERO, inertia: Mat3::IDENTITY * 60.0 })
++            .set_body_mass_properties(
++                bogie,
++                MassProperties {
++                    mass: 300.0,
++                    local_com: Vec3::ZERO,
++                    inertia: Mat3::IDENTITY * 60.0,
++                },
++            )
+             .unwrap();
+         let pivot = w
+             .scene
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces.rs:885:
+                 frame_child: Transform::IDENTITY,
+             })
+             .unwrap();
+-        w.scene.set_joint_limits(pivot, JointAxis::AngX, Some([-0.1, 0.1])).unwrap();
++        w.scene
++            .set_joint_limits(pivot, JointAxis::AngX, Some([-0.1, 0.1]))
++            .unwrap();
+         for x in [0.7, -0.7] {
+             let wheel = body(&mut w, 140.0);
+             w.scene
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces.rs:892:
+-                .set_body_mass_properties(wheel, MassProperties { mass: 140.0, local_com: Vec3::ZERO, inertia: Mat3::IDENTITY * 34.0 })
++                .set_body_mass_properties(
++                    wheel,
++                    MassProperties {
++                        mass: 140.0,
++                        local_com: Vec3::ZERO,
++                        inertia: Mat3::IDENTITY * 34.0,
++                    },
++                )
+                 .unwrap();
+             let spin = w
+                 .scene
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces.rs:909:
+             config.tire.radius = radius;
+             config.supported_mass = 6700.0 / 4.0;
+             w.wheels.configure_pressure_tire(wheel, config).unwrap();
+-            w.scene.set_joint_brake(spin, JointAxis::AngX, 5.0e5).unwrap();
++            w.scene
++                .set_joint_brake(spin, JointAxis::AngX, 5.0e5)
++                .unwrap();
+         }
+     }
+     // A front support leg on the ground.
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-solvers/tests/wheel_forces.rs:928:
+         }
+         let at = w.scene.body_pose(chassis).unwrap().position;
+         let along = Vec3::new(at.x - start.x, 0.0, at.z - start.z);
+-        assert!(along.length() < 0.15, "t={second}s braked tandem rolled {along:?}");
++        assert!(
++            along.length() < 0.15,
++            "t={second}s braked tandem rolled {along:?}"
++        );
+     }
+     let v = w.scene.body_velocity(chassis).unwrap().linear;
+     assert!(v.length() < 0.02, "braked tandem still moving at {v:?}");
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/reports/physical_shape.rs:2009:
+     let mut force_sign_stable = true;
+     let mut moment_sign_stable = true;
+     let mut max_mirrored_moment_error_over_load_radius = 0.0_f64;
+-    let constant_friction = SurfaceMaterial { mu_dynamic: material.mu_static, ..material };
++    let constant_friction = SurfaceMaterial {
++        mu_dynamic: material.mu_static,
++        ..material
++    };
+ 
+     for slip_ratio in [
+         0.000, 0.015, 0.030, 0.045, 0.060, 0.080, 0.105, 0.135, 0.170, 0.215, 0.270,
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/reports/physical_shape.rs:2084:
+         max_budget_ratio = max_budget_ratio
+             .max(sample.consumed_friction_budget_n / sample.available_friction_budget_n.max(1.0));
+         let mirrored = tire_rig_point(
+-            &params, &terrain, &material, load_n, speed_m_per_s,
+-            0.080, -slip_angle_rad, 0.0,
++            &params,
++            &terrain,
++            &material,
++            load_n,
++            speed_m_per_s,
++            0.080,
++            -slip_angle_rad,
++            0.0,
+         );
+         let control = tire_rig_point(
+-            &params, &terrain, &constant_friction, load_n, speed_m_per_s,
+-            0.080, slip_angle_rad, 0.0,
++            &params,
++            &terrain,
++            &constant_friction,
++            load_n,
++            speed_m_per_s,
++            0.080,
++            slip_angle_rad,
++            0.0,
+         );
+         finite_outputs &= mirrored.is_finite() && control.is_finite();
+-        max_mirrored_moment_error_over_load_radius = max_mirrored_moment_error_over_load_radius.max(
+-            (sample.aligning_moment_nm + mirrored.telemetry.aligning_moment_nm).abs()
+-                / (load_n * params.radius),
+-        );
++        max_mirrored_moment_error_over_load_radius = max_mirrored_moment_error_over_load_radius
++            .max(
++                (sample.aligning_moment_nm + mirrored.telemetry.aligning_moment_nm).abs()
++                    / (load_n * params.radius),
++            );
+         moment_sign_stable &= control.telemetry.aligning_moment_nm < 0.0;
+         if let Some(prev) = previous_moment {
+             max_moment_jump_over_load_radius = max_moment_jump_over_load_radius.max(
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/rig/runners.rs:269:
+     }
+     let mut next = history.clone();
+     let sanitized = sanitize_brush_params(params);
+-    let geometry = (sanitized.radius, sanitized.width, sanitized.segments, sanitized.width_segments);
++    let geometry = (
++        sanitized.radius,
++        sanitized.width,
++        sanitized.segments,
++        sanitized.width_segments,
++    );
+     if next.geometry != Some(geometry) {
+         next.reset();
+         next.geometry = Some(geometry);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/rig/runners.rs:276:
+-        next.profile = brush_profile(sanitized.radius, sanitized.width, sanitized.segments, sanitized.width_segments);
+-        next.cells
+-            .resize(sanitized.segments * sanitized.width_segments, TreadBristle::default());
++        next.profile = brush_profile(
++            sanitized.radius,
++            sanitized.width,
++            sanitized.segments,
++            sanitized.width_segments,
++        );
++        next.cells.resize(
++            sanitized.segments * sanitized.width_segments,
++            TreadBristle::default(),
++        );
+     }
+     let output = evaluate_brush_inner::<T, CACHED>(
+         params,
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/rig/runners.rs:292:
+     Ok(output)
+ }
+ 
+-fn brush_profile(radius: f64, width: f64, segments: usize, width_segments: usize) -> std::sync::Arc<[[f64; 3]]> {
+-    (0..segments).flat_map(|i| {
+-        let signed = if i > segments / 2 { i as f64 - segments as f64 } else { i as f64 };
+-        let theta = signed * (std::f64::consts::TAU / segments as f64);
+-        let (x, y) = (radius * theta.sin(), -radius * theta.cos());
+-        (0..width_segments).map(move |strip| {
+-            [x, y, ((strip as f64 + 0.5) / width_segments as f64 - 0.5) * width]
++fn brush_profile(
++    radius: f64,
++    width: f64,
++    segments: usize,
++    width_segments: usize,
++) -> std::sync::Arc<[[f64; 3]]> {
++    (0..segments)
++        .flat_map(|i| {
++            let signed = if i > segments / 2 {
++                i as f64 - segments as f64
++            } else {
++                i as f64
++            };
++            let theta = signed * (std::f64::consts::TAU / segments as f64);
++            let (x, y) = (radius * theta.sin(), -radius * theta.cos());
++            (0..width_segments).map(move |strip| {
++                [
++                    x,
++                    y,
++                    ((strip as f64 + 0.5) / width_segments as f64 - 0.5) * width,
++                ]
++            })
+         })
+-    }).collect()
++        .collect()
+ }
+ 
+ fn evaluate_brush_impl<T: Terrain + ?Sized>(
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/rig/runners.rs:359:
+     let terrain_mu_ref =
+         finite_positive_or(terrain.friction(), material.mu_static.max(1.0e-3), 1.0e-6);
+ 
+-    let depths: Vec<_> = profile.iter().map(|&[x, y, z]| {
+-        terrain.height(state.hub_pos[0] + heading[0] * x + side[0] * z,
+-            state.hub_pos[2] + heading[2] * x + side[2] * z) - (state.hub_pos[1] + y)
+-    }).collect();
++    let depths: Vec<_> = profile
++        .iter()
++        .map(|&[x, y, z]| {
++            terrain.height(
++                state.hub_pos[0] + heading[0] * x + side[0] * z,
++                state.hub_pos[2] + heading[2] * x + side[2] * z,
++            ) - (state.hub_pos[1] + y)
++        })
++        .collect();
+     if depths.iter().any(|p| !p.is_finite()) {
+         return Err("non-finite brush terrain height");
+     }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/rig/runners.rs:440:
+         let fn_i = normal_per_area_per_m * penetration * cell_area * camber_pressure_bias;
+         let normal_pressure = fn_i / cell_area.max(1.0e-9);
+         let (load_mu_factor, load_stiffness_factor) = factors.load(normal_pressure);
+-        let shear_k_eff = params.tread_shear_stiffness
+-            * load_stiffness_factor
+-            * factors.inflation();
++        let shear_k_eff =
++            params.tread_shear_stiffness * load_stiffness_factor * factors.inflation();
+         let profile = patch_gain * brush_bristle_profile(local_x, leading_x, patch_extent, arc_len);
+         let bristle_disp_long = slip_ratio_cell * params.radius * profile;
+         let bristle_disp_lat = lateral_slip_speed_cell / denom_cell * params.radius * profile;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/rig/runners.rs:502:
+             } else {
+                 smooth_combined_brush_force(trial_long, trial_lat, static_cap, dynamic_cap)
+             };
+-        let rolling_direction = if v_long_cell == 0.0 { 0.0 } else { v_long_cell.signum() };
++        let rolling_direction = if v_long_cell == 0.0 {
++            0.0
++        } else {
++            v_long_cell.signum()
++        };
+         let rolling_i = cell_material.rolling_resistance * fn_i * rolling_direction;
+         rolling_resistance_force += rolling_i;
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/tests.rs:136:
+     assert_eq!(low_dist.lateral_bins.len(), 4);
+     assert!(high_dist.lateral_span_m > 0.1 && low_dist.lateral_span_m > 0.1);
+     for (contact, distribution) in [(&high, &high_dist), (&low, &low_dist)] {
+-        let load: f64 = distribution.lateral_bins.iter().map(|bin| bin.normal_load_n).sum();
++        let load: f64 = distribution
++            .lateral_bins
++            .iter()
++            .map(|bin| bin.normal_load_n)
++            .sum();
+         assert!((load - contact.normal_load).abs() < contact.normal_load * 1e-9);
+     }
+     assert!(
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/tests.rs:4189:
+     let mut wrong_sign = report;
+     wrong_sign.moment_sign_stable = false;
+     assert!(!wrong_sign.passed());
+-    assert!(wrong_sign.acceptance_checks().iter().any(|check|
+-        check.check_id == "adhesion_sliding_moment_sign_stable" && !check.passed));
++    assert!(
++        wrong_sign
++            .acceptance_checks()
++            .iter()
++            .any(|check| check.check_id == "adhesion_sliding_moment_sign_stable" && !check.passed)
++    );
+     for error in [1e-8, f64::INFINITY, f64::NAN] {
+         let mut asymmetric = report;
+         asymmetric.max_mirrored_moment_error_over_load_radius = error;
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/tests.rs:4197:
+         assert!(!asymmetric.passed());
+-        assert!(asymmetric.acceptance_checks().iter().any(|check|
+-            check.check_id == "adhesion_sliding_moment_mirrored" && !check.passed));
++        assert!(
++            asymmetric
++                .acceptance_checks()
++                .iter()
++                .any(|check| check.check_id == "adhesion_sliding_moment_mirrored" && !check.passed)
++        );
+     }
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/tests.rs:8894:
+         p_low > p_high,
+         "low-pressure patch should be longer at Fz=5 kN: low={p_low} high={p_high}"
+     );
+-    let params = RealTireParams { pressure_pa: 120_000.0, ..Default::default() };
++    let params = RealTireParams {
++        pressure_pa: 120_000.0,
++        ..Default::default()
++    };
+     let height = solve_loaded_tire_hub_height(&params, &terrain, 0.0, 0.0, 5_000.0);
+     let inner = params.radius * (std::f64::consts::PI / params.segments as f64).cos();
+     let lower = 2.0 * (inner * inner - height * height).max(0.0).sqrt();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/tests.rs:8901:
+-    let upper = 2.0 * (params.radius * params.radius - height * height).max(0.0).sqrt();
+-    assert!((lower - 1e-12..=upper + 1e-12).contains(&p_low),
+-        "patch {p_low} outside inscribed-polygon/circle bounds [{lower}, {upper}]");
++    let upper = 2.0
++        * (params.radius * params.radius - height * height)
++            .max(0.0)
++            .sqrt();
++    assert!(
++        (lower - 1e-12..=upper + 1e-12).contains(&p_low),
++        "patch {p_low} outside inscribed-polygon/circle bounds [{lower}, {upper}]"
++    );
+ }
+ 
+ /// Hardening sweep for the reduced brush tire: over a small grid
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/tests.rs:9036:
+         "sanitized bad tire input should stay finite: {out:?}"
+     );
+     assert!(out.normal_load >= 0.0);
+-    assert!(out.contact_count <= 512 * bad_params.width_segments.clamp(1, 16), "brush grid hard cap should hold");
++    assert!(
++        out.contact_count <= 512 * bad_params.width_segments.clamp(1, 16),
++        "brush grid hard cap should hold"
++    );
+ 
+     let empty = evaluate_brush_tire(
+         &RealTireParams::default(),
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:6:
+     let params = RealTireParams::default();
+     let state = RealWheelState {
+         hub_pos: [0.0, params.radius * 0.9, 0.0],
+-        hub_vel: [1.0, 0.0, 0.0], heading: [1.0, 0.0, 0.0], omega: 4.0,
++        hub_vel: [1.0, 0.0, 0.0],
++        heading: [1.0, 0.0, 0.0],
++        omega: 4.0,
+     };
+-    let contact = evaluate_brush_tire(&params, &state, &FlatTerrain::new(0.0, 1.0), &SurfaceMaterial::new(1.0, 0.82));
++    let contact = evaluate_brush_tire(
++        &params,
++        &state,
++        &FlatTerrain::new(0.0, 1.0),
++        &SurfaceMaterial::new(1.0, 0.82),
++    );
+     assert!(contact.cells.iter().any(|cell| cell.local_z < 0.0));
+     assert!(contact.cells.iter().any(|cell| cell.local_z > 0.0));
+ }
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:21:
+     for zero in [0.0, -0.0] {
+         let state = RealWheelState {
+             hub_pos: [0.0, params.radius * 0.9, 0.0],
+-            hub_vel: [zero, zero, zero], heading: [1.0, 0.0, 0.0], omega: zero,
++            hub_vel: [zero, zero, zero],
++            heading: [1.0, 0.0, 0.0],
++            omega: zero,
+         };
+         let stateless = evaluate_brush_tire(&params, &state, &terrain, &material);
+         let persistent = evaluate_planar_brush_tire_persistent(
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:28:
+-            &params, &state, &terrain, &material, &mut TireBrushState::default(), 0.001,
+-        ).unwrap();
++            &params,
++            &state,
++            &terrain,
++            &material,
++            &mut TireBrushState::default(),
++            0.001,
++        )
++        .unwrap();
+         for contact in [stateless, persistent] {
+             assert!(contact.normal_load > 0.0);
+             assert_eq!(contact.longitudinal_force, 0.0);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:38:
+ 
+ struct SplitWidth;
+ impl Terrain for SplitWidth {
+-    fn height(&self, _: f64, _: f64) -> f64 { 0.0 }
+-    fn normal(&self, _: f64, _: f64) -> [f64; 3] { [0.0, 1.0, 0.0] }
+-    fn friction(&self) -> f64 { 1.0 }
+-    fn friction_at(&self, _: f64, z: f64) -> f64 { if z < 0.0 { 0.0 } else { 1.0 } }
++    fn height(&self, _: f64, _: f64) -> f64 {
++        0.0
++    }
++    fn normal(&self, _: f64, _: f64) -> [f64; 3] {
++        [0.0, 1.0, 0.0]
++    }
++    fn friction(&self) -> f64 {
++        1.0
++    }
++    fn friction_at(&self, _: f64, z: f64) -> f64 {
++        if z < 0.0 { 0.0 } else { 1.0 }
++    }
+ }
+ 
+ fn wheel(params: &RealTireParams) -> RealWheelState {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:48:
+     RealWheelState {
+         hub_pos: [0.0, params.radius * 0.9, 0.0],
+-        hub_vel: [1.0, 0.0, 0.0], heading: [1.0, 0.0, 0.0], omega: 8.0,
++        hub_vel: [1.0, 0.0, 0.0],
++        heading: [1.0, 0.0, 0.0],
++        omega: 8.0,
+     }
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:54:
+ #[test]
+ fn mixed_shoulders_have_independent_shear_and_the_correct_yaw_moment() {
+-    let params = RealTireParams { width_segments: 4, ..Default::default() };
++    let params = RealTireParams {
++        width_segments: 4,
++        ..Default::default()
++    };
+     let state = wheel(&params);
+-    let material = SurfaceMaterial { rolling_resistance: 0.0, ..SurfaceMaterial::new(1.0, 0.82) };
++    let material = SurfaceMaterial {
++        rolling_resistance: 0.0,
++        ..SurfaceMaterial::new(1.0, 0.82)
++    };
+     let mut history = TireBrushState::default();
+     for _ in 0..3 {
+-        let contact = evaluate_planar_brush_tire_persistent(&params, &state, &SplitWidth, &material, &mut history, 0.001).unwrap();
++        let contact = evaluate_planar_brush_tire_persistent(
++            &params,
++            &state,
++            &SplitWidth,
++            &material,
++            &mut history,
++            0.001,
++        )
++        .unwrap();
+         let mut torque = 0.0;
+         for cell in &contact.cells {
+             if cell.local_z < 0.0 {
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:65:
+                 assert_eq!(cell.tangential_force, 0.0);
+                 assert_eq!(cell.lateral_force, 0.0);
+-            } else { assert!(cell.tangential_force > 0.0); }
++            } else {
++                assert!(cell.tangential_force > 0.0);
++            }
+             torque += cell.local_z * cell.tangential_force - cell.local_x * cell.lateral_force;
+         }
+         assert!(torque > 0.0);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:77:
+     let mut baseline: Option<RealTireContact> = None;
+     let material = SurfaceMaterial::new(1.0, 0.82);
+     for width_segments in [1, 2, 3, 8, 16] {
+-        let params = RealTireParams { width_segments, ..Default::default() };
++        let params = RealTireParams {
++            width_segments,
++            ..Default::default()
++        };
+         let mut state = wheel(&params);
+         state.hub_vel[2] = 0.2;
+         let mut history = TireBrushState::default();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:84:
+-        let contact = evaluate_planar_brush_tire_persistent(&params, &state, &FlatTerrain::new(0.0, 1.0), &material, &mut history, 0.001).unwrap();
+-        assert!(contact.cells.iter().all(|cell| cell.local_z.abs() < params.width * 0.5));
++        let contact = evaluate_planar_brush_tire_persistent(
++            &params,
++            &state,
++            &FlatTerrain::new(0.0, 1.0),
++            &material,
++            &mut history,
++            0.001,
++        )
++        .unwrap();
++        assert!(
++            contact
++                .cells
++                .iter()
++                .all(|cell| cell.local_z.abs() < params.width * 0.5)
++        );
+         if let Some(base) = &baseline {
+-            for (a, b) in contact.force.iter().zip(base.force) { assert!((a - b).abs() < 1e-8); }
++            for (a, b) in contact.force.iter().zip(base.force) {
++                assert!((a - b).abs() < 1e-8);
++            }
+             assert!((contact.normal_load - base.normal_load).abs() < 1e-8);
+             assert!((contact.aligning_moment_z - base.aligning_moment_z).abs() < 1e-8);
+-            assert!((contact.available_friction_budget - base.available_friction_budget).abs() < 1e-8);
++            assert!(
++                (contact.available_friction_budget - base.available_friction_budget).abs() < 1e-8
++            );
+             let area: f64 = contact.cells.iter().map(|cell| cell.area).sum();
+             let base_area: f64 = base.cells.iter().map(|cell| cell.area).sum();
+             assert!((area - base_area).abs() < 1e-12);
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:94:
+             assert_eq!(contact.cells.len(), base.cells.len() * width_segments);
+-        } else { baseline = Some(contact); }
++        } else {
++            baseline = Some(contact);
++        }
+     }
+ }
+ 
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:99:
+ #[test]
+ fn changing_width_resolution_resets_history_and_invalid_steps_are_atomic() {
+-    let mut params = RealTireParams { width_segments: 1, ..Default::default() };
++    let mut params = RealTireParams {
++        width_segments: 1,
++        ..Default::default()
++    };
+     let state = wheel(&params);
+     let material = SurfaceMaterial::new(1.0, 0.82);
+     let mut history = TireBrushState::default();
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:105:
+-    evaluate_planar_brush_tire_persistent(&params, &state, &SplitWidth, &material, &mut history, 0.01).unwrap();
++    evaluate_planar_brush_tire_persistent(
++        &params,
++        &state,
++        &SplitWidth,
++        &material,
++        &mut history,
++        0.01,
++    )
++    .unwrap();
+     params.width_segments = 4;
+     let stored = history.clone();
+-    assert!(evaluate_planar_brush_tire_persistent(&params, &state, &SplitWidth, &material, &mut history, f64::NAN).is_err());
++    assert!(
++        evaluate_planar_brush_tire_persistent(
++            &params,
++            &state,
++            &SplitWidth,
++            &material,
++            &mut history,
++            f64::NAN
++        )
++        .is_err()
++    );
+     assert_eq!(history.geometry, stored.geometry);
+     assert_eq!(history.cells, stored.cells);
+     assert!(std::sync::Arc::ptr_eq(&history.profile, &stored.profile));
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:112:
+-    let actual = evaluate_planar_brush_tire_persistent(&params, &state, &SplitWidth, &material, &mut history, 0.001).unwrap();
+-    let fresh = evaluate_planar_brush_tire_persistent(&params, &state, &SplitWidth, &material, &mut TireBrushState::default(), 0.001).unwrap();
++    let actual = evaluate_planar_brush_tire_persistent(
++        &params,
++        &state,
++        &SplitWidth,
++        &material,
++        &mut history,
++        0.001,
++    )
++    .unwrap();
++    let fresh = evaluate_planar_brush_tire_persistent(
++        &params,
++        &state,
++        &SplitWidth,
++        &material,
++        &mut TireBrushState::default(),
++        0.001,
++    )
++    .unwrap();
+     assert_eq!(actual.force, fresh.force);
+     assert_eq!(actual.aligning_moment_z, fresh.aligning_moment_z);
+     assert!(!std::sync::Arc::ptr_eq(&history.profile, &stored.profile));
+Diff in /home/bresilla/data/code/OUSD/molla/crates/molla-vehicle/src/real_tire/width_tests.rs:117:
+     let geometry = history.profile.clone();
+     params.pressure_pa *= 1.1;
+-    evaluate_planar_brush_tire_persistent(&params, &state, &SplitWidth, &material, &mut history, 0.001).unwrap();
++    evaluate_planar_brush_tire_persistent(
++        &params,
++        &state,
++        &SplitWidth,
++        &material,
++        &mut history,
++        0.001,
++    )
++    .unwrap();
+     assert!(std::sync::Arc::ptr_eq(&history.profile, &geometry));
+     history.reset();
+     assert!(history.profile.is_empty());
+make: *** [Makefile:236: harden] Error 1

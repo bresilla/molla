@@ -669,7 +669,12 @@ fn tire_vehicle_brush_rows_from_spin_reference_uses_resident_spin_state() {
         tire_vehicle_brush_rows_from_spin_reference(&input).expect("brush rows from spin ref");
     assert_eq!(out.wheels.len(), input.wheel_mounts.len());
     assert!(out.finite);
-    for ((wheel, spin), controls) in out.wheels.iter().zip(spin_rows.iter()).zip(&input.wheel_controls) {
+    for ((wheel, spin), controls) in out
+        .wheels
+        .iter()
+        .zip(spin_rows.iter())
+        .zip(&input.wheel_controls)
+    {
         assert!((wheel.spin[0] - spin[0]).abs() < 1.0e-6);
         assert!((wheel.spin[1] - spin[1]).abs() < 1.0e-6);
         assert_eq!(wheel.hub_pos[3], controls[3]);
@@ -696,7 +701,9 @@ fn tire_vehicle_brush_rows_reject_invalid_widths() {
     }
     input.width_segments.pop();
     assert!(tire_vehicle_brush_rows_reference(&input).is_err());
-    let spin = tire_vehicle_wheel_spin_state_reference(&sample_wheel_spin_input()).unwrap().rows;
+    let spin = tire_vehicle_wheel_spin_state_reference(&sample_wheel_spin_input())
+        .unwrap()
+        .rows;
     let mut input = sample_brush_rows_from_spin_input(spin);
     for invalid in [-1.0, 0.25, 17.0, f32::NAN, f32::INFINITY] {
         input.wheel_controls[1][3] = invalid;

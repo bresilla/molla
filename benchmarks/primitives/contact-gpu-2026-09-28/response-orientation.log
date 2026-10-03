@@ -1,0 +1,35 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.74s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 5 tests
+test contact_response_gpu::tests::articulated_response_matches_cpu_gram_and_generalized_friction ... articulated contact response: peak gram error=5.680281103259688e-7, peak rate error=3.888536544031712e-7
+ok
+test contact_response_gpu::tests::contact_response_faults_preserve_status_and_retire_rates_and_impulses ... ok
+test contact_response_gpu::tests::coordinate_null_mass_is_supported_and_oblique_rank_deficiency_fails_closed ... ok
+test contact_response_gpu::tests::device_contact_friction_holds_loaded_box_and_matches_cpu_trajectory ... GPU contact trajectory: holding=true, peak drift=2.2777468984713778e-5, settled creep=5.64266884328959e-7, CPU position error=5.668846621358381e-7, orientation error=1.2990531157078367e-7, velocity error=1.3944007833321154e-5
+integrated published-impulse host KKT peak=9.989676738694049e-8
+ok
+test contact_response_gpu::tests::device_contact_friction_slide_matches_analytic_acceleration_and_cpu ... GPU contact trajectory: holding=false, peak drift=1.592165470123291e0, settled creep=0e0, CPU position error=1.8055059231558008e-6, orientation error=2.9802322387695313e-8, velocity error=2.275598975579624e-5
+integrated published-impulse host KKT peak=9.429168919133732e-8
+GPU kinetic slide: acceleration=2.981366813182831e0, analytic=2.98134754727832e0
+ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 99 filtered out; finished in 45.88s
+
+warning: function `body_poses` is never used
+  --> crates/molla-solvers/tests/common/gpu_readback.rs:27:8
+   |
+27 | pub fn body_poses(engine: &Engine, system: &FemRigidGpuSystem, count: usize) -> Vec<Transform> {
+   |        ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (test "featherstone_stop_momentum") generated 1 warning
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.74s

@@ -1,0 +1,27 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.06s
+     Running tests/runtime_reactions_gpu.rs (target/debug/deps/runtime_reactions_gpu-e290b076fc50cf5c)
+
+running 8 tests
+test empty_scene_reaction_capture_can_be_toggled ... ok
+test external_loop_force_is_not_double_counted_as_tree_load ... Distance world=true loop GPU reaction resources=[115, 534144, 35, 10, 8]
+Ball world=true loop GPU reaction resources=[115, 535104, 35, 10, 8]
+Distance world=false loop GPU reaction resources=[115, 536288, 35, 10, 8]
+Ball world=false loop GPU reaction resources=[115, 537552, 35, 10, 8]
+ok
+test fixed_support_publishes_substeps_means_peaks_and_force_edit_invalidation ... ok
+test moving_ball_and_d6_transmit_only_constrained_components ... ok
+test moving_floating_chain_matches_cpu_substep_wrenches ... moving floating GPU reaction peak absolute wrench error=1.5672722509360595e-4
+ok
+test runtime_reaction_resources_and_frame_transfers_are_retained ... runtime GPU reaction resources=[77, 528464, 19, 7, 5], diagnostics=GpuRuntimeDiagnostics { model_compilations: 2, current_model_bind_groups_created: 18, completed_frames: 1, last_substeps: 8, last_state_upload_bytes: 96, last_state_readback_bytes: 1044 }
+ok
+test sleeping_compaction_and_reaction_faults_do_not_publish_stale_samples ... ok
+test stop_impulse_peak_is_not_the_frame_average_or_motor_command ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 405.28s
+

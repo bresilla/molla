@@ -36,7 +36,7 @@ impl<T: BufferElement> DeviceBuffer<T> {
             .ok_or_else(|| Error::Storage("sensor buffer size overflow".into()))?
             as u64;
         if bytes > device.limits().max_buffer_size
-            || bytes > device.limits().max_storage_buffer_binding_size as u64
+            || bytes > device.limits().max_storage_buffer_binding_size
         {
             return Err(Error::Storage("sensor buffer exceeds GPU limits".into()));
         }
@@ -327,10 +327,10 @@ impl ReadbackRing {
     fn fail(&mut self, reason: String) -> Error {
         self.failure = Some(reason.clone());
         for slot in &mut self.slots {
-            if let Some(pending) = slot.pending.take() {
-                if !pending.cancelled {
-                    self.stats.cancellations += 1;
-                }
+            if let Some(pending) = slot.pending.take()
+                && !pending.cancelled
+            {
+                self.stats.cancellations += 1;
             }
             if let Ok(mut completion) = slot.completion.lock() {
                 *completion = (0, None);
@@ -469,10 +469,10 @@ impl ReadbackRing {
             slot.staging
                 .slice(0..mapped_bytes)
                 .map_async(wgpu::MapMode::Read, move |result| {
-                    if let Ok(mut state) = completion.lock() {
-                        if state.0 == serial {
-                            state.1 = Some(result.map_err(|e| e.to_string()));
-                        }
+                    if let Ok(mut state) = completion.lock()
+                        && state.0 == serial
+                    {
+                        state.1 = Some(result.map_err(|e| e.to_string()));
                     }
                 });
         }
@@ -513,7 +513,7 @@ impl ReadbackRing {
         let bytes = if pending.bytes == 0 {
             Vec::new()
         } else {
-            let mapped_bytes = (pending.bytes as u64 + 7) / 8 * 8;
+            let mapped_bytes = (pending.bytes as u64).div_ceil(8) * 8;
             let view = slot.staging.slice(0..mapped_bytes).get_mapped_range();
             let bytes = view[..pending.bytes].to_vec();
             drop(view);
@@ -555,11 +555,11 @@ impl ReadbackRing {
     /// Cancel all outstanding requests, including completed but uncollected mappings.
     pub fn reset(&mut self) {
         for slot in &mut self.slots {
-            if let Some(pending) = &mut slot.pending {
-                if !pending.cancelled {
-                    pending.cancelled = true;
-                    self.stats.cancellations += 1;
-                }
+            if let Some(pending) = &mut slot.pending
+                && !pending.cancelled
+            {
+                pending.cancelled = true;
+                self.stats.cancellations += 1;
             }
         }
     }

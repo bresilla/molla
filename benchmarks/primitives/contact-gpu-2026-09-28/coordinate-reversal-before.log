@@ -1,0 +1,27 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.72s
+     Running tests/featherstone_drift_gpu.rs (target/debug/deps/featherstone_drift_gpu-01e9a04a0014a011)
+
+running 1 test
+test compensated_drift_preserves_coordinates_across_large_reversals ... 
+thread 'compensated_drift_preserves_coordinates_across_large_reversals' (3986063) panicked at crates/molla-solvers/tests/featherstone_drift_gpu.rs:52:17:
+assertion `left == right` failed: step=1 axis=0
+  left: 0.0
+ right: 9.999999974752427e-7
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    compensated_drift_preserves_coordinates_across_large_reversals
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 10.97s
+
+error: test failed, to rerun pass `-p molla-solvers --test featherstone_drift_gpu`
+make: *** [Makefile:81: test-gpu] Error 101

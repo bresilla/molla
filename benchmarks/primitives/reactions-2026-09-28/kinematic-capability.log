@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.54s
+     Running unittests src/lib.rs (target/debug/deps/molla_kernels-93f9a39b7db425e5)
+
+running 4 tests
+test rnea::tests::rejects_unimplemented_scalar_modes_and_preserves_supported_modes ... ok
+test rnea::tests::rejects_prescribed_motion_not_represented_by_generalized_rates ... ok
+test rnea::tests::rejects_unimplemented_multidof_rnea_instead_of_zeroing_its_width ... ok
+test rnea::tests::rejects_articulations_larger_than_shader_scratch ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+

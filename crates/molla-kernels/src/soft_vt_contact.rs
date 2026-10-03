@@ -269,50 +269,65 @@ impl SoftVtContactKernel {
 
         // ── Owned scratch buffers ──────────────────────────────────
         let dq_bytes = (particle_count as u64).max(1) * 16;
-        let particle_dq = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::soft_vt_contact particle_dq"),
-            size: dq_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let particle_dq = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact particle_dq"),
+                size: dq_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         // Zero-init dq so the first commit_dq pass is a no-op.
-        queue.write_buffer(&particle_dq, 0, &vec![0u8; dq_bytes as usize]);
+        molla_core::gpu_write_buffer!(queue, &particle_dq, 0, &vec![0u8; dq_bytes as usize]);
 
         let vert_aabbs_bytes = (particle_count as u64).max(1) * 32;
-        let vert_aabbs = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::soft_vt_contact vert_aabbs"),
-            size: vert_aabbs_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let vert_aabbs = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact vert_aabbs"),
+                size: vert_aabbs_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         let out_contacts_bytes = out_capacity as u64 * core::mem::size_of::<VtContactGpu>() as u64;
-        let out_contacts = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::soft_vt_contact out_contacts"),
-            size: out_contacts_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let out_contact_count = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::soft_vt_contact out_contact_count"),
-            size: 16,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::soft_vt_contact uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let out_contacts = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact out_contacts"),
+                size: out_contacts_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let out_contact_count = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact out_contact_count"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let uniforms = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         // Stage 33.2.1 — pre-substep snapshot buffers + per-vertex
         // friction scratches. q + qd snapshots: vec4<f32> per particle
@@ -320,57 +335,72 @@ impl SoftVtContactKernel {
         // into atomic<u32>). contact_normal_sum: vec4<f32> per particle
         // (16 B, bit-cast into atomic<u32>).
         let pq_bytes = (particle_count as u64).max(1) * 16;
-        let pre_step_q = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::soft_vt_contact pre_step_q"),
-            size: pq_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let pre_step_qd = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::soft_vt_contact pre_step_qd"),
-            size: pq_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
+        let pre_step_q = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact pre_step_q"),
+                size: pq_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let pre_step_qd = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact pre_step_qd"),
+                size: pq_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
         let scalar_bytes = (particle_count as u64).max(1) * 4;
-        let friction_per_v = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::soft_vt_contact friction_per_v"),
-            size: scalar_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let restitution_per_v = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::soft_vt_contact restitution_per_v"),
-            size: scalar_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let contact_normal_sum = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::soft_vt_contact contact_normal_sum"),
-            size: pq_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
+        let friction_per_v = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact friction_per_v"),
+                size: scalar_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let restitution_per_v = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact restitution_per_v"),
+                size: scalar_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let contact_normal_sum = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact contact_normal_sum"),
+                size: pq_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
         // Zero-init the scratches so the first dispatch sees a clean
         // baseline (and the snapshot buffers, so commit_velocity_recovery
         // doesn't read garbage if the caller forgot to snapshot).
         let zeros_pq = vec![0u8; pq_bytes as usize];
         let zeros_scalar = vec![0u8; scalar_bytes as usize];
-        queue.write_buffer(&pre_step_q, 0, &zeros_pq);
-        queue.write_buffer(&pre_step_qd, 0, &zeros_pq);
-        queue.write_buffer(&friction_per_v, 0, &zeros_scalar);
-        queue.write_buffer(&restitution_per_v, 0, &zeros_scalar);
-        queue.write_buffer(&contact_normal_sum, 0, &zeros_pq);
+        molla_core::gpu_write_buffer!(queue, &pre_step_q, 0, &zeros_pq);
+        molla_core::gpu_write_buffer!(queue, &pre_step_qd, 0, &zeros_pq);
+        molla_core::gpu_write_buffer!(queue, &friction_per_v, 0, &zeros_scalar);
+        molla_core::gpu_write_buffer!(queue, &restitution_per_v, 0, &zeros_scalar);
+        molla_core::gpu_write_buffer!(queue, &contact_normal_sum, 0, &zeros_pq);
 
         Ok(Self {
             device,
@@ -568,8 +598,12 @@ impl SoftVtContactKernel {
         }
 
         // Reset out_contact_count[0] to zero before gather.
-        self.queue
-            .write_buffer(&self.out_contact_count, 0, bytemuck::cast_slice(&[0u32; 4]));
+        molla_core::gpu_write_buffer!(
+            self.queue,
+            &self.out_contact_count,
+            0,
+            bytemuck::cast_slice(&[0u32; 4])
+        );
 
         let bg_state = self.bind_state(model, state)?;
         let bg_topo = self.bind_topo(model)?;
@@ -597,8 +631,7 @@ impl SoftVtContactKernel {
             _pad0: 0,
             _pad1: 0,
         };
-        self.queue
-            .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u_gather));
+        molla_core::gpu_write_buffer!(self.queue, &self.uniforms, 0, bytemuck::bytes_of(&u_gather));
 
         let mut encoder = self
             .device
@@ -647,8 +680,7 @@ impl SoftVtContactKernel {
             _pad0: 0,
             _pad1: 0,
         };
-        self.queue
-            .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u_apply));
+        molla_core::gpu_write_buffer!(self.queue, &self.uniforms, 0, bytemuck::bytes_of(&u_apply));
         let apply_groups = count.div_ceil(WORKGROUP_SIZE).max(1);
 
         let mut encoder = self
@@ -738,8 +770,7 @@ impl SoftVtContactKernel {
             _pad0: 0,
             _pad1: 0,
         };
-        self.queue
-            .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
+        molla_core::gpu_write_buffer!(self.queue, &self.uniforms, 0, bytemuck::bytes_of(&u));
 
         let bg_state = self.bind_state(model, state)?;
         let bg_topo = self.bind_topo(model)?;
@@ -794,8 +825,7 @@ impl SoftVtContactKernel {
             _pad0: 0,
             _pad1: 0,
         };
-        self.queue
-            .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
+        molla_core::gpu_write_buffer!(self.queue, &self.uniforms, 0, bytemuck::bytes_of(&u));
         Ok(())
     }
 
@@ -956,12 +986,15 @@ impl SoftVtContactKernel {
     }
 
     fn read_contact_count(&self) -> Result<u32> {
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::soft_vt_contact count staging"),
-            size: 4,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let staging = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact count staging"),
+                size: 4,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -980,7 +1013,7 @@ impl SoftVtContactKernel {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = molla_core::gpu_readback!(slice);
         let words: &[u32] = bytemuck::cast_slice(&mapped);
         let count = words[0];
         drop(mapped);

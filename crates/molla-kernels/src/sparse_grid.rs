@@ -200,20 +200,26 @@ impl SparseGridKernel {
         );
 
         // ── IO buffers ────────────────────────────────────────────
-        let buf_coords = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_grid query_coords"),
-            size: coord_bytes,
-            usage: usage_storage,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&buf_coords, 0, bytemuck::cast_slice(&padded));
+        let buf_coords = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_grid query_coords"),
+                size: coord_bytes,
+                usage: usage_storage,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &buf_coords, 0, bytemuck::cast_slice(&padded));
 
-        let buf_results = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_grid query_results"),
-            size: result_bytes,
-            usage: usage_storage,
-            mapped_at_creation: false,
-        });
+        let buf_results = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_grid query_results"),
+                size: result_bytes,
+                usage: usage_storage,
+                mapped_at_creation: false,
+            }
+        );
 
         // ── Bind groups ──────────────────────────────────────────
         let bg_grid = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -267,13 +273,16 @@ impl SparseGridKernel {
             background: packed.background,
             root_table_capacity: packed.root_table_capacity,
         };
-        let buf_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_grid uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&buf_uniforms, 0, bytemuck::bytes_of(&uniforms));
+        let buf_uniforms = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_grid uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &buf_uniforms, 0, bytemuck::bytes_of(&uniforms));
         let bg_u = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sparse_grid uniforms bg"),
             layout: &self.layout_uniforms,
@@ -300,12 +309,15 @@ impl SparseGridKernel {
             pass.dispatch_workgroups(groups, 1, 1);
         }
 
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_grid stage"),
-            size: result_bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_grid stage"),
+                size: result_bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         encoder.copy_buffer_to_buffer(&buf_results, 0, &stage, 0, result_bytes);
         queue.submit(std::iter::once(encoder.finish()));
 
@@ -322,7 +334,7 @@ impl SparseGridKernel {
         receiver
             .recv()
             .map_err(|e| Error::Gpu(format!("sparse_grid readback recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = molla_core::gpu_readback!(slice);
         let out: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         stage.unmap();
@@ -343,14 +355,17 @@ fn create_storage_with_data(
     // Empty inputs (e.g. a zero-leaf grid) get a 4-byte stub so the
     // bind group remains valid.
     let bytes = data.len().max(4);
-    let buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: bytes as u64,
-        usage,
-        mapped_at_creation: false,
-    });
+    let buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size: bytes as u64,
+            usage,
+            mapped_at_creation: false,
+        }
+    );
     if !data.is_empty() {
-        queue.write_buffer(&buf, 0, data);
+        molla_core::gpu_write_buffer!(queue, &buf, 0, data);
     }
     buf
 }

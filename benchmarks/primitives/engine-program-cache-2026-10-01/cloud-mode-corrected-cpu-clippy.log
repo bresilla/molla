@@ -1,0 +1,33 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sensors v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sensors)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
+     Running tests/latency_benchmark_mode.rs (target/debug/deps/latency_benchmark_mode-63ef54a3a8789290)
+
+running 4 tests
+test camera_smoke_dimensions_keep_nonzero_images_and_bound_aperture_rays ... ok
+test cargo_bench_preserves_original_performance_defaults ... ok
+test cargo_test_and_explicit_smoke_use_bounded_sampling ... ok
+test cloud_smoke_bounds_storage_and_preserves_performance_sizes ... FAILED
+
+failures:
+
+---- cloud_smoke_bounds_storage_and_preserves_performance_sizes stdout ----
+
+thread 'cloud_smoke_bounds_storage_and_preserves_performance_sizes' (1598221) panicked at crates/molla-sensors/tests/latency_benchmark_mode.rs:67:9:
+assertion `left == right` failed
+  left: [1024, 65536, 1000003]
+ right: [1024, 65536]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cloud_smoke_bounds_storage_and_preserves_performance_sizes
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p molla-sensors --test latency_benchmark_mode`
+make: *** [Makefile:141: test] Error 101

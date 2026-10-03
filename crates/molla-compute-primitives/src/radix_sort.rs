@@ -72,6 +72,34 @@ pub struct RadixSortKernel {
     bins_capacity: usize,
 }
 
+/// Fixed-length stable sort with independent retained scratch and bindings.
+pub struct RadixSortDispatch {
+    pipelines: [wgpu::ComputePipeline; 3],
+    data: [wgpu::BindGroup; 2],
+    uniforms: [wgpu::BindGroup; 4],
+    blocks: u32,
+}
+
+impl RadixSortDispatch {
+    /// Record twelve ordered passes without allocation, upload or submission.
+    pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+        for digit in 0..4 {
+            for stage in 0..3 {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+                pass.set_pipeline(&self.pipelines[stage]);
+                pass.set_bind_group(0, &self.data[digit % 2], &[]);
+                pass.set_bind_group(1, &self.uniforms[digit], &[]);
+                pass.dispatch_workgroups(if stage == 1 { 1 } else { self.blocks }, 1, 1);
+                molla_core::gpu_metrics::record_dispatch();
+            }
+        }
+    }
+
+    pub fn resource_counts(&self) -> [usize; 3] {
+        [7, 6, 3]
+    }
+}
+
 impl RadixSortKernel {
     /// Build pipelines + initial scratch buffers sized for
     /// `initial_capacity` keys.
@@ -159,17 +187,20 @@ impl RadixSortKernel {
         );
 
         let uniforms = std::array::from_fn(|i| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(match i {
-                    0 => "molla::radix_sort uniforms[0]",
-                    1 => "molla::radix_sort uniforms[1]",
-                    2 => "molla::radix_sort uniforms[2]",
-                    _ => "molla::radix_sort uniforms[3]",
-                }),
-                size: core::mem::size_of::<Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(match i {
+                        0 => "molla::radix_sort uniforms[0]",
+                        1 => "molla::radix_sort uniforms[1]",
+                        2 => "molla::radix_sort uniforms[2]",
+                        _ => "molla::radix_sort uniforms[3]",
+                    }),
+                    size: core::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         });
 
         Ok(Self {
@@ -192,6 +223,94 @@ impl RadixSortKernel {
     /// Element capacity of the scratch ping-pong buffers.
     pub fn capacity(&self) -> usize {
         self.capacity
+    }
+
+    /// Prepare an independent fixed-length sort; padding keys remain caller-owned.
+    pub fn prepare(
+        &self,
+        keys: &wgpu::Buffer,
+        values: &wgpu::Buffer,
+        len: usize,
+    ) -> Result<RadixSortDispatch> {
+        let limits = self.device.limits();
+        let bytes = (len as u64).saturating_mul(4);
+        let blocks = (len as u64).div_ceil(u64::from(BLOCK_SIZE));
+        let bins_bytes = blocks.saturating_mul(256 * 4);
+        if len == 0
+            || len > u32::MAX as usize
+            || keys == values
+            || blocks > u64::from(limits.max_compute_workgroups_per_dimension)
+            || bins_bytes > limits.max_storage_buffer_binding_size
+            || [keys, values].iter().any(|b| {
+                b.size() < bytes
+                    || b.size() > limits.max_storage_buffer_binding_size
+                    || !b.usage().contains(wgpu::BufferUsages::STORAGE)
+            })
+        {
+            return Err(Error::Gpu(
+                "invalid retained radix-sort capacity or buffers".into(),
+            ));
+        }
+        let scratch_keys = alloc_storage(&self.device, "retained sort keys", bytes);
+        let scratch_values = alloc_storage(&self.device, "retained sort values", bytes);
+        let bins = alloc_storage(&self.device, "retained sort bins", bins_bytes);
+        let data = std::array::from_fn(|digit| {
+            let buffers = if digit == 0 {
+                [keys, values, &scratch_keys, &scratch_values, &bins]
+            } else {
+                [&scratch_keys, &scratch_values, keys, values, &bins]
+            };
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("retained radix sort data"),
+                layout: &self.layout_data,
+                entries: &buffers
+                    .iter()
+                    .enumerate()
+                    .map(|(binding, b)| wgpu::BindGroupEntry {
+                        binding: binding as u32,
+                        resource: b.as_entire_binding(),
+                    })
+                    .collect::<Vec<_>>(),
+            })
+        });
+        let uniforms = std::array::from_fn(|digit| {
+            let buffer = molla_core::gpu_create_buffer!(
+                self.device,
+                &wgpu::BufferDescriptor {
+                    label: Some("retained radix sort uniform"),
+                    size: 16,
+                    usage: wgpu::BufferUsages::UNIFORM,
+                    mapped_at_creation: true,
+                }
+            );
+            molla_core::gpu_mapped_upload!(buffer.slice(..)).copy_from_slice(bytemuck::bytes_of(
+                &Uniforms {
+                    n: len as u32,
+                    shift: digit as u32 * 8,
+                    num_blocks: blocks as u32,
+                    _pad: 0,
+                },
+            ));
+            buffer.unmap();
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("retained radix sort uniform"),
+                layout: &self.layout_uniforms,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            })
+        });
+        Ok(RadixSortDispatch {
+            pipelines: [
+                self.pipeline_count.clone(),
+                self.pipeline_scan.clone(),
+                self.pipeline_scatter.clone(),
+            ],
+            data,
+            uniforms,
+            blocks: blocks as u32,
+        })
     }
 
     fn ensure_capacity(&mut self, n: usize) {
@@ -247,8 +366,12 @@ impl RadixSortKernel {
                 num_blocks,
                 _pad: 0,
             };
-            self.queue
-                .write_buffer(&self.uniforms[pass], 0, bytemuck::bytes_of(&u));
+            molla_core::gpu_write_buffer!(
+                self.queue,
+                &self.uniforms[pass],
+                0,
+                bytemuck::bytes_of(&u)
+            );
         }
 
         // Encode all 4 passes in one command encoder.
@@ -316,6 +439,7 @@ impl RadixSortKernel {
                 p.set_bind_group(0, &bg_data, &[]);
                 p.set_bind_group(1, &bg_uniforms, &[]);
                 p.dispatch_workgroups(num_blocks, 1, 1);
+                molla_core::gpu_metrics::record_dispatch();
             }
             // Scan.
             {
@@ -327,6 +451,7 @@ impl RadixSortKernel {
                 p.set_bind_group(0, &bg_data, &[]);
                 p.set_bind_group(1, &bg_uniforms, &[]);
                 p.dispatch_workgroups(1, 1, 1);
+                molla_core::gpu_metrics::record_dispatch();
             }
             // Scatter.
             {
@@ -338,6 +463,7 @@ impl RadixSortKernel {
                 p.set_bind_group(0, &bg_data, &[]);
                 p.set_bind_group(1, &bg_uniforms, &[]);
                 p.dispatch_workgroups(num_blocks, 1, 1);
+                molla_core::gpu_metrics::record_dispatch();
             }
         }
 
@@ -369,14 +495,17 @@ fn bins_capacity_for(n_keys: usize) -> usize {
 
 fn alloc_storage(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
     let size = size.max(16);
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_SRC
-            | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+    molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    )
 }
 
 fn ro_storage(binding: u32) -> wgpu::BindGroupLayoutEntry {
@@ -554,12 +683,15 @@ impl RadixSortKernel64 {
         );
 
         let uniforms = std::array::from_fn(|_| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::radix_sort_64 uniforms[i]"),
-                size: core::mem::size_of::<Uniforms64>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::radix_sort_64 uniforms[i]"),
+                    size: core::mem::size_of::<Uniforms64>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         });
 
         Ok(Self {
@@ -647,8 +779,12 @@ impl RadixSortKernel64 {
                 num_blocks,
                 use_high,
             };
-            self.queue
-                .write_buffer(&self.uniforms[pass], 0, bytemuck::bytes_of(&uni));
+            molla_core::gpu_write_buffer!(
+                self.queue,
+                &self.uniforms[pass],
+                0,
+                bytemuck::bytes_of(&uni)
+            );
         }
 
         let mut encoder = self
@@ -731,6 +867,7 @@ impl RadixSortKernel64 {
                 p.set_bind_group(0, &bg_data, &[]);
                 p.set_bind_group(1, &bg_uniforms, &[]);
                 p.dispatch_workgroups(num_blocks, 1, 1);
+                molla_core::gpu_metrics::record_dispatch();
             }
             {
                 let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -741,6 +878,7 @@ impl RadixSortKernel64 {
                 p.set_bind_group(0, &bg_data, &[]);
                 p.set_bind_group(1, &bg_uniforms, &[]);
                 p.dispatch_workgroups(1, 1, 1);
+                molla_core::gpu_metrics::record_dispatch();
             }
             {
                 let mut p = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -751,6 +889,7 @@ impl RadixSortKernel64 {
                 p.set_bind_group(0, &bg_data, &[]);
                 p.set_bind_group(1, &bg_uniforms, &[]);
                 p.dispatch_workgroups(num_blocks, 1, 1);
+                molla_core::gpu_metrics::record_dispatch();
             }
         }
 
@@ -832,8 +971,7 @@ impl RadixSortKernel64 {
                 *hi |= tag;
             }
         }
-        self.queue
-            .write_buffer(keys_hi, 0, bytemuck::cast_slice(&hi_host));
+        molla_core::gpu_write_buffer!(self.queue, keys_hi, 0, bytemuck::cast_slice(&hi_host));
 
         // Run the regular 64-bit sort.
         self.sort_pairs_u64(keys_lo, keys_hi, values, n_total)?;
@@ -843,8 +981,7 @@ impl RadixSortKernel64 {
         for hi in &mut hi_host {
             *hi &= !TAG_MASK_HI_64;
         }
-        self.queue
-            .write_buffer(keys_hi, 0, bytemuck::cast_slice(&hi_host));
+        molla_core::gpu_write_buffer!(self.queue, keys_hi, 0, bytemuck::cast_slice(&hi_host));
 
         Ok(())
     }
@@ -875,12 +1012,15 @@ fn read_u32(
         return Ok(Vec::new());
     }
     let bytes = (n as u64) * core::mem::size_of::<u32>() as u64;
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("molla::radix_sort_64 read_u32 staging"),
-        size: bytes,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let staging = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("molla::radix_sort_64 read_u32 staging"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("molla::radix_sort_64 read_u32 enc"),
     });
@@ -898,7 +1038,7 @@ fn read_u32(
     rx.recv()
         .map_err(|e| Error::Gpu(format!("radix_sort_64 recv: {e}")))?
         .map_err(|e| Error::Gpu(format!("radix_sort_64 map: {e:?}")))?;
-    let mapped = slice.get_mapped_range();
+    let mapped = molla_core::gpu_readback!(slice);
     let out = bytemuck::cast_slice::<u8, u32>(&mapped).to_vec();
     drop(mapped);
     staging.unmap();

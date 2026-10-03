@@ -1,0 +1,32 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on package cache
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.98s
+     Running tests/runtime_motor_coupling.rs (target/debug/deps/runtime_motor_coupling-7ceb8bf5f09772a8)
+
+running 1 test
+adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+coupled_motor_feedback_modes=[true]
+coupled_motor_prepare_begin stable=true cases=72
+coupled_motor_prepare_complete stable=true seconds=45.737349
+
+thread 'gpu_coupled_motor_models_match_two_body_inverse_mass' (778207) panicked at crates/molla-solvers/tests/runtime_motor_coupling.rs:212:13:
+assertion `left == right` failed
+  left: Some(2)
+ right: Some(1)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test gpu_coupled_motor_models_match_two_body_inverse_mass ... FAILED
+
+failures:
+
+failures:
+    gpu_coupled_motor_models_match_two_body_inverse_mass
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 47.57s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_motor_coupling`
+make: *** [Makefile:712: test-primitives-motor-feedback-gpu] Error 101

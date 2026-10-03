@@ -1,0 +1,32 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.49s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 7 tests
+test impact_episodes_gpu::tests::frame_rollback_sticky_fault_and_capacity_failure_preserve_history ... ok
+test impact_episodes_gpu::tests::history_rehash_and_dense_shape_remapping_retain_pair_identity ... ok
+test impact_episodes_gpu::tests::invalid_episode_configuration_and_failed_history_shrink_are_fail_closed ... ok
+test impact_episodes_gpu::tests::normal_preparation_episode_suppression_and_force_gather_share_one_encoder ... ok
+test impact_episodes_gpu::tests::one_hundred_queued_manifold_changes_match_pair_reference_across_workgroups ... ok
+test impact_episodes_gpu::tests::onset_suppression_does_not_hide_invalid_force_or_material_inputs ... ok
+test impact_episodes_gpu::tests::onset_suppression_pair_reordering_separation_and_normal_changes ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 181 filtered out; finished in 1.70s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 4 tests
+test contact_response_gpu::impact_tests::articulated_impacts_match_cpu_with_joint_rows_boundaries_and_endpoint_exchange ... articulated impact response peak rate error=2.2698148828492748e-5, peak Gram error=1.762245922520833e-7
+ok
+test contact_response_gpu::impact_tests::episodes_select_coupled_dynamic_groups_without_rebounding_shared_ground_neighbors ... ok
+test contact_response_gpu::impact_tests::retained_predictor_increment_survives_large_common_normal_velocity ... ok
+test contact_response_gpu::impact_tests::zero_friction_zero_penalty_predictor_change_and_fault_retirement ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 184 filtered out; finished in 3.56s
+

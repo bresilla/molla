@@ -1,0 +1,44 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.09s
+     Running tests/runtime_mixed_contacts_gpu.rs (target/debug/deps/runtime_mixed_contacts_gpu-3c8d981606b05e0f)
+
+running 3 tests
+test mixed_distance_contact_break_continues_remaining_substeps ... ok
+test runtime_distance_contact_uses_common_impulse_and_publishes_reactions ... live_distance_contact capture=false stage=scene
+live_distance_contact capture=false stage=gpu elapsed=919.921µs
+live_distance_contact capture=false stage=readout elapsed=143.623048815s
+live_distance_contact capture=false stage=complete elapsed=143.623086453s
+live_distance_contact capture=true stage=scene
+live_distance_contact capture=true stage=gpu elapsed=928.774µs
+live_distance_contact capture=true stage=readout elapsed=13.436823412s
+live_distance_contact capture=true stage=complete elapsed=13.43686417s
+ok
+test scalar_reservations_do_not_expand_contact_capacity_and_faults_roll_back ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 450.10s
+
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Checking molla v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla)
+    Checking molla_viewer v0.0.1 (/home/bresilla/data/code/OUSD/molla/bin/molla_viewer)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.89s
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Checking molla v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla)
+    Checking molla_viewer v0.0.1 (/home/bresilla/data/code/OUSD/molla/bin/molla_viewer)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.59s

@@ -1,0 +1,21 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.47s
+     Running tests/runtime_mixed_contacts_gpu.rs (target/debug/deps/runtime_mixed_contacts_gpu-6d4c48a61920f61e)
+
+running 8 tests
+test loaded_contact_slider_hits_releases_and_mutates_both_stops ... ok
+test mixed_distance_contact_break_continues_remaining_substeps ... ok
+test redundant_cone_contact_break_decisions_match_away_from_threshold_ties ... ok
+test runtime_contact_and_scalar_stop_without_distance_joint_share_response ... ok
+test runtime_distance_contact_uses_common_impulse_and_publishes_reactions ... ok
+test runtime_locked_cone_and_contact_publish_complete_torque ... ok
+test scalar_reservations_do_not_expand_contact_capacity_and_faults_roll_back ... ok
+test two_contact_articulations_share_distance_impulses_under_endpoint_exchange ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 466.81s
+

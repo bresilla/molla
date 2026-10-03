@@ -12,11 +12,11 @@ use crate::{
     readback::{BufferLease, DeviceBuffer, ReadbackSource, ReadbackStamp},
 };
 use crate::{ProcessorStorageLimits, ProcessorStorageUsage};
+use arrayvec::ArrayVec;
 use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_kernels::{CloudDescriptor, CloudProcessBindings, CloudProcessKernel};
 use molla_math::{Real, Transform, Vec3};
-use arrayvec::ArrayVec;
 use molla_storage::{BufferElement, BufferUsage};
 use std::{any::TypeId, ops::Range, sync::Arc};
 
@@ -92,6 +92,11 @@ pub struct CloudRaster {
     pub angles: Option<[(Real, Real); 2]>,
 }
 
+/// Inline cloud channel descriptors retaining shared device and buffer leases.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Fixed-channel readback descriptors remain inline in the public input API"
+)]
 pub enum CloudInput<'a> {
     Points(ReadbackSource<'a>),
     /// Channels: point, normal, actual direction, distance, signed shape ID.
@@ -804,25 +809,28 @@ impl CloudProcessor {
         if jobs.len() > self.config.max_jobs as usize {
             return Err(Error::Solver("cloud: job budget exceeded".into()));
         }
-        self.plan_metadata(jobs.iter().map(|job| {
-            let (count, raster) = match &job.input {
-                CloudInput::Points(source) => (self.check_source::<CloudPoint>(source)?, None),
-                CloudInput::Rays { channels, raster } => {
-                    let counts = [
-                        self.check_source::<Vec3>(&channels[0])?,
-                        self.check_source::<Vec3>(&channels[1])?,
-                        self.check_source::<Vec3>(&channels[2])?,
-                        self.check_source::<Real>(&channels[3])?,
-                        self.check_source::<i32>(&channels[4])?,
-                    ];
-                    if counts.iter().any(|n| *n != counts[0]) {
-                        return Err(Error::Solver("cloud: inconsistent ray channels".into()));
+        self.plan_metadata(
+            jobs.iter().map(|job| {
+                let (count, raster) = match &job.input {
+                    CloudInput::Points(source) => (self.check_source::<CloudPoint>(source)?, None),
+                    CloudInput::Rays { channels, raster } => {
+                        let counts = [
+                            self.check_source::<Vec3>(&channels[0])?,
+                            self.check_source::<Vec3>(&channels[1])?,
+                            self.check_source::<Vec3>(&channels[2])?,
+                            self.check_source::<Real>(&channels[3])?,
+                            self.check_source::<i32>(&channels[4])?,
+                        ];
+                        if counts.iter().any(|n| *n != counts[0]) {
+                            return Err(Error::Solver("cloud: inconsistent ray channels".into()));
+                        }
+                        (counts[0], Some(*raster))
                     }
-                    (counts[0], Some(*raster))
-                }
-            };
-            Ok((count, raster, job.transform, job.filter, job.stamp))
-        }), descriptors)
+                };
+                Ok((count, raster, job.transform, job.filter, job.stamp))
+            }),
+            descriptors,
+        )
     }
 
     /// Validates jobs into `descriptors`; returns the caller's layouts and point count.
@@ -1053,7 +1061,7 @@ pub(crate) fn checked_budget(config: CloudProcessorConfig, limits: &wgpu::Limits
     let bytes: u64 = buffers.iter().sum();
     if bytes > config.max_buffer_bytes
         || buffers.into_iter().any(|size| {
-            size > limits.max_buffer_size || size > limits.max_storage_buffer_binding_size as u64
+            size > limits.max_buffer_size || size > limits.max_storage_buffer_binding_size
         })
     {
         return Err(Error::Solver(
@@ -1066,6 +1074,14 @@ pub(crate) fn checked_budget(config: CloudProcessorConfig, limits: &wgpu::Limits
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ray_input_reserves_inline_channel_storage() {
+        assert!(
+            size_of::<CloudInput<'static>>()
+                >= size_of::<[ReadbackSource<'static>; 5]>() + size_of::<CloudRaster>()
+        );
+    }
 
     #[test]
     #[ignore = "requires GPU"]

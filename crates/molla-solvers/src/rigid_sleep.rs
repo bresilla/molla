@@ -53,13 +53,13 @@ impl SleepingGroups {
         self.owners.contains_key(&body)
     }
 
-    fn refresh(&mut self, scene: &RigidScene, wheels: &WheelForces) {
+    pub(super) fn refresh(&mut self, scene: &RigidScene, wheels: &WheelForces) {
         self.groups.retain(|_, group| group.valid(scene, wheels));
         self.owners
             .retain(|_, group| self.groups.contains_key(group));
     }
 
-    fn acknowledge(&mut self, scene: &RigidScene) {
+    pub(super) fn acknowledge(&mut self, scene: &RigidScene) {
         for group in self.groups.values_mut() {
             for (body, stamp) in &mut group.watched {
                 *stamp = scene
@@ -69,7 +69,16 @@ impl SleepingGroups {
         }
     }
 
-    fn wake(&mut self, body: BodyHandle) {
+    #[cfg(feature = "gpu")]
+    pub(super) fn gpu_groups(
+        &self,
+    ) -> impl Iterator<Item = (&[BodyHandle], &BTreeSet<[ColliderHandle; 2]>)> {
+        self.groups
+            .values()
+            .map(|g| (g.bodies.as_slice(), &g.contacts))
+    }
+
+    pub(super) fn wake(&mut self, body: BodyHandle) {
         if let Some(owner) = self.owners.get(&body).copied()
             && let Some(group) = self.groups.remove(&owner)
         {
@@ -77,6 +86,50 @@ impl SleepingGroups {
                 self.owners.remove(&body);
             }
         }
+    }
+
+    pub(super) fn selection(
+        &mut self,
+        scene: &RigidScene,
+        state: &State,
+        graph: &RigidIslands,
+    ) -> Result<(Vec<bool>, Vec<bool>)> {
+        let velocities = state.body_qd.host()?;
+        loop {
+            let before = self.owners.len();
+            for group in graph.groups() {
+                if group.bodies.iter().any(|body| !self.contains(*body))
+                    || group.boundaries.iter().any(|body| {
+                        velocities[scene.body_index(*body).unwrap().index()] != SpatialVector::ZERO
+                            || (scene.body(*body).is_some_and(|b| b.enabled)
+                                && scene
+                                    .kinematic_acceleration(*body)
+                                    .ok()
+                                    .flatten()
+                                    .is_some_and(|a| a != SpatialVector::ZERO))
+                    })
+                {
+                    for &body in &group.bodies {
+                        self.wake(body);
+                    }
+                }
+            }
+            if self.owners.len() == before {
+                break;
+            }
+        }
+        let mut selected = vec![true; scene.model().body_count];
+        let mut articulations = vec![true; scene.model().articulation_count];
+        for group in graph.groups() {
+            let awake = group.bodies.iter().any(|body| !self.contains(*body));
+            for &body in &group.bodies {
+                selected[scene.body_index(body).unwrap().index()] = awake;
+            }
+            for &art in &group.articulations {
+                articulations[art] = awake;
+            }
+        }
+        Ok((selected, articulations))
     }
 }
 
@@ -324,8 +377,15 @@ impl RigidWorld {
         let weight = 1.0 / self.solver.substeps.max(1) as Real;
         let mut substep = 0usize;
         let mut next = scene.model().state()?;
+        let mut readings = super::ConstraintReadings::default();
+        let capture = self.reaction_readout;
+        let mut reaction_frame = crate::joint_reactions::ReactionFrame::default();
+        let mut reaction_substep = 0usize;
+        let compliant = std::cell::RefCell::new(Vec::new());
         let bounds = self.bounds.prepare(scene);
-        self.solver.step_with_active_bounds(
+        let common = crate::mixed_constraints::needed(scene)?;
+        let impacts = std::cell::RefCell::new(self.impacts.clone());
+        self.solver.step_with_active_constraints(
             scene.model(),
             scene.state(),
             scene.control(),
@@ -371,38 +431,11 @@ impl RigidWorld {
                     graph_cache = Some((edges, graph));
                 }
                 let graph = &graph_cache.as_ref().unwrap().1;
-                let mut selected = vec![true; scene.model().body_count];
-                let mut articulations = vec![true; scene.model().articulation_count];
-                let velocities = state.body_qd.host()?;
-                loop {
-                    let before = sleeping.owners.len();
-                    for group in graph.groups() {
-                        if group.bodies.iter().any(|body| !sleeping.contains(*body))
-                            || group.boundaries.iter().any(|body| {
-                                let i = scene.body_index(*body).unwrap().index();
-                                velocities[i] != SpatialVector::ZERO
-                            })
-                        {
-                            for &body in &group.bodies {
-                                sleeping.wake(body);
-                            }
-                        }
-                    }
-                    if sleeping.owners.len() == before {
-                        break;
-                    }
-                }
-                let mut any_awake = false;
-                for group in graph.groups() {
-                    let awake = group.bodies.iter().any(|body| !sleeping.contains(*body));
-                    any_awake |= awake;
-                    for &body in &group.bodies {
-                        selected[scene.body_index(body).unwrap().index()] = awake;
-                    }
-                    for &art in &group.articulations {
-                        articulations[art] = awake;
-                    }
-                }
+                let (selected, articulations) = sleeping.selection(scene, state, graph)?;
+                let any_awake = graph
+                    .groups()
+                    .iter()
+                    .any(|group| group.bodies.iter().any(|body| !sleeping.contains(*body)));
                 damping(scene, state, sub_dt, wrenches, &selected)?;
                 let mut response =
                     crate::articulated_response::ArticulatedResponse::new(scene.model(), state);
@@ -427,12 +460,78 @@ impl RigidWorld {
                     Vec::new()
                 };
                 devices.record_reactions(&reactions, weight, substep == 0);
+                if capture {
+                    *compliant.borrow_mut() = reactions;
+                }
                 substep += 1;
+                impacts.borrow_mut().prepare(scene, state, contacts)?;
                 Ok(articulations)
             },
             Some(&bounds),
+            common,
+            |solver, input, output, sub_dt, selected| {
+                let resting = impacts
+                    .borrow_mut()
+                    .resting_selection(scene, Some(selected))?;
+                let mut next_readings = if common {
+                    solver.correct_mixed_cpu(scene, input, output, sub_dt, Some(&resting))?
+                } else {
+                    crate::distance_constraints::apply_selected(
+                        scene,
+                        solver,
+                        input,
+                        output,
+                        sub_dt,
+                        Some(&resting),
+                    )?
+                };
+                let position_reference = solver.correct_impact_cpu(
+                    &mut impacts.borrow_mut(),
+                    scene,
+                    input,
+                    output,
+                    sub_dt,
+                    &mut next_readings,
+                    Some(selected),
+                )?;
+                if capture {
+                    for sample in crate::joint_reactions::sample_cpu(
+                        scene,
+                        input,
+                        output,
+                        sub_dt,
+                        reaction_substep,
+                        &next_readings,
+                        &compliant.borrow(),
+                        solver.contact_forces(),
+                        Some(selected),
+                    )? {
+                        reaction_frame.add(sample, dt)?;
+                    }
+                    reaction_substep += 1;
+                }
+                crate::rigid_momentum::transport(
+                    scene.model(),
+                    input,
+                    output,
+                    sub_dt,
+                    position_reference.as_ref(),
+                    Some(selected),
+                )?;
+                crate::distance_constraints::refresh_readings(scene, output, &mut next_readings)?;
+                readings.accumulate(next_readings, weight, dt);
+                Ok(())
+            },
         )?;
         self.scene.commit_step(next)?;
+        self.impacts = impacts.into_inner();
+        self.impacts.record_published(&self.scene);
+        self.distance_readings = readings.distance;
+        self.cone_readings = readings.cones;
+        self.distance_stamp = Some(self.scene.dynamics_stamp());
+        if capture {
+            self.reaction_frame = reaction_frame;
+        }
         sleeping.acknowledge(&self.scene);
         self.sleeping = sleeping;
         self.wheels.publish(&self.scene, wheel_step);

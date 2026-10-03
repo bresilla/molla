@@ -1,0 +1,15 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+     Running tests/runtime_multidof_limits.rs (target/debug/deps/runtime_multidof_limits-6170a08f61f0cbf7)
+
+running 2 tests
+test d6_angular_projection_matches_xyz_oracle_without_rotating_other_axes ... ok
+test d6_near_gimbal_projection_matches_xyz_oracle ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

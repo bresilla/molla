@@ -95,10 +95,12 @@ impl MotorController {
 
     pub fn set_command(&mut self, command: MotorCommand) {
         let command = match command {
-            MotorCommand::Position(p) => MotorCommand::Position(match self.limits.position_limits {
-                Some([lo, hi]) => p.clamp(lo, hi),
-                None => p,
-            }),
+            MotorCommand::Position(p) => {
+                MotorCommand::Position(match self.limits.position_limits {
+                    Some([lo, hi]) => p.clamp(lo, hi),
+                    None => p,
+                })
+            }
             MotorCommand::Velocity(v) => {
                 MotorCommand::Velocity(v.clamp(-self.limits.max_velocity, self.limits.max_velocity))
             }
@@ -129,7 +131,9 @@ impl MotorController {
             MotorCommand::Position(target) => {
                 let error = target - position;
                 self.integral += error * dt;
-                let derivative = self.previous_error.map_or(0.0, |previous| (error - previous) / dt);
+                let derivative = self
+                    .previous_error
+                    .map_or(0.0, |previous| (error - previous) / dt);
                 self.previous_error = Some(error);
                 let [p, i, d] = self.limits.pid;
                 let speed = self.speed.abs().min(self.limits.max_velocity);
@@ -159,6 +163,15 @@ pub struct Devices {
 }
 
 impl Devices {
+    pub fn is_empty(&self) -> bool {
+        self.motors.is_empty()
+            && self.propellers.is_empty()
+            && self.belts.is_empty()
+            && self.connectors.is_empty()
+            && self.copters.is_empty()
+            && !self.aero.active()
+    }
+
     /// Whether a device needs the per-substep force path this step.
     pub fn needs_forces(&self) -> bool {
         self.propellers.active() || self.aero.active()
@@ -178,14 +191,26 @@ impl Devices {
     }
 
     /// Adds the propellers' and the air's wrenches for one substep.
-    pub fn apply(&mut self, scene: &RigidScene, state: &State, wrenches: &mut [SpatialVector], weight: Real) -> Result<()> {
+    pub fn apply(
+        &mut self,
+        scene: &RigidScene,
+        state: &State,
+        wrenches: &mut [SpatialVector],
+        weight: Real,
+    ) -> Result<()> {
         let aero = &self.aero;
-        self.propellers.apply(scene, state, wrenches, weight, &|body| aero.wind_at(body))?;
+        self.propellers
+            .apply(scene, state, wrenches, weight, &|body| aero.wind_at(body))?;
         self.aero.apply(scene, state, wrenches, weight)
     }
 
     /// Records one substep's loop-joint reactions with `weight`.
-    pub fn record_reactions(&mut self, reactions: &[(JointHandle, LoopReaction)], weight: Real, first: bool) {
+    pub fn record_reactions(
+        &mut self,
+        reactions: &[(JointHandle, LoopReaction)],
+        weight: Real,
+        first: bool,
+    ) {
         if first {
             self.reactions.clear();
         }
@@ -205,6 +230,13 @@ impl Devices {
     pub fn reaction(&self, joint: JointHandle) -> Option<LoopReaction> {
         self.reactions.get(&joint).copied()
     }
+
+    pub(crate) fn replace_reactions(
+        &mut self,
+        reactions: BTreeMap<JointHandle, LoopReaction>,
+    ) -> BTreeMap<JointHandle, LoopReaction> {
+        std::mem::replace(&mut self.reactions, reactions)
+    }
 }
 
 #[cfg(test)]
@@ -222,8 +254,14 @@ mod tests {
         let v = c.velocity(0.0, 0.01).unwrap();
         assert!((v - 0.1).abs() < 1e-12, "acceleration-limited: {v}");
         c.velocity = 2.0;
-        assert!((c.velocity(0.0, 0.01).unwrap() - 2.0).abs() < 1e-12, "clamped at max velocity");
-        assert!((c.velocity(0.95, 0.01).unwrap() - 1.9).abs() < 1e-12, "decelerates at the limit");
+        assert!(
+            (c.velocity(0.0, 0.01).unwrap() - 2.0).abs() < 1e-12,
+            "clamped at max velocity"
+        );
+        assert!(
+            (c.velocity(0.95, 0.01).unwrap() - 1.9).abs() < 1e-12,
+            "decelerates at the limit"
+        );
         c.set_command(MotorCommand::Force(3.0));
         assert!(c.velocity(0.0, 0.01).is_none());
     }

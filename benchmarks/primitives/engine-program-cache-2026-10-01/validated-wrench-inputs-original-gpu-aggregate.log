@@ -1,0 +1,494 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling autocfg v1.5.0
+   Compiling libm v0.2.16
+   Compiling serde_core v1.0.228
+   Compiling cfg-if v1.0.4
+   Compiling cfg_aliases v0.2.1
+   Compiling thiserror v2.0.18
+   Compiling num-traits v0.2.19
+   Compiling zerocopy v0.8.48
+   Compiling bitflags v2.11.1
+   Compiling libc v0.2.185
+   Compiling log v0.4.29
+   Compiling equivalent v1.0.2
+   Compiling once_cell v1.21.4
+   Compiling syn v2.0.117
+   Compiling foldhash v0.2.0
+   Compiling allocator-api2 v0.2.21
+   Compiling hashbrown v0.17.0
+   Compiling hashbrown v0.16.1
+   Compiling approx v0.5.1
+   Compiling smallvec v1.15.1
+   Compiling naga v29.0.4
+   Compiling bit-vec v0.9.1
+   Compiling parking_lot_core v0.9.12
+   Compiling ash v0.38.0+1.3.281
+   Compiling arrayvec v0.7.6
+   Compiling indexmap v2.14.0
+   Compiling unicode-width v0.1.14
+   Compiling codespan-reporting v0.13.1
+   Compiling bit-set v0.9.1
+   Compiling spirv v0.4.0+sdk-1.4.341.0
+   Compiling libloading v0.8.9
+   Compiling foldhash v0.1.5
+   Compiling hexf-parse v0.2.1
+   Compiling raw-window-handle v0.6.2
+   Compiling rustc-hash v1.1.0
+   Compiling scopeguard v1.2.0
+   Compiling lock_api v0.4.14
+   Compiling hashbrown v0.15.5
+   Compiling ordered-float v5.3.0
+   Compiling gpu-descriptor-types v0.2.0
+   Compiling wgpu-hal v29.0.4
+   Compiling presser v0.3.1
+   Compiling gpu-descriptor v0.3.2
+   Compiling parking_lot v0.12.5
+   Compiling renderdoc-sys v1.1.0
+   Compiling profiling v1.0.17
+   Compiling wgpu-core v29.0.4
+   Compiling litrs v1.0.0
+   Compiling wgpu v29.0.4
+   Compiling document-features v0.2.12
+   Compiling crossbeam-utils v0.8.21
+   Compiling bytemuck_derive v1.10.2
+   Compiling thiserror-impl v2.0.18
+   Compiling zerocopy-derive v0.8.48
+   Compiling static_assertions v1.1.0
+   Compiling either v1.15.0
+   Compiling paste v1.0.15
+   Compiling heapless v0.8.0
+   Compiling version_check v0.9.5
+   Compiling bytemuck v1.25.0
+   Compiling glam v0.30.10
+   Compiling wgpu-types v29.0.4
+   Compiling safe_arch v0.7.4
+   Compiling byteorder v1.5.0
+   Compiling hash32 v0.3.1
+   Compiling wide v0.7.33
+   Compiling slotmap v1.1.1
+   Compiling crossbeam-epoch v0.9.18
+   Compiling num-complex v0.4.6
+   Compiling stable_deref_trait v1.2.1
+   Compiling rayon-core v1.13.0
+   Compiling simba v0.9.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling rstar v0.12.2
+   Compiling half v2.7.1
+   Compiling num-derive v0.4.2
+   Compiling tracing-attributes v0.1.31
+   Compiling molla-core v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-core)
+   Compiling tracing-core v0.1.36
+   Compiling molla-math v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-math)
+   Compiling ena v0.14.4
+   Compiling pin-project-lite v0.2.17
+   Compiling zmij v1.0.21
+   Compiling downcast-rs v2.0.2
+   Compiling pollster v0.4.0
+   Compiling gpu-allocator v0.28.0
+   Compiling glamx v0.1.3
+   Compiling serde v1.0.228
+   Compiling slab v0.4.12
+   Compiling tracing v0.1.44
+   Compiling parry3d-f64 v0.26.1
+   Compiling rayon v1.12.0
+   Compiling serde_derive v1.0.228
+   Compiling serde_json v1.0.149
+   Compiling molla-optim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-optim)
+   Compiling molla-autograd v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-autograd)
+   Compiling clap_lex v1.1.0
+   Compiling regex-syntax v0.8.10
+   Compiling itoa v1.0.18
+   Compiling ciborium-io v0.2.2
+   Compiling memchr v2.8.0
+   Compiling molla-vehicle v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-vehicle)
+   Compiling plotters-backend v0.3.7
+   Compiling anstyle v1.0.14
+   Compiling clap_builder v4.6.0
+   Compiling plotters-svg v0.3.7
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling regex-automata v0.4.14
+   Compiling ciborium-ll v0.2.2
+   Compiling wgpu-core-deps-windows-linux-android v29.0.4
+   Compiling itertools v0.10.5
+   Compiling cast v0.3.0
+   Compiling same-file v1.0.6
+   Compiling walkdir v2.5.0
+   Compiling criterion-plot v0.5.0
+   Compiling regex v1.12.3
+   Compiling ciborium v0.2.2
+   Compiling clap v4.6.1
+   Compiling tinytemplate v1.2.1
+   Compiling plotters v0.3.7
+   Compiling is-terminal v0.4.17
+   Compiling oorandom v11.1.5
+   Compiling anes v0.1.6
+   Compiling criterion v0.5.1
+   Compiling molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+   Compiling molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 32.04s
+     Running tests/featherstone_polish_gpu.rs (target/debug/deps/featherstone_polish_gpu-813e4806259947b4)
+
+running 2 tests
+test d6_angular_limit_holds_under_gravity_gpu ... D6 angular limit: max excess = 0.00000 rad
+ok
+test distance_joint_length_holds_within_eps_gpu ... Distance Lagrange (GPU): worst |p|−L = 0.000e0
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 197.88s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.55s
+     Running tests/featherstone_multidof_gpu.rs (target/debug/deps/featherstone_multidof_gpu-c7ccf5a4d707be4b)
+
+running 4 tests
+test ball_spherical_pendulum_falls_under_gravity_gpu ... BALL pendulum after 2000 steps: max_y=-0.4777, max |dist-0.5|=0.0000
+ok
+test d6_pretensioned_holds_under_gravity_gpu ... D6 locked body after 0.5s under gravity: pos=DVec3(0.0, 0.0, 0.0)
+ok
+test free_joint_body_falls_at_g_gpu ... FREE body fall after 0.200s: joint_q.y=-0.1971 body.y=-0.1971 expected=-0.1961
+ok
+test free_joint_cpu_gpu_match ... FREE parity: cpu y=-1.238090 gpu y=-1.238089
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 390.14s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.27s
+     Running tests/featherstone_motor_caps_gpu.rs (target/debug/deps/featherstone_motor_caps_gpu-295722ab9c707e37)
+
+running 2 tests
+test fem_island_accepts_caps_and_applies_them_on_gpu ... ok
+test gpu_motor_caps_preserve_feedforward_and_total_limits ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 202.55s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.12s
+     Running tests/runtime_motor_models.rs (target/debug/deps/runtime_motor_models-914359b7a04535bc)
+
+running 4 tests
+test gpu_d6_motor_models_match_each_authored_axis ... ok
+test gpu_motor_edits_rebuilds_and_reactions_match_scalar_dynamics ... ok
+test gpu_motor_models_match_independent_scalar_dynamics ... ok
+test gpu_stiff_motor_models_match_independent_scalar_dynamics ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 781.92s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.92s
+     Running tests/runtime_motor_coupling.rs (target/debug/deps/runtime_motor_coupling-7ceb8bf5f09772a8)
+
+running 1 test
+test gpu_coupled_motor_models_match_two_body_inverse_mass ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+coupled_motor_feedback_modes=[false, true]
+coupled_motor_prepare_begin stable=false cases=72
+coupled_motor_prepare_complete stable=false seconds=91.690877
+coupled_motor_complete stable=false cases=72 frames=40 dt=0.0004 substeps=4 peak_coordinate=2.371466314553955e-8 peak_rate=2.9393905079944105e-6 peak_reaction=7.035145035771961e-5
+coupled_motor_prepare_begin stable=true cases=72
+coupled_motor_prepare_complete stable=true seconds=0.014324
+coupled_motor_complete stable=true cases=72 frames=40 dt=0.02 substeps=4 peak_coordinate=6.643140808559878e-7 peak_rate=3.710364802733679e-6 peak_reaction=4.604191384061096e-5
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 94.00s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on artifact directory
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.71s
+     Running tests/runtime_friction_contract.rs (target/debug/deps/runtime_friction_contract-e8987b1413fe006b)
+
+running 1 test
+test gpu_loaded_static_friction_holds_ten_seconds_at_three_step_sizes ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+static hold rates=[60, 120, 240] duration=10s substeps=8 cases_per_rate=4
+static hold progress: hz=60 elapsed=1s peak=2.6838343383420727e-5 post_settle_creep=0e0
+static hold progress: hz=60 elapsed=2s peak=2.6838343383420727e-5 post_settle_creep=7.14381889855701e-8
+static hold progress: hz=60 elapsed=3s peak=2.6838343383420727e-5 post_settle_creep=1.3904699655980143e-7
+static hold progress: hz=60 elapsed=4s peak=2.6838343383420727e-5 post_settle_creep=2.192001432048017e-7
+static hold progress: hz=60 elapsed=5s peak=2.6838343383420727e-5 post_settle_creep=2.9026580163022733e-7
+static hold progress: hz=60 elapsed=6s peak=2.6838343383420727e-5 post_settle_creep=3.615537574161492e-7
+static hold progress: hz=60 elapsed=7s peak=2.6838343383420727e-5 post_settle_creep=4.286368226927386e-7
+static hold progress: hz=60 elapsed=8s peak=2.6838343383420727e-5 post_settle_creep=4.999191579687512e-7
+static hold progress: hz=60 elapsed=9s peak=2.6838343383420727e-5 post_settle_creep=5.682867929212156e-7
+static hold progress: hz=60 elapsed=10s peak=2.6838343383420727e-5 post_settle_creep=6.425866930493535e-7
+static hold duration=10s hz=60 substeps=8 cases=4 peak=0.000026838343383420727 post_settle_creep=0.0000006425866930493535
+static hold progress: hz=120 elapsed=1s peak=3.511552752872557e-5 post_settle_creep=0e0
+static hold progress: hz=120 elapsed=2s peak=3.511552752872557e-5 post_settle_creep=3.8200800276072e-8
+static hold progress: hz=120 elapsed=3s peak=3.511552752872557e-5 post_settle_creep=7.683067445284735e-8
+static hold progress: hz=120 elapsed=4s peak=3.511552752872557e-5 post_settle_creep=1.1453814135205799e-7
+static hold progress: hz=120 elapsed=5s peak=3.511552752872557e-5 post_settle_creep=1.440239740152332e-7
+static hold progress: hz=120 elapsed=6s peak=3.511552752872557e-5 post_settle_creep=1.794231240692e-7
+static hold progress: hz=120 elapsed=7s peak=3.511552752872557e-5 post_settle_creep=2.1626308162332875e-7
+static hold progress: hz=120 elapsed=8s peak=3.511552752872557e-5 post_settle_creep=2.558292756849671e-7
+static hold progress: hz=120 elapsed=9s peak=3.511552752872557e-5 post_settle_creep=2.917457076416006e-7
+static hold progress: hz=120 elapsed=10s peak=3.511552752872557e-5 post_settle_creep=3.345151928169427e-7
+static hold duration=10s hz=120 substeps=8 cases=4 peak=0.00003511552752872557 post_settle_creep=0.0000003345151928169427
+static hold progress: hz=240 elapsed=1s peak=3.6079333218501685e-5 post_settle_creep=0e0
+static hold progress: hz=240 elapsed=2s peak=3.6079333218501685e-5 post_settle_creep=7.424898300145238e-8
+static hold progress: hz=240 elapsed=3s peak=3.6079333218501685e-5 post_settle_creep=1.2072565194389836e-7
+static hold progress: hz=240 elapsed=4s peak=3.6079333218501685e-5 post_settle_creep=1.842253374356131e-7
+static hold progress: hz=240 elapsed=5s peak=3.6079333218501685e-5 post_settle_creep=2.542971388893277e-7
+static hold progress: hz=240 elapsed=6s peak=3.6079333218501685e-5 post_settle_creep=3.189929563076855e-7
+static hold progress: hz=240 elapsed=7s peak=3.6079333218501685e-5 post_settle_creep=3.793934981676247e-7
+static hold progress: hz=240 elapsed=8s peak=3.6079333218501685e-5 post_settle_creep=4.386928012376437e-7
+static hold progress: hz=240 elapsed=9s peak=3.6079333218501685e-5 post_settle_creep=5.008595510830513e-7
+static hold progress: hz=240 elapsed=10s peak=3.6079333218501685e-5 post_settle_creep=5.617832892549559e-7
+static hold duration=10s hz=240 substeps=8 cases=4 peak=0.000036079333218501685 post_settle_creep=0.0000005617832892549559
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 435.82s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.02s
+     Running tests/runtime_capsule_manifold.rs (target/debug/deps/runtime_capsule_manifold-24c525562fc86bf1)
+
+running 1 test
+test gpu_capsule_support_span_preserves_loaded_equilibrium ... capsule span hz=60 peak_position=1.905292768000777e-8 peak_angle=3.5263843403799694e-8
+capsule span hz=120 peak_position=8.436799259214922e-9 peak_angle=3.5263843403799694e-8
+capsule span hz=240 peak_position=5.484309451020408e-9 peak_angle=3.5263843403799694e-8
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 164.43s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.98s
+     Running tests/runtime_loop_compliance.rs (target/debug/deps/runtime_loop_compliance-883767fde2e73b58)
+
+running 3 tests
+test gpu_compliant_loop_breakage_preserves_substep_motion_and_explicit_repair ... ok
+test gpu_coupled_compliant_loops_match_two_by_two_loaded_recurrence_and_substeps ... ok
+test gpu_general_compliant_loops_match_independent_loaded_recurrence_and_edits ... compliant loop scalar oracle: hz=60, cases=60
+compliant loop scalar oracle: hz=120, cases=60
+compliant loop scalar oracle: hz=240, cases=60
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 309.29s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.03s
+     Running tests/runtime_loop_controls.rs (target/debug/deps/runtime_loop_controls-54ef59741a439a0b)
+
+running 4 tests
+test gpu_compliant_loop_brakes_are_independent_of_motor_caps_and_springs ... loop controls hz=60 substeps=1 brakes=true: 288 cases passed
+loop controls hz=60 substeps=4 brakes=true: 288 cases passed
+loop controls hz=120 substeps=1 brakes=true: 288 cases passed
+loop controls hz=120 substeps=4 brakes=true: 288 cases passed
+loop controls hz=240 substeps=1 brakes=true: 288 cases passed
+loop controls hz=240 substeps=4 brakes=true: 288 cases passed
+ok
+test gpu_compliant_loop_controls_match_coupled_linear_angular_oracle ... loop controls hz=60 substeps=1 brakes=false: 288 cases passed
+loop controls hz=60 substeps=4 brakes=false: 288 cases passed
+loop controls hz=120 substeps=1 brakes=false: 288 cases passed
+loop controls hz=120 substeps=4 brakes=false: 288 cases passed
+loop controls hz=240 substeps=1 brakes=false: 288 cases passed
+loop controls hz=240 substeps=4 brakes=false: 288 cases passed
+ok
+test gpu_compliant_loops_preserve_weak_modes_beside_null_modes ... ok
+test gpu_rotated_high_inertia_compliant_loop_matches_near_rest_oracle ... angular predictor frame=10 cap=0 expected_q=-0.010310095451901313 actual_q=-0.010310095803328506 expected_rate=-0.34749053803407876 actual_rate=-0.347490519285202 pose=Transform { position: DVec3(0.0, 2.0, -3.0), rotation: DQuat(0.06337641179561615, -0.1883544772863388, 0.335096150636673, 0.9209867715835571) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24479538202285767, -0.20618827641010284, -0.13531917333602905) }
+angular predictor frame=10 cap=0.25 expected_q=-0.010309885566089366 actual_q=-0.010309885638726063 expected_rate=-0.34750399063631265 actual_rate=-0.3475039601325989 pose=Transform { position: DVec3(8.0, 2.0, -3.0), rotation: DQuat(0.06337650865316391, -0.18835444748401642, 0.33509618043899536, 0.9209867119789124) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24480482935905457, -0.20619626343250275, -0.1353244185447693) }
+angular predictor frame=10 cap=inf expected_q=-0.010297585267053795 actual_q=-0.010297584736638499 expected_rate=-0.3474078576667667 actual_rate=-0.34740781784057617 pose=Transform { position: DVec3(16.0, 2.0, -3.0), rotation: DQuat(0.06338217109441757, -0.18835239112377167, 0.3350973427295685, 0.9209863543510437) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24473711848258972, -0.2061392217874527, -0.13528697192668915) }
+angular predictor frame=11 cap=0 expected_q=-0.011770425262533383 actual_q=-0.011770425592894623 expected_rate=-0.3504791545516967 actual_rate=-0.3504791259765625 pose=Transform { position: DVec3(0.0, 2.0, -3.0), rotation: DQuat(0.0627039223909378, -0.1885991096496582, 0.334958553314209, 0.9210327863693237) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.246900737285614, -0.20796161890029907, -0.13648299872875214) }
+angular predictor frame=11 cap=0.25 expected_q=-0.011770266716355456 actual_q=-0.011770266790737532 expected_rate=-0.3504914760638615 actual_rate=-0.350491464138031 pose=Transform { position: DVec3(8.0, 2.0, -3.0), rotation: DQuat(0.06270399689674377, -0.18859907984733582, 0.334958553314209, 0.9210327863693237) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24690943956375122, -0.20796893537044525, -0.13648779690265656) }
+angular predictor frame=11 cap=inf expected_q=-0.011757732685865848 actual_q=-0.011757732118898356 expected_rate=-0.3504353805148927 actual_rate=-0.350435346364975 pose=Transform { position: DVec3(16.0, 2.0, -3.0), rotation: DQuat(0.0627097636461258, -0.18859697878360748, 0.3349597454071045, 0.9210323691368103) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24686990678310394, -0.2079356461763382, -0.13646595180034637) }
+loop controls hz=240 substeps=1 brakes=false: 24 cases passed
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 475.80s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.79s
+     Running tests/runtime_loop_contacts.rs (target/debug/deps/runtime_loop_contacts-415c359705cdc4ec)
+
+running 2 tests
+test gpu_compliant_brakes_share_live_contacts_and_retire_with_disabled_loops ... ok
+test gpu_compliant_loops_and_capped_effort_preserve_contact_and_horizontal_recurrence ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 153.43s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.95s
+     Running tests/runtime_loop_articulated_contacts.rs (target/debug/deps/runtime_loop_articulated_contacts-c03bea13c8c00c8b)
+
+running 2 tests
+test gpu_articulated_contact_break_channels_preserve_boundary_state_and_explicit_repair ... articulated contact torque/force/both break hz=60 capture=false: 9 assemblies passed
+articulated contact torque/force/both break hz=60 capture=true: 9 assemblies passed
+articulated contact torque/force/both break hz=240 capture=false: 9 assemblies passed
+articulated contact torque/force/both break hz=240 capture=true: 9 assemblies passed
+ok
+test gpu_rotated_loops_and_articulated_contacts_match_motion_and_anchor_wrench_oracle ... articulated rotated loop/contact oracle hz=60 substeps=1: 9 assemblies passed
+articulated rotated loop/contact oracle hz=60 substeps=4: 9 assemblies passed
+articulated rotated loop/contact oracle hz=120 substeps=1: 9 assemblies passed
+articulated rotated loop/contact oracle hz=120 substeps=4: 9 assemblies passed
+articulated rotated loop/contact oracle hz=240 substeps=1: 9 assemblies passed
+articulated rotated loop/contact oracle hz=240 substeps=4: 9 assemblies passed
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 163.91s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.17s
+     Running tests/runtime_rigid_fixed_loops.rs (target/debug/deps/runtime_rigid_fixed_loops-d3072834f421f2af)
+
+running 3 tests
+test gpu_rigid_fixed_loop_break_channels_and_explicit_repair_preserve_state ... ok
+test gpu_rigid_fixed_loop_projection_matches_independent_six_dimensional_impulse ... ok
+test gpu_rigid_fixed_loops_preserve_rotated_frames_and_balance_anchor_wrenches ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 163.38s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.14s
+     Running tests/contact_friction_modes_gpu.rs (target/debug/deps/contact_friction_modes_gpu-c06d9ec1a96c1936)
+
+running 2 tests
+test rolling_friction_damps_horizontal_axis_spin_gpu ... GPU horizontal spin |ω| after 0.3 s: roll=0 → 13.7689, roll=0.5 → 0.0000
+ok
+test torsional_friction_damps_normal_axis_spin_gpu ... GPU normal-axis spin |ω.y| after 0.3 s: tors=0 → 9.8175, tors=2.0 → 0.0000
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.11s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.13s
+     Running tests/featherstone_scalar_equality_gpu.rs (target/debug/deps/featherstone_scalar_equality_gpu-2d94fda0198ae390)
+
+running 4 tests
+test predictor_increment_is_independent_of_fused_rate_rounding_gpu ... ok
+test predictor_retains_small_increments_and_velocity_overrides_gpu ... ok
+test scalar_equality_clears_velocity_and_holds_nonzero_coordinate_gpu ... ok
+test scalar_equality_transmits_child_load_to_floating_parent_gpu ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 196.58s
+
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[2]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.96s
+     Running tests/rigid_singular_forces.rs (target/debug/deps/rigid_singular_forces-3e1b3f9e31520d24)
+
+running 4 tests
+test gpu_locked_singular_d6_roots_keep_supported_spin_under_null_axis_loads ... 
+thread 'gpu_locked_singular_d6_roots_keep_supported_spin_under_null_axis_loads' (496588) panicked at crates/molla-solvers/tests/rigid_singular_forces.rs:76:17:
+locked singular root frame=2 substeps=1 body=BodyHandle(3) rate=0.0025 velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.0008997799595817924, 0.002279735868796706, -0.0004966731066815555) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test gpu_null_mode_motors_preserve_supported_linear_drive ... ok
+test gpu_singular_and_weak_roots_preserve_supported_spin ... ok
+test gpu_zero_inertia_roots_keep_com_acceleration_without_artificial_spin ... ok
+
+failures:
+
+failures:
+    gpu_locked_singular_d6_roots_keep_supported_spin_under_null_axis_loads
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 248.48s
+
+error: test failed, to rerun pass `-p molla-solvers --test rigid_singular_forces`
+make[2]: *** [Makefile:170: test-gpu] Error 101
+make[2]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: *** [Makefile:192: test-primitives-baseline-gpu] Error 2
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:147: test-primitives-gpu] Error 2

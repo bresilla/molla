@@ -1,0 +1,35 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `release` profile [optimized] target(s) in 0.11s
+     Running benches/runtime_primitives.rs (target/release/deps/runtime_primitives-c87dd9596ff6fd06)
+benchmark_schema=6	run_mode=benchmark	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=process_rust_allocator_layouts_in_measured_frames_and_observed_device_totals	device_counter_scope=orchestrator_buffer_allocation_events_and_frame_boundaries_excluding_timestamp_harness	transfer_scope=orchestrator_queue_writes_and_mapped_view_footprints_excluding_timestamp_harness	frame_trace=false	build_profile=release
+case_process_start	primitive=mixed	instances=1	backend=gpu	timeout_seconds=900
+benchmark_schema=6	run_mode=benchmark	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=process_rust_allocator_layouts_in_measured_frames_and_observed_device_totals	device_counter_scope=orchestrator_buffer_allocation_events_and_frame_boundaries_excluding_timestamp_harness	transfer_scope=orchestrator_queue_writes_and_mapped_view_footprints_excluding_timestamp_harness	frame_trace=false	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=mixed	instances=1	backend=gpu
+case_setup_complete	primitive=mixed	instances=1	backend=gpu	seconds=143.232650902
+case_warmup_complete	primitive=mixed	instances=1	backend=gpu	steps=20
+case_ok	primitive=mixed	instances=1	backend=gpu	bodies=6	articulations=6	warmup=20	steps=1000	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=143.232650902	wall_seconds=26.162724183	max_step_seconds=0.084536384	device_timeline_seconds=Some(26.162378752000002)	state_upload_bytes=786760	state_readout_bytes=86776976	boundary_buffer_bytes=924592	boundary_buffers=Some(387)	boundary_allocations=None	model_compilations=Some(4)	break_events=1	encoded_dispatches=449379	all_transfer_bytes=91041756	all_upload_bytes=3697548	all_readback_bytes=87344208	host_allocations=7486816	host_reallocations=1566773	host_requested_bytes=6606859905	host_initial_live_bytes=18253785	host_peak_live_bytes=29250965	host_peak_extra_bytes=10917284	host_peak_live_allocations=74317	host_peak_extra_allocations=29688	observed_device_buffer_bytes=Some(1303504)	observed_device_buffers=Some(854)	observed_device_native_allocations=None	device_counter_observations=Some(1768)	device_transient_peak_allocations=unavailable
+case_process_start	primitive=mixed	instances=100	backend=gpu	timeout_seconds=900
+benchmark_schema=6	run_mode=benchmark	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=process_rust_allocator_layouts_in_measured_frames_and_observed_device_totals	device_counter_scope=orchestrator_buffer_allocation_events_and_frame_boundaries_excluding_timestamp_harness	transfer_scope=orchestrator_queue_writes_and_mapped_view_footprints_excluding_timestamp_harness	frame_trace=false	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=mixed	instances=100	backend=gpu
+
+thread 'main' (3403461) panicked at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-29.0.4/src/backend/wgpu_core.rs:1614:18:
+wgpu error: Out of Memory
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+case_process_error	primitive=mixed	instances=100	backend=gpu	status=exit status: 101
+case_process_start	primitive=mixed	instances=1000	backend=gpu	timeout_seconds=900
+benchmark_schema=6	run_mode=benchmark	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=process_rust_allocator_layouts_in_measured_frames_and_observed_device_totals	device_counter_scope=orchestrator_buffer_allocation_events_and_frame_boundaries_excluding_timestamp_harness	transfer_scope=orchestrator_queue_writes_and_mapped_view_footprints_excluding_timestamp_harness	frame_trace=false	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=mixed	instances=1000	backend=gpu
+Error: Gpu("invalid articulated contact response metadata or buffers")
+case_process_error	primitive=mixed	instances=1000	backend=gpu	status=exit status: 1
+case_process_start	primitive=mixed	instances=10000	backend=gpu	timeout_seconds=900
+benchmark_schema=6	run_mode=benchmark	timing_scope=device_timeline_including_host_queue_idle	dispatch_scope=instrumented_live_runtime_encodings	allocation_scope=process_rust_allocator_layouts_in_measured_frames_and_observed_device_totals	device_counter_scope=orchestrator_buffer_allocation_events_and_frame_boundaries_excluding_timestamp_harness	transfer_scope=orchestrator_queue_writes_and_mapped_view_footprints_excluding_timestamp_harness	frame_trace=false	build_profile=release
+adapter	Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+case_start	primitive=mixed	instances=10000	backend=gpu
+make: *** [Makefile:773: bench-primitives] Terminated

@@ -628,14 +628,16 @@ impl BsrAlgebraKernel {
             _pad3: 0.0,
             _pad4: 0.0,
         };
-        let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::mv uniforms"),
-            size: core::mem::size_of::<MatvecUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::mv uniforms"),
+                size: core::mem::size_of::<MatvecUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(self.queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let bg_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sparse_gpu::mv io bg"),
@@ -721,14 +723,16 @@ impl BsrAlgebraKernel {
             _pad3: 0.0,
             _pad4: 0.0,
         };
-        let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::prep-mv uniforms"),
-            size: core::mem::size_of::<MatvecUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::prep-mv uniforms"),
+                size: core::mem::size_of::<MatvecUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(self.queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let bg_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sparse_gpu::prep-mv io bg"),
@@ -841,14 +845,16 @@ impl BsrAlgebraKernel {
             _pad3: 0.0,
             _pad4: 0.0,
         };
-        let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::axpy uniforms"),
-            size: core::mem::size_of::<AxpyUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::axpy uniforms"),
+                size: core::mem::size_of::<AxpyUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(self.queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let bg_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sparse_gpu::axpy io bg"),
@@ -967,18 +973,25 @@ impl BsrAlgebraKernel {
         // Values buffer: allocate empty (zeroed) so the scatter has
         // somewhere to land. f32 storage.
         let values_bytes = (nnz as u64).max(4) * 4;
-        let values_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::transpose B values"),
-            size: values_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let values_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::transpose B values"),
+                size: values_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         // Zero so any rows missing nonzeros stay 0 (defensive — the
         // scatter writes every slot, so this is just hygiene).
-        self.queue
-            .write_buffer(&values_buf, 0, &vec![0u8; values_bytes as usize]);
+        molla_core::gpu_write_buffer!(
+            self.queue,
+            &values_buf,
+            0,
+            &vec![0u8; values_bytes as usize]
+        );
 
         // ── 4. Upload dst_map + dispatch the scatter shader ────────
         let dst_map_buf = create_storage_buffer(
@@ -995,14 +1008,21 @@ impl BsrAlgebraKernel {
                 _pad1: 0,
                 _pad2: 0,
             };
-            let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::sparse_gpu::transpose uniforms"),
-                size: core::mem::size_of::<ScalarU32Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue
-                .write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+            let uniform_buf = molla_core::gpu_create_buffer!(
+                self.device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::sparse_gpu::transpose uniforms"),
+                    size: core::mem::size_of::<ScalarU32Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(
+                self.queue,
+                &uniform_buf,
+                0,
+                bytemuck::bytes_of(&uniforms)
+            );
 
             let bg_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("molla::sparse_gpu::transpose io bg"),
@@ -1199,16 +1219,23 @@ impl BsrAlgebraKernel {
             bytemuck::cast_slice(&c_col_idx),
         );
         let values_bytes = (c_nnz as u64).max(4) * 4;
-        let c_values_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::spgemm C values"),
-            size: values_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&c_values_buf, 0, &vec![0u8; values_bytes as usize]);
+        let c_values_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::spgemm C values"),
+                size: values_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            self.queue,
+            &c_values_buf,
+            0,
+            &vec![0u8; values_bytes as usize]
+        );
 
         if c_nnz == 0 {
             return Ok(BsrGpu {
@@ -1241,14 +1268,16 @@ impl BsrAlgebraKernel {
             _pad1: 0,
             _pad2: 0,
         };
-        let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::spgemm uniforms"),
-            size: core::mem::size_of::<ScalarU32Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::spgemm uniforms"),
+                size: core::mem::size_of::<ScalarU32Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(self.queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let bg_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sparse_gpu::spgemm io bg"),
@@ -1339,14 +1368,17 @@ impl BsrAlgebraKernel {
                 "molla::sparse_gpu::spgemm C col_indices (empty)",
                 &[],
             );
-            let c_values_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::sparse_gpu::spgemm C values (empty)"),
-                size: 16,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            let c_values_buf = molla_core::gpu_create_buffer!(
+                self.device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::sparse_gpu::spgemm C values (empty)"),
+                    size: 16,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
             return Ok(BsrGpu {
                 row_offsets: Arc::new(c_row_offsets_buf),
                 col_indices: Arc::new(c_col_idx_buf),
@@ -1364,26 +1396,32 @@ impl BsrAlgebraKernel {
         let bitmap_words: u32 = ncols.div_ceil(32);
         let total_bitmap_u32 = (nrows as u64) * (bitmap_words as u64);
         let bitmap_bytes = (total_bitmap_u32 * 4).max(16);
-        let bitmap_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::spgemm row_bitmaps"),
-            size: bitmap_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let bitmap_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::spgemm row_bitmaps"),
+                size: bitmap_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         // count[row] — u32 unique-col tally per row. One extra slot at
         // the end so the exclusive scan can produce `nrows+1` offsets
         // (we'll scan into a separate buffer of length `nrows+1`).
-        let count_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::spgemm count"),
-            size: ((nrows as u64) * 4).max(16),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let count_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::spgemm count"),
+                size: ((nrows as u64) * 4).max(16),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         // ── Step 1: symbolic_count ────────────────────────────────────
         let sym_count_u = SymCountUniforms {
@@ -1392,14 +1430,21 @@ impl BsrAlgebraKernel {
             b_ncols: ncols,
             bitmap_words,
         };
-        let sym_count_u_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::sym_count uniforms"),
-            size: core::mem::size_of::<SymCountUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&sym_count_u_buf, 0, bytemuck::bytes_of(&sym_count_u));
+        let sym_count_u_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::sym_count uniforms"),
+                size: core::mem::size_of::<SymCountUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            self.queue,
+            &sym_count_u_buf,
+            0,
+            bytemuck::bytes_of(&sym_count_u)
+        );
 
         let bg_sym_count_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sparse_gpu::sym_count io bg"),
@@ -1478,17 +1523,21 @@ impl BsrAlgebraKernel {
         // nrows is irrelevant since exclusive scan never reads slot `i`
         // for its own output — out[i] = sum(in[0..i]).
         let n_plus_1 = nrows + 1;
-        let count_padded_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::spgemm count padded"),
-            size: ((n_plus_1 as u64) * 4).max(16),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let count_padded_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::spgemm count padded"),
+                size: ((n_plus_1 as u64) * 4).max(16),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         // Zero-init the padded buffer (so slot `nrows` is 0).
         // Then copy `count[0..nrows]` into the first `nrows` slots.
-        self.queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            self.queue,
             &count_padded_buf,
             0,
             &vec![0u8; ((n_plus_1 as u64) * 4).max(16) as usize],
@@ -1503,14 +1552,17 @@ impl BsrAlgebraKernel {
             self.queue.submit(std::iter::once(enc.finish()));
         }
 
-        let c_row_offsets_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::spgemm C row_offsets"),
-            size: ((n_plus_1 as u64) * 4).max(16),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let c_row_offsets_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::spgemm C row_offsets"),
+                size: ((n_plus_1 as u64) * 4).max(16),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         self.scan
             .exclusive_scan_u32(&count_padded_buf, &c_row_offsets_buf, n_plus_1)?;
 
@@ -1521,12 +1573,15 @@ impl BsrAlgebraKernel {
         // the col_indices + values buffers anyway.)
         let total_nnz_u32 = {
             let bytes = 4u64;
-            let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::sparse_gpu::spgemm total_nnz staging"),
-                size: bytes.max(16),
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            let staging = molla_core::gpu_create_buffer!(
+                self.device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::sparse_gpu::spgemm total_nnz staging"),
+                    size: bytes.max(16),
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
             let mut enc = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1545,7 +1600,7 @@ impl BsrAlgebraKernel {
             rx.recv()
                 .map_err(|e| Error::Gpu(format!("sparse_gpu spgemm total_nnz recv: {e}")))?
                 .map_err(|e| Error::Gpu(format!("sparse_gpu spgemm total_nnz map: {e:?}")))?;
-            let mapped = slice.get_mapped_range();
+            let mapped = molla_core::gpu_readback!(slice);
             let v = u32::from_le_bytes([mapped[0], mapped[1], mapped[2], mapped[3]]);
             drop(mapped);
             staging.unmap();
@@ -1556,27 +1611,37 @@ impl BsrAlgebraKernel {
 
         // ── Step 3: allocate c_col_indices + c_values ─────────────────
         let c_col_idx_bytes = ((c_nnz as u64) * 4).max(16);
-        let c_col_idx_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::spgemm C col_indices"),
-            size: c_col_idx_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let c_col_idx_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::spgemm C col_indices"),
+                size: c_col_idx_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let c_values_bytes = ((c_nnz as u64) * 4).max(16);
-        let c_values_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::spgemm C values"),
-            size: c_values_bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let c_values_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::spgemm C values"),
+                size: c_values_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         // Zero c_values — the atomic-add numeric kernel accumulates
         // into it.
-        self.queue
-            .write_buffer(&c_values_buf, 0, &vec![0u8; c_values_bytes as usize]);
+        molla_core::gpu_write_buffer!(
+            self.queue,
+            &c_values_buf,
+            0,
+            &vec![0u8; c_values_bytes as usize]
+        );
 
         if c_nnz == 0 {
             return Ok(BsrGpu {
@@ -1596,14 +1661,21 @@ impl BsrAlgebraKernel {
             _pad0: 0,
             _pad1: 0,
         };
-        let sym_write_u_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::sym_write uniforms"),
-            size: core::mem::size_of::<SymWriteUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&sym_write_u_buf, 0, bytemuck::bytes_of(&sym_write_u));
+        let sym_write_u_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::sym_write uniforms"),
+                size: core::mem::size_of::<SymWriteUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            self.queue,
+            &sym_write_u_buf,
+            0,
+            bytemuck::bytes_of(&sym_write_u)
+        );
 
         let bg_sym_write_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sparse_gpu::sym_write io bg"),
@@ -1660,14 +1732,16 @@ impl BsrAlgebraKernel {
             _pad0: 0,
             _pad1: 0,
         };
-        let num_u_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sparse_gpu::num_atomic uniforms"),
-            size: core::mem::size_of::<NumericAtomicUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue
-            .write_buffer(&num_u_buf, 0, bytemuck::bytes_of(&num_u));
+        let num_u_buf = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sparse_gpu::num_atomic uniforms"),
+                size: core::mem::size_of::<NumericAtomicUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(self.queue, &num_u_buf, 0, bytemuck::bytes_of(&num_u));
 
         let bg_num_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sparse_gpu::num_atomic io bg"),
@@ -1801,16 +1875,19 @@ fn create_storage_buffer(
 ) -> wgpu::Buffer {
     let unpadded = data.len() as u64;
     let size = unpadded.max(16).next_multiple_of(4);
-    let buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_SRC
-            | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let buf = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
     if !data.is_empty() {
-        queue.write_buffer(&buf, 0, data);
+        molla_core::gpu_write_buffer!(queue, &buf, 0, data);
     }
     buf
 }
@@ -1823,12 +1900,15 @@ fn read_u32_buffer(
     label: &str,
 ) -> Result<Vec<u32>> {
     let size = bytes.max(16);
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let staging = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("molla::sparse_gpu::readback enc"),
     });
@@ -1845,7 +1925,7 @@ fn read_u32_buffer(
     rx.recv()
         .map_err(|e| Error::Gpu(format!("sparse_gpu read recv: {e}")))?
         .map_err(|e| Error::Gpu(format!("sparse_gpu read map: {e:?}")))?;
-    let mapped = slice.get_mapped_range();
+    let mapped = molla_core::gpu_readback!(slice);
     let v: Vec<u32> = bytemuck::cast_slice::<u8, u32>(&mapped).to_vec();
     drop(mapped);
     staging.unmap();
@@ -1860,12 +1940,15 @@ fn read_f32_buffer(
     label: &str,
 ) -> Result<Vec<f32>> {
     let size = bytes.max(16);
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let staging = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }
+    );
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("molla::sparse_gpu::readback enc"),
     });
@@ -1882,7 +1965,7 @@ fn read_f32_buffer(
     rx.recv()
         .map_err(|e| Error::Gpu(format!("sparse_gpu read recv: {e}")))?
         .map_err(|e| Error::Gpu(format!("sparse_gpu read map: {e:?}")))?;
-    let mapped = slice.get_mapped_range();
+    let mapped = molla_core::gpu_readback!(slice);
     let v: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&mapped).to_vec();
     drop(mapped);
     staging.unmap();

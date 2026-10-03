@@ -298,7 +298,7 @@ fn active_contact_state_and_readout_match_ordinary_step() {
             )
             .unwrap();
         assert_state(&actual, &expected);
-        assert_eq!(solver.contact_forces().len(), substeps as usize);
+        assert_eq!(solver.contact_forces().len(), substeps);
         for (actual, expected) in solver.contact_forces().iter().zip(readings) {
             assert_eq!(actual.acted, expected.acted);
             assert_eq!(actual.force_on_b, expected.force_on_b);

@@ -31,11 +31,10 @@ fn response_column(j: u32, d: u32, frame: Transform, reference: vec3<f32>) -> Re
     result.angular = vec3<f32>(0.0);
     if joint_enabled[j] == 0u || (body_flags[u32(joint_child[j])] & 3u) != 0u { return result; }
     let kind = joint_type[j];
-    let v = joint_dof_offset[j] + d;
-    let lo = joint_limit_lower[v];
-    let hi = joint_limit_upper[v];
     if kind <= 2u || kind == 6u {
-        if abs(lo) < 3.402823e38 && abs(hi) < 3.402823e38 && abs(hi - lo) < 1e-12 { return result; }
+        let structural=(kind<=1u) || (kind==2u && ((joint_enabled[j]>>1u)&7u)==7u)
+            || (kind==6u && (d<3u || ((joint_enabled[j]>>4u)&7u)==7u));
+        if structural && (joint_enabled[j]&(1u<<(d+1u)))!=0u { return result; }
     }
     var local = vec3<f32>(0.0);
     var angular = false;

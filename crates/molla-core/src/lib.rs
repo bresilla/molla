@@ -3,6 +3,9 @@
 mod error;
 mod ids;
 
+#[cfg(feature = "gpu")]
+pub mod gpu_metrics;
+
 pub use error::{Error, Result};
 pub use ids::{BodyId, JointId, ParticleId, ShapeId, WorldId};
 

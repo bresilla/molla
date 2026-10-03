@@ -1,0 +1,48 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.07s
+     Running tests/featherstone_disabled_joints.rs (target/debug/deps/featherstone_disabled_joints-2518add631e2cc96)
+
+running 1 test
+test gpu_disabled_joints_freeze_relative_motion_and_transmit_child_loads ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 22.69s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.88s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 1 test
+test rigid_world::gpu::scale_tests::radial_point_zero_cap_first_step_stages ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } isolated_radial_cap=true
+radial_host a=DVec3(1.2, -0.4, 0.8) b=DVec3(2.2, -0.3999999999999999, 0.8) delta=DVec3(1.0000000000000002, 1.1102230246251565e-16, 0.0) q=[0.0, 0.0, 0.0, 1.0, 1.0000000000000002, 1.1102230246251565e-16, 0.0, 0.0, 3.469446951953614e-18, 0.0, 1.0]
+distance_scale_stage_wait stage=initial-position-tail
+distance_scale_stage_complete stage=initial-position-tail
+radial_position_tails=[0.0, 0.0, 0.0, 0.0, 2.852035e-8, -4.7117005e-8, -4.4505693e-8, 0.0]
+distance_scale_stage_wait stage=isolated-refresh
+distance_scale_stage_complete stage=isolated-refresh
+distance_scale_stage_wait stage=refreshed-pose
+distance_scale_stage_complete stage=refreshed-pose
+distance_scale_stage_wait stage=refreshed-position-tail
+distance_scale_stage_complete stage=refreshed-position-tail
+refreshed_position_error=4.440892099e-15
+distance_scale_stage_wait stage=isolated-predictor
+distance_scale_stage_complete stage=isolated-predictor
+distance_scale_stage_wait stage=isolated-radial-status
+distance_scale_stage_complete stage=isolated-radial-status
+distance_scale_stage_wait stage=isolated-radial-reaction
+distance_scale_stage_complete stage=isolated-radial-reaction
+distance_scale_stage_wait stage=isolated-radial-response
+distance_scale_stage_complete stage=isolated-radial-response
+radial_device status=0 row=3 reaction=[0.7745072, 1.0318509e-15, -2.0637018e-15, 0.0, 4e-45, 0.0, 0.0, 0.0] response=[0.7745072, 1.0318509e-15, -2.0637018e-15, 0.0]
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 238 filtered out; finished in 52.94s
+

@@ -1,0 +1,32 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.63s
+     Running tests/runtime_multidof_limits.rs (target/debug/deps/runtime_multidof_limits-6170a08f61f0cbf7)
+
+running 2 tests
+bounded_xyz axis=0 angles=[0.10278290508160513, -0.2875747399030655, 0.11334541005059123] violation=2.7829050816051276e-3
+
+thread 'd6_angular_projection_satisfies_xyz_bounds_and_keeps_free_response' (1019523) panicked at crates/molla-solvers/tests/runtime_multidof_limits.rs:67:5:
+axis=0 violation=2.7829050816051276e-3
+bounded_xyz axis=0 angles=[0.10854314978835354, -1.5676642356355175, -0.09145550021266885] violation=8.543149788353535e-3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'd6_near_gimbal_projection_satisfies_bounds_and_keeps_free_response' (1019524) panicked at crates/molla-solvers/tests/runtime_multidof_limits.rs:67:5:
+axis=0 violation=8.543149788353535e-3
+test d6_angular_projection_satisfies_xyz_bounds_and_keeps_free_response ... FAILED
+test d6_near_gimbal_projection_satisfies_bounds_and_keeps_free_response ... FAILED
+
+failures:
+
+failures:
+    d6_angular_projection_satisfies_xyz_bounds_and_keeps_free_response
+    d6_near_gimbal_projection_satisfies_bounds_and_keeps_free_response
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_multidof_limits`
+make: *** [Makefile:132: test] Error 101

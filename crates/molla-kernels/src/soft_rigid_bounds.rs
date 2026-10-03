@@ -54,11 +54,14 @@ impl SoftRigidBoundsKernel {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let descriptors = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("FEM scalar bounds"),
-            contents: bytemuck::cast_slice(bounds),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let descriptors = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("FEM scalar bounds"),
+                contents: bytemuck::cast_slice(bounds),
+                usage: wgpu::BufferUsages::STORAGE,
+            }
+        );
         let entries: Vec<_> = (0..5)
             .map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
@@ -136,11 +139,14 @@ impl SoftRigidBoundsKernel {
                 "invalid coupled bound buffers or timestep".into(),
             ));
         }
-        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&[dt.to_bits(), base, self.count, 0]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let params = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&[dt.to_bits(), base, self.count, 0]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let buffers = [&self.descriptors, coordinates, contacts, status, &params];
         let entries: Vec<_> = buffers
             .iter()

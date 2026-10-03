@@ -25,7 +25,7 @@ fn bounded_active_set_matches_dense_path_through_clamps_and_releases() {
                 })
                 .collect();
             let expected = bounded_solve(&matrix, &rhs, &bounds).unwrap();
-            let actual = bounded_solve_inner::<true>(&matrix, &rhs, &bounds).unwrap();
+            let actual = bounded_solve_inner::<true, false>(&matrix, &rhs, &bounds).unwrap();
             assert_eq!(actual, expected);
         }
     }

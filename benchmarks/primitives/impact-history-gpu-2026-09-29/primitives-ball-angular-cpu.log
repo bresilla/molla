@@ -1,0 +1,38 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.82s
+     Running unittests src/lib.rs (target/debug/deps/molla_sim-0ea3f5e440833e76)
+
+running 1 test
+test joint_control::coupled_stop_tests::ball_activation_keeps_partial_points_and_caps_nonstructural ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.00s
+
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.00s
+     Running tests/standalone_ball_limits.rs (target/debug/deps/standalone_ball_limits-adc9ba00fff1bd58)
+
+running 1 test
+ball_angular_response case=0 angular_error=8.788849946e-1 linear_error=1.329157476e0 rotation_error=1.659904674e-16 anchor_error=2.719479911e-16
+
+thread 'cpu_raw_ball_partial_points_intervals_and_caps_use_physical_angular_rows' (4172693) panicked at crates/molla-solvers/tests/standalone_ball_limits.rs:195:9:
+assertion failed: angular_error <= 0.01 * case.acceleration.length().max(1.)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_raw_ball_partial_points_intervals_and_caps_use_physical_angular_rows ... FAILED
+
+failures:
+
+failures:
+    cpu_raw_ball_partial_points_intervals_and_caps_use_physical_angular_rows
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p molla-solvers --test standalone_ball_limits`
+make: *** [Makefile:504: test-primitives-ball-angular-cpu] Error 101

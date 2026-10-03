@@ -1,0 +1,172 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.20s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 5 tests
+test coupled_constraints::tests::bounded_null_response_effort_and_invalid_domains_are_explicit ... ok
+test coupled_constraints::tests::unilateral_joint_activation_and_static_promotion_use_global_solution ... ok
+test coupled_constraints::tests::mixed_disk_scalar_solution_and_infeasible_rows ... ok
+test coupled_constraints::tests::bounded_feedback_and_friction_match_independent_active_set_oracle ... ok
+test coupled_constraints::tests::satisfied_zero_response_rows_coexist_with_contact_and_faults_are_explicit ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 127 filtered out; finished in 0.01s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 5 tests
+test constraint_allocation::tests::tangent_affine_disk_intersection_retains_its_unique_impulse ... ok
+test constraint_allocation::tests::objective_linear_part_and_unilateral_feasibility_are_preserved ... ok
+test constraint_allocation::tests::redundant_bilateral_rows_leave_strictly_inactive_stop_at_exact_zero ... ok
+test constraint_allocation::tests::redundant_interval_rows_preserve_caps_points_and_minimum_norm ... ok
+test constraint_allocation::tests::redundant_allocation_has_analytic_interior_and_capped_solutions ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 127 filtered out; finished in 0.00s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 26 tests
+test impact_constraints::tests::invalid_indefinite_and_nonfinite_inputs_are_rejected ... ok
+test impact_constraints::tests::active_set_checks_inactive_rows_and_preserves_bilateral_equalities ... ok
+test impact_constraints::tests::midpoint_capture_reports_average_zero_not_final_zero ... ok
+test impact_constraints::tests::midpoint_normal_bounce_matches_authored_coefficient_and_preserves_momentum ... ok
+test impact_constraints::tests::newton_rebound_mass_speed_sweep_and_energy ... ok
+test impact_constraints::tests::joint_coupling_is_solved_before_friction_mode_promotion ... ok
+test impact_constraints::tests::midpoint_friction_removes_the_oblique_energy_counterexample ... ok
+test impact_constraints::tests::normal_tangent_coupling_has_no_associated_cone_dilatancy ... ok
+test impact_constraints::tests::newton_normal_restitution_alone_is_not_an_oblique_energy_certificate ... ok
+test impact_constraints::tests::static_capture_promotion_and_initial_dynamic_mode ... ok
+test impact_constraints::tests::sliding_cap_includes_base_and_solved_normal_impulse ... ok
+test impact_constraints::tests::target_and_capacity_overflow_fail_closed ... ok
+test impact_constraints::tests::midpoint_coupled_contacts_and_homogeneous_joints_have_nonpositive_work ... ok
+test impact_constraints::tests::two_body_impact_conserves_momentum_and_measures_energy_loss ... ok
+test impact_constraints::tests::midpoint_rejects_stale_event_speed_and_separating_active_contacts ... ok
+test impact_constraints::tests::tangent_basis_rotation_preserves_world_impulse ... ok
+test impact_constraints::tests::bounded_scalars_handle_prescribed_null_effort_and_reject_invalid_domains ... ok
+test impact_constraints::tests::separated_and_zero_load_contacts_cannot_generate_friction ... ok
+test impact_constraints::tests::coupled_contacts_preserve_response_under_block_permutation ... ok
+test impact_constraints::tests::rank_deficient_tangent_response_remains_bounded ... ok
+test impact_constraints::tests::nonnegative_joint_couples_to_restitution_normal ... ok
+test impact_constraints::tests::bounded_scalars_match_independent_box_oracle_with_bilateral_coupling ... ok
+test impact_constraints::tests::infeasible_immovable_rows_fail_closed_and_empty_problem_succeeds ... ok
+test impact_constraints::tests::nearly_parallel_scalar_rows_release_inactive_impulses_with_bilateral_rows ... ok
+test impact_constraints::tests::midpoint_passive_oblique_impacts_dissipate_across_mass_friction_and_restitution ... ok
+test impact_constraints::tests::nearly_parallel_contact_normals_release_inactive_impulses ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 106 filtered out; finished in 0.11s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: variant `Interval` is never constructed
+  --> crates/molla-solvers/src/coupled_constraints.rs:15:5
+   |
+ 7 | pub(crate) enum Domain {
+   |                 ------ variant in this enum
+...
+15 |     Interval {
+   |     ^^^^^^^^
+   |
+   = note: `Domain` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.87s
+     Running tests/articulated_impact.rs (target/debug/deps/articulated_impact-36a1276feece47f0)
+
+running 13 tests
+test off_center_two_body_friction_conserves_linear_and_angular_momentum ... ok
+test moving_support_work_explains_dynamic_energy_gain ... ok
+test moving_surface_transfers_work_and_ignores_normal_belt_velocity ... ok
+test world_hinge_uses_pivot_inertia_and_preserves_the_locked_motion ... ok
+test fixed_tree_impact_transfers_through_the_articulation ... ok
+test simultaneous_manifold_contacts_are_order_independent_in_body_response ... ok
+test inherited_kinematic_velocity_uses_physical_not_relative_joint_energy ... ok
+test off_center_rotated_com_and_tensor_match_analytic_impulse ... ok
+test two_body_rebound_momentum_endpoint_exchange_and_force_preservation ... ok
+test scalar_joint_row_couples_to_contact_and_failures_leave_state_unchanged ... ok
+test oblique_friction_impacts_dissipate_with_world_frame_covariance ... ok
+test bounded_feedback_keeps_physical_rates_and_work_and_rejects_invalid_edits ... ok
+test nonnegative_scalar_response_and_late_failure_are_transactional ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+warning: variant `Interval` is never constructed
+  --> crates/molla-solvers/src/coupled_constraints.rs:15:5
+   |
+ 7 | pub(crate) enum Domain {
+   |                 ------ variant in this enum
+...
+15 |     Interval {
+   |     ^^^^^^^^
+   |
+   = note: `Domain` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (lib) generated 1 warning
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.66s
+     Running tests/runtime_mixed_contacts_cpu.rs (target/debug/deps/runtime_mixed_contacts_cpu-8c046ec7274fc43a)
+
+running 7 tests
+test locked_cone_contact_has_complete_cpu_torque_balance ... ok
+test unrelated_sleeping_island_does_not_change_mixed_cpu_response ... ok
+test mixed_cpu_distance_break_uses_common_reaction_and_continues ... ok
+test distance_and_contact_share_one_cpu_impulse_solution ... ok
+test distance_between_two_contacts_transfers_friction_and_preserves_endpoint_exchange ... ok
+test incompatible_immovable_mixed_row_rolls_back_and_recovers ... ok
+test loaded_scalar_contact_stops_release_and_survive_limit_edits ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error: variant `Interval` is never constructed
+  --> crates/molla-solvers/src/coupled_constraints.rs:15:5
+   |
+ 7 | pub(crate) enum Domain {
+   |                 ------ variant in this enum
+...
+15 |     Interval {
+   |     ^^^^^^^^
+   |
+   = note: `Domain` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `-D dead-code` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: could not compile `molla-solvers` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+make: *** [Makefile:359: clippy-check] Error 101

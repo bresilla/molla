@@ -1,0 +1,34 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 6 tests
+test coupled_constraint_gpu::tests::redundant_allocation_matches_minimum_norm_across_scales_rotations_and_order ... ok
+test coupled_constraint_gpu::tests::redundant_bilateral_rows_keep_inactive_stop_exactly_zero ... ok
+test coupled_constraint_gpu::tests::redundant_bounded_allocation_matches_independent_capped_minimum_norm ... ok
+test coupled_constraint_gpu::tests::retained_device_sequence_changes_domains_counts_and_status ... ok
+test coupled_constraint_gpu::tests::sticky_faults_retire_and_recover_mixed_outputs ... island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[131072, 0, 0, 0] residual=0
+island=0 diagnostic=[131072, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[262144, 0, 1065353216, 1073741826] residual=1
+island=0 diagnostic=[262144, 0, 1065353216, 1073741826] residual=1
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+island=0 diagnostic=[65536, 0, 0, 0] residual=0
+ok
+test coupled_constraint_gpu::tests::zero_response_scalar_domains_fail_only_when_unbounded ... island=0 diagnostic=[524288, 0, 0, 0] residual=0
+island=0 diagnostic=[524288, 0, 0, 0] residual=0
+ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 239 filtered out; finished in 109.73s
+

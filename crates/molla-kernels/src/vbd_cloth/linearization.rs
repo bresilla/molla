@@ -26,7 +26,7 @@ impl MaterialLinearization {
         let cache_bytes = u64::from(tets.max(1)) * 432;
         if device.limits().max_bind_groups < 7
             || device.limits().max_storage_buffers_per_shader_stage < 47
-            || cache_bytes > u64::from(device.limits().max_storage_buffer_binding_size)
+            || cache_bytes > device.limits().max_storage_buffer_binding_size
             || cache_bytes > device.limits().max_buffer_size
         {
             return Err(Error::Build(
@@ -90,12 +90,15 @@ impl MaterialLinearization {
             cache: None,
         });
         let allocate = |label| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: u64::from(particles) * 16,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: u64::from(particles) * 16,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let cache_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("cache material tangents"),
@@ -125,12 +128,15 @@ impl MaterialLinearization {
             batches: Vec::new(),
             cache_batches: Vec::new(),
             cache_ready: std::sync::atomic::AtomicBool::new(false),
-            tangent_cache: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("material stress derivative cache"),
-                size: cache_bytes,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            }),
+            tangent_cache: molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("material stress derivative cache"),
+                    size: cache_bytes,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                }
+            ),
             residual: allocate("material signed residual"),
             action: allocate("material tangent action"),
         })

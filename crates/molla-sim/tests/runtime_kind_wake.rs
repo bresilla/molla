@@ -29,11 +29,13 @@ fn kind_transition_activation_and_fixed_velocity_follow_wake_policy() {
         for to in kinds {
             for wake in [false, true] {
                 let mut scene = RigidScene::new().unwrap();
-                let a = scene.insert_body(BodyDesc {
-                    kind: from,
-                    velocity: SpatialVector::new(Vec3::X, Vec3::Z),
-                    ..Default::default()
-                }).unwrap();
+                let a = scene
+                    .insert_body(BodyDesc {
+                        kind: from,
+                        velocity: SpatialVector::new(Vec3::X, Vec3::Z),
+                        ..Default::default()
+                    })
+                    .unwrap();
                 let b = scene.insert_body(BodyDesc::default()).unwrap();
                 let activation = [scene.activation_stamp(a), scene.activation_stamp(b)];
                 let pose = scene.body_pose(a).unwrap();
@@ -43,10 +45,18 @@ fn kind_transition_activation_and_fixed_velocity_follow_wake_policy() {
                 assert_eq!(scene.body(a).unwrap().kind, to);
                 assert_eq!(scene.body_pose(a).unwrap(), pose);
                 assert_eq!(scene.body_mass_properties(a).unwrap(), mass);
-                assert_eq!(scene.body_velocity(a).unwrap(),
-                    if to == BodyKind::Fixed { SpatialVector::ZERO } else { velocity });
-                assert_eq!(scene.activation_stamp(a) != activation[0],
-                    from != to && to != BodyKind::Fixed && wake);
+                assert_eq!(
+                    scene.body_velocity(a).unwrap(),
+                    if to == BodyKind::Fixed {
+                        SpatialVector::ZERO
+                    } else {
+                        velocity
+                    }
+                );
+                assert_eq!(
+                    scene.activation_stamp(a) != activation[0],
+                    from != to && to != BodyKind::Fixed && wake
+                );
                 assert_eq!(scene.activation_stamp(b), activation[1]);
                 let stamp = scene.stamp();
                 let revision = scene.revision();
@@ -67,7 +77,11 @@ fn unknown_body_kind_edit_is_atomic() {
     let stamp = scene.stamp();
     let activation = scene.activation_stamp(a);
     for wake in [false, true] {
-        assert!(scene.set_body_kind_with_wake(removed, BodyKind::Fixed, wake).is_err());
+        assert!(
+            scene
+                .set_body_kind_with_wake(removed, BodyKind::Fixed, wake)
+                .is_err()
+        );
         assert_eq!(scene.stamp(), stamp);
         assert_eq!(scene.activation_stamp(a), activation);
     }

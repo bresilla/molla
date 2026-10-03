@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.03s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 1 test
+test contact_response_gpu::coupled_tests::scalar_impulse_residue_survives_mass_response_and_rate_cancellation ... mass_response_probe impulse=[1229.7384, -2.4414063e-5] delta=[1229.7384, 614.8692, 0.0, 0.0, 0.0, 0.0] rates=[-307.4346, 614.8692, 0.0, 0.0, 0.0, 0.0] exact=1229.73837890625
+scalar_arithmetic_probe=[1229.7384, -2.4414063e-5, 1229.7384, -2.4414063e-5, -307.4346, 6.1035153e-6, -307.4346, 0.0]
+mass_response_low_probe=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } impulse=[1229.7384, -2.4414063e-5] rates=[-307.4346, 614.8692, 0.0, 0.0, 0.0, 0.0] absolute_kkt=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 242 filtered out; finished in 2.08s
+

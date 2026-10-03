@@ -1,0 +1,35 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.76s
+     Running tests/runtime_loop_compliance.rs (target/debug/deps/runtime_loop_compliance-2817011fbcfa4c19)
+
+running 1 test
+test gpu_general_compliant_loops_match_independent_loaded_recurrence_and_edits ... loop trace JointHandle(44): CompliantLoopRow { metadata: [-1, 25, 0, 1], child_linear: [0.7648422, 0.64421767, 1.5434942e-8, -3.0938536e-6], child_angular: [0.0, 0.0, 0.0, -3.5707282e-9], parent_linear: [-0.7648422, -0.64421767, -1.5434942e-8, -inf], parent_angular: [0.0, 0.0, 0.0, inf], feedback: [631.65466, 30.15929, 0.0, 1.0] }
+loop trace JointHandle(44): CompliantLoopRow { metadata: [-1, 25, 1, 1], child_linear: [-0.59336376, 0.70446634, -0.38941833, 0.020002445], child_angular: [-0.0, 0.0, 0.0, 0.07], parent_linear: [0.59336376, -0.70446634, 0.38941833, -inf], parent_angular: [0.0, 0.0, 0.0, inf], feedback: [631.65466, 30.15929, 0.0, 1.0] }
+loop trace JointHandle(44): CompliantLoopRow { metadata: [-1, 25, 2, 1], child_linear: [-0.25087017, 0.29784355, 0.921061, 9.764917e-7], child_angular: [0.0, -0.0, 0.0, -3.302039e-9], parent_linear: [0.25087017, -0.29784355, -0.921061, -inf], parent_angular: [0.0, 0.0, 0.0, inf], feedback: [631.65466, 30.15929, 0.0, 1.0] }
+loop trace JointHandle(44): CompliantLoopRow { metadata: [-1, 25, 4, 1], child_linear: [0.0, 0.0, 0.0, 1.9771136e-9], child_angular: [-0.59336376, 0.70446634, -0.38941833, 0.0], parent_linear: [0.0, 0.0, 0.0, -inf], parent_angular: [0.59336376, -0.70446634, 0.38941833, inf], feedback: [631.65466, 30.15929, 0.0, 1.0] }
+loop trace JointHandle(44): CompliantLoopRow { metadata: [-1, 25, 5, 1], child_linear: [0.0, 0.0, 0.0, 2.9039013e-8], child_angular: [-0.25087017, 0.29784355, 0.921061, 0.0], parent_linear: [0.0, 0.0, 0.0, -inf], parent_angular: [0.25087017, -0.29784355, -0.921061, inf], feedback: [631.65466, 30.15929, 0.0, 1.0] }
+loop trace JointHandle(44): CompliantLoopRow { metadata: [-1, 25, 0, 1], child_linear: [0.7648422, 0.64421767, 1.5434942e-8, -3.5306439e-6], child_angular: [0.0, 0.0, 0.0, 1.9406685e-5], parent_linear: [-0.7648422, -0.64421767, -1.5434942e-8, -inf], parent_angular: [0.0, 0.0, 0.0, inf], feedback: [631.65466, 30.15929, 0.0, 1.0] }
+loop trace JointHandle(44): CompliantLoopRow { metadata: [-1, 25, 1, 1], child_linear: [-0.59336376, 0.70446634, -0.38941833, 0.018690292], child_angular: [-0.0, 0.0, 0.0, -0.078770995], parent_linear: [0.59336376, -0.70446634, 0.38941833, -inf], parent_angular: [0.0, 0.0, 0.0, inf], feedback: [631.65466, 30.15929, 0.0, 1.0] }
+loop trace JointHandle(44): CompliantLoopRow { metadata: [-1, 25, 2, 1], child_linear: [-0.25087017, 0.29784355, 0.921061, 1.1855736e-6], child_angular: [0.0, -0.0, 0.0, -6.127608e-6], parent_linear: [0.25087017, -0.29784355, -0.921061, -inf], parent_angular: [0.0, 0.0, 0.0, inf], feedback: [631.65466, 30.15929, 0.0, 1.0] }
+loop trace JointHandle(44): CompliantLoopRow { metadata: [-1, 25, 4, 1], child_linear: [0.0, 0.0, 0.0, 1.9771136e-9], child_angular: [-0.59336376, 0.70446634, -0.38941833, -1.2403117e-8], parent_linear: [0.0, 0.0, 0.0, -inf], parent_angular: [0.59336376, -0.70446634, 0.38941833, inf], feedback: [631.65466, 30.15929, 0.0, 1.0] }
+loop trace JointHandle(44): CompliantLoopRow { metadata: [-1, 25, 5, 1], child_linear: [0.0, 0.0, 0.0, 2.9039013e-8], child_angular: [-0.25087017, 0.29784355, 0.921061, -1.8217922e-7], parent_linear: [0.0, 0.0, 0.0, -inf], parent_angular: [0.25087017, -0.29784355, -0.921061, inf], feedback: [631.65466, 30.15929, 0.0, 1.0] }
+
+thread 'gpu_general_compliant_loops_match_independent_loaded_recurrence_and_edits' (3697241) panicked at crates/molla-solvers/tests/runtime_loop_compliance.rs:241:21:
+hz=60 frame=1 expected=-1.5373802747258486e1 reading=JointReaction { child: SpatialVector { linear: DVec3(9.125720977783203, -10.83044147491455, 5.986851215362549), angular: DVec3(5.69152825846686e-6, -6.757220489816973e-6, -1.747976966726128e-5) }, parent: SpatialVector { linear: DVec3(-9.125720977783203, 10.83044147491455, -5.986851215362549), angular: DVec3(-5.311634595273063e-6, 3.935194399673492e-6, 1.1793727935582865e-5) }, sample_dt: 0.016666666666666666, peak_force: 15.375943183898926, peak_torque: 1.95856046047993e-5 } Case { parent: None, child: BodyHandle(43), joint: JointHandle(44), kind: Revolute, origin: DVec3(136.0, 2.0, -3.0), direction: DVec3(-0.5933637833613874, 0.7044663052755917, -0.38941834230865047), rotation: DQuat(-0.18662454822852997, -0.06812327793826826, 0.3360626807021292, 0.920647799997774), mass: [1.0, 3.0], position: [0.0, 0.01603464487828761], velocity: [0.0, -0.15916566128264525], offset: 0.0, softness: JointSoftness { natural_frequency: 4.0, damping_ratio: 0.6 }, enabled: true }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_general_compliant_loops_match_independent_loaded_recurrence_and_edits
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 5.78s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_loop_compliance`
+make: *** [Makefile:112: test-gpu] Error 101

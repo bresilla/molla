@@ -63,7 +63,7 @@ impl CloudProcessKernel {
             || limits.max_storage_buffers_per_shader_stage < 7
             || limits.max_compute_workgroup_storage_size < 1024
             || buffers.iter().zip(sizes).any(|(b, size)| {
-                b.size() < size || b.size() > limits.max_storage_buffer_binding_size as u64
+                b.size() < size || b.size() > limits.max_storage_buffer_binding_size
             })
         {
             return Err(Error::Gpu(
@@ -71,24 +71,30 @@ impl CloudProcessKernel {
             ));
         }
         let storage = |size, label| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let ranks = storage(capacity as u64 * 8, "molla::cloud local ranks");
         let blocks = storage(
             capacity.div_ceil(256) as u64 * 8,
             "molla::cloud block offsets",
         );
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::cloud parameters"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::cloud parameters"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let all = [
             buffers[0], buffers[1], buffers[2], &ranks, &blocks, buffers[3], buffers[4], &uniform,
         ];
@@ -163,8 +169,7 @@ impl CloudProcessKernel {
             (1 + 5 * self.max_jobs as u64) * 4,
         ];
         if buffers.iter().zip(sizes).any(|(buffer, size)| {
-            buffer.size() < size
-                || buffer.size() > device.limits().max_storage_buffer_binding_size as u64
+            buffer.size() < size || buffer.size() > device.limits().max_storage_buffer_binding_size
         }) {
             return Err(Error::Gpu(
                 "cloud processing: invalid output capacity".into(),
@@ -232,7 +237,8 @@ impl CloudProcessKernel {
         if points == 0 {
             return Ok(());
         }
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.uniform,
             0,
             bytemuck::cast_slice(&[points, jobs, points.div_ceil(256), 0]),

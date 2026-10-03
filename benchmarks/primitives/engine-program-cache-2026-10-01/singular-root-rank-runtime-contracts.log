@@ -1,0 +1,49 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling wgpu-types v29.0.4
+   Compiling molla-core v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-core)
+   Compiling molla-math v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-math)
+   Compiling molla-autograd v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-autograd)
+   Compiling molla-optim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-optim)
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling wgpu-hal v29.0.4
+   Compiling wgpu-core-deps-windows-linux-android v29.0.4
+   Compiling wgpu-core v29.0.4
+   Compiling wgpu v29.0.4
+   Compiling molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+   Compiling molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.55s
+     Running tests/runtime_primitives_contract_gpu.rs (target/debug/deps/runtime_primitives_contract_gpu-17b111111ba5223d)
+
+running 12 tests
+test runtime_gpu_distance_mutation_is_solved_and_can_be_removed ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_gpu_empty_reaction_readout_stays_on_device ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_gpu_empty_scene_and_invalid_step_are_safe ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_gpu_fault_is_atomic_and_corrected_inputs_can_resume ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+
+thread 'runtime_gpu_fault_is_atomic_and_corrected_inputs_can_resume' (627951) panicked at crates/molla-solvers/tests/runtime_primitives_contract_gpu.rs:561:34:
+called `Result::unwrap_err()` on an `Ok` value: ()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test runtime_gpu_free_body_matches_cpu_and_publishes_velocity ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test runtime_gpu_mutations_rebuild_and_preserve_handles ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+make[1]: *** [Makefile:170: test-gpu] Terminated
+make: *** [Makefile:197: test-primitives-runtime-gpu] Terminated

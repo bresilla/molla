@@ -137,19 +137,25 @@ impl RobustLossKernel {
         let usage_storage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC;
-        let in_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::robust_loss input"),
-            size: in_bytes,
-            usage: usage_storage,
-            mapped_at_creation: false,
-        });
-        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::robust_loss output"),
-            size: out_bytes,
-            usage: usage_storage,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&in_buf, 0, bytemuck::cast_slice(residuals));
+        let in_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::robust_loss input"),
+                size: in_bytes,
+                usage: usage_storage,
+                mapped_at_creation: false,
+            }
+        );
+        let out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::robust_loss output"),
+                size: out_bytes,
+                usage: usage_storage,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &in_buf, 0, bytemuck::cast_slice(residuals));
 
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::robust_loss io bg"),
@@ -185,13 +191,16 @@ impl RobustLossKernel {
             param1: 0.0,
             _pad: 0,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::robust_loss uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::robust_loss uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_u = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::robust_loss uniforms bg"),
             layout: &self.layout_uniforms,
@@ -216,12 +225,15 @@ impl RobustLossKernel {
             pass.dispatch_workgroups(groups, 1, 1);
         }
 
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::robust_loss stage"),
-            size: out_bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::robust_loss stage"),
+                size: out_bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         encoder.copy_buffer_to_buffer(&out_buf, 0, &stage, 0, out_bytes);
         queue.submit(std::iter::once(encoder.finish()));
 
@@ -238,7 +250,7 @@ impl RobustLossKernel {
         receiver
             .recv()
             .map_err(|e| Error::Gpu(format!("robust_loss readback recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = molla_core::gpu_readback!(slice);
         let raw: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         stage.unmap();

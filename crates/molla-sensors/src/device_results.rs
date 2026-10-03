@@ -111,7 +111,7 @@ impl SensorFramePool {
         for spec in specs {
             let bytes = spec.bytes()?;
             if bytes > device.limits().max_buffer_size
-                || bytes > u64::from(device.limits().max_storage_buffer_binding_size)
+                || bytes > device.limits().max_storage_buffer_binding_size
             {
                 return Err(Error::Storage(
                     "sensor output: device capacity exceeded".into(),
@@ -1025,7 +1025,7 @@ mod tests {
                 .encode_output(
                     &mut pool,
                     &specs,
-                    &[0..0],
+                    std::slice::from_ref(&(0..0)),
                     Default::default(),
                     |_, _, _, _| Ok(0),
                 )
@@ -1093,7 +1093,7 @@ mod tests {
                 .encode_output(
                     &mut pool,
                     &specs,
-                    &[0..0],
+                    std::slice::from_ref(&(0..0)),
                     Default::default(),
                     |_, _, _, _| Ok(0),
                 )
@@ -1112,7 +1112,7 @@ mod tests {
                         &[&receipt],
                         &mut foreign_pool,
                         &specs,
-                        &[0..0],
+                        std::slice::from_ref(&(0..0)),
                         Default::default(),
                         |_, _, _| panic!("foreign pool")
                     )
@@ -1125,7 +1125,7 @@ mod tests {
                         &[&receipt],
                         &mut pool,
                         &[SensorChannelSpec::of::<i32>(0)],
-                        &[0..0],
+                        std::slice::from_ref(&(0..0)),
                         Default::default(),
                         |_, _, _| panic!("wrong layout")
                     )
@@ -1136,7 +1136,7 @@ mod tests {
                     &[&receipt],
                     &mut pool,
                     &specs,
-                    &[0..0],
+                    std::slice::from_ref(&(0..0)),
                     Default::default(),
                     |encoder, inputs, outputs| {
                         let channel = inputs.channel::<u32>(0, 0)?;
@@ -1169,7 +1169,7 @@ mod tests {
                                     &[&stage],
                                     &mut more,
                                     &specs,
-                                    &[0..0],
+                                    std::slice::from_ref(&(0..0)),
                                     Default::default(),
                                     |_, _, _| Ok(1)
                                 )
@@ -1206,7 +1206,7 @@ mod tests {
             .encode_output(
                 &mut pool,
                 &specs,
-                &[0..0],
+                std::slice::from_ref(&(0..0)),
                 Default::default(),
                 |_, _, _, _| Ok(0),
             )
@@ -1218,7 +1218,7 @@ mod tests {
                     &[&last],
                     &mut pool,
                     &specs,
-                    &[0..0],
+                    std::slice::from_ref(&(0..0)),
                     Default::default(),
                     |_, inputs, _| {
                         assert!(inputs.channel::<u32>(0, 0)?.is_empty());
@@ -1236,7 +1236,7 @@ mod tests {
                     &[&last],
                     &mut pool,
                     &specs,
-                    &[0..0],
+                    std::slice::from_ref(&(0..0)),
                     Default::default(),
                     |_, _, _| panic!("output limit")
                 )
@@ -1284,7 +1284,7 @@ mod tests {
                 .encode_output(
                     &mut pool,
                     &specs,
-                    &[0..1],
+                    std::slice::from_ref(&(0..1)),
                     Default::default(),
                     |_, _, _, _| Ok(0),
                 )
@@ -1317,7 +1317,7 @@ mod tests {
                 .encode_output(
                     &mut pool,
                     &specs,
-                    &[0..1],
+                    std::slice::from_ref(&(0..1)),
                     Default::default(),
                     |_, _, _, _| Ok(0),
                 )
@@ -1333,7 +1333,7 @@ mod tests {
                             .encode_output(
                                 &mut pool,
                                 &specs,
-                                &[0..1],
+                                std::slice::from_ref(&(0..1)),
                                 Default::default(),
                                 |_, _, _, _| Err(Error::Gpu("injected producer failure".into()))
                             )
@@ -1404,7 +1404,7 @@ mod tests {
                 .encode_output(
                     &mut pool,
                     &specs,
-                    &[0..0],
+                    std::slice::from_ref(&(0..0)),
                     Default::default(),
                     |_, _, _, _| { Err(Error::Gpu("injected encode error".into())) }
                 )
@@ -1418,7 +1418,7 @@ mod tests {
                 let _ = panicked.encode_output(
                     &mut pool,
                     &specs,
-                    &[0..0],
+                    std::slice::from_ref(&(0..0)),
                     Default::default(),
                     |_, _, _, _| panic!("injected"),
                 );
@@ -1432,7 +1432,7 @@ mod tests {
             .encode_output(
                 &mut pool,
                 &specs,
-                &[0..0],
+                std::slice::from_ref(&(0..0)),
                 Default::default(),
                 |_, _, _, _| Ok(0),
             )
@@ -1479,7 +1479,7 @@ mod tests {
                     .encode_output(
                         &mut pool,
                         &specs,
-                        &[0..1],
+                        std::slice::from_ref(&(0..1)),
                         Default::default(),
                         |_, _, _, _| Ok(0),
                     )
@@ -1493,7 +1493,7 @@ mod tests {
                 .encode_output(
                     &mut other,
                     &specs,
-                    &[0..1],
+                    std::slice::from_ref(&(0..1)),
                     Default::default(),
                     |_, _, _, _| panic!("must not encode")
                 )
@@ -1533,10 +1533,16 @@ mod tests {
         let encode = |pool: &mut SensorFramePool| {
             let mut batch = SensorCommandBatch::new(&engine).unwrap();
             let receipt = batch
-                .encode_output(pool, &specs, &[0..4], Default::default(), |_, _, encoder, outputs| {
-                    encoder.clear_buffer(&outputs[0], 0, None);
-                    Ok(1)
-                })
+                .encode_output(
+                    pool,
+                    &specs,
+                    std::slice::from_ref(&(0..4)),
+                    Default::default(),
+                    |_, _, encoder, outputs| {
+                        encoder.clear_buffer(&outputs[0], 0, None);
+                        Ok(1)
+                    },
+                )
                 .unwrap()
                 .unwrap();
             let submitted = batch.submit().unwrap();
@@ -1561,9 +1567,13 @@ mod tests {
         let mut batch = SensorCommandBatch::new(&engine).unwrap();
         assert!(
             batch
-                .encode_output(&mut pool, &specs, &[0..4], Default::default(), |_, _, _, _| {
-                    panic!("must not encode")
-                })
+                .encode_output(
+                    &mut pool,
+                    &specs,
+                    std::slice::from_ref(&(0..4)),
+                    Default::default(),
+                    |_, _, _, _| { panic!("must not encode") }
+                )
                 .is_err()
         );
         assert_eq!(pool.stats().reserved_frames, 2);

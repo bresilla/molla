@@ -219,7 +219,7 @@ fn independent_grids_chain_typed_clouds_with_offsets_and_large_cell_dispatch() {
             &[&first.frame],
             &mut shifted_pool,
             &specs,
-            &[3..260],
+            std::slice::from_ref(&(3..260)),
             stamp(2),
             |encoder, inputs, outputs| {
                 let input = inputs.channel::<CloudPoint>(0, 0)?;
@@ -364,7 +364,10 @@ fn warm_four_slot_grids_reuse_bindings_across_specs_and_snapshot_inputs() {
     )
     .unwrap();
     let snapshot = snapshots
-        .try_capture(&[input.readback_source(0..257).unwrap()], stamp(1))
+        .try_capture(
+            std::slice::from_ref(&(input.readback_source(0..257).unwrap())),
+            stamp(1),
+        )
         .unwrap()
         .unwrap();
     let mut p = grid(&engine, 257, 257);

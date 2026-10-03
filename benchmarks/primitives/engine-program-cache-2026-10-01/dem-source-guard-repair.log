@@ -1,0 +1,57 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.48s
+     Running tests/tire_dem_gpu.rs (target/debug/deps/tire_dem_gpu-a8965b4f4aefbb16)
+
+running 32 tests
+test tire_dem_fem_terrain_owner_gpu_sparse_lbvh_step_matches_reference ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_built_grid_step_matches_host_grid_reference ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_built_lbvh_tree_rows_feed_resident_sparse_step ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_grid_step_matches_reference ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_impulses_match_reference ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_large_sparse_lbvh_dispatch_stress_matches_reference ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_lbvh_step_matches_sparse_lbvh_reference ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_radix_unbounded_grid_matches_host_oracle ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_sparse_lbvh_leaf_rows_match_cpu_sorted_leaf_chunks ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_sparse_lbvh_morton_order_matches_cpu_oracle ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_sparse_lbvh_tree_rows_match_cpu_complete_binary_oracle ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_sparse_lbvh_tree_rows_pad_non_power_of_two_leaves ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_step_matches_reference ... ignored, needs a real wgpu adapter
+test tire_dem_gpu_unbounded_radix_grid_step_matches_host_grid_reference ... ignored, needs a real wgpu adapter
+test tire_dem_fem_terrain_owner_exports_height_sinkage_and_surface_velocity ... ok
+test tire_dem_fem_terrain_owner_steps_owned_sparse_lbvh_state ... ok
+test tire_dem_resident_fem_terrain_owner_reseed_refreshes_gpu_state_and_bounds ... ignored, needs a real wgpu adapter
+test tire_dem_resident_fem_terrain_owner_steps_and_keeps_gpu_terrain ... ignored, needs a real wgpu adapter
+test tire_dem_resident_gpu_lbvh_builder_feeds_sparse_step_without_tree_readback ... ignored, needs a real wgpu adapter
+test tire_dem_resident_gpu_lbvh_builder_large_sparse_bed_matches_reference ... ignored, needs a real wgpu adapter
+test tire_dem_reference_step_solves_grain_floor_and_tire_contacts ... ok
+test tire_dem_grid_reference_matches_dense_step_for_local_contacts ... ok
+test tire_dem_resident_state_sparse_lbvh_step_ping_pongs_without_reupload ... ignored, needs a real wgpu adapter
+test tire_dem_resident_terrain_raster_matches_cpu_export_without_grain_readback ... ignored, needs a real wgpu adapter
+test tire_dem_reference_applies_localized_tire_impulses ... ok
+test tire_dem_sparse_lbvh_builds_morton_sorted_sparse_tree ... ok
+test tire_dem_surface_velocity_map_exports_top_layer_velocity_for_fem_terrain ... ok
+test tire_dem_sparse_lbvh_reference_matches_dense_step_for_sparse_bed ... ok
+test tire_dem_resident_fem_owner_uses_no_readback_gpu_lbvh_builder_source_guard ... ok
+test tire_dem_unbounded_sorted_grid_keeps_all_grains_in_dense_cell ... ok
+test tire_dem_resident_owner_reseed_has_explicit_in_place_gpu_state_bridge_source_guard ... ok
+test tire_dem_sparse_lbvh_large_stress_matches_dense_step ... ok
+
+test result: ok. 12 passed; 0 failed; 20 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+error: the package 'molla-kernels' does not contain this feature: resource-counters
+help: packages with the missing feature: molla-sensors, molla-solvers
+make: *** [Makefile:167: test-gpu] Error 101

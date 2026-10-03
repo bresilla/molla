@@ -78,8 +78,7 @@ impl ContactLinearizationKernel {
             || rows.div_ceil(64) > limits.max_compute_workgroups_per_dimension
             || particles.div_ceil(64) > limits.max_compute_workgroups_per_dimension
             || sizes.iter().any(|size| {
-                *size > u64::from(limits.max_storage_buffer_binding_size)
-                    || *size > limits.max_buffer_size
+                *size > limits.max_storage_buffer_binding_size || *size > limits.max_buffer_size
             })
         {
             return Err(Error::Build(
@@ -140,14 +139,17 @@ impl ContactLinearizationKernel {
             })
         });
         let allocate = |label, size| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
         };
         Ok(Self {
             layout,
@@ -236,7 +238,7 @@ impl ContactLinearizationKernel {
         ];
         for (buffer, minimum) in inputs.iter().zip(minimums) {
             if buffer.size() < minimum
-                || buffer.size() > u64::from(device.limits().max_storage_buffer_binding_size)
+                || buffer.size() > device.limits().max_storage_buffer_binding_size
                 || !buffer.usage().contains(wgpu::BufferUsages::STORAGE)
                 || outputs.contains(buffer)
             {
@@ -245,20 +247,23 @@ impl ContactLinearizationKernel {
                 ));
             }
         }
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("contact linearization parameters"),
-            usage: wgpu::BufferUsages::UNIFORM,
-            contents: bytemuck::bytes_of(&Uniforms {
-                particles: self.particles,
-                rows: self.rows,
-                dofs: self.dofs,
-                bodies: self.bodies,
-                dt: settings.dt,
-                recovery: settings.penetration_recovery,
-                max_recovery: settings.max_recovery_speed,
-                pad: 0,
-            }),
-        });
+        let uniform = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("contact linearization parameters"),
+                usage: wgpu::BufferUsages::UNIFORM,
+                contents: bytemuck::bytes_of(&Uniforms {
+                    particles: self.particles,
+                    rows: self.rows,
+                    dofs: self.dofs,
+                    bodies: self.bodies,
+                    dt: settings.dt,
+                    recovery: settings.penetration_recovery,
+                    max_recovery: settings.max_recovery_speed,
+                    pad: 0,
+                }),
+            }
+        );
         let buffers: Vec<_> = inputs
             .into_iter()
             .chain(outputs)

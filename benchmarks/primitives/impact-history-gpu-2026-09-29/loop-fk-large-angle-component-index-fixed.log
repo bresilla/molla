@@ -1,0 +1,26 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.75s
+     Running tests/quaternion_fk_gpu.rs (target/debug/deps/quaternion_fk_gpu-82049d5bd9763968)
+
+running 2 tests
+test retained_fk_pairs_match_all_joint_kinds_and_prescribed_boundaries ... 
+thread 'retained_fk_pairs_match_all_joint_kinds_and_prescribed_boundaries' (331894) panicked at crates/molla-kernels/tests/quaternion_fk_gpu.rs:240:17:
+body=131 lane=0 error=0.021572473203835985 expected=-0.3213455832280036 actual=GpuQuaternionPair { high: [-0.2997731, 0.6123001, -0.6399826, -0.3544671], low: [-1.2985899e-8, 1.6920062e-8, -2.3030637e-8, 3.502213e-9] }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test unjointed_and_fixed_only_models_use_current_pose_without_coordinate_storage ... ok
+
+failures:
+
+failures:
+    retained_fk_pairs_match_all_joint_kinds_and_prescribed_boundaries
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+error: test failed, to rerun pass `-p molla-kernels --test quaternion_fk_gpu`
+make: *** [Makefile:112: test-gpu] Error 101

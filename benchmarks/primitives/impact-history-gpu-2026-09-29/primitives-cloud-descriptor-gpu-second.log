@@ -1,0 +1,14 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sensors v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sensors)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.03s
+     Running tests/sensor_allocation_gpu.rs (target/debug/deps/sensor_allocation_gpu-80ba1683741a594a)
+
+running 1 test
+test cloud_input_descriptors_reuse_handles_without_allocating ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.26s
+

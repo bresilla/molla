@@ -1,0 +1,21 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0599]: no variant or associated item named `from_u32` found for enum `JointType` in the current scope
+   --> crates/molla-solvers/tests/standalone_redundant_limits.rs:511:31
+    |
+511 |         let kind = JointType::from_u32(model.joint_type.host().unwrap()[j]).unwrap();
+    |                               ^^^^^^^^ variant or associated item not found in `JointType`
+    |
+help: there is an associated function `from` with a similar name
+    |
+511 -         let kind = JointType::from_u32(model.joint_type.host().unwrap()[j]).unwrap();
+511 +         let kind = JointType::from(model.joint_type.host().unwrap()[j]).unwrap();
+    |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `molla-solvers` (test "standalone_redundant_limits") due to 1 previous error
+make: *** [Makefile:506: test-primitives-redundant-limits-cpu] Error 101

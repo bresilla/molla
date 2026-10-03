@@ -1,0 +1,116 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.05s
+     Running tests/runtime_break_detachment.rs (target/debug/deps/runtime_break_detachment-9ca0ee447a1aacdd)
+
+running 4 tests
+test gpu_broken_compliant_loop_is_free_until_explicit_repair_restores_response ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+compliant break/repair phases=4 frames=64 substeps=4 position_error=7.819078877424612e-9 velocity_error=2.828209285654637e-7 reaction_error=8.241129978614481e-5
+ok
+test gpu_detached_tree_and_loop_joints_leave_no_hidden_constraint ... ok
+test gpu_loop_break_keeps_tree_load_sharing_and_unrelated_sleep ... ok
+test gpu_unrepresentable_threshold_is_rejected_without_advancing ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 415.84s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.96s
+     Running tests/runtime_joint_breakage_gpu.rs (target/debug/deps/runtime_joint_breakage_gpu-6dd9be63f1d6e0e7)
+
+running 8 tests
+test delayed_stop_peaks_produce_sequential_break_boundaries_not_frame_mean_decisions ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+test gravity_break_preserves_first_boundary_across_queued_substeps_and_continues_free_motion ... ok
+test hardware_engine::hardware_engine_identity_is_shared_within_the_test_executable ... ok
+test later_gpu_failure_rolls_back_the_original_model_and_discards_provisional_events ... post-break overflow: solver error: GPU rigid runtime solver fault 1
+ok
+test simultaneous_breaks_cross_workgroups_without_losing_triggers ... ok
+test simultaneous_gpu_channels_are_collected_before_halt_and_match_cpu ... ok
+test subthreshold_and_sleeping_frames_keep_compact_transfer_and_zero_waits_for_a_sample ... ok
+test tree_and_loop_joint_kinds_detach_at_the_same_support_load ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 104.35s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.90s
+     Running tests/kinematic_motion_gpu.rs (target/debug/deps/kinematic_motion_gpu-b0738457db09a91d)
+
+running 2 tests
+test gpu_driven_prediction_and_repeated_redrift_match_cpu_across_tree_kinds ... GPU prescribed tree prediction/redrift peak=6.091392592074144e-6
+GPU prescribed prediction warm resources=Some([83, 545664, 12, 3, 3])
+GPU prescribed compensated travel=4.3009256955883757e-7, expected=4.3009245957105255e-7
+ok
+test zero_coordinate_compensation_retains_redrift_residues_and_resets_explicitly ... zero-coordinate GPU position residue=[3.1e-7, 0.0, 0.0, 0.0]
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 209.11s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.13s
+     Running tests/runtime_kinematic_reactions.rs (target/debug/deps/runtime_kinematic_reactions-2288fee48f251a9c)
+
+running 4 tests
+test gpu_driven_motion_reactions_break_continuation_and_disable_match_cpu ... ok
+test gpu_driven_tree_angular_acceleration_matches_analytic_transmitted_loads ... GPU prescribed Fixed force_error=6.010235019057252e-7 torque_error=1.527984191792255e-6
+GPU prescribed Revolute force_error=6.451337884684275e-7 torque_error=8.596304119739507e-7
+GPU prescribed Ball force_error=6.40708560915273e-7 torque_error=2.799515382246346e-6
+ok
+test gpu_moving_kinematic_tree_reactions_match_centripetal_support_loads ... ok
+test gpu_translating_rotating_kinematic_root_matches_zero_hinge_acceleration ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 521.23s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.89s
+     Running tests/runtime_kinematic_constraints.rs (target/debug/deps/runtime_kinematic_constraints-d4778887bf0b1945)
+
+running 2 tests
+test gpu_accelerating_boundaries_drive_distance_cone_and_common_contacts ... prescribed distance sleep=false
+prescribed distance sleep=true
+prescribed contact common=false inherited=false angular=false
+prescribed contact common=true inherited=false angular=false
+prescribed contact common=false inherited=true angular=false
+prescribed contact common=true inherited=true angular=false
+prescribed contact common=false inherited=true angular=true
+ok
+test gpu_accelerating_static_capture_uses_input_slip_not_predicted_slip ... prescribed contact common=false inherited=true angular=false
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 318.06s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

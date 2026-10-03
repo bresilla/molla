@@ -73,7 +73,7 @@ impl GlobalNewtonState {
             || device.limits().max_bind_groups < 7
             || device.limits().max_storage_buffers_per_shader_stage < 47
             || dimension * (u64::from(config.restart) + 1) * 4
-                > u64::from(device.limits().max_storage_buffer_binding_size)
+                > device.limits().max_storage_buffer_binding_size
         {
             return Err(Error::Build(
                 "unsupported native global Newton configuration".into(),
@@ -82,14 +82,17 @@ impl GlobalNewtonState {
         let mut candidate = model.state()?;
         candidate.upload_to_device(device, queue)?;
         let allocate = |label, size| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                mapped_at_creation: false,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    mapped_at_creation: false,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                }
+            )
         };
         Ok(Self {
             config,
@@ -234,7 +237,7 @@ impl GlobalNewtonState {
                 }
                 self.contact.encode(encoder)?;
                 evaluations += 1;
-                if evaluations % 16 == 0 {
+                if evaluations.is_multiple_of(16) {
                     let pending = std::mem::replace(
                         encoder,
                         device.create_command_encoder(&Default::default()),

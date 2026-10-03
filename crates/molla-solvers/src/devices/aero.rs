@@ -87,8 +87,14 @@ impl Aero {
         if scene.body(spec.body).is_none() {
             return Err(Error::Build("drag body is missing".into()));
         }
-        if !spec.area.is_finite() || spec.area.min_element() < 0.0 || !(spec.density >= 0.0) {
-            return Err(Error::Build("drag areas and air density must be nonnegative".into()));
+        if !spec.area.is_finite()
+            || spec.area.min_element() < 0.0
+            || spec.density.is_nan()
+            || spec.density < 0.0
+        {
+            return Err(Error::Build(
+                "drag areas and air density must be nonnegative".into(),
+            ));
         }
         self.next += 1;
         let id = DragId(self.next);
@@ -131,7 +137,8 @@ impl Aero {
         let centers = scene.model().body_com.host()?;
         let (wind, body_wind) = (self.wind, &self.body_wind);
         for (spec, reading) in self.drags.values_mut() {
-            let (Some(body), Some(desc)) = (scene.body_index(spec.body), scene.body(spec.body)) else {
+            let (Some(body), Some(desc)) = (scene.body_index(spec.body), scene.body(spec.body))
+            else {
                 continue;
             };
             if !desc.enabled || desc.kind != BodyKind::Dynamic {

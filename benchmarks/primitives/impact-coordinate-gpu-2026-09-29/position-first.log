@@ -1,0 +1,32 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 8 tests
+test contact_response_gpu::position_tests::coordinate_displacement_uses_joint_frames_not_velocity_caps_or_prescribed_time ... ok
+test contact_response_gpu::position_tests::displacement_retains_sub_ulp_motion_rates_and_cached_bindings_across_faults ... ok
+test contact_response_gpu::position_tests::exported_position_gaps_survive_large_rates_and_zero_depth_onsets ... ok
+test contact_response_gpu::position_tests::generated_distance_cone_and_axis_position_rows_match_cpu_geometry ... ok
+test contact_response_gpu::position_tests::onset_position_displacements_match_cpu_articulated_scalar_oracle ... articulated position displacement peak error=4.869755827969016e-9
+ok
+test contact_response_gpu::position_tests::predictor_projection_and_redrift_reuse_all_six_state_bindings ... ok
+test contact_response_gpu::position_tests::redundant_position_rows_are_mass_scaled_and_faults_retire_displacements ... ok
+test contact_response_gpu::position_tests::solved_displacement_updates_coordinates_then_redrifts_without_advancing_boundary_twice ... 
+thread 'contact_response_gpu::position_tests::solved_displacement_updates_coordinates_then_redrifts_without_advancing_boundary_twice' (691145) panicked at crates/molla-solvers/src/impact_position_gpu_tests.rs:117:9:
+pose: Transform { position: DVec3(2.0, 0.0, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) } != Transform { position: DVec3(2.0029697124421633, 0.0010143996735247698, 0.0020450100210611943), rotation: DQuat(2.4999999742050784e-6, 0.0002487499974334053, 4.999999948410157e-6, 0.9999999690460939) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    contact_response_gpu::position_tests::solved_displacement_updates_coordinates_then_redrifts_without_advancing_boundary_twice
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 191 filtered out; finished in 150.28s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:160: test-primitives-impact-position-gpu] Error 101

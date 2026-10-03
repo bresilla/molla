@@ -1,0 +1,28 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.16s
+     Running tests/runtime_boundary_radial_caps.rs (target/debug/deps/runtime_boundary_radial_caps-8dc0c9c7637695ab)
+
+running 1 test
+boundary_radial_cases=12 fixed_kinematic=true signs=both axes=XYZ dt=0.00001 peak_angular_error=6.238652666e-16 peak_com_error=3.580735132e-10
+test cpu_fixed_kinematic_radial_caps_preserve_permitted_motion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.98s
+     Running tests/runtime_boundary_radial_caps.rs (target/debug/deps/runtime_boundary_radial_caps-d216ccaf001646b2)
+
+running 1 test
+test gpu_fixed_kinematic_radial_caps_preserve_permitted_motion ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } boundary_radial_caps=true
+boundary_radial_cases=12 fixed_kinematic=true signs=both axes=XYZ dt=0.00001 peak_angular_error=4.435097527e-7 peak_com_error=1.069726704e-6
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 51.05s
+

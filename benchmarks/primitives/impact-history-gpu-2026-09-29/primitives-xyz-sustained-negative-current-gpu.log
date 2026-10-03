@@ -1,0 +1,28 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/runtime_d6_singular_bounds.rs (target/debug/deps/runtime_d6_singular_bounds-85d5f4f2034012d8)
+
+running 1 test
+adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+singular_xyz_poles=[-1.0]
+singular_xyz_crossing_prepare_begin sign=-1 pairs=8 contacts_per_island=16
+test gpu_free_d6_motion_crosses_both_xyz_poles_without_false_stops has been running for over 60 seconds
+singular_xyz_crossing_prepare_complete sign=-1 seconds=79.394883
+singular_xyz_crossing sign=-1 elapsed=0.1s pitch=1.6657963267948968 orientation_error=7.884953353001448e-8 angular_rate_error=1.1191048088221578e-13
+singular_xyz_crossing sign=-1 elapsed=0.2s pitch=1.7657963267948966 orientation_error=0e0 angular_rate_error=1.1013412404281553e-13
+singular_xyz_crossing sign=-1 elapsed=0.3s pitch=1.8657963267948967 orientation_error=4.2146848510894035e-8 angular_rate_error=1.1191048088221578e-13
+singular_xyz_crossing sign=-1 elapsed=0.4s pitch=1.9 orientation_error=2.9802322387695313e-8 angular_rate_error=1.4901161193847656e-8
+singular_xyz_crossing sign=-1 elapsed=0.5s pitch=1.9 orientation_error=2.9802322387695313e-8 angular_rate_error=1.4901161193847656e-8
+singular_xyz_crossing sign=-1 elapsed=0.6s pitch=1.9 orientation_error=2.9802322387695313e-8 angular_rate_error=1.4901161193847656e-8
+singular_xyz_crossing sign=-1 elapsed=0.7000000000000001s pitch=1.9 orientation_error=2.9802322387695313e-8 angular_rate_error=1.4901161193847656e-8
+singular_xyz_crossing sign=-1 elapsed=0.8s pitch=1.9 orientation_error=2.9802322387695313e-8 angular_rate_error=1.4901161193847656e-8
+singular_xyz_crossing sign=-1 elapsed=0.9s pitch=1.9 orientation_error=2.9802322387695313e-8 angular_rate_error=1.4901161193847656e-8
+singular_xyz_crossing sign=-1 elapsed=1s pitch=1.9 orientation_error=2.9802322387695313e-8 angular_rate_error=1.4901161193847656e-8
+test gpu_free_d6_motion_crosses_both_xyz_poles_without_false_stops ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 92.33s
+

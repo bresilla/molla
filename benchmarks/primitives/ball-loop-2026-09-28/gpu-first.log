@@ -1,0 +1,24 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.40s
+     Running tests/runtime_ball_loop.rs (target/debug/deps/runtime_ball_loop-0d500e8be2f20517)
+
+running 3 tests
+test gpu_rigid_ball_loop_pendulum_ten_seconds_three_step_sizes ... rigid ball pendulum: dt=0.016666666666666666 duration=10s anchor=8.528042247445212e-6 cone=0e0
+rigid ball pendulum: dt=0.008333333333333333 duration=10s anchor=2.2693959720115853e-6 cone=0e0
+rigid ball pendulum: dt=0.004166666666666667 duration=10s anchor=7.748604607863464e-7 cone=0e0
+ok
+test gpu_rigid_ball_loop_shares_two_articulation_impulses_and_preserves_twist ... ok
+test gpu_rigid_ball_loop_transmits_loaded_anchor_and_cone_reactions ... rigid ball loaded: peak_anchor=9.816294386663452e-8, force_error=2.3214985559447383e-6, torque_error=3.441472274915131e-6
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 60.62s
+

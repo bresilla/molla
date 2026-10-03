@@ -1,0 +1,51 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.60s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 20 tests
+test impact_constraints::tests::invalid_indefinite_and_nonfinite_inputs_are_rejected ... ok
+test impact_constraints::tests::midpoint_capture_reports_average_zero_not_final_zero ... ok
+test impact_constraints::tests::joint_coupling_is_solved_before_friction_mode_promotion ... ok
+test impact_constraints::tests::midpoint_normal_bounce_matches_authored_coefficient_and_preserves_momentum ... ok
+test impact_constraints::tests::midpoint_friction_removes_the_oblique_energy_counterexample ... ok
+test impact_constraints::tests::newton_normal_restitution_alone_is_not_an_oblique_energy_certificate ... ok
+test impact_constraints::tests::nonnegative_joint_couples_to_restitution_normal ... ok
+test impact_constraints::tests::rank_deficient_tangent_response_remains_bounded ... ok
+test impact_constraints::tests::normal_tangent_coupling_has_no_associated_cone_dilatancy ... ok
+test impact_constraints::tests::separated_and_zero_load_contacts_cannot_generate_friction ... ok
+test impact_constraints::tests::sliding_cap_includes_base_and_solved_normal_impulse ... ok
+test impact_constraints::tests::static_capture_promotion_and_initial_dynamic_mode ... ok
+test impact_constraints::tests::newton_rebound_mass_speed_sweep_and_energy ... ok
+test impact_constraints::tests::target_and_capacity_overflow_fail_closed ... ok
+test impact_constraints::tests::coupled_contacts_preserve_response_under_block_permutation ... ok
+test impact_constraints::tests::midpoint_coupled_contacts_and_homogeneous_joints_have_nonpositive_work ... ok
+test impact_constraints::tests::two_body_impact_conserves_momentum_and_measures_energy_loss ... ok
+test impact_constraints::tests::tangent_basis_rotation_preserves_world_impulse ... ok
+test impact_constraints::tests::infeasible_immovable_rows_fail_closed_and_empty_problem_succeeds ... ok
+
+thread 'impact_constraints::tests::midpoint_passive_oblique_impacts_dissipate_across_mass_friction_and_restitution' (556607) panicked at crates/molla-solvers/src/impact_constraints.rs:739:53:
+mass=0.000001, b=0.8, c=0, mu=2, e=0, slip=-3: solver error: coupled impact response did not converge
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test impact_constraints::tests::midpoint_passive_oblique_impacts_dissipate_across_mass_friction_and_restitution ... FAILED
+
+failures:
+
+failures:
+    impact_constraints::tests::midpoint_passive_oblique_impacts_dissipate_across_mass_friction_and_restitution
+
+test result: FAILED. 19 passed; 1 failed; 0 ignored; 0 measured; 98 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make[1]: *** [Makefile:74: test] Error 101
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:145: test-primitives-impact-oracle] Error 2

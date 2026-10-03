@@ -1,0 +1,16 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.54s
+     Running tests/narrow_resident_gpu.rs (target/debug/deps/narrow_resident_gpu-c0617498070c6087)
+
+running 1 test
+test resident_plane_depths_consume_sub_ulp_body_translation_residues ... raw lows=[-1.9073486e-15, -9.536743e-16, -1.9073486e-15, 4.7683716e-7, -9.536743e-16, 9.536743e-7, -9.536743e-16, 9.536743e-7, -9.536743e-16, -9.536743e-16]
+residue poses=[Transform { position: DVec3(0.0, 0.0009770393371582031, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }, Transform { position: DVec3(0.0, 0.0009765625, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }, Transform { position: DVec3(0.0, 512.25, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }, Transform { position: DVec3(0.0, 512.0, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }, Transform { position: DVec3(0.0, 1049088.0, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }, Transform { position: DVec3(0.0, 1048576.0, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }] bodies=[0, 1, 2, 3, 4, 5] lows=[[0.0, -1.9073486e-15, 0.0, 0.0], [0.0, -9.536743e-16, 0.0, 0.0], [0.0, -1e-9, 0.0, 0.0], [0.0, -5e-10, 0.0, 0.0], [0.0, -2.048e-6, 0.0, 0.0], [0.0, -1.024e-6, 0.0, 0.0]] counts=[4, 4, 4, 4, 4, 4] depths=[9.536743e-16, 9.536743e-16, -9.536743e-7, -9.536743e-7, 9.536743e-16, 9.536743e-16, -9.536743e-7, -9.536743e-7]
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 1.75s
+

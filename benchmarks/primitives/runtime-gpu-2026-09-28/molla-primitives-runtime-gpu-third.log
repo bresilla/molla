@@ -1,0 +1,20 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.61s
+     Running tests/runtime_primitives_contract_gpu.rs (target/debug/deps/runtime_primitives_contract_gpu-a9107b5ca6b36412)
+
+running 4 tests
+test runtime_gpu_free_body_matches_cpu_and_publishes_velocity ... ok
+test runtime_gpu_mutations_rebuild_and_preserve_handles ... ok
+test runtime_gpu_rejects_unsupported_mutation_without_advancing ... ok
+test runtime_gpu_world_anchor_uses_authored_frames ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.88s
+

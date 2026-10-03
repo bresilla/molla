@@ -1,0 +1,141 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.88s
+     Running tests/featherstone_motor_caps_gpu.rs (target/debug/deps/featherstone_motor_caps_gpu-a392b7640828055b)
+
+running 2 tests
+test fem_island_accepts_caps_and_applies_them_on_gpu ... ok
+test gpu_motor_caps_preserve_feedforward_and_total_limits ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.01s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.86s
+     Running tests/featherstone_multidof_gpu.rs (target/debug/deps/featherstone_multidof_gpu-f14bca9af4a1f286)
+
+running 4 tests
+test ball_spherical_pendulum_falls_under_gravity_gpu ... BALL pendulum after 2000 steps: max_y=-0.4777, max |dist-0.5|=0.0000
+ok
+test d6_pretensioned_holds_under_gravity_gpu ... D6 locked body after 0.5s under gravity: pos=DVec3(0.0, 0.0, 0.0)
+ok
+test free_joint_body_falls_at_g_gpu ... FREE body fall after 0.200s: joint_q.y=-0.1971 body.y=-0.1971 expected=-0.1961
+ok
+test free_joint_cpu_gpu_match ... FREE parity: cpu y=-1.238090 gpu y=-1.238089
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.47s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.00s
+     Running tests/featherstone_scalar_equality_gpu.rs (target/debug/deps/featherstone_scalar_equality_gpu-efb8415e4be88ddb)
+
+running 3 tests
+test predictor_retains_small_increments_and_velocity_overrides_gpu ... ok
+test scalar_equality_clears_velocity_and_holds_nonzero_coordinate_gpu ... ok
+test scalar_equality_transmits_child_load_to_floating_parent_gpu ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 45.85s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.91s
+     Running tests/runtime_d6_axis_certification.rs (target/debug/deps/runtime_d6_axis_certification-52ffe430d7c385f5)
+
+running 1 test
+test gpu_d6_each_axis_free_bounded_locked_matches_analytic_motion ... d6_axis_cases=36 peak_pose=0.000001736658284289374 peak_rate=0.000006281558014812067
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 4.71s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.96s
+     Running tests/runtime_reactions_gpu.rs (target/debug/deps/runtime_reactions_gpu-d12e0d28e4b6c141)
+
+running 8 tests
+test empty_scene_reaction_capture_can_be_toggled ... ok
+test external_loop_force_is_not_double_counted_as_tree_load ... Distance world=true loop GPU reaction resources=[129, 534960, 37, 11, 9]
+Ball world=true loop GPU reaction resources=[129, 535920, 37, 11, 9]
+Distance world=false loop GPU reaction resources=[129, 537488, 37, 11, 9]
+Ball world=false loop GPU reaction resources=[129, 538752, 37, 11, 9]
+ok
+test fixed_support_publishes_substeps_means_peaks_and_force_edit_invalidation ... ok
+test moving_ball_and_d6_transmit_only_constrained_components ... ok
+test moving_floating_chain_matches_cpu_substep_wrenches ... moving floating GPU reaction peak absolute wrench error=1.7911375721819348e-4
+ok
+test runtime_reaction_resources_and_frame_transfers_are_retained ... runtime GPU reaction resources=[84, 528608, 19, 7, 5], diagnostics=GpuRuntimeDiagnostics { model_compilations: 2, current_model_bind_groups_created: 18, completed_frames: 1, last_substeps: 8, last_state_upload_bytes: 96, last_state_readback_bytes: 1044 }
+ok
+test sleeping_compaction_and_reaction_faults_do_not_publish_stale_samples ... ok
+test stop_impulse_peak_is_not_the_frame_average_or_motor_command ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 69.15s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.01s
+     Running tests/runtime_dispatch_metrics_gpu.rs (target/debug/deps/runtime_dispatch_metrics_gpu-de23d00c1a73a4fd)
+
+running 1 test
+test dispatch_counts_follow_substeps_and_batched_reaction_stages_not_body_count ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.47s
+
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.43s
+     Running tests/runtime_primitives_contract_gpu.rs (target/debug/deps/runtime_primitives_contract_gpu-17b111111ba5223d)
+
+running 10 tests
+test runtime_gpu_distance_mutation_is_solved_and_can_be_removed ... ok
+test runtime_gpu_empty_reaction_readout_stays_on_device ... ok
+test runtime_gpu_empty_scene_and_invalid_step_are_safe ... ok
+test runtime_gpu_fault_is_atomic_and_corrected_inputs_can_resume ... ok
+test runtime_gpu_free_body_matches_cpu_and_publishes_velocity ... ok
+test runtime_gpu_mutations_rebuild_and_preserve_handles ... ok
+test runtime_gpu_rejects_unsupported_mutation_without_advancing ... ok
+test runtime_gpu_rotated_frames_com_inertia_and_motor_parity ... Ball initial corrected CPU=Transform { position: DVec3(1.4556717229510796e-5, 1.9996536584861737, 4.6270310653753755e-5), rotation: DQuat(9.145946822791489e-6, 2.7015441916329058e-6, 0.14943460461713154, 0.9887716110669718) } GPU=Transform { position: DVec3(1.4568412552762311e-5, 1.9996535778045654, 4.6264362026704475e-5), rotation: DQuat(9.145950571110006e-6, 2.7015444175049197e-6, 0.14943459630012512, 0.9887715578079224) }
+Ball initial corrected CPU=Transform { position: DVec3(-0.14773567552225875, 2.4773249563404263, 6.791368316477335e-5), rotation: DQuat(-2.2811818695817054e-6, -3.3049327144030888e-6, 0.1494412932575955, 0.9887706002169416) } GPU=Transform { position: DVec3(-0.14773567020893097, 2.477324962615967, 6.789079634472728e-5), rotation: DQuat(-2.2879864900460234e-6, -3.2866373658180237e-6, 0.14944128692150116, 0.9887705445289612) }
+Ball: max position=7.95572113914722e-6 rotation=9.400731501333504e-7 velocity=1.9740661511995396e-5
+Revolute initial corrected CPU=Transform { position: DVec3(1.535690633937964e-5, 1.9996540102678337, 5.874544961763373e-5), rotation: DQuat(1.4666239186180228e-6, -2.4215932833075273e-6, 0.14943489913601343, 0.988771566597763) } GPU=Transform { position: DVec3(1.5365934814326465e-5, 1.9996541738510132, 5.875439092051238e-5), rotation: DQuat(1.466624212298484e-6, -2.4215923986048438e-6, 0.1494349092245102, 0.9887715578079224) }
+Revolute initial corrected CPU=Transform { position: DVec3(-0.2700277326912218, 2.4561353945734754, -0.022140225153922617), rotation: DQuat(0.01925857762774892, 0.11054738051005215, 0.02778614146082332, 0.9932956831643038) } GPU=Transform { position: DVec3(-0.27002769708633423, 2.4561355113983154, -0.02214025892317295), rotation: DQuat(0.01925859972834587, 0.11054744571447372, 0.027786217629909515, 0.9932956695556641) }
+Revolute: max position=1.4208730728026179e-6 rotation=7.027283979983126e-7 velocity=7.774575303409626e-6
+Prismatic initial corrected CPU=Transform { position: DVec3(-2.043210501036924e-5, 1.999582876447949, -9.805651467229004e-6), rotation: DQuat(-1.4717731160928347e-6, -5.7498886877149e-7, 0.14944025712486225, 0.9887707568228131) } GPU=Transform { position: DVec3(-2.0401743313414045e-5, 1.9995828866958618, -9.804151886783075e-6), rotation: DQuat(-1.4717757039761636e-6, -5.749895422013651e-7, 0.14944025874137878, 0.9887707829475403) }
+Prismatic initial corrected CPU=Transform { position: DVec3(-0.2879536323052181, 2.294908329625199, -0.2609197458461301), rotation: DQuat(0.06720239034499334, 0.21007820287038995, 0.1261183506757062, 0.9671841339856161) } GPU=Transform { position: DVec3(-0.28795361518859863, 2.294908285140991, -0.2609197497367859), rotation: DQuat(0.0672023817896843, 0.210078164935112, 0.12611834704875946, 0.9671840667724609) }
+Prismatic: max position=8.984417694659931e-6 rotation=1.2054293403719062e-6 velocity=1.944522772688528e-5
+ok
+test runtime_gpu_warm_resources_are_retained ... warm runtime GPU [buffers, bytes, groups, pipelines, shaders]=[87, 527072, 14, 4, 4]
+ok
+test runtime_gpu_world_anchor_uses_authored_frames ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 52.84s
+

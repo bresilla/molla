@@ -9,13 +9,12 @@ use molla_math::{Quat, SpatialVector, Transform, Vec3};
 use molla_sensors::readback::ReadbackStamp;
 use molla_sensors::{
     AnnotationConfig, AnnotationProcessor, CameraBatch, CameraBatchOutputPool, CameraSpec,
-    CloudFilter, CloudGrid,
-    CloudGridConfig, CloudGridSpec, CloudProcessor, CloudProcessorConfig, CloudRaster,
-    ContactSensor, FrameTarget, FrameTransformSensor, ImageProcessor, ImageProcessorConfig,
-    ImuMount, ImuSensor, LidarBatch, LidarPattern, LidarScan, PendingCloudGridInput,
-    PendingCloudInput, PendingCloudJob, PendingCloudSource, Raycaster, ScanMetadata,
-    SensorCommandBatch, SensorFramePool, SensorFramePoolConfig, SensorScene, ShapeLabel,
-    TiledCameraConfig,
+    CloudFilter, CloudGrid, CloudGridConfig, CloudGridSpec, CloudProcessor, CloudProcessorConfig,
+    CloudRaster, ContactSensor, FrameTarget, FrameTransformSensor, ImageProcessor,
+    ImageProcessorConfig, ImuMount, ImuSensor, LidarBatch, LidarPattern, LidarScan,
+    PendingCloudGridInput, PendingCloudInput, PendingCloudJob, PendingCloudSource, Raycaster,
+    ScanMetadata, SensorCommandBatch, SensorFramePool, SensorFramePoolConfig, SensorScene,
+    ShapeLabel, TiledCameraConfig,
 };
 use molla_sim::{BodyParams, Contacts, Model, ModelBuilder, State};
 use molla_storage::{Buffer, BufferElement, BufferUsage};
@@ -149,13 +148,15 @@ fn symbols(trace: &Backtrace) -> Vec<(String, String)> {
     for line in trace.to_string().lines().map(str::trim) {
         if let Some(location) = line.strip_prefix("at ") {
             if let Some(last) = frames.last_mut() {
-                let short = location.rsplit_once("/crates/").map_or(location, |(_, p)| p);
+                let short = location
+                    .rsplit_once("/crates/")
+                    .map_or(location, |(_, p)| p);
                 last.1 = short.to_string();
             }
-        } else if let Some((index, symbol)) = line.split_once(": ") {
-            if index.parse::<usize>().is_ok() {
-                frames.push((symbol.to_string(), String::new()));
-            }
+        } else if let Some((index, symbol)) = line.split_once(": ")
+            && index.parse::<usize>().is_ok()
+        {
+            frames.push((symbol.to_string(), String::new()));
         }
     }
     frames
@@ -613,7 +614,13 @@ impl AuxChain {
             .unwrap();
         let c = self
             .contact
-            .encode(&mut batch, engine, contacts, &mut self.pc, stamp(frame as u64))
+            .encode(
+                &mut batch,
+                engine,
+                contacts,
+                &mut self.pc,
+                stamp(frame as u64),
+            )
             .unwrap()
             .unwrap();
         let f = self
@@ -631,7 +638,10 @@ impl AuxChain {
 fn assert_flat(label: &str, warm: &BTreeMap<&str, isize>, later: &BTreeMap<&str, isize>) {
     eprintln!("{label} warm resources: {warm:?}");
     assert!(warm["buffers"] > 0, "{label}: wgpu counters are disabled");
-    assert_eq!(warm, later, "{label}: steady-state frames changed live GPU objects");
+    assert_eq!(
+        warm, later,
+        "{label}: steady-state frames changed live GPU objects"
+    );
 }
 
 #[test]
@@ -711,20 +721,26 @@ fn warm_sensor_frame_allocations_are_attributed() {
         rays.frame(&engine, &scene, &state, frame);
         aux.frame(&engine, &model, &aux_state, &contacts, frame);
     }
-    let per = |f: &mut dyn FnMut(usize)| (8..24).map(|frame| counted(|| f(frame)).1).collect::<Vec<_>>();
+    let per = |f: &mut dyn FnMut(usize)| {
+        (8..24)
+            .map(|frame| counted(|| f(frame)).1)
+            .collect::<Vec<_>>()
+    };
     let camera_counts = per(&mut |frame| cameras.frame(&engine, &scene, &state, frame));
     let ray_counts = per(&mut |frame| rays.frame(&engine, &scene, &state, frame));
     let aux_counts = per(&mut |frame| aux.frame(&engine, &model, &aux_state, &contacts, frame));
     let ((), camera_traces) = traced(|| cameras.frame(&engine, &scene, &state, 24));
     let ((), ray_traces) = traced(|| rays.frame(&engine, &scene, &state, 24));
-    let ((), aux_traces) =
-        traced(|| aux.frame(&engine, &model, &aux_state, &contacts, 24));
+    let ((), aux_traces) = traced(|| aux.frame(&engine, &model, &aux_state, &contacts, 24));
     for (label, counts, traces) in [
         ("camera/image/annotation", &camera_counts, &camera_traces),
         ("ray/lidar/cloud/grid", &ray_counts, &ray_traces),
         ("imu/contact/frame", &aux_counts, &aux_traces),
     ] {
         let owners = report(label, counts, traces);
-        assert!(!owners.contains_key("unresolved"), "{label}: unresolved frames");
+        assert!(
+            !owners.contains_key("unresolved"),
+            "{label}: unresolved frames"
+        );
     }
 }

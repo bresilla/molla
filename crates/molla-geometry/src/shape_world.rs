@@ -35,7 +35,12 @@ impl SceneShapeBounds {
                 .map(|field| field.local_aabb())
                 .collect();
             self.stamp = Some(stamp);
-            self.tiles = scene.model().heightfields.iter().map(HeightfieldTiles::new).collect();
+            self.tiles = scene
+                .model()
+                .heightfields
+                .iter()
+                .map(HeightfieldTiles::new)
+                .collect();
         }
         PreparedShapeBounds {
             model: scene.model(),
@@ -63,7 +68,13 @@ impl<'a> PreparedShapeBounds<'a> {
                     .map(|field| field.local_aabb())
                     .collect(),
             ),
-            tiles: Cow::Owned(model.heightfields.iter().map(HeightfieldTiles::new).collect()),
+            tiles: Cow::Owned(
+                model
+                    .heightfields
+                    .iter()
+                    .map(HeightfieldTiles::new)
+                    .collect(),
+            ),
         }
     }
 
@@ -71,7 +82,12 @@ impl<'a> PreparedShapeBounds<'a> {
         self.model
     }
 
-    pub(crate) fn heightfield_may_contact(&self, state: &State, field_shape: usize, other: Aabb) -> bool {
+    pub(crate) fn heightfield_may_contact(
+        &self,
+        state: &State,
+        field_shape: usize,
+        other: Aabb,
+    ) -> bool {
         let ShapeGeometry::Heightfield { field_id } = self.model.shape_geometry[field_shape] else {
             return true;
         };
@@ -85,8 +101,14 @@ impl<'a> PreparedShapeBounds<'a> {
             return true;
         }
         let pose = shape_world_transform(self.model, state, field_shape).inverse();
-        let padding = 1e-9 * (1.0 + other.min.abs().max_element()
-            .max(other.max.abs().max_element()).max(pose.position.abs().max_element()));
+        let padding = 1e-9
+            * (1.0
+                + other
+                    .min
+                    .abs()
+                    .max_element()
+                    .max(other.max.abs().max_element())
+                    .max(pose.position.abs().max_element()));
         let local = transformed_bounds(other.min, other.max, pose, padding);
         tiles.may_contact(field, local)
     }

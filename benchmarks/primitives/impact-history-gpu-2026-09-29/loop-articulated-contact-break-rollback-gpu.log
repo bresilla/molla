@@ -1,0 +1,22 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.93s
+     Running tests/runtime_contact_breakage_gpu.rs (target/debug/deps/runtime_contact_breakage_gpu-01dc459ca80c2018)
+
+running 5 tests
+test contact_load_breaks_support_and_continues_with_cpu_event_and_state_agreement ... ok
+test detachment_refreshes_contacts_without_removing_explicit_pair_exclusions ... ok
+test post_break_capacity_failure_restores_original_topology_and_precision ... ok
+test sequential_contact_breaks_preserve_global_sample_times_and_frame_means ... ok
+test successful_detachment_transfers_translation_residues_to_new_free_roots ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 126.67s
+

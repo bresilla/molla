@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.04s
+     Running tests/normal_contact_gpu.rs (target/debug/deps/normal_contact_gpu-3bbb9ad69487f145)
+
+running 4 tests
+test device_normal_forces_drive_featherstone_drop_and_settle_like_cpu ... normal drop: position_error=1.920270090882692e-6, velocity_error=1.6635470234727806e-4, min_height=0.49548956751823425, peak_force=599.7079467773438
+ok
+test normal_contact_faults_are_sticky_and_preparation_rejects_bad_inputs ... ok
+test normal_contact_rows_and_com_wrenches_match_cpu_materials_and_boundaries ... ok
+test resident_bounds_manifolds_and_normal_forces_chain_without_host_roundtrips ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.14s
+

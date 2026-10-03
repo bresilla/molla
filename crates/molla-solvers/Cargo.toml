@@ -12,6 +12,7 @@ workspace = true
 
 [features]
 default = []
+resource-counters = ["gpu", "wgpu/counters", "molla-core/gpu-metrics"]
 autograd = ["dep:molla-autograd"]
 gpu = [
     "dep:molla-compute",
@@ -20,6 +21,7 @@ gpu = [
     "molla-actuators/gpu",
     "molla-compute/gpu",
     "molla-kernels/gpu",
+    "molla-geometry/gpu",
     "molla-sim/gpu",
 ]
 
@@ -48,6 +50,19 @@ wgpu = { version = "29", optional = true, default-features = false, features = [
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
 molla-optim = { path = "../molla-optim" }
+
+[[example]]
+name = "check_primitives_shaders"
+required-features = ["gpu"]
+
+[[example]]
+name = "prepare_primitives_gpu"
+required-features = ["gpu"]
+
+[[bench]]
+name = "runtime_primitives"
+harness = false
+required-features = ["resource-counters"]
 
 [[bench]]
 name = "bench_featherstone_chain"

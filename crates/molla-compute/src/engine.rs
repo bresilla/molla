@@ -36,6 +36,8 @@ pub struct AdapterInfo {
     pub is_software: bool,
     /// Driver name, when reported.
     pub driver: String,
+    /// Driver version and implementation details, when reported.
+    pub driver_info: String,
 }
 
 impl AdapterInfo {
@@ -46,6 +48,7 @@ impl AdapterInfo {
             backend: format!("{:?}", info.backend),
             is_software: matches!(info.device_type, wgpu::DeviceType::Cpu),
             driver: info.driver,
+            driver_info: info.driver_info,
         }
     }
 }
@@ -54,6 +57,7 @@ impl AdapterInfo {
 /// to the kernel dispatch wrappers. Construct
 /// via [`Engine::new_cpu`] / [`Engine::new_gpu`] / [`Engine::new`].
 pub struct Engine {
+    programs: crate::program_cache::ProgramCache,
     backend: Backend,
     adapter_info: Option<AdapterInfo>,
     device: Option<Arc<wgpu::Device>>,
@@ -121,6 +125,7 @@ impl Engine {
     pub fn new_cpu() -> Self {
         Self {
             backend: Backend::Cpu,
+            programs: Default::default(),
             adapter_info: None,
             device: None,
             queue: None,
@@ -134,13 +139,18 @@ impl Engine {
         Self::new(Backend::AutoGpu)
     }
 
+    /// Construct a GPU engine requiring the specified device features; unsupported features fail.
+    pub fn new_gpu_with_features(features: wgpu::Features) -> Result<Self> {
+        init_gpu(wgpu::Backends::PRIMARY, features)
+    }
+
     /// Construct an engine with the given [`Backend`]. Use
     /// [`Self::new_cpu`] / [`Self::new_gpu`] for the common cases.
     pub fn new(backend: Backend) -> Result<Self> {
         match backend {
             Backend::Cpu => Ok(Self::new_cpu()),
-            Backend::AutoGpu => init_gpu(wgpu::Backends::PRIMARY),
-            Backend::Gpu(b) => init_gpu(b),
+            Backend::AutoGpu => init_gpu(wgpu::Backends::PRIMARY, wgpu::Features::empty()),
+            Backend::Gpu(b) => init_gpu(b, wgpu::Features::empty()),
             Backend::External => Err(Error::Gpu(
                 "external backend: construct with Engine::from_device".into(),
             )),
@@ -160,6 +170,7 @@ impl Engine {
     ) -> Self {
         Self {
             backend: Backend::External,
+            programs: Default::default(),
             adapter_info,
             device: Some(device),
             queue: Some(queue),
@@ -203,6 +214,39 @@ impl Engine {
             .check()
     }
 
+    /// Retain up to 64 immutable GPU programs by type and compiler-input variant.
+    /// Initialization is serialized; the initializer must not reenter this engine's cache.
+    /// Programs contain pipelines/layouts, not model/state buffers. Failed builds are not retained.
+    pub fn cached_gpu_program<T: std::any::Any + Send + Sync>(
+        &self,
+        variant: &str,
+        create: impl FnOnce(&wgpu::Device) -> Result<T>,
+    ) -> Result<Arc<T>> {
+        self.check_device()?;
+        let device = self.device.as_ref().expect("GPU health has a device");
+        self.programs.get_or_create(variant, || {
+            let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let allocation = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let program = create(device);
+            let errors = [
+                pollster::block_on(internal.pop()),
+                pollster::block_on(allocation.pop()),
+                pollster::block_on(validation.pop()),
+            ];
+            self.check_device()?;
+            if let Some(error) = errors.into_iter().flatten().next() {
+                return Err(Error::Gpu(format!("GPU program initialization: {error}")));
+            }
+            program
+        })
+    }
+
+    /// Drop retained programs; existing kernels keep their own references.
+    pub fn clear_gpu_program_cache(&self) {
+        self.programs.clear();
+    }
+
     /// Marks this engine's logical device lost immediately, then destroys it.
     pub fn destroy_device(&self) -> Result<()> {
         let health = self
@@ -213,6 +257,7 @@ impl Engine {
             wgpu::DeviceLostReason::Destroyed,
             "logical device explicitly destroyed".into(),
         );
+        self.clear_gpu_program_cache();
         self.device
             .as_ref()
             .expect("GPU health has a device")
@@ -221,7 +266,7 @@ impl Engine {
     }
 }
 
-fn init_gpu(backends: wgpu::Backends) -> Result<Engine> {
+fn init_gpu(backends: wgpu::Backends, features: wgpu::Features) -> Result<Engine> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -243,7 +288,7 @@ fn init_gpu(backends: wgpu::Backends) -> Result<Engine> {
     // browser we'll need to consolidate buffers.
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("molla::compute::Engine"),
-        required_features: wgpu::Features::empty(),
+        required_features: features,
         required_limits: adapter.limits(),
         experimental_features: wgpu::ExperimentalFeatures::default(),
         memory_hints: wgpu::MemoryHints::Performance,
@@ -255,6 +300,7 @@ fn init_gpu(backends: wgpu::Backends) -> Result<Engine> {
     let signal = health.clone();
     device.set_device_lost_callback(move |reason, message| signal.record(reason, message));
     Ok(Engine {
+        programs: Default::default(),
         backend: Backend::Gpu(backends),
         adapter_info: Some(adapter_info),
         device: Some(Arc::new(device)),
@@ -318,5 +364,92 @@ mod tests {
         assert!(e.adapter_info().is_none());
         assert!(e.device().is_none());
         assert!(e.queue().is_none());
+    }
+
+    #[test]
+    fn cpu_engine_does_not_initialize_cached_gpu_programs() {
+        let e = Engine::new_cpu();
+        assert!(
+            e.cached_gpu_program::<u32>("cpu", |_| panic!("CPU used GPU cache"))
+                .is_err()
+        );
+        e.clear_gpu_program_cache();
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[ignore = "requires GPU; run via make test-primitives-program-cache-gpu"]
+    fn gpu_program_cache_retains_valid_objects_without_crossing_engines() {
+        let a = Engine::new_gpu().unwrap();
+        let source = "@compute @workgroup_size(1) fn main() {}";
+        let first = a
+            .cached_gpu_program("same", |device| {
+                Ok(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("cache identity"),
+                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                }))
+            })
+            .unwrap();
+        let weak = Arc::downgrade(&first);
+        drop(first);
+        let retained = a
+            .cached_gpu_program::<wgpu::ShaderModule>("same", |_| panic!("cache recompiled"))
+            .unwrap();
+        assert!(Arc::ptr_eq(&retained, &weak.upgrade().unwrap()));
+        let b = Engine::new_gpu().unwrap();
+        let other = b
+            .cached_gpu_program("same", |device| {
+                Ok(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("other cache"),
+                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                }))
+            })
+            .unwrap();
+        assert!(!Arc::ptr_eq(&retained, &other));
+        drop(retained);
+        a.destroy_device().unwrap();
+        assert!(weak.upgrade().is_none());
+        assert!(
+            a.cached_gpu_program::<wgpu::ShaderModule>("same", |_| panic!("lost device compiled"))
+                .is_err()
+        );
+        assert!(b.check_device().is_ok());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[ignore = "requires GPU; run via make test-primitives-program-cache-gpu"]
+    fn gpu_program_cache_surfaces_validation_and_retries_failed_variants() {
+        let engine = Engine::new_gpu().unwrap();
+        let device = engine.device().unwrap();
+        let outer = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let failed = engine.cached_gpu_program("retry", |device| {
+            Ok(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("invalid cache fixture"),
+                source: wgpu::ShaderSource::Wgsl("invalid WGSL".into()),
+            }))
+        });
+        assert!(
+            failed
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("GPU program initialization")
+        );
+        assert!(pollster::block_on(outer.pop()).is_none());
+        let valid = engine
+            .cached_gpu_program("retry", |device| {
+                Ok(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("valid retry"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        "@compute @workgroup_size(1) fn main() {}".into(),
+                    ),
+                }))
+            })
+            .unwrap();
+        let again = engine
+            .cached_gpu_program::<wgpu::ShaderModule>("retry", |_| panic!("valid variant rebuilt"))
+            .unwrap();
+        assert!(Arc::ptr_eq(&valid, &again));
     }
 }

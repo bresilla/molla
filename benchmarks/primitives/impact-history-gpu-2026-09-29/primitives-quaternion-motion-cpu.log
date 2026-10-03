@@ -1,0 +1,26 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0061]: this method takes 4 arguments but 3 arguments were supplied
+    --> crates/molla-solvers/tests/standalone_limit_precision.rs:530:63
+     |
+ 530 |                         molla_sim::JointType::Free => builder.add_joint_free(body, parent, child),
+     |                                                               ^^^^^^^^^^^^^^       ------ argument #2 of type `BodyId` is missing
+     |
+note: method defined here
+    --> crates/molla-sim/src/builder.rs:2189:12
+     |
+2189 |     pub fn add_joint_free(
+     |            ^^^^^^^^^^^^^^
+help: provide the argument
+     |
+ 530 -                         molla_sim::JointType::Free => builder.add_joint_free(body, parent, child),
+ 530 +                         molla_sim::JointType::Free => builder.add_joint_free(body, /* BodyId */, child, parent),
+     |
+
+For more information about this error, try `rustc --explain E0061`.
+error: could not compile `molla-solvers` (test "standalone_limit_precision") due to 1 previous error
+make: *** [Makefile:497: test-primitives-quaternion-motion-cpu] Error 101

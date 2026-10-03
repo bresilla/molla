@@ -121,8 +121,8 @@ impl RubberBeltMesh {
         let p = self.params;
         let invalid = || Error::Build("invalid outer belt phase grid".into());
         if count < 2
-            || p.segments % count != 0
-            || p.thickness_cells % 2 != 0
+            || !p.segments.is_multiple_of(count)
+            || !p.thickness_cells.is_multiple_of(2)
             || self.positions.len() != p.segments * (p.width_cells + 1) * (p.thickness_cells + 1)
         {
             return Err(invalid());
@@ -228,7 +228,7 @@ impl RubberBeltMesh {
                     .saturating_mul(lug.depth_cells);
                 if self.positions.len() != original
                     || lug.count < 2
-                    || p.segments % lug.count != 0
+                    || !p.segments.is_multiple_of(lug.count)
                     || lug.segment_span == 0
                     || lug.segment_span >= p.segments / lug.count
                     || lug.width_cells == 0
@@ -333,7 +333,7 @@ impl RubberBeltMesh {
     ) -> Result<ReinforcedBelt> {
         let p = self.params;
         if !center.is_finite()
-            || p.thickness_cells % 2 != 0
+            || !p.thickness_cells.is_multiple_of(2)
             || !cord.axial_rigidity.is_finite()
             || cord.axial_rigidity <= 0.0
             || !cord.linear_density.is_finite()

@@ -103,48 +103,69 @@ impl TireTransientGpuKernel {
         let in_bytes = (capacity * core::mem::size_of::<TireTransientGpuInput>()) as u64;
         let state_bytes = (capacity * core::mem::size_of::<TireTransientGpuState>()) as u64;
         let out_bytes = (capacity * core::mem::size_of::<TireTransientGpuOutput>()) as u64;
-        let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient persistent input"),
-            size: in_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let state_in_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient persistent state in"),
-            size: state_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let state_out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient persistent state out"),
-            size: state_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient persistent output"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient persistent uniforms"),
-            size: core::mem::size_of::<TireTransientUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let stage_state = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient persistent stage state"),
-            size: state_bytes.max(4),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let stage_out = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient persistent stage output"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let input_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient persistent input"),
+                size: in_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let state_in_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient persistent state in"),
+                size: state_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let state_out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient persistent state out"),
+                size: state_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient persistent output"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient persistent uniforms"),
+                size: core::mem::size_of::<TireTransientUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let stage_state = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient persistent stage state"),
+                size: state_bytes.max(4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
+        let stage_out = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient persistent stage output"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_transient persistent bg"),
             layout: &self.layout,
@@ -209,9 +230,9 @@ impl TireTransientGpuKernel {
         };
         let state_bytes = (n * core::mem::size_of::<TireTransientGpuState>()) as u64;
         let out_bytes = (n * core::mem::size_of::<TireTransientGpuOutput>()) as u64;
-        queue.write_buffer(&batch.input_buf, 0, bytemuck::cast_slice(inputs));
-        queue.write_buffer(&batch.state_in_buf, 0, bytemuck::cast_slice(states));
-        queue.write_buffer(&batch.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        molla_core::gpu_write_buffer!(queue, &batch.input_buf, 0, bytemuck::cast_slice(inputs));
+        molla_core::gpu_write_buffer!(queue, &batch.state_in_buf, 0, bytemuck::cast_slice(states));
+        molla_core::gpu_write_buffer!(queue, &batch.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::tire_transient persistent encoder"),
@@ -253,51 +274,72 @@ impl TireTransientGpuKernel {
             count: n as u32,
             _pad: [0; 3],
         };
-        let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient input"),
-            size: in_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let state_in_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient state in"),
-            size: state_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let state_out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient state out"),
-            size: state_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient output"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let stage_state = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient stage state"),
-            size: state_bytes.max(4),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let stage_out = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient stage output"),
-            size: out_bytes.max(4),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tire_transient uniforms"),
-            size: core::mem::size_of::<TireTransientUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&input_buf, 0, bytemuck::cast_slice(inputs));
-        queue.write_buffer(&state_in_buf, 0, bytemuck::cast_slice(states));
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let input_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient input"),
+                size: in_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let state_in_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient state in"),
+                size: state_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let state_out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient state out"),
+                size: state_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let out_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient output"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let stage_state = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient stage state"),
+                size: state_bytes.max(4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
+        let stage_out = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient stage output"),
+                size: out_bytes.max(4),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("tire_transient uniforms"),
+                size: core::mem::size_of::<TireTransientUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &input_buf, 0, bytemuck::cast_slice(inputs));
+        molla_core::gpu_write_buffer!(queue, &state_in_buf, 0, bytemuck::cast_slice(states));
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_transient bg"),
@@ -461,7 +503,7 @@ fn read_buffer<T: Pod>(
     receiver
         .recv()
         .map_err(|e| Error::Gpu(format!("tire_transient recv: {e:?}")))??;
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let out = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     stage.unmap();

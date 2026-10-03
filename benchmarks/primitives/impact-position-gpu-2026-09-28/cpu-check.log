@@ -1,0 +1,126 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: method `scalar_position_buffers` is never used
+   --> crates/molla-solvers/src/distance_gpu.rs:727:19
+    |
+ 95 | impl DistanceGpu {
+    | ---------------- method in this implementation
+...
+727 |     pub(crate) fn scalar_position_buffers(
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (lib) generated 1 warning
+    Checking molla v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla)
+warning: function `body_poses` is never used
+  --> crates/molla-solvers/tests/common/gpu_readback.rs:27:8
+   |
+27 | pub fn body_poses(engine: &Engine, system: &FemRigidGpuSystem, count: usize) -> Vec<Transform> {
+   |        ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (test "featherstone_drift_gpu") generated 1 warning
+    Checking molla_viewer v0.0.1 (/home/bresilla/data/code/OUSD/molla/bin/molla_viewer)
+warning: `molla-solvers` (test "kinematic_motion_gpu") generated 1 warning (1 duplicate)
+warning: `molla-solvers` (test "featherstone_stop_momentum") generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.21s
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-006645531fd0399e)
+
+running 24 tests
+test impact_constraints::tests::invalid_indefinite_and_nonfinite_inputs_are_rejected ... ok
+test impact_constraints::tests::active_set_checks_inactive_rows_and_preserves_bilateral_equalities ... ok
+test impact_constraints::tests::midpoint_capture_reports_average_zero_not_final_zero ... ok
+test impact_constraints::tests::coupled_contacts_preserve_response_under_block_permutation ... ok
+test impact_constraints::tests::midpoint_coupled_contacts_and_homogeneous_joints_have_nonpositive_work ... ok
+test impact_constraints::tests::midpoint_rejects_stale_event_speed_and_separating_active_contacts ... ok
+test impact_constraints::tests::newton_normal_restitution_alone_is_not_an_oblique_energy_certificate ... ok
+test impact_constraints::tests::newton_rebound_mass_speed_sweep_and_energy ... ok
+test impact_constraints::tests::sliding_cap_includes_base_and_solved_normal_impulse ... ok
+test impact_constraints::tests::midpoint_normal_bounce_matches_authored_coefficient_and_preserves_momentum ... ok
+test impact_constraints::tests::nonnegative_joint_couples_to_restitution_normal ... ok
+test impact_constraints::tests::rank_deficient_tangent_response_remains_bounded ... ok
+test impact_constraints::tests::static_capture_promotion_and_initial_dynamic_mode ... ok
+test impact_constraints::tests::target_and_capacity_overflow_fail_closed ... ok
+test impact_constraints::tests::midpoint_friction_removes_the_oblique_energy_counterexample ... ok
+test impact_constraints::tests::two_body_impact_conserves_momentum_and_measures_energy_loss ... ok
+test impact_constraints::tests::separated_and_zero_load_contacts_cannot_generate_friction ... ok
+test impact_constraints::tests::joint_coupling_is_solved_before_friction_mode_promotion ... ok
+test impact_constraints::tests::normal_tangent_coupling_has_no_associated_cone_dilatancy ... ok
+test impact_constraints::tests::tangent_basis_rotation_preserves_world_impulse ... ok
+test impact_constraints::tests::infeasible_immovable_rows_fail_closed_and_empty_problem_succeeds ... ok
+test impact_constraints::tests::midpoint_passive_oblique_impacts_dissipate_across_mass_friction_and_restitution ... ok
+test impact_constraints::tests::nearly_parallel_scalar_rows_release_inactive_impulses_with_bilateral_rows ... ok
+test impact_constraints::tests::nearly_parallel_contact_normals_release_inactive_impulses ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 98 filtered out; finished in 0.11s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/articulated_impact.rs (target/debug/deps/articulated_impact-36a1276feece47f0)
+
+running 12 tests
+test off_center_two_body_friction_conserves_linear_and_angular_momentum ... ok
+test moving_surface_transfers_work_and_ignores_normal_belt_velocity ... ok
+test world_hinge_uses_pivot_inertia_and_preserves_the_locked_motion ... ok
+test moving_support_work_explains_dynamic_energy_gain ... ok
+test inherited_kinematic_velocity_uses_physical_not_relative_joint_energy ... ok
+test fixed_tree_impact_transfers_through_the_articulation ... ok
+test simultaneous_manifold_contacts_are_order_independent_in_body_response ... ok
+test off_center_rotated_com_and_tensor_match_analytic_impulse ... ok
+test scalar_joint_row_couples_to_contact_and_failures_leave_state_unchanged ... ok
+test two_body_rebound_momentum_endpoint_exchange_and_force_preservation ... ok
+test oblique_friction_impacts_dissipate_with_world_frame_covariance ... ok
+test nonnegative_scalar_response_and_late_failure_are_transactional ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/runtime_restitution.rs (target/debug/deps/runtime_restitution-daf7ed01298d6c08)
+
+running 10 tests
+test failed_frame_after_impact_restores_the_episode_and_physical_state ... ok
+test explicit_velocity_and_material_edits_start_a_fresh_impact_episode ... ok
+test restitution_runs_in_the_sleeping_selection_path ... ok
+test impact_joint_reactions_include_the_impulse_and_can_trigger_breakage ... ok
+test impact_impulse_is_published_once_and_matches_the_velocity_jump ... ok
+test a_remote_impact_does_not_change_an_unconnected_contact_trajectory ... ok
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=0, measured=0e0
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=0.5, measured=5e-1
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=1, measured=1e0
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=0, measured=0e0
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=0.5, measured=5e-1
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=1, measured=1e0
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=0, measured=0e0
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=0.5, measured=5e-1
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=1, measured=1e0
+test cpu_normal_rebound_consumes_restitution_across_step_sizes ... ok
+test passive_oblique_runtime_impacts_do_not_increase_kinetic_energy ... ok
+test rebound_is_independent_of_onset_penalty_stiffness_damping_and_substeps ... ok
+test tilted_box_impacts_keep_kinetic_energy_below_the_initial_budget ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

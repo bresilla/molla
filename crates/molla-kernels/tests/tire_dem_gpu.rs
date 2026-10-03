@@ -1436,13 +1436,21 @@ fn tire_dem_resident_owner_reseed_has_explicit_in_place_gpu_state_bridge_source_
         .split("pub fn dispatch_lbvh_step_resident_state")
         .next()
         .expect("resident state update body should precede dispatch");
+    let update: String = update.split_whitespace().collect();
     assert!(
-        update.contains("queue.write_buffer(&state.positions")
-            && update.contains("queue.write_buffer(&state.velocities"),
+        update.contains(
+            "molla_core::gpu_write_buffer!(queue,&state.positions,0,bytemuck::cast_slice(positions))"
+        ) && update.contains(
+            "molla_core::gpu_write_buffer!(queue,&state.velocities,0,bytemuck::cast_slice(velocities))"
+        ),
         "resident DEM state update should write existing GPU buffers directly"
     );
     assert!(
-        update.contains("positions.len() != state.grain_count"),
+        !update.contains("create_buffer"),
+        "resident DEM state update must not allocate replacement buffers"
+    );
+    assert!(
+        update.contains("positions.len()!=state.grain_count"),
         "resident DEM state update must reject count changes instead of overflowing buffers"
     );
 }

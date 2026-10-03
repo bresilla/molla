@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.44s
+     Running tests/runtime_cone_limits.rs (target/debug/deps/runtime_cone_limits-7faab4c43142700e)
+
+running 1 test
+test gpu_diagonal_ellipse_retains_loaded_free_twist ... 
+thread 'gpu_diagonal_ellipse_retains_loaded_free_twist' (3323359) panicked at crates/molla-solvers/tests/runtime_cone_limits.rs:220:9:
+velocity=DVec3(1.53414785861969, 0.5209676623344421, 1.1725164651870728), expected=DVec3(1.534287912833419, 0.5210553288836659, 1.1723744899882482), error=0.00021784756991378366, reading=ConeReading { swing: [0.28284998184803417, 0.6363798708170575], violation: 6.798688970412984e-8, active: true, torque: DVec3(1.333803653717041, 1.2907795906066895, -2.3193159103393555), sample_dt: 0.008333333333333333 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_diagonal_ellipse_retains_loaded_free_twist
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 6.12s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_cone_limits`
+make: *** [Makefile:76: test-gpu] Error 101

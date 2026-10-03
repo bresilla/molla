@@ -137,12 +137,12 @@ impl SceneAcceleration {
         scene.check_engine(engine)?;
         let device = engine.device().expect("checked engine").clone();
         let model = &scene.model;
-        if let Some(poses) = seed_poses {
-            if poses.len() != model.body_count || poses.iter().any(|&p| !valid_pose(p)) {
-                return Err(Error::Build(
-                    "scene hierarchy: invalid topology seed poses".into(),
-                ));
-            }
+        if let Some(poses) = seed_poses
+            && (poses.len() != model.body_count || poses.iter().any(|&p| !valid_pose(p)))
+        {
+            return Err(Error::Build(
+                "scene hierarchy: invalid topology seed poses".into(),
+            ));
         }
         let count = model
             .shape_geometry
@@ -182,10 +182,10 @@ impl SceneAcceleration {
             }
             let pose = poses[shape];
             let mut center = pose.transform_point(lo * 0.5 + hi * 0.5);
-            if bodies[shape] >= 0 {
-                if let Some(seeds) = seed_poses {
-                    center = seeds[bodies[shape] as usize].transform_point(center);
-                }
+            if bodies[shape] >= 0
+                && let Some(seeds) = seed_poses
+            {
+                center = seeds[bodies[shape] as usize].transform_point(center);
             }
             centers.push(center);
             shapes.push(shape as u32);

@@ -39,6 +39,8 @@ pub struct Contacts {
     pub depth: Buffer<Real>,
     /// Friction coefficient at this contact.
     pub friction: Buffer<Real>,
+    /// Static coefficient; NaN maps legacy manually authored contacts to `friction`.
+    pub static_friction: Buffer<Real>,
     /// Rolling friction (μ_rolling) at this contact — opposes the
     /// angular velocity component perpendicular to the normal.
     pub rolling_friction: Buffer<Real>,
@@ -88,6 +90,7 @@ impl Contacts {
             normal: Buffer::from_vec(vec![Vec3::ZERO; capacity], StorageReadWrite),
             depth: Buffer::from_vec(vec![0.0; capacity], StorageReadWrite),
             friction: Buffer::from_vec(vec![0.0; capacity], StorageReadWrite),
+            static_friction: Buffer::from_vec(vec![Real::NAN; capacity], StorageReadWrite),
             rolling_friction: Buffer::from_vec(vec![0.0; capacity], StorageReadWrite),
             torsional_friction: Buffer::from_vec(vec![0.0; capacity], StorageReadWrite),
             restitution: Buffer::from_vec(vec![0.0; capacity], StorageReadWrite),
@@ -122,6 +125,7 @@ impl Contacts {
         up!(normal);
         up!(depth);
         up!(friction);
+        up!(static_friction);
         up!(rolling_friction);
         up!(torsional_friction);
         up!(restitution);

@@ -1,0 +1,15 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.65s
+     Running tests/runtime_loop_brakes.rs (target/debug/deps/runtime_loop_brakes-a39a43f392af4a43)
+
+running 1 test
+66 rotated compliant hinge/slider/Ball/D6 axis controls: masses .01/1/100, world and floating pairs, capped effort and uncapped physical brakes, 16 live-edit frames, independent rate/pose/both-anchor oracle and retained layout
+test cpu_compliant_loop_brakes_cover_all_valid_axes_and_floating_pairs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+

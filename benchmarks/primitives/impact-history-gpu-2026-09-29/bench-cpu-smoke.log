@@ -1,0 +1,28 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on artifact directory
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.24s
+     Running benches/runtime_primitives.rs (target/debug/deps/runtime_primitives-2eb5357e378b0797)
+benchmark_schema=1	timing_scope=device_timeline_including_host_queue_idle	allocation_scope=post_frame_observed_device_totals	transfer_scope=runtime_state_diagnostics_only	build_profile=debug
+case_start	primitive=distance	instances=1	backend=cpu
+case_ok	primitive=distance	instances=1	backend=cpu	bodies=1	articulations=1	warmup=2	steps=4	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000656129	wall_seconds=0.002034970	max_step_seconds=0.000795828	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=0	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_start	primitive=cone	instances=1	backend=cpu
+case_ok	primitive=cone	instances=1	backend=cpu	bodies=1	articulations=1	warmup=2	steps=4	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000298755	wall_seconds=0.001161277	max_step_seconds=0.000341318	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=0	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_start	primitive=d6	instances=1	backend=cpu
+case_ok	primitive=d6	instances=1	backend=cpu	bodies=1	articulations=1	warmup=2	steps=4	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000291019	wall_seconds=0.000603117	max_step_seconds=0.000152658	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=0	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_start	primitive=reaction	instances=1	backend=cpu
+case_ok	primitive=reaction	instances=1	backend=cpu	bodies=1	articulations=1	warmup=2	steps=4	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000104832	wall_seconds=0.000236649	max_step_seconds=0.000059974	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=0	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_start	primitive=break	instances=1	backend=cpu
+case_ok	primitive=break	instances=1	backend=cpu	bodies=1	articulations=1	warmup=2	steps=4	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000097220	wall_seconds=0.000602910	max_step_seconds=0.000359188	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=1	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_start	primitive=friction	instances=1	backend=cpu
+case_ok	primitive=friction	instances=1	backend=cpu	bodies=1	articulations=1	warmup=2	steps=4	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.000151124	wall_seconds=0.001190442	max_step_seconds=0.000300159	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=0	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable
+case_start	primitive=mixed	instances=1	backend=cpu
+case_ok	primitive=mixed	instances=1	backend=cpu	bodies=6	articulations=6	warmup=2	steps=4	dt=0.004166666666666667	substeps=4	reactions=true	pair_capacity=8	contact_width=8	setup_seconds=0.001366685	wall_seconds=0.004961228	max_step_seconds=0.001694451	device_timeline_seconds=None	state_upload_bytes=0	state_readout_bytes=0	boundary_buffer_bytes=0	boundary_allocations=0	model_compilations=None	break_events=1	dispatch_count=unavailable	all_transfer_bytes=unavailable	transient_peak_allocations=unavailable

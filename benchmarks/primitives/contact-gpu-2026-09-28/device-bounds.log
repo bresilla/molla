@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+error[E0432]: unresolved import `molla_sim::BodyId`
+ --> crates/molla-geometry/tests/shape_bounds_gpu.rs:6:17
+  |
+6 | use molla_sim::{BodyId, BodyParams, ModelBuilder, ShapeGeometry};
+  |                 ^^^^^^ no `BodyId` in the root
+  |
+  = help: consider importing this struct instead:
+          molla_core::BodyId
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `molla-geometry` (test "shape_bounds_gpu") due to 1 previous error
+make: *** [Makefile:81: test-gpu] Error 101

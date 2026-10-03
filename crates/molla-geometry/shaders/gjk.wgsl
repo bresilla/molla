@@ -338,7 +338,10 @@ fn write_simplex(i: u32, count: u32, v0: SimplexVtx, v1: SimplexVtx, v2: Simplex
 // ── GJK kernel. ─────────────────────────────────────────────────
 @compute @workgroup_size(64)
 fn gjk_overlap(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
+    gjk_pair(gid.x);
+}
+
+fn gjk_pair(i: u32) {
     if (i >= u.pair_count) { return; }
     overlap[i] = 0u;
 

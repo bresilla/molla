@@ -67,12 +67,15 @@ impl TimestampPages {
                 })
             })
             .collect();
-        let ticks = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("FEM substep phase ticks"),
-            size: u64::from(count) * 8,
-            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
+        let ticks = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("FEM substep phase ticks"),
+                size: u64::from(count) * 8,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
         Self {
             queries,
             ticks,

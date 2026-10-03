@@ -1,0 +1,31 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.54s
+     Running tests/runtime_distance_gpu.rs (target/debug/deps/runtime_distance_gpu-73a3d0bb456975ab)
+
+running 6 tests
+test runtime_distance_gpu_offset_rotated_frames_full_inertia_and_loop ... offset redundant distance one-second CPU/GPU peak position=0.0000003462291781151763
+ok
+test runtime_distance_gpu_retains_warm_resources_and_tracks_mutation ... distance GPU warm [buffers, bytes, groups, pipelines, shaders]=[89, 529616, 28, 6, 6]
+ok
+test runtime_distance_gpu_scalar_stop_couples_to_other_articulation ... ok
+test runtime_distance_gpu_shared_response_and_independent_bounds ... ok
+test runtime_distance_gpu_world_pendulum_ten_seconds_and_short_parity ... GPU distance pendulum dt=0.016666666666666666 substeps=8 duration=10s peak=0.000043753554254122307 one-second-parity=0.0000010800176457349955
+GPU distance pendulum dt=0.008333333333333333 substeps=8 duration=10s peak=0.000011011978352737373 one-second-parity=0.0000075870098729767295
+GPU distance pendulum dt=0.004166666666666667 substeps=8 duration=10s peak=0.0000028378564032038867 one-second-parity=0.000004839776988717669
+ok
+test runtime_distance_gpu_zero_equality_failure_and_resume_are_atomic ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 158.47s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

@@ -1,0 +1,38 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.72s
+     Running `target/debug/examples/check_primitives_shaders`
+shader_wiring_ok	module=mass_response	entry_points=1
+shader_wiring_ok	module=jacobian_response	entry_points=1
+shader_wiring_ok	module=reaction_response	entry_points=1
+shader_wiring_ok	module=featherstone	entry_points=1
+shader_wiring_ok	module=runtime_distance	entry_points=2
+shader_wiring_ok	module=body_damping	entry_points=1
+shader_wiring_ok	module=scalar_publication	entry_points=1
+shader_wiring_ok	module=floating_momentum	entry_points=1
+shader_wiring_complete	modules=8	device_execution=false
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running tests/standalone_redundant_limits.rs (target/debug/deps/standalone_redundant_limits-d931a4bcdd82f5b1)
+
+running 1 test
+test gpu_runtime_redundant_points_and_caps_preserve_permitted_physical_motion ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } dt=0.00001 runtime_mobile_cases=18
+
+thread 'gpu_runtime_redundant_points_and_caps_preserve_permitted_physical_motion' (181228) panicked at crates/molla-solvers/tests/standalone_redundant_limits.rs:714:20:
+called `Result::unwrap()` on an `Err` value: Solver("GPU rigid runtime solver fault 512")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_runtime_redundant_points_and_caps_preserve_permitted_physical_motion
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 45.00s
+
+error: test failed, to rerun pass `-p molla-solvers --test standalone_redundant_limits`
+make: *** [Makefile:514: test-primitives-redundant-runtime-mobile-gpu] Error 101

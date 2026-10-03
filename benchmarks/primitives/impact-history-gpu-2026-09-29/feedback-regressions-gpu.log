@@ -1,0 +1,17 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.86s
+     Running tests/featherstone_feedback_gpu.rs (target/debug/deps/featherstone_feedback_gpu-86426fb05b542894)
+
+running 3 tests
+test stable_feedback_matches_cpu_caps_and_coupled_momentum ... ok
+test stable_feedback_requires_rigorous_dynamics_and_faults_nonfinite_gains ... ok
+test stiff_coupled_feedback_trajectory_stays_bounded_on_gpu ... 512-step coupled GPU feedback trajectory: peak=0.006560687907040119rad/s; CPU parity and momentum passed
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 204.22s
+

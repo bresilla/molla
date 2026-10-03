@@ -155,13 +155,21 @@ fn build_quadruped_like_tree() -> Model {
     model
 }
 
-fn build_contact_quadruped_like_tree() -> Model {
+fn build_contact_quadruped_like_tree(floor_fixture: bool) -> Model {
     let mut b = ModelBuilder::new();
     b.set_linear_damping(0.05);
     b.set_angular_damping(0.08);
+    if floor_fixture {
+        b.set_default_friction(0.7).unwrap();
+    }
     b.begin_articulation();
 
-    let root_pos = Vec3::new(0.0, 1.15, 0.0);
+    let root_height = if floor_fixture {
+        3.0 * 0.28 + 0.24 + 0.035 - 1e-4
+    } else {
+        1.15
+    };
+    let root_pos = Vec3::new(0.0, root_height, 0.0);
     let root = b.add_body(
         BodyParams::new()
             .with_spatial_inertia(SpatialInertia {
@@ -171,7 +179,8 @@ fn build_contact_quadruped_like_tree() -> Model {
             })
             .with_position(root_pos),
     );
-    b.add_shape_box(root, Vec3::new(0.40, 0.08, 0.25), Transform::IDENTITY)
+    let root_shape = b
+        .add_shape_box(root, Vec3::new(0.40, 0.08, 0.25), Transform::IDENTITY)
         .unwrap();
     b.add_joint_fixed(
         BodyId::NONE,
@@ -200,7 +209,8 @@ fn build_contact_quadruped_like_tree() -> Model {
                 })
                 .with_position(upper_pos),
         );
-        b.add_shape_capsule(upper, 0.24, 0.035, Transform::IDENTITY)
+        let upper_shape = b
+            .add_shape_capsule(upper, 0.24, 0.035, Transform::IDENTITY)
             .unwrap();
         b.add_joint_revolute(
             root,
@@ -211,7 +221,8 @@ fn build_contact_quadruped_like_tree() -> Model {
         )
         .unwrap();
 
-        let lower_pos = root_pos + hip + Vec3::new(0.0, -0.82, 0.0);
+        let lower_drop = if floor_fixture { 0.84 } else { 0.82 };
+        let lower_pos = root_pos + hip + Vec3::new(0.0, -lower_drop, 0.0);
         let lower = b.add_body(
             BodyParams::new()
                 .with_spatial_inertia(SpatialInertia {
@@ -221,8 +232,13 @@ fn build_contact_quadruped_like_tree() -> Model {
                 })
                 .with_position(lower_pos),
         );
-        b.add_shape_capsule(lower, 0.24, 0.035, Transform::IDENTITY)
+        let lower_shape = b
+            .add_shape_capsule(lower, 0.24, 0.035, Transform::IDENTITY)
             .unwrap();
+        if floor_fixture {
+            b.add_shape_collision_exclusion(root_shape, upper_shape);
+            b.add_shape_collision_exclusion(upper_shape, lower_shape);
+        }
         b.add_joint_revolute(
             upper,
             lower,
@@ -510,8 +526,82 @@ fn procedural_quadruped_tree_pd_targets_stay_finite_and_converge() {
 }
 
 #[test]
+fn connected_overlap_quadruped_holds_hips_inside_static_friction_budget() {
+    let model = build_contact_quadruped_like_tree(false);
+    let mut input = model.state().unwrap();
+    let mut output = model.state().unwrap();
+    let mut control = model.control();
+    let targets = [0.18, -0.55, -0.18, -0.55, -0.16, 0.45, 0.16, 0.45];
+    for (i, &target) in targets.iter().enumerate() {
+        control.joint_target_mode.host_mut().unwrap()[i] = JointTargetMode::Position as u32;
+        control.joint_target_pos.host_mut().unwrap()[i] = target;
+        control.joint_target_kp.host_mut().unwrap()[i] = 120.0;
+        control.joint_target_kd.host_mut().unwrap()[i] = 16.0;
+    }
+    let mut contacts = Contacts::with_capacity(256);
+    let mut pipeline = CollisionPipeline::new();
+    let mut solver = FeatherstoneSolver::new_cpu().with_damping(0.12);
+    let mut max_hip_motion: Real = 0.0;
+    for frame in 0..800 {
+        pipeline.collide(&model, &input, &mut contacts).unwrap();
+        for row in 0..contacts.count as usize {
+            assert_ne!(contacts.a_index.host().unwrap()[row], u32::MAX);
+            assert_ne!(contacts.b_index.host().unwrap()[row], u32::MAX);
+        }
+        solver
+            .step(&model, &input, &control, &contacts, 0.003, &mut output)
+            .unwrap();
+        if frame == 0 {
+            let hip_contacts: Vec<_> = solver
+                .contact_forces()
+                .iter()
+                .filter(|c| c.bodies[0] == Some(BodyId::from_index(0)))
+                .collect();
+            assert_eq!(hip_contacts.len(), 4);
+            for contact in hip_contacts {
+                assert!((contact.normal_force - 6500.0).abs() < 65.0);
+                assert_eq!(contact.static_friction, 0.5);
+                assert_eq!(contact.friction, 0.5);
+                assert_eq!(
+                    contact.friction_regime,
+                    molla_solvers::penalty_contact::FrictionRegime::Sticking
+                );
+                let budget =
+                    (1.15 - contact.point.y).abs() * contact.static_friction * contact.normal_force;
+                assert!(budget > 10.0 * 120.0 * 0.18, "hip torque budget={budget}");
+                assert!(
+                    contact.tangent_impulse.length()
+                        <= contact.static_friction * contact.normal_impulse
+                );
+            }
+        }
+        for i in [0, 2, 4, 6] {
+            max_hip_motion = max_hip_motion.max(output.joint_q.host().unwrap()[i].abs());
+        }
+        assert!(output.joint_q.host().unwrap().iter().all(|q| q.is_finite()));
+        assert!(
+            output
+                .joint_qd
+                .host()
+                .unwrap()
+                .iter()
+                .all(|v| v.is_finite())
+        );
+        std::mem::swap(&mut input, &mut output);
+    }
+    assert!(max_hip_motion < 1e-9, "hip displacement={max_hip_motion}");
+    for i in [1, 3, 5, 7] {
+        assert!((input.joint_q.host().unwrap()[i] - targets[i]).abs() < targets[i].abs() * 0.95);
+    }
+    eprintln!(
+        "connected self-contact: hip displacement={max_hip_motion}, q={:?}",
+        input.joint_q.host().unwrap()
+    );
+}
+
+#[test]
 fn procedural_quadruped_tree_survives_floor_contacts_while_controlled() {
-    let model = build_contact_quadruped_like_tree();
+    let model = build_contact_quadruped_like_tree(true);
     assert_eq!(model.body_count, 9, "root + 4 two-link legs");
     assert_eq!(model.joint_dof_total, 8);
 
@@ -537,18 +627,33 @@ fn procedural_quadruped_tree_survives_floor_contacts_while_controlled() {
     let initial_q = s_a.joint_q.host().unwrap().to_vec();
     let dt: Real = 0.003;
     let mut max_contacts = 0_u32;
+    let mut ground_frames = 0;
+    let mut peak_ground_force: Real = 0.0;
     for _ in 0..800 {
         pipeline.collide(&model, &s_a, &mut contacts).unwrap();
         max_contacts = max_contacts.max(contacts.count);
         solver
             .step(&model, &s_a, &control, &contacts, dt, &mut s_b)
             .unwrap();
+        let ground: Vec<_> = solver
+            .contact_forces()
+            .iter()
+            .filter(|contact| contact.acted && contact.bodies.contains(&None))
+            .collect();
+        if !ground.is_empty() {
+            ground_frames += 1;
+        }
+        for contact in ground {
+            peak_ground_force = peak_ground_force.max(contact.normal_force);
+            assert_eq!(contact.static_friction, 0.7);
+            assert_eq!(contact.friction, 0.7);
+        }
         std::mem::swap(&mut s_a, &mut s_b);
     }
 
     assert!(
-        max_contacts > 0,
-        "controlled quadruped did not exercise floor contacts"
+        ground_frames > 0 && (peak_ground_force - 10.0).abs() < 0.1,
+        "floor preload mismatch: frames={ground_frames}, peak_force={peak_ground_force}"
     );
     let q = s_a.joint_q.host().unwrap();
     let qd = s_a.joint_qd.host().unwrap();
@@ -580,7 +685,7 @@ fn procedural_quadruped_tree_survives_floor_contacts_while_controlled() {
         );
     }
     eprintln!(
-        "contact quadruped: max_contacts={max_contacts}, min_body_y={min_body_y:.4}, q={:?}",
+        "contact quadruped: max_contacts={max_contacts}, ground_frames={ground_frames}, peak_ground_force={peak_ground_force}, min_body_y={min_body_y:.4}, q={:?}",
         q
     );
     assert!(

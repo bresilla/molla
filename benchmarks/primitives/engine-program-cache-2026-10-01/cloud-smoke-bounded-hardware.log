@@ -1,0 +1,48 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sensors v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sensors)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.38s
+     Running benches/bench_sensor_cloud.rs (target/debug/deps/bench_sensor_cloud-a50f775c5cd513fe)
+Gnuplot not found, using plotters backend
+sensor cloud adapter: Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" })
+sensor cloud sizes=[1024, 65536] smoke=true
+Testing sensor_cloud/cpu/transform/1024
+Success
+Testing sensor_cloud/gpu_completed/transform/1024
+Success
+Testing sensor_cloud/gpu_selected_host/transform/1024
+Success
+Testing sensor_cloud/cpu/half_kept/1024
+Success
+Testing sensor_cloud/gpu_completed/half_kept/1024
+Success
+Testing sensor_cloud/gpu_selected_host/half_kept/1024
+Success
+Testing sensor_cloud/cpu/all_rejected/1024
+Success
+Testing sensor_cloud/gpu_completed/all_rejected/1024
+Success
+Testing sensor_cloud/gpu_selected_host/all_rejected/1024
+Success
+Testing sensor_cloud/cpu/transform/65536
+Success
+Testing sensor_cloud/gpu_completed/transform/65536
+Success
+Testing sensor_cloud/gpu_selected_host/transform/65536
+Success
+Testing sensor_cloud/cpu/half_kept/65536
+Success
+Testing sensor_cloud/gpu_completed/half_kept/65536
+Success
+Testing sensor_cloud/gpu_selected_host/half_kept/65536
+Success
+Testing sensor_cloud/cpu/all_rejected/65536
+Success
+Testing sensor_cloud/gpu_completed/all_rejected/65536
+Success
+Testing sensor_cloud/gpu_selected_host/all_rejected/65536
+Success
+

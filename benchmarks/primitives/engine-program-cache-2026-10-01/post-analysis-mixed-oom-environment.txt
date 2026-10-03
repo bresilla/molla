@@ -1,0 +1,12 @@
+Thu Oct  1 16:49:27 UTC 2026
+NVIDIA GeForce RTX 4080, 595.91.07, 16376 MiB, 11356 MiB, 0 %
+7551, /usr/libexec/gnome-remote-desktop-daemon, 241 MiB
+7864, /usr/libexec/gnome-remote-desktop-daemon, 1479 MiB
+2133052, /usr/bin/ptyxis, 70 MiB
+3450671, /home/bresilla/data/code/OUSD/molla/target/release/deps/runtime_primitives-c87dd9596ff6fd06, 330 MiB
+               total        used        free      shared  buff/cache   available
+Mem:            58Gi       6.7Gi       5.7Gi       198Mi        46Gi        51Gi
+Swap:           71Gi       4.9Gi        67Gi
+3349172 3349164 3349172       46:00 timeout --kill-after=10s 21600s nix develop --impure -c bash -c set -u; dir=benchmarks/primitives/engine-program-cac
+3397925 3397912 3349172       07:42 /home/bresilla/data/code/OUSD/molla/target/release/deps/runtime_primitives-c87dd9596ff6fd06 --primitive mixed --coun
+3450671 3397925 3349172       00:01 /home/bresilla/data/code/OUSD/molla/target/release/deps/runtime_primitives-c87dd9596ff6fd06 --worker --primitive mix

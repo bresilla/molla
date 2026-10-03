@@ -9,7 +9,9 @@ use molla_sim::{MassProperties, Model, State, eval_body_velocities};
 
 pub(crate) mod blocks;
 mod compact;
+mod impact;
 mod response_batch;
+pub use impact::{ImpactConstraint, ImpactContact, ImpactResponse, ImpactRow, apply_impact};
 
 /// Apply a world impulse and COM angular impulse through the articulation mass matrix.
 pub fn apply_impulse(
@@ -69,7 +71,7 @@ pub fn apply_impulse(
     let rhs: Vec<Real> = (0..n)
         .map(|c| (0..6).map(|r| jacobian[r * n + c] * wrench[r]).sum())
         .collect();
-    let matrix = crate::mass_matrix(model, state, articulation)?;
+    let matrix = crate::response_mass_matrix(model, state, articulation)?;
     let mut locked = Vec::new();
     for &child in &children[begin..end] {
         let i = child as usize;
@@ -220,16 +222,40 @@ enum MassDecomposition {
     },
 }
 
+/// Certify a normalized Cholesky spectrum above the relative null-mode cutoff.
+fn cholesky_resolves_modes(factor: &[Real], n: usize) -> bool {
+    let mut rows = vec![0.; n];
+    let mut columns = vec![0.; n];
+    for i in 0..n {
+        let mut bound = 1.;
+        for j in 0..i {
+            bound += factor[i * n + j].abs() * rows[j];
+        }
+        rows[i] = bound / factor[i * n + i];
+    }
+    for i in (0..n).rev() {
+        let mut bound = 1.;
+        for j in i + 1..n {
+            bound += factor[j * n + i].abs() * columns[j];
+        }
+        columns[i] = bound / factor[i * n + i];
+    }
+    let inverse_bound =
+        rows.into_iter().fold(0., Real::max) * columns.into_iter().fold(0., Real::max);
+    inverse_bound.is_finite() && inverse_bound * n as Real * 1e-12 < 1.
+}
+
 impl MassFactor {
     pub(crate) fn full_rank_cholesky(&self, n: usize) -> Option<(Real, &[Real])> {
         let MassDecomposition::Cholesky(factor) = &self.decomposition else {
             return None;
         };
-        (self.n == n && self.scale.is_finite() && self.scale > 0.0
+        (self.n == n
+            && self.scale.is_finite()
+            && self.scale > 0.0
             && factor.iter().all(|v| v.is_finite())
-            && (0..n).all(|i| factor[i * n + i] > 0.0
-                && factor[i * n + i].powi(2) > 1e-12))
-            .then_some((self.scale, factor.as_slice()))
+            && (0..n).all(|i| factor[i * n + i] > 0.0 && factor[i * n + i].powi(2) > 1e-12))
+        .then_some((self.scale, factor.as_slice()))
     }
 
     pub(crate) fn into_full_rank(self) -> Option<Self> {
@@ -243,6 +269,7 @@ impl MassFactor {
             || scale <= 0.0
             || factor.iter().any(|v| !v.is_finite())
             || (0..n).any(|i| factor[i * n + i] <= 0.0 || factor[i * n + i].powi(2) <= 1e-12)
+            || !cholesky_resolves_modes(&factor, n)
         {
             return None;
         }
@@ -265,6 +292,7 @@ impl MassFactor {
             let mut factor = normalized.clone();
             if dense_chol(&mut factor, n).is_ok()
                 && (0..n).all(|i| factor[i * n + i].powi(2) > 1e-12)
+                && cholesky_resolves_modes(&factor, n)
             {
                 MassDecomposition::Cholesky(factor)
             } else {
@@ -355,7 +383,8 @@ impl MassFactor {
                         .iter()
                         .zip(&whitened[col])
                         .map(|(a, b)| a * b)
-                        .sum::<Real>() / self.scale;
+                        .sum::<Real>()
+                        / self.scale;
                     response[row * count + col] += value;
                     if row != col {
                         response[col * count + row] += value;
@@ -433,7 +462,9 @@ fn whiten_rows(factor: &[Real], rows: &[Vec<Real>], n: usize) -> Result<Vec<Vec<
                 }
                 let diagonal = coefficients[i];
                 if diagonal.abs() < 1e-30 {
-                    return Err(Error::Build(format!("forward_sub: zero diagonal at row {i}")));
+                    return Err(Error::Build(format!(
+                        "forward_sub: zero diagonal at row {i}"
+                    )));
                 }
                 for lane in 0..LANES {
                     values[lane] /= diagonal;
@@ -458,6 +489,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rotated_null_modes_do_not_become_cholesky_full_rank() {
+        use molla_math::{Mat3, Quat, Vec3};
+        for tilt in [0., 1e-5, 1e-4, 1e-3, 0.2] {
+            let rotation =
+                Mat3::from_quat(Quat::from_rotation_z(0.4) * Quat::from_rotation_y(tilt));
+            let inertia =
+                rotation * Mat3::from_diagonal(Vec3::new(0., 0.2, 0.2)) * rotation.transpose();
+            let mut cholesky = (inertia / 0.2).to_cols_array().to_vec();
+            if dense_chol(&mut cholesky, 3).is_ok() {
+                assert!(MassFactor::from_cholesky(cholesky, 3, 0.2).is_none());
+            }
+            for scale in [1e-100, 1., 1e100] {
+                let factor = MassFactor::new(&(inertia * scale).to_cols_array(), 3).unwrap();
+                assert!(
+                    factor.full_rank_cholesky(3).is_none(),
+                    "tilt={tilt} scale={scale}"
+                );
+                for local in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::new(7., 3., -4.)] {
+                    let rhs = rotation * local;
+                    let solved = factor.solve(&rhs.to_array()).unwrap();
+                    let actual = Vec3::from_slice(&solved) * scale;
+                    let expected = rotation * Vec3::new(0., local.y / 0.2, local.z / 0.2);
+                    assert!(
+                        (actual - expected).length() < 1e-10,
+                        "tilt={tilt} scale={scale} actual={actual:?} expected={expected:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn retained_cholesky_matches_fresh_factors_and_preserves_cutoff() {
         for scale in [1e-100, 1.0, 1e100] {
             let matrix = [4.0, 1.0, 1.0, 3.0].map(|v| v * scale);
@@ -475,9 +538,7 @@ mod tests {
             }
         }
         for pivot in [0.0, -1.0, 1e-7, 1e-6, f64::NAN, f64::INFINITY] {
-            assert!(
-                MassFactor::from_cholesky(vec![1.0, 0.0, 0.0, pivot], 2, 1.0).is_none()
-            );
+            assert!(MassFactor::from_cholesky(vec![1.0, 0.0, 0.0, pivot], 2, 1.0).is_none());
         }
         for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             assert!(MassFactor::from_cholesky(vec![1.0], 1, scale).is_none());
@@ -574,7 +635,9 @@ mod tests {
             assert!(factor.add_gram(&[vec![1.0, 2.0]], &mut []).is_err());
             factor.add_gram(&[], &mut []).unwrap();
             let mut response = [7.0; 4];
-            factor.add_gram(&[vec![0.0; 2], vec![0.0; 2]], &mut response).unwrap();
+            factor
+                .add_gram(&[vec![0.0; 2], vec![0.0; 2]], &mut response)
+                .unwrap();
             assert_eq!(response, [7.0; 4]);
         }
     }

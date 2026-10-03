@@ -67,14 +67,18 @@ pub struct Motors {
 }
 
 fn axis_of(scene: &RigidScene, joint: JointHandle) -> Result<JointAxis> {
-    let desc = scene.joint(joint).ok_or_else(|| Error::Build("motor joint is missing".into()))?;
+    let desc = scene
+        .joint(joint)
+        .ok_or_else(|| Error::Build("motor joint is missing".into()))?;
     if scene.joint_softness(joint)?.is_some() {
         return Err(Error::Build("motors and brakes need a rigid joint".into()));
     }
     match desc.kind {
         JointType::Revolute => Ok(JointAxis::AngX),
         JointType::Prismatic => Ok(JointAxis::LinX),
-        _ => Err(Error::Build("motors and brakes need a revolute or prismatic joint".into())),
+        _ => Err(Error::Build(
+            "motors and brakes need a revolute or prismatic joint".into(),
+        )),
     }
 }
 
@@ -87,24 +91,46 @@ fn coordinate(scene: &RigidScene, joint: JointHandle) -> Result<Option<(Real, Re
     let coord = model.joint_coord_offset.host()?[index.index()] as usize;
     let dof = model.joint_dof_offset.host()?[index.index()] as usize;
     let state = scene.state();
-    Ok(Some((state.joint_q.host()?[coord], state.joint_qd.host()?[dof], dof)))
+    Ok(Some((
+        state.joint_q.host()?[coord],
+        state.joint_qd.host()?[dof],
+        dof,
+    )))
 }
 
 impl Motors {
+    pub(super) fn is_empty(&self) -> bool {
+        self.motors.is_empty() && self.brakes.is_empty()
+    }
+
     /// Puts a motor on `joint`, holding its current position.
-    pub fn insert(&mut self, scene: &RigidScene, joint: JointHandle, spec: MotorSpec) -> Result<()> {
+    pub fn insert(
+        &mut self,
+        scene: &RigidScene,
+        joint: JointHandle,
+        spec: MotorSpec,
+    ) -> Result<()> {
         axis_of(scene, joint)?;
-        if !(spec.max_force >= 0.0) || !(spec.limits.max_velocity >= 0.0) {
-            return Err(Error::Build("motor force and velocity limits must be nonnegative".into()));
+        if spec.max_force.is_nan()
+            || spec.max_force < 0.0
+            || spec.limits.max_velocity.is_nan()
+            || spec.limits.max_velocity < 0.0
+        {
+            return Err(Error::Build(
+                "motor force and velocity limits must be nonnegative".into(),
+            ));
         }
         let mut controller = MotorController::new(spec.limits);
         let hold = coordinate(scene, joint)?.map_or(0.0, |(q, _, _)| q);
         controller.set_command(MotorCommand::Position(hold));
-        self.motors.insert(joint, Motor {
-            controller,
-            max_force: spec.max_force,
-            written: None,
-        });
+        self.motors.insert(
+            joint,
+            Motor {
+                controller,
+                max_force: spec.max_force,
+                written: None,
+            },
+        );
         Ok(())
     }
 
@@ -129,7 +155,8 @@ impl Motors {
     }
 
     pub fn command(&mut self, joint: JointHandle, command: MotorCommand) -> Result<()> {
-        let (MotorCommand::Position(v) | MotorCommand::Velocity(v) | MotorCommand::Force(v)) = command;
+        let (MotorCommand::Position(v) | MotorCommand::Velocity(v) | MotorCommand::Force(v)) =
+            command;
         if !v.is_finite() {
             return Err(Error::Build("motor command must be finite".into()));
         }
@@ -144,7 +171,11 @@ impl Motors {
         Ok(())
     }
 
-    pub fn set_acceleration(&mut self, joint: JointHandle, acceleration: Option<Real>) -> Result<()> {
+    pub fn set_acceleration(
+        &mut self,
+        joint: JointHandle,
+        acceleration: Option<Real>,
+    ) -> Result<()> {
         self.motor(joint)?.controller.limits.acceleration = acceleration.map(Real::abs);
         Ok(())
     }
@@ -156,7 +187,7 @@ impl Motors {
 
     /// Force or torque available to the motor.
     pub fn set_max_force(&mut self, joint: JointHandle, max_force: Real) -> Result<()> {
-        if !(max_force >= 0.0) {
+        if max_force.is_nan() || max_force < 0.0 {
             return Err(Error::Build("motor force limit must be nonnegative".into()));
         }
         self.motor(joint)?.max_force = max_force;
@@ -165,7 +196,12 @@ impl Motors {
 
     /// Puts a brake on `joint`, or changes its damping (N·m·s/rad or N·s/m);
     /// zero releases it and keeps reporting.
-    pub fn set_brake(&mut self, scene: &mut RigidScene, joint: JointHandle, damping: Real) -> Result<()> {
+    pub fn set_brake(
+        &mut self,
+        scene: &mut RigidScene,
+        joint: JointHandle,
+        damping: Real,
+    ) -> Result<()> {
         let axis = axis_of(scene, joint)?;
         scene.set_joint_brake(joint, axis, damping)?;
         self.brakes.insert(joint, damping);
@@ -231,7 +267,12 @@ impl Motors {
     pub(crate) fn after_step(&mut self, scene: &RigidScene, efforts: &[JointEffort]) -> Result<()> {
         self.brakes.retain(|joint, _| scene.joint(*joint).is_some());
         self.readings.clear();
-        let joints: Vec<JointHandle> = self.motors.keys().chain(self.brakes.keys()).copied().collect();
+        let joints: Vec<JointHandle> = self
+            .motors
+            .keys()
+            .chain(self.brakes.keys())
+            .copied()
+            .collect();
         for joint in joints {
             let Some((position, velocity, dof)) = coordinate(scene, joint)? else {
                 continue;
@@ -241,21 +282,28 @@ impl Motors {
                 Some(motor) => (
                     motor.controller.command,
                     motor.written.map_or(0.0, |w| {
-                        if w.mode == JointTargetMode::Velocity { w.target_velocity } else { 0.0 }
+                        if w.mode == JointTargetMode::Velocity {
+                            w.target_velocity
+                        } else {
+                            0.0
+                        }
                     }),
                     effort.drive,
                 ),
                 None => (MotorCommand::Force(0.0), 0.0, 0.0),
             };
-            self.readings.insert(joint, MotorReading {
-                position,
-                velocity,
-                command,
-                commanded_velocity,
-                force,
-                brake_damping: self.brakes.get(&joint).copied().unwrap_or(0.0),
-                brake_force: effort.brake,
-            });
+            self.readings.insert(
+                joint,
+                MotorReading {
+                    position,
+                    velocity,
+                    command,
+                    commanded_velocity,
+                    force,
+                    brake_damping: self.brakes.get(&joint).copied().unwrap_or(0.0),
+                    brake_force: effort.brake,
+                },
+            );
         }
         Ok(())
     }

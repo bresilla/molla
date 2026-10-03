@@ -1,0 +1,68 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.39s
+     Running tests/runtime_multidof_feedback_gpu.rs (target/debug/deps/runtime_multidof_feedback_gpu-c96cf063213942db)
+
+running 1 test
+test multidof_drives_use_nonzero_coordinates_and_match_cpu_with_stable_feedback ... multidof kind=D6 stable=false phase=0 peak_pose=1.5070001698839172e-8 peak_velocity=5.159893639937405e-9 peak_reaction=1.837123381517955e-6
+multidof kind=D6 stable=false phase=1 peak_pose=9.077097472419923e-4 peak_velocity=2.168371060837086e-6 peak_reaction=1.4842184976259698e-5
+multidof kind=D6 stable=false phase=2 peak_pose=9.053367672576069e-4 peak_velocity=1.009663604164575e-7 peak_reaction=7.551386417341931e-7
+multidof kind=D6 stable=false phase=3 peak_pose=9.080081755817939e-4 peak_velocity=1.6740297492691028e-6 peak_reaction=1.1952532308156534e-5
+multidof kind=D6 stable=true phase=0 peak_pose=1.3023340085945375e-7 peak_velocity=8.350943905268611e-9 peak_reaction=3.4233202574725245e-6
+multidof kind=D6 stable=true phase=1 peak_pose=9.024753853430008e-4 peak_velocity=1.9219583810864415e-6 peak_reaction=1.2456187212135662e-5
+multidof kind=D6 stable=true phase=2 peak_pose=9.082930599828925e-4 peak_velocity=6.203146092632135e-8 peak_reaction=9.69692351507729e-7
+multidof kind=D6 stable=true phase=3 peak_pose=8.993622256416629e-4 peak_velocity=1.8847188979935834e-6 peak_reaction=1.538783992975647e-5
+multidof kind=Free stable=false phase=0 peak_pose=1.5070001698839172e-8 peak_velocity=5.159893639937405e-9 peak_reaction=1.837123381517955e-6
+multidof kind=Free stable=false phase=1 peak_pose=9.077097472419923e-4 peak_velocity=2.168371060837086e-6 peak_reaction=1.4842184976259698e-5
+multidof kind=Free stable=false phase=2 peak_pose=9.053367672576069e-4 peak_velocity=1.009663604164575e-7 peak_reaction=7.551386417341931e-7
+multidof kind=Free stable=false phase=3 peak_pose=9.080081755817939e-4 peak_velocity=1.6740297492691028e-6 peak_reaction=1.1952532308156534e-5
+multidof kind=Free stable=true phase=0 peak_pose=1.3023340085945375e-7 peak_velocity=8.350943905268611e-9 peak_reaction=3.4233202574725245e-6
+multidof kind=Free stable=true phase=1 peak_pose=9.024753853430008e-4 peak_velocity=1.9219583810864415e-6 peak_reaction=1.2456187212135662e-5
+multidof kind=Free stable=true phase=2 peak_pose=9.082930599828925e-4 peak_velocity=6.203146092632135e-8 peak_reaction=9.69692351507729e-7
+multidof kind=Free stable=true phase=3 peak_pose=8.993622256416629e-4 peak_velocity=1.8847188979935834e-6 peak_reaction=1.538783992975647e-5
+multidof kind=Ball stable=false phase=0 peak_pose=2.6337564208732378e-8 peak_velocity=5.455026421220495e-9 peak_reaction=1.990869392380897e-6
+multidof kind=Ball stable=false phase=1 peak_pose=8.924704946785582e-4 peak_velocity=1.8504910885702018e-6 peak_reaction=1.1903214959982388e-5
+multidof kind=Ball stable=false phase=2 peak_pose=9.045110795476948e-4 peak_velocity=4.288692493349959e-8 peak_reaction=7.045724326212928e-7
+multidof kind=Ball stable=false phase=3 peak_pose=9.106502321232053e-4 peak_velocity=2.7412900590025275e-6 peak_reaction=1.9944660177787153e-5
+multidof kind=Ball stable=true phase=0 peak_pose=2.6337564208732378e-8 peak_velocity=5.417341615789861e-9 peak_reaction=1.977114449395558e-6
+multidof kind=Ball stable=true phase=1 peak_pose=9.126709960255988e-4 peak_velocity=1.6903018177894697e-6 peak_reaction=1.1221110812844426e-5
+multidof kind=Ball stable=true phase=2 peak_pose=8.788278261045861e-4 peak_velocity=5.7672729807683124e-8 peak_reaction=3.5662477997217036e-7
+multidof kind=Ball stable=true phase=3 peak_pose=9.112229920598123e-4 peak_velocity=1.8860560786634982e-6 peak_reaction=1.3040166330989166e-5
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 112.29s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.72s
+     Running tests/runtime_multidof_limits.rs (target/debug/deps/runtime_multidof_limits-778e86f1d9e403fe)
+
+running 2 tests
+test gpu_d6_angular_projection_preserves_other_xyz_axes_and_authored_frames ... ok
+test gpu_d6_near_gimbal_projection_preserves_resolvable_xyz_axes ... near_gimbal sign=-1 axis=0 error=0.000004197792258658944
+near_gimbal sign=-1 axis=1 error=0.000003876250033998287
+near_gimbal sign=-1 axis=2 error=0.0000004878850443287176
+near_gimbal sign=1 axis=0 error=0.000005475198445877313
+near_gimbal sign=1 axis=1 error=0.0000057596409589333435
+near_gimbal sign=1 axis=2 error=0.0000009248328595866584
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 303.43s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

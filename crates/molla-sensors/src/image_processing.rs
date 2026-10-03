@@ -685,7 +685,7 @@ pub(crate) fn checked_budget(config: ImageProcessorConfig, limits: &wgpu::Limits
         || uniform > limits.max_buffer_size
         || uniform > u32::MAX as u64
         || storage.into_iter().any(|size| {
-            size > limits.max_buffer_size || size > limits.max_storage_buffer_binding_size as u64
+            size > limits.max_buffer_size || size > limits.max_storage_buffer_binding_size
         })
     {
         return Err(Error::Solver(

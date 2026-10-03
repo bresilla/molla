@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.11s
+     Running tests/runtime_motor_coupling.rs (target/debug/deps/runtime_motor_coupling-99baf1f4f9ee3945)
+
+running 1 test
+test gpu_coupled_motor_models_match_two_body_inverse_mass ... 
+thread 'gpu_coupled_motor_models_match_two_body_inverse_mass' (2062311) panicked at crates/molla-solvers/tests/runtime_motor_coupling.rs:192:21:
+reaction frame=12 axis=1 expected=0.0034545440879582955 actual=JointReaction { child: SpatialVector { linear: DVec3(0.003228425979614258, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }, parent: SpatialVector { linear: DVec3(-0.003228425979614258, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }, sample_dt: 0.0004, peak_force: 0.00393223762512207, peak_torque: 0.0 }: Case { bodies: [BodyHandle(13), BodyHandle(14)], joints: [JointHandle(15), JointHandle(16)], masses: [0.01, 3.0], models: [Force, Acceleration], cap: inf, loads: [0.003, -1.2000000000000002], q: [0.0018569860814005134, -0.001862575595985793], v: [0.5587631915726885, -0.5608616453068409] }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_coupled_motor_models_match_two_body_inverse_mass
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 3.96s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_motor_coupling`
+make: *** [Makefile:110: test-gpu] Error 101

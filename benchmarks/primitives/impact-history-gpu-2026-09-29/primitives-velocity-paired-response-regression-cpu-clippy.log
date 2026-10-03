@@ -1,0 +1,42 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s
+     Running tests/runtime_ball_drives.rs (target/debug/deps/runtime_ball_drives-e554f937c436dae3)
+
+running 3 tests
+18 floating two-body full-inertia Ball pairs, simultaneous three-axis Force/Acceleration PD and brakes, mixed zero/finite/unbounded caps: independent box active-set enumeration, angular momentum and both-anchor reactions
+test cpu_floating_ball_drives_match_independent_multiaxis_box_response ... ok
+32 live Ball cone/control frames, six rotated closures: blocked swing cancels Effort/Force PD and retires null-mobility Acceleration PD, free twist follows independent implicit brake/model law, setters retain layout and separate cone/total reactions
+test cpu_ball_drives_and_brakes_share_cone_constraints_and_reactions ... ok
+ball_pivot_response cases=540 dt=0.004166666666666667 substeps=1 tolerance=1e-8
+540 full-tensor off-centre Ball closures: three authored-frame axes, all modes, Force/Acceleration, three masses/caps, brakes, independent inverse pivot tensor and anchor reactions
+test cpu_ball_drives_use_full_pivot_response_and_physical_caps ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.08s
+
+     Running tests/runtime_motor_coupling.rs (target/debug/deps/runtime_motor_coupling-f9d99d90e62fd045)
+
+running 1 test
+test coupled_motor_models_match_two_body_inverse_mass ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+     Running tests/runtime_motor_models.rs (target/debug/deps/runtime_motor_models-b95efbc521bf0804)
+
+running 4 tests
+test cpu_d6_motor_models_match_each_authored_axis ... ok
+test cpu_motor_edits_rebuilds_and_reactions_match_scalar_dynamics ... ok
+test cpu_stiff_motor_models_match_independent_scalar_dynamics ... ok
+test cpu_motor_models_match_independent_scalar_dynamics ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.59s
+
+    Checking molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Checking molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Checking molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.52s

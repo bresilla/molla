@@ -1,0 +1,37 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.56s
+     Running tests/runtime_cone_limits.rs (target/debug/deps/runtime_cone_limits-15ee9f156b65c2b4)
+
+running 5 tests
+test cpu_diagonal_ellipse_retains_loaded_free_twist ... ok
+test cpu_cone_impacts_preserve_two_body_angular_momentum ... ok
+test cpu_zero_cone_preserves_free_twist ... ok
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0.4,0.4 peak=1.90958701021092e-7 torque_error=0e0
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0.4,0.9 peak=1.90958701021092e-7 torque_error=0e0
+cone pendulum duration=10s dt=0.016666666666666666 peak=0e0 initial_energy=5.595546871377419 peak_energy=5.60063347167322 final_energy=0.7750296825671383
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0,0.9 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(1.0, 0.0, 0.0) extents=0,0 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0.4,0.4 peak=1.9095870155399958e-7 torque_error=3.9968028886505635e-11
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0.4,0.9 peak=1.9095870155399958e-7 torque_error=3.9968028886505635e-11
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0,0.9 peak=0e0 torque_error=0e0
+cone pendulum duration=10s dt=0.008333333333333333 peak=0e0 initial_energy=5.595546871377419 peak_energy=5.598089328526084 final_energy=0.7747382236909289
+loaded cone axis=DVec3(0.0, 1.0, 0.0) extents=0,0 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0.4,0.4 peak=1.909587011987279e-7 torque_error=0e0
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0.4,0.9 peak=1.909587011987279e-7 torque_error=0e0
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0,0.9 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(0.0, 0.0, 1.0) extents=0,0 peak=0e0 torque_error=0e0
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0.4,0.4 peak=1.9095870102109206e-7 torque_error=7.993682894254012e-12
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0.4,0.9 peak=1.9095870102109206e-7 torque_error=2.082963028648268e-15
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0,0.9 peak=1.1957467920563633e-16 torque_error=6.661338147750939e-16
+loaded cone axis=DVec3(2.0, -3.0, 4.0) extents=0,0 peak=0e0 torque_error=2.220446049250313e-16
+test cpu_loaded_cones_hold_boundary_and_react_torque ... ok
+cone pendulum duration=10s dt=0.004166666666666667 peak=0e0 initial_energy=5.595546871377419 peak_energy=5.59681788976309 final_energy=0.774571185552668
+test cpu_cone_pendulum_is_bounded_for_ten_seconds ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s
+

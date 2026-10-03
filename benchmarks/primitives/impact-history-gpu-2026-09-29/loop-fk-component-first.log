@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+error[E0432]: unresolved import `molla_sim::BodyId`
+ --> crates/molla-kernels/tests/quaternion_fk_gpu.rs:6:28
+  |
+6 | use molla_sim::{BodyFlags, BodyId, BodyParams, Model, ModelBuilder};
+  |                            ^^^^^^ no `BodyId` in the root
+  |
+  = help: consider importing this struct instead:
+          molla_core::BodyId
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `molla-kernels` (test "quaternion_fk_gpu") due to 1 previous error
+make: *** [Makefile:112: test-gpu] Error 101

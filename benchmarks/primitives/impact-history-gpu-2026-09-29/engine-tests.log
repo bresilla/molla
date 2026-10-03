@@ -1,0 +1,17 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.14s
+     Running unittests src/lib.rs (target/debug/deps/molla_compute-763de6d897da2e61)
+
+running 4 tests
+test engine::loss_tests::cpu_engine_has_no_device_loss_signal ... ok
+test engine::loss_tests::external_backend_is_not_selectable ... ok
+test engine::tests::cpu_engine_reports_no_adapter ... ok
+test engine::loss_tests::loss_is_sticky_and_keeps_the_first_diagnostic ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

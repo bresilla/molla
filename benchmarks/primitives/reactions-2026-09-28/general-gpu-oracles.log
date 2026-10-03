@@ -1,0 +1,19 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.28s
+     Running tests/reaction_wrenches_gpu.rs (target/debug/deps/reaction_wrenches_gpu-93c0ee512f6ae3ab)
+
+running 2 tests
+test general_gpu_wrenches_match_cpu_for_all_joint_kinds_and_boundaries ... general GPU reactions: arts=144 joints=432 dofs=738 peak scaled wrench error=2.41202148723776e-6
+ok
+test prepared_reaction_dispatch_retains_resources ... retained GPU reaction resources=[58, 773648, 4, 3, 3]
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+

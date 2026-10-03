@@ -1,0 +1,14 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.77s
+     Running tests/featherstone_mass_inverse_gpu.rs (target/debug/deps/featherstone_mass_inverse_gpu-475c5131121bf9c9)
+
+running 1 test
+test joint_psd_inverse_preserves_scaled_weak_modes_and_rejects_indefinite_blocks ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+

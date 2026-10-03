@@ -1,0 +1,10 @@
+gate_start=barrier date=2026-10-03T04:29:44+02:00
+gate_end=barrier exit=0 date=2026-10-03T04:29:58+02:00
+gate_start=normal date=2026-10-03T04:29:58+02:00
+gate_end=normal exit=0 date=2026-10-03T04:31:50+02:00
+gate_start=drift date=2026-10-03T04:31:50+02:00
+gate_end=drift exit=0 date=2026-10-03T04:41:41+02:00
+gate_start=contact-tail date=2026-10-03T04:41:41+02:00
+gate_end=contact-tail exit=0 date=2026-10-03T06:17:11+02:00
+gate_start=later-lanes date=2026-10-03T06:17:11+02:00
+gate_end=later-lanes exit=0 date=2026-10-03T06:56:14+02:00

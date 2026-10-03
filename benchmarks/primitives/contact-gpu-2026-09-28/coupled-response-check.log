@@ -1,0 +1,295 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Blocking waiting for file lock on build directory
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: field `scalar_export` is never read
+  --> crates/molla-solvers/src/distance_gpu.rs:64:5
+   |
+50 | pub(crate) struct DistanceGpu {
+   |                   ----------- field in this struct
+...
+64 |     scalar_export: Option<ScalarExport>,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `pipeline`, `rows`, `jacobians`, and `directions` are never read
+  --> crates/molla-solvers/src/distance_gpu.rs:68:5
+   |
+67 | struct ScalarExport {
+   |        ------------ fields in this struct
+68 |     pipeline: wgpu::ComputePipeline,
+   |     ^^^^^^^^
+69 |     rows: wgpu::Buffer,
+   |     ^^^^
+70 |     jacobians: wgpu::Buffer,
+   |     ^^^^^^^^^
+71 |     directions: wgpu::Buffer,
+   |     ^^^^^^^^^^
+
+warning: associated items `new_for_coupling`, `scalar_buffers`, and `prepare_scalar_rows` are never used
+   --> crates/molla-solvers/src/distance_gpu.rs:123:19
+    |
+ 89 | impl DistanceGpu {
+    | ---------------- associated items in this implementation
+...
+123 |     pub(crate) fn new_for_coupling(
+    |                   ^^^^^^^^^^^^^^^^
+...
+584 |     pub(crate) fn scalar_buffers(
+    |                   ^^^^^^^^^^^^^^
+...
+596 |     pub(crate) fn prepare_scalar_rows(
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: `molla-solvers` (lib) generated 3 warnings
+    Checking molla v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla)
+    Checking molla_viewer v0.0.1 (/home/bresilla/data/code/OUSD/molla/bin/molla_viewer)
+warning: function `body_poses` is never used
+  --> crates/molla-solvers/tests/common/gpu_readback.rs:27:8
+   |
+27 | pub fn body_poses(engine: &Engine, system: &FemRigidGpuSystem, count: usize) -> Vec<Transform> {
+   |        ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (test "featherstone_drift_gpu") generated 1 warning
+warning: `molla-solvers` (test "featherstone_stop_momentum") generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.26s
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: field `scalar_export` is never read
+  --> crates/molla-solvers/src/distance_gpu.rs:64:5
+   |
+50 | pub(crate) struct DistanceGpu {
+   |                   ----------- field in this struct
+...
+64 |     scalar_export: Option<ScalarExport>,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `pipeline`, `rows`, `jacobians`, and `directions` are never read
+  --> crates/molla-solvers/src/distance_gpu.rs:68:5
+   |
+67 | struct ScalarExport {
+   |        ------------ fields in this struct
+68 |     pipeline: wgpu::ComputePipeline,
+   |     ^^^^^^^^
+69 |     rows: wgpu::Buffer,
+   |     ^^^^
+70 |     jacobians: wgpu::Buffer,
+   |     ^^^^^^^^^
+71 |     directions: wgpu::Buffer,
+   |     ^^^^^^^^^^
+
+warning: associated items `new_for_coupling`, `scalar_buffers`, and `prepare_scalar_rows` are never used
+   --> crates/molla-solvers/src/distance_gpu.rs:123:19
+    |
+ 89 | impl DistanceGpu {
+    | ---------------- associated items in this implementation
+...
+123 |     pub(crate) fn new_for_coupling(
+    |                   ^^^^^^^^^^^^^^^^
+...
+584 |     pub(crate) fn scalar_buffers(
+    |                   ^^^^^^^^^^^^^^
+...
+596 |     pub(crate) fn prepare_scalar_rows(
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: `molla-solvers` (lib) generated 3 warnings
+    Checking molla v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla)
+    Checking molla_viewer v0.0.1 (/home/bresilla/data/code/OUSD/molla/bin/molla_viewer)
+warning: function `body_poses` is never used
+  --> crates/molla-solvers/tests/common/gpu_readback.rs:27:8
+   |
+27 | pub fn body_poses(engine: &Engine, system: &FemRigidGpuSystem, count: usize) -> Vec<Transform> {
+   |        ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (test "featherstone_drift_gpu") generated 1 warning
+warning: `molla-solvers` (test "featherstone_stop_momentum") generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.24s
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: field `scalar_export` is never read
+  --> crates/molla-solvers/src/distance_gpu.rs:68:5
+   |
+54 | pub(crate) struct DistanceGpu {
+   |                   ----------- field in this struct
+...
+68 |     scalar_export: Option<ScalarExport>,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `pipeline`, `rows`, `jacobians`, and `directions` are never read
+  --> crates/molla-solvers/src/distance_gpu.rs:72:5
+   |
+71 | struct ScalarExport {
+   |        ------------ fields in this struct
+72 |     pipeline: wgpu::ComputePipeline,
+   |     ^^^^^^^^
+73 |     rows: wgpu::Buffer,
+   |     ^^^^
+74 |     jacobians: wgpu::Buffer,
+   |     ^^^^^^^^^
+75 |     directions: wgpu::Buffer,
+   |     ^^^^^^^^^^
+
+warning: associated items `new_for_coupling`, `scalar_buffers`, `scalar_publication`, and `prepare_scalar_rows` are never used
+   --> crates/molla-solvers/src/distance_gpu.rs:127:19
+    |
+ 93 | impl DistanceGpu {
+    | ---------------- associated items in this implementation
+...
+127 |     pub(crate) fn new_for_coupling(
+    |                   ^^^^^^^^^^^^^^^^
+...
+588 |     pub(crate) fn scalar_buffers(
+    |                   ^^^^^^^^^^^^^^
+...
+600 |     pub(crate) fn scalar_publication(
+    |                   ^^^^^^^^^^^^^^^^^^
+...
+623 |     pub(crate) fn prepare_scalar_rows(
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `ScalarJointPublication` is never constructed
+ --> crates/molla-solvers/src/scalar_joint_publication_gpu.rs:4:19
+  |
+4 | pub(crate) struct ScalarJointPublication {
+  |                   ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `new` and `encode` are never used
+  --> crates/molla-solvers/src/scalar_joint_publication_gpu.rs:13:19
+   |
+11 | impl ScalarJointPublication {
+   | --------------------------- associated items in this implementation
+12 |     #[allow(clippy::too_many_arguments)]
+13 |     pub(super) fn new(
+   |                   ^^^
+...
+64 |     pub(crate) fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+   |                   ^^^^^^
+
+warning: `molla-solvers` (lib) generated 5 warnings
+    Checking molla v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla)
+    Checking molla_viewer v0.0.1 (/home/bresilla/data/code/OUSD/molla/bin/molla_viewer)
+warning: function `body_poses` is never used
+  --> crates/molla-solvers/tests/common/gpu_readback.rs:27:8
+   |
+27 | pub fn body_poses(engine: &Engine, system: &FemRigidGpuSystem, count: usize) -> Vec<Transform> {
+   |        ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (test "featherstone_drift_gpu") generated 1 warning
+warning: `molla-solvers` (test "featherstone_stop_momentum") generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.52s
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+warning: field `scalar_export` is never read
+  --> crates/molla-solvers/src/distance_gpu.rs:68:5
+   |
+54 | pub(crate) struct DistanceGpu {
+   |                   ----------- field in this struct
+...
+68 |     scalar_export: Option<ScalarExport>,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `pipeline`, `rows`, `jacobians`, and `directions` are never read
+  --> crates/molla-solvers/src/distance_gpu.rs:72:5
+   |
+71 | struct ScalarExport {
+   |        ------------ fields in this struct
+72 |     pipeline: wgpu::ComputePipeline,
+   |     ^^^^^^^^
+73 |     rows: wgpu::Buffer,
+   |     ^^^^
+74 |     jacobians: wgpu::Buffer,
+   |     ^^^^^^^^^
+75 |     directions: wgpu::Buffer,
+   |     ^^^^^^^^^^
+
+warning: associated items `new_for_coupling`, `scalar_buffers`, `scalar_publication`, and `prepare_scalar_rows` are never used
+   --> crates/molla-solvers/src/distance_gpu.rs:127:19
+    |
+ 93 | impl DistanceGpu {
+    | ---------------- associated items in this implementation
+...
+127 |     pub(crate) fn new_for_coupling(
+    |                   ^^^^^^^^^^^^^^^^
+...
+588 |     pub(crate) fn scalar_buffers(
+    |                   ^^^^^^^^^^^^^^
+...
+600 |     pub(crate) fn scalar_publication(
+    |                   ^^^^^^^^^^^^^^^^^^
+...
+623 |     pub(crate) fn prepare_scalar_rows(
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `ScalarJointPublication` is never constructed
+ --> crates/molla-solvers/src/scalar_joint_publication_gpu.rs:4:19
+  |
+4 | pub(crate) struct ScalarJointPublication {
+  |                   ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `new` and `encode` are never used
+  --> crates/molla-solvers/src/scalar_joint_publication_gpu.rs:13:19
+   |
+11 | impl ScalarJointPublication {
+   | --------------------------- associated items in this implementation
+12 |     #[allow(clippy::too_many_arguments)]
+13 |     pub(super) fn new(
+   |                   ^^^
+...
+64 |     pub(crate) fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+   |                   ^^^^^^
+
+warning: `molla-solvers` (lib) generated 5 warnings
+    Checking molla v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla)
+    Checking molla_viewer v0.0.1 (/home/bresilla/data/code/OUSD/molla/bin/molla_viewer)
+warning: function `body_poses` is never used
+  --> crates/molla-solvers/tests/common/gpu_readback.rs:27:8
+   |
+27 | pub fn body_poses(engine: &Engine, system: &FemRigidGpuSystem, count: usize) -> Vec<Transform> {
+   |        ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `molla-solvers` (test "featherstone_stop_momentum") generated 1 warning
+warning: `molla-solvers` (test "featherstone_drift_gpu") generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.27s
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+
+Scoped formatting and git diff --check passed.

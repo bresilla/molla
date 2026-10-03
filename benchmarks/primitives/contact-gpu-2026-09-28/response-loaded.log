@@ -1,0 +1,28 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.34s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 2 tests
+test contact_response_gpu::tests::articulated_response_matches_cpu_gram_and_generalized_friction ... articulated contact response: peak gram error=5.680281103259688e-7, peak rate error=2.741845624036404e-7
+ok
+test contact_response_gpu::tests::device_contact_friction_holds_loaded_box_and_matches_cpu_trajectory ... GPU loaded hold: peak drift=2.2537134645972404e-4, CPU position error=8.808713621036725e-8, velocity error=7.824696832664542e-6
+
+thread 'contact_response_gpu::tests::device_contact_friction_holds_loaded_box_and_matches_cpu_trajectory' (3915984) panicked at crates/molla-solvers/src/contact_response_gpu_tests.rs:624:5:
+assertion failed: peak_drift < 2e-4
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    contact_response_gpu::tests::device_contact_friction_holds_loaded_box_and_matches_cpu_trajectory
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 99 filtered out; finished in 12.42s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:134: test-primitives-contact-response-gpu] Error 101

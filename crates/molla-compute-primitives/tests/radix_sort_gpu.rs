@@ -108,6 +108,83 @@ fn cpu_reference(keys: &[u32], values: &[u32]) -> (Vec<u32>, Vec<u32>) {
     (out_k, out_v)
 }
 
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu"]
+fn retained_sorts_keep_independent_uniforms_and_scratch_across_queued_updates() {
+    let _lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let mut kernel = RadixSortKernel::new(device.clone(), queue.clone(), 1).unwrap();
+    let sizes = [1, 257, 513];
+    let buffers: Vec<_> = sizes
+        .iter()
+        .map(|&n| {
+            (
+                alloc_u32_buf(device, "retained keys", n),
+                alloc_u32_buf(device, "retained values", n),
+            )
+        })
+        .collect();
+    let prepared: Vec<_> = buffers
+        .iter()
+        .zip(sizes)
+        .map(|((k, v), n)| kernel.prepare(k, v, n).unwrap())
+        .collect();
+    assert!(prepared.iter().all(|p| p.resource_counts() == [7, 6, 3]));
+    assert!(kernel.prepare(&buffers[0].0, &buffers[0].1, 0).is_err());
+    assert!(kernel.prepare(&buffers[0].0, &buffers[0].0, 1).is_err());
+    assert!(
+        kernel
+            .prepare(&buffers[0].0, &buffers[0].1, usize::MAX)
+            .is_err()
+    );
+    let grow_keys = alloc_u32_buf(device, "grow keys", 4096);
+    let grow_values = alloc_u32_buf(device, "grow values", 4096);
+    kernel.dispatch(&grow_keys, &grow_values, 4096).unwrap();
+    drop(kernel);
+    let stride = sizes.iter().sum::<usize>() * 2;
+    let output = alloc_u32_buf(device, "retained snapshots", stride * 20);
+    let mut reference = Vec::new();
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut offset = 0_u64;
+    for step in 0..20 {
+        for (which, &n) in sizes.iter().enumerate() {
+            let keys: Vec<_> = (0..n)
+                .map(|i| {
+                    if step % 3 == 0 {
+                        u32::MAX
+                    } else {
+                        ((i * 31 + step * 19) % 17) as u32 * 0x01000001
+                    }
+                })
+                .collect();
+            let values: Vec<_> = (0..n as u32).collect();
+            let sources = [
+                alloc_u32_buf(device, "source keys", n),
+                alloc_u32_buf(device, "source values", n),
+            ];
+            queue.write_buffer(&sources[0], 0, bytemuck::cast_slice(&keys));
+            queue.write_buffer(&sources[1], 0, bytemuck::cast_slice(&values));
+            encoder.copy_buffer_to_buffer(&sources[0], 0, &buffers[which].0, 0, n as u64 * 4);
+            encoder.copy_buffer_to_buffer(&sources[1], 0, &buffers[which].1, 0, n as u64 * 4);
+            prepared[which].encode(&mut encoder);
+            for b in [&buffers[which].0, &buffers[which].1] {
+                encoder.copy_buffer_to_buffer(b, 0, &output, offset, n as u64 * 4);
+                offset += n as u64 * 4;
+            }
+            let (k, v) = cpu_reference(&keys, &values);
+            reference.extend(k);
+            reference.extend(v);
+        }
+    }
+    queue.submit([encoder.finish()]);
+    assert_eq!(
+        read_u32_buf(device, queue, &output, reference.len()).unwrap(),
+        reference
+    );
+}
+
 // Cheap LCG PRNG so tests don't need a `rand` dep.
 fn lcg(seed: u64) -> impl FnMut() -> u32 {
     let mut s = seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1);

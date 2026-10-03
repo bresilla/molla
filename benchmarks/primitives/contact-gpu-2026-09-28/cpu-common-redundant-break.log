@@ -1,0 +1,27 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.85s
+     Running tests/runtime_mixed_contacts_gpu.rs (target/debug/deps/runtime_mixed_contacts_gpu-6d4c48a61920f61e)
+
+running 1 test
+test redundant_cone_contact_break_decisions_match_away_from_threshold_ties ... 
+thread 'redundant_cone_contact_break_decisions_match_away_from_threshold_ties' (286955) panicked at crates/molla-solvers/tests/runtime_mixed_contacts_gpu.rs:428:5:
+assertion `left == right` failed: GPU events=[JointBreakEvent { frame: 0, joint: JointHandle(4), parent: None, child: BodyHandle(1), trigger: Torque, limits: JointBreakLimits { force: None, torque: Some(0.902) }, sample: JointReactionSample { joint: JointHandle(4), child: SpatialVector { linear: DVec3(-0.19295872747898102, 0.0, 0.00026416778564453125), angular: DVec3(0.0, -0.903516948223114, 0.0) }, parent: SpatialVector { linear: DVec3(0.19295872747898102, -0.0, -0.00026416778564453125), angular: DVec3(0.0, 0.903516948223114, -0.0) }, anchors: [DVec3(0.0, 0.0, 0.49998000264167786), DVec3(0.0, 0.0, 0.49998000264167786)], substep: 0, time_offset: 0.01, sample_dt: 0.01 } }], CPU events=[]
+  left: true
+ right: false
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    redundant_cone_contact_break_decisions_match_away_from_threshold_ties
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 31.43s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_mixed_contacts_gpu`
+make: *** [Makefile:85: test-gpu] Error 101

@@ -140,68 +140,92 @@ impl XpbdKernel {
         // mirror types. `Transform` mirror is 32 bytes, `vec4<f32>` is
         // 16 bytes.
         let n = (body_count.max(1)) as u64;
-        let body_q_pred = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::xpbd body_q_pred"),
-            size: 32 * n,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let body_v_pred = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::xpbd body_v_pred"),
-            size: 16 * n,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let body_q_alt = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::xpbd body_q_alt"),
-            size: 32 * n,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let body_v_post = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::xpbd body_v_post"),
-            size: 16 * n,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let body_w_pred = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::xpbd body_w_pred"),
-            size: 16 * n,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let body_w_post = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::xpbd body_w_post"),
-            size: 16 * n,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let external_f_dummy = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::xpbd dummy external_f"),
-            size: 32,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let body_q_contact = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::xpbd body_q_contact"),
-            size: 32 * n,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let body_q_pred = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::xpbd body_q_pred"),
+                size: 32 * n,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let body_v_pred = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::xpbd body_v_pred"),
+                size: 16 * n,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let body_q_alt = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::xpbd body_q_alt"),
+                size: 32 * n,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let body_v_post = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::xpbd body_v_post"),
+                size: 16 * n,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let body_w_pred = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::xpbd body_w_pred"),
+                size: 16 * n,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let body_w_post = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::xpbd body_w_post"),
+                size: 16 * n,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let external_f_dummy = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::xpbd dummy external_f"),
+                size: 32,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let body_q_contact = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::xpbd body_q_contact"),
+                size: 32 * n,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
 
         Self {
             pipeline_predict,
@@ -446,13 +470,16 @@ impl XpbdKernel {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::xpbd uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::xpbd uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         // Friction-off twin for the non-final velocity sweeps (B1b):
         // iterated sweeps must only handle restitution/normal — the
         // Coulomb caps bound the TOTAL friction impulse, so friction
@@ -461,13 +488,21 @@ impl XpbdKernel {
             friction_pass: 0.0,
             ..uniforms
         };
-        let uniform_buf_nofric = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::xpbd uniforms (no-friction sweep)"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf_nofric, 0, bytemuck::bytes_of(&uniforms_nofric));
+        let uniform_buf_nofric = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::xpbd uniforms (no-friction sweep)"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &uniform_buf_nofric,
+            0,
+            bytemuck::bytes_of(&uniforms_nofric)
+        );
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::xpbd uniforms bg"),
             layout: &self.layout_uniforms,

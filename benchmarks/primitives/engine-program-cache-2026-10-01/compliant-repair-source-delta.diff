@@ -1,0 +1,11 @@
+--- benchmarks/primitives/engine-program-cache-2026-10-01/hinge-antipode-paired-rates-source-sha256.txt	2026-10-02 09:22:20.981866594 +0200
++++ benchmarks/primitives/engine-program-cache-2026-10-01/compliant-repair-source-sha256.txt	2026-10-02 11:39:44.336983129 +0200
+@@ -1185,7 +1185,7 @@
+ 81ea4044a8a90cd950aa4a49710c571041905f9d392738f26de8018c05e0058d  crates/molla-solvers/tests/runtime_ball_loop.rs
+ 580dd3f4075a0c1f060a4123e1ab30a97850a602fc95e1dd8a70bdf36076d5a5  crates/molla-solvers/tests/runtime_body_control_wrenches.rs
+ 1747f7584bd88740f802ae86614a74ddadabb422f2242d714dabec4414213109  crates/molla-solvers/tests/runtime_boundary_radial_caps.rs
+-2980934eccb112348456a604ceb7c3bbd12e4ad05a58a8575c78b673e4eb4eae  crates/molla-solvers/tests/runtime_break_detachment.rs
++0c970d548e80c1962339c79d37d53d7cddfd9fc25d823328c9c181792c2654e2  crates/molla-solvers/tests/runtime_break_detachment.rs
+ 0ee005b5a105167d6c1446528cdcd4b5bd2c98f5f9116aa7c551eca5d1b908df  crates/molla-solvers/tests/runtime_capsule_manifold.rs
+ 1b626b6fae87973429d4095d401792d5225364fbd97d1dbf4a4399e47ceb4d30  crates/molla-solvers/tests/runtime_com_roots.rs
+ 7398f07c9e15d7730dd21255819e4884784bf23baa1478801d1a15882c1ce83e  crates/molla-solvers/tests/runtime_cone_capability.rs

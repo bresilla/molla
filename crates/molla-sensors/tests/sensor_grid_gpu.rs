@@ -406,7 +406,6 @@ fn grid_device_chain_snapshot_and_pending_copies_survive_reuse() {
         .process(channel.readback_source(0..257).unwrap(), spec, stamp)
         .unwrap();
     let first = enqueue(&frame, &mut ring);
-    drop(channel);
     drop(snapshot);
     snapshots.reset().unwrap();
     let frame = grid

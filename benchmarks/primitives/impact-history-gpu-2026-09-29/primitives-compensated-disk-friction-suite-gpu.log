@@ -1,0 +1,23 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-502725455ce4e57e)
+
+running 7 tests
+test coulomb_disk_gpu::tests::coupled_disk_gpu_device_sequence_regimes_and_contact_retirement ... ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_matches_cpu_and_retires_batched_island_slots ... coupled disk batch: peak iterations=23
+ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_rotations_permutations_and_reciprocal_scales ... disk basis/permutation/scale: 30 cases, peak host KKT=9.977477124566751e-8
+ok
+test coulomb_disk_gpu::tests::coupled_disk_gpu_validation_sticky_faults_and_reset ... ok
+test coulomb_disk_gpu::tests::nearly_loaded_static_disks_cancel_slip_across_scales_and_directions ... nearly loaded static peak slip=6.717164069414139e-8
+ok
+test coulomb_disk_gpu::tests::rank_deficient_grams_pass_and_indefinite_null_blocks_fail ... ok
+test coulomb_disk_gpu::tests::rounded_disk_boundary_gap_matches_f64 ... disk boundary squared-gap peak error=1.9210221126225147e-14
+ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 238 filtered out; finished in 73.69s
+

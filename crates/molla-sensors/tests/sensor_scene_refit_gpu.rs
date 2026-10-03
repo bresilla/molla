@@ -20,7 +20,7 @@ fn collect(
         ReadbackConfig {
             slots: 1,
             bytes_per_slot: bytes,
-            max_total_bytes: (bytes + 7) / 8 * 8,
+            max_total_bytes: bytes.div_ceil(8) * 8,
         },
     )
     .unwrap();

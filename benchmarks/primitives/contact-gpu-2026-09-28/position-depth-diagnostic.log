@@ -1,0 +1,29 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.46s
+     Running tests/narrow_resident_gpu.rs (target/debug/deps/narrow_resident_gpu-c0617498070c6087)
+
+running 1 test
+test resident_plane_depths_consume_sub_ulp_body_translation_residues ... raw lows=[-1.9073486e-15, -9.536743e-16, -1.9073486e-15, 4.7683716e-7, 0.0, 9.536743e-7, 0.0, 9.536743e-7, 0.0, -9.536743e-16]
+residue poses=[Transform { position: DVec3(0.0, 0.0009770393371582031, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }, Transform { position: DVec3(0.0, 0.0009765625, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }, Transform { position: DVec3(0.0, 512.25, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }, Transform { position: DVec3(0.0, 512.0, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }, Transform { position: DVec3(0.0, 1049088.0, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }, Transform { position: DVec3(0.0, 1048576.0, 0.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }] bodies=[0, 1, 2, 3, 4, 5] lows=[[0.0, -1.9073486e-15, 0.0, 0.0], [0.0, -9.536743e-16, 0.0, 0.0], [0.0, -1e-9, 0.0, 0.0], [0.0, -5e-10, 0.0, 0.0], [0.0, -2.048e-6, 0.0, 0.0], [0.0, -1.024e-6, 0.0, 0.0]] counts=[0, 0, 0, 0, 0, 0] depths=[-0.0, -0.0, -9.536743e-7, -9.536743e-7, -0.0, -0.0, -9.536743e-7, -9.536743e-7]
+
+thread 'resident_plane_depths_consume_sub_ulp_body_translation_residues' (4021105) panicked at crates/molla-geometry/tests/narrow_resident_gpu.rs:157:9:
+assertion `left == right` failed: pair=0
+  left: 0
+ right: 4
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    resident_plane_depths_consume_sub_ulp_body_translation_residues
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 1.50s
+
+error: test failed, to rerun pass `-p molla-geometry --test narrow_resident_gpu`
+make: *** [Makefile:81: test-gpu] Error 101

@@ -1,0 +1,31 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.97s
+     Running tests/runtime_contact_breakage_gpu.rs (target/debug/deps/runtime_contact_breakage_gpu-7255456fbf074124)
+
+running 1 test
+test successful_detachment_transfers_translation_residues_to_new_free_roots ... frame=9 body=BodyHandle(1) world_pose=Ok(Transform { position: DVec3(1.0000004000000224, 3.0, 2.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }) reference_pose=Ok(Transform { position: DVec3(1.0000004000000224, 3.0, 2.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }) world_velocity=Ok(SpatialVector { linear: DVec3(9.999999747378752e-6, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }) reference_velocity=Ok(SpatialVector { linear: DVec3(9.999999747378752e-6, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }) world_q=Ok([1.0000004000000224, 3.0, 2.0, 0.0, 0.0, 0.0, 1.0]) reference_q=Ok([1.0000004000000224, 3.0, 2.0, 0.0, 0.0, 0.0, 1.0])
+frame=9 body=BodyHandle(2) world_pose=Ok(Transform { position: DVec3(2.000000400000019, 3.0, 2.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }) reference_pose=Ok(Transform { position: DVec3(2.000000400000019, 3.0, 2.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }) world_velocity=Ok(SpatialVector { linear: DVec3(9.999999747378752e-6, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }) reference_velocity=Ok(SpatialVector { linear: DVec3(9.999999747378752e-6, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }) world_q=Ok([1.0000004000000224, 3.0, 2.0, 0.0, 0.0, 0.0, 1.0]) reference_q=Ok([1.0000004000000224, 3.0, 2.0, 0.0, 0.0, 0.0, 1.0])
+frame=10 body=BodyHandle(1) world_pose=Ok(Transform { position: DVec3(1.0000004400000257, 3.0, 2.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }) reference_pose=Ok(Transform { position: DVec3(1.0000004400000257, 3.0, 2.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }) world_velocity=Ok(SpatialVector { linear: DVec3(9.999999747378752e-6, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }) reference_velocity=Ok(SpatialVector { linear: DVec3(9.999999747378752e-6, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }) world_q=Ok([1.0000004400000257, 3.0, 2.0, 0.0, 0.0, 0.0, 1.0, 2.0000004400000293, 3.0, 2.0, 0.0, 0.0, 0.0, 1.0]) reference_q=Ok([1.0000004400000257, 3.0, 2.0, 0.0, 0.0, 0.0, 1.0])
+frame=10 body=BodyHandle(2) world_pose=Ok(Transform { position: DVec3(2.0000004400000293, 3.0, 2.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }) reference_pose=Ok(Transform { position: DVec3(2.0000004400000257, 3.0, 2.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }) world_velocity=Ok(SpatialVector { linear: DVec3(9.999999747378752e-6, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }) reference_velocity=Ok(SpatialVector { linear: DVec3(9.999999747378752e-6, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }) world_q=Ok([1.0000004400000257, 3.0, 2.0, 0.0, 0.0, 0.0, 1.0, 2.0000004400000293, 3.0, 2.0, 0.0, 0.0, 0.0, 1.0]) reference_q=Ok([1.0000004400000257, 3.0, 2.0, 0.0, 0.0, 0.0, 1.0])
+
+thread 'successful_detachment_transfers_translation_residues_to_new_free_roots' (505471) panicked at crates/molla-solvers/tests/runtime_contact_breakage_gpu.rs:315:13:
+assertion `left == right` failed: frame=10 body=BodyHandle(2)
+  left: Transform { position: DVec3(2.0000004400000293, 3.0, 2.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }
+ right: Transform { position: DVec3(2.0000004400000257, 3.0, 2.0), rotation: DQuat(0.0, 0.0, 0.0, 1.0) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    successful_detachment_transfers_translation_residues_to_new_free_roots
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 221.52s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_contact_breakage_gpu`
+make: *** [Makefile:172: test-gpu] Error 101

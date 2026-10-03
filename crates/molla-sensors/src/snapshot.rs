@@ -230,9 +230,7 @@ impl DeviceSnapshotPool {
             if !Arc::ptr_eq(&self.device, &source.device) {
                 return Err(Error::Gpu("snapshot: foreign source device".into()));
             }
-            if source.channel.bytes as u64
-                > self.device.limits().max_storage_buffer_binding_size as u64
-            {
+            if source.channel.bytes as u64 > self.device.limits().max_storage_buffer_binding_size {
                 return Err(Error::Storage(
                     "snapshot: channel exceeds storage binding limit".into(),
                 ));

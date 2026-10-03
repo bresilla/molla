@@ -72,12 +72,15 @@ impl SgdGpuKernel {
             cache: None,
         });
 
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::optim_sgd uniforms buf"),
-            size: std::mem::size_of::<SgdUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::optim_sgd uniforms buf"),
+                size: std::mem::size_of::<SgdUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let bg_u = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::optim_sgd uniforms bg"),
             layout: &layout_u,
@@ -133,8 +136,12 @@ impl SgdGpuKernel {
             dampening: cfg.dampening as f32,
             weight_decay: cfg.weight_decay as f32,
         };
-        self.queue
-            .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        molla_core::gpu_write_buffer!(
+            self.queue,
+            &self.uniform_buf,
+            0,
+            bytemuck::bytes_of(&uniforms)
+        );
 
         let bg_io = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::optim_sgd io bg"),

@@ -1,0 +1,63 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.73s
+     Running `target/debug/examples/check_primitives_shaders`
+shader_wiring_ok	module=mass_response	entry_points=1
+shader_wiring_ok	module=jacobian_response	entry_points=1
+shader_wiring_ok	module=reaction_response	entry_points=1
+shader_wiring_ok	module=featherstone	entry_points=1
+shader_wiring_ok	module=runtime_distance	entry_points=3
+shader_wiring_ok	module=body_damping	entry_points=1
+shader_wiring_ok	module=scalar_publication	entry_points=1
+shader_wiring_ok	module=coulomb_disk	entry_points=1
+shader_wiring_ok	module=contact_response	entry_points=6
+shader_wiring_ok	module=floating_momentum	entry_points=1
+shader_wiring_complete	modules=10	device_execution=false
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.86s
+     Running tests/featherstone_mixed_distance.rs (target/debug/deps/featherstone_mixed_distance-805e37d04c6df793)
+
+running 1 test
+test gpu_standalone_distance_slack_unilateral_and_zero_bounds_preserve_rotation ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } dt=0.00001 cases=32
+distance_semantics case=0 position_error=1.604493148e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=1 position_error=1.658882746e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=2 position_error=1.604493148e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=3 position_error=1.658882746e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=4 position_error=1.604493148e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=5 position_error=1.658882746e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=6 position_error=1.604493148e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=7 position_error=1.658882746e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=8 position_error=1.826130760e-13 rotation_error=4.546034757e-16 velocity_error=1.825012075e-8
+distance_semantics case=9 position_error=1.210168560e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=10 position_error=1.604493148e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=11 position_error=1.830209980e-13 rotation_error=4.546034757e-16 velocity_error=1.825012075e-8
+distance_semantics case=12 position_error=2.719479911e-16 rotation_error=4.546034757e-16 velocity_error=2.175583929e-15
+distance_semantics case=13 position_error=2.719479911e-16 rotation_error=4.546034757e-16 velocity_error=2.175583929e-15
+distance_semantics case=14 position_error=1.087791937e-20 rotation_error=4.546034757e-16 velocity_error=1.087791964e-15
+distance_semantics case=15 position_error=1.087791937e-20 rotation_error=4.546034757e-16 velocity_error=1.087791964e-15
+distance_semantics case=16 position_error=1.604493148e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=17 position_error=1.658882746e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=18 position_error=1.604493148e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=19 position_error=1.658882746e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=20 position_error=1.604493148e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=21 position_error=1.658882746e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=22 position_error=1.604493148e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=23 position_error=1.658882746e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=24 position_error=1.826130760e-13 rotation_error=4.546034757e-16 velocity_error=1.825012075e-8
+distance_semantics case=25 position_error=1.210168560e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=26 position_error=1.604493148e-14 rotation_error=4.546034757e-16 velocity_error=9.097941755e-9
+distance_semantics case=27 position_error=1.830209980e-13 rotation_error=4.546034757e-16 velocity_error=1.825012075e-8
+distance_semantics case=28 position_error=2.719479911e-16 rotation_error=4.546034757e-16 velocity_error=2.175583929e-15
+distance_semantics case=29 position_error=2.719479911e-16 rotation_error=4.546034757e-16 velocity_error=2.175583929e-15
+distance_semantics case=30 position_error=1.087791937e-20 rotation_error=4.546034757e-16 velocity_error=1.087791964e-15
+distance_semantics case=31 position_error=1.087791937e-20 rotation_error=4.546034757e-16 velocity_error=1.087791964e-15
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 106.10s
+

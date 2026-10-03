@@ -1,0 +1,13 @@
+--- benchmarks/primitives/engine-program-cache-2026-10-01/bounded-island-source-sha256.txt	2026-10-02 15:07:24.449628596 +0200
++++ benchmarks/primitives/engine-program-cache-2026-10-01/empty-dependency-source-sha256.txt	2026-10-02 15:50:21.213473535 +0200
+@@ -1014,8 +1014,8 @@
+ 8b0dde7dd772aad49284dc8aeb88bd86e2cd8da4ec9e0cc08aff266291e4e39e  crates/molla-solvers/src/rigid_activation_gpu.rs
+ b40b1711f9dc041bbe435d4395ea3b3588be271b9288a9c63822d0a28fdbaf63  crates/molla-solvers/src/rigid_bounds_tests.rs
+ c28d97cc496dacaaf732735685dd9f668fe51837517b3a3b44f480897460f1ed  crates/molla-solvers/src/rigid_breakage.rs
+-5284383ed34da55bf862d8f64b15aa5825ff4a1774c1e99c277b956f68e2a927  crates/molla-solvers/src/rigid_contact_activation_gpu.rs
+-4db1c1d44bbf8f3cc2d5f91c1d7c7a1d02e2f85610a449882f7d9baac40a95fa  crates/molla-solvers/src/rigid_contact_activation_gpu_tests.rs
++bd65837f4766f88f8260e1ac5f2afa0260bc796a6334ae81a08a3c84acebc994  crates/molla-solvers/src/rigid_contact_activation_gpu.rs
++0f06fa14c93ba68755f1cb7921bb20b8d06f564ae20a866a8fc7189b8e1220cf  crates/molla-solvers/src/rigid_contact_activation_gpu_tests.rs
+ f55195bd24842058ea066cdd45ebe0de0b2a207d444cd5292f3940c77a716728  crates/molla-solvers/src/rigid_contact_precision_gpu.rs
+ 23a78ad86c84ff0d66328588399ac990c39f510e8c175f11a8220ba0549d0b76  crates/molla-solvers/src/rigid_contact_reaction_tests.rs
+ a69d3853f825720c01b134f5208ca98ac8a783c6b25c00ad6bb18dc55b598488  crates/molla-solvers/src/rigid_contacts_gpu.rs

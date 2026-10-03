@@ -1,0 +1,10 @@
+2026-10-03T17:54:55+02:00
+utilization.gpu [%], memory.used [MiB], power.draw [W]
+5 %, 4405 MiB, 40.89 W
+# gpu         pid   type     sm    mem    enc    dec    jpg    ofa    command 
+# Idx           #    C/G      %      %      %      %      %      %    name 
+    0       2929     G      -      -      -      -      -      -    gnome-shell    
+    0       9615   C+G      -      -      -      -      -      -    gnome-remote-de
+    0       9657     G      -      -      -      -      -      -    gnome-shell    
+    0       9945   C+G      -      -      -      -      -      -    gnome-remote-de
+    0      49654     G      -      -      -      -      -      -    Xwayland       

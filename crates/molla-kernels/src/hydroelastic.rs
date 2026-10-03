@@ -455,13 +455,21 @@ impl HydroelasticKernel {
                 0.0,
             ],
         };
-        let pressure_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::kernels::hydroelastic pressure uniforms"),
-            size: core::mem::size_of::<HydroUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&pressure_uniform_buf, 0, bytemuck::bytes_of(&u_pressure));
+        let pressure_uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::kernels::hydroelastic pressure uniforms"),
+                size: core::mem::size_of::<HydroUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &pressure_uniform_buf,
+            0,
+            bytemuck::bytes_of(&u_pressure)
+        );
 
         // ── 3. Anchor-pass uniforms. ──────────────────────────────────
         let u_anchor = AnchorUniforms {
@@ -470,13 +478,16 @@ impl HydroelasticKernel {
             _pad1: 0,
             _pad2: 0,
         };
-        let anchor_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::kernels::hydroelastic anchor uniforms"),
-            size: core::mem::size_of::<AnchorUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&anchor_uniform_buf, 0, bytemuck::bytes_of(&u_anchor));
+        let anchor_uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::kernels::hydroelastic anchor uniforms"),
+                size: core::mem::size_of::<AnchorUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &anchor_uniform_buf, 0, bytemuck::bytes_of(&u_anchor));
 
         // ── 4. Bind groups. ───────────────────────────────────────────
         let pos_buf = self
@@ -661,12 +672,15 @@ fn read_anchor_packed(
 ) -> Result<(Vec3, Real, Vec3, Real, Vec3, Real)> {
     // 3 × vec4<f32> = 48 bytes.
     const N_BYTES: u64 = 48;
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("molla::kernels::hydroelastic anchor readback"),
-        size: N_BYTES,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+    let staging = molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("molla::kernels::hydroelastic anchor readback"),
+            size: N_BYTES,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }
+    );
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("molla::kernels::hydroelastic anchor copy"),
     });
@@ -694,7 +708,7 @@ fn read_anchor_packed(
             )));
         }
     }
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let words: &[f32] = bytemuck::cast_slice(&data);
     // Layout: [cx, cy, cz, fc, ax, ay, az, fa, dx, dy, dz, tot].
     let centroid = Vec3::new(words[0] as Real, words[1] as Real, words[2] as Real);

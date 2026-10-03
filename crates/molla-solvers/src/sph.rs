@@ -365,12 +365,15 @@ impl SphSimulation {
         let n = cfg.max_particles.max(1) as u64;
 
         let mk_buf = |label: &str, size: u64, usage: wgpu::BufferUsages| -> wgpu::Buffer {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let storage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_DST
@@ -390,12 +393,15 @@ impl SphSimulation {
             storage,
         );
 
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::sph uniforms"),
-            size: std::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::sph uniforms"),
+                size: std::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
         let bg_uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::sph uniforms bg"),
             layout: &layout_uniforms,
@@ -405,12 +411,15 @@ impl SphSimulation {
             }],
         });
         let mk_stage = |label: &str, size: u64| -> wgpu::Buffer {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let stage_pos = mk_stage("molla::sph stage_pos", n * 16);
         let stage_vel = mk_stage("molla::sph stage_vel", n * 16);
@@ -511,28 +520,33 @@ impl SphSimulation {
         let mut pos: Vec<[f32; 4]> = Vec::with_capacity(total);
         pos.extend(fluid.iter().map(|p| [p[0], p[1], p[2], 0.0]));
         pos.extend(boundary.iter().map(|p| [p[0], p[1], p[2], 0.0]));
-        queue.write_buffer(&self.p_pos, 0, bytemuck::cast_slice(&pos));
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(queue, &self.p_pos, 0, bytemuck::cast_slice(&pos));
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.p_vel,
             0,
             bytemuck::cast_slice(&vec![[0.0f32; 4]; total]),
         );
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.p_accel,
             0,
             bytemuck::cast_slice(&vec![[0.0f32; 4]; total]),
         );
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.p_density,
             0,
             bytemuck::cast_slice(&vec![self.cfg.rest_density; total]),
         );
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.p_pressure,
             0,
             bytemuck::cast_slice(&vec![0.0f32; total]),
         );
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.p_stress,
             0,
             bytemuck::cast_slice(&vec![0.0f32; total * 6]),
@@ -577,24 +591,28 @@ impl SphSimulation {
         let mut pos: Vec<[f32; 4]> = Vec::with_capacity(total);
         pos.extend(fluid.iter().map(|p| [p[0], p[1], p[2], 0.0]));
         pos.extend(boundary.iter().map(|p| [p[0], p[1], p[2], 0.0]));
-        queue.write_buffer(&self.p_pos, 0, bytemuck::cast_slice(&pos));
-        queue.write_buffer(&self.p_vel, 0, bytemuck::cast_slice(&vel));
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(queue, &self.p_pos, 0, bytemuck::cast_slice(&pos));
+        molla_core::gpu_write_buffer!(queue, &self.p_vel, 0, bytemuck::cast_slice(&vel));
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.p_accel,
             0,
             bytemuck::cast_slice(&vec![[0.0f32; 4]; total]),
         );
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.p_density,
             0,
             bytemuck::cast_slice(&vec![self.cfg.rest_density; total]),
         );
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.p_pressure,
             0,
             bytemuck::cast_slice(&vec![0.0f32; total]),
         );
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(
+            queue,
             &self.p_stress,
             0,
             bytemuck::cast_slice(&vec![0.0f32; total * 6]),
@@ -639,12 +657,14 @@ impl SphSimulation {
                 .map(|p| [p[0], p[1], p[2], 0.0])
                 .collect();
             let vels: Vec<[f32; 4]> = vec![[b.vel[0], b.vel[1], b.vel[2], 0.0]; count as usize];
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &self.p_pos,
                 (start as u64) * 16,
                 bytemuck::cast_slice(&world),
             );
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &self.p_vel,
                 (start as u64) * 16,
                 bytemuck::cast_slice(&vels),
@@ -762,7 +782,7 @@ impl SphSimulation {
             gravity: self.cfg.gravity,
             friction: self.cfg.friction,
         };
-        queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        molla_core::gpu_write_buffer!(queue, &self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let groups_grid = grid_total.div_ceil(WORKGROUP_SIZE).max(1);
         let groups_part = self.particle_count.div_ceil(WORKGROUP_SIZE).max(1);
@@ -908,7 +928,7 @@ fn map_blocking(
     receiver
         .recv()
         .map_err(|e| Error::Gpu(format!("sph readback recv: {e:?}")))??;
-    Ok(slice.get_mapped_range())
+    Ok(molla_core::gpu_readback!(slice))
 }
 
 fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntry> {

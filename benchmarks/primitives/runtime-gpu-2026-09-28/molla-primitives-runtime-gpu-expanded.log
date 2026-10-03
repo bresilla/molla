@@ -1,0 +1,46 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling wgpu-hal v29.0.4
+   Compiling wgpu-core-deps-windows-linux-android v29.0.4
+   Compiling wgpu-core v29.0.4
+   Compiling wgpu v29.0.4
+   Compiling molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+   Compiling molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.32s
+     Running tests/runtime_primitives_contract_gpu.rs (target/debug/deps/runtime_primitives_contract_gpu-56debff2c1ecf76b)
+
+running 7 tests
+test runtime_gpu_empty_scene_and_invalid_step_are_safe ... ok
+test runtime_gpu_free_body_matches_cpu_and_publishes_velocity ... ok
+test runtime_gpu_mutations_rebuild_and_preserve_handles ... ok
+test runtime_gpu_rejects_unsupported_mutation_without_advancing ... ok
+test runtime_gpu_rotated_frames_com_inertia_and_motor_parity ... Ball: max position=6.782489148779411e-7 rotation=1.039242492566281e-6 velocity=2.9339567426719497e-6
+Revolute: max position=1.2283831876588267e-5 rotation=1.9914040269722343e-5 velocity=3.097412361295858e-5
+Prismatic: max position=1.4159821486404282e-3 rotation=1.51526255783406e-4 velocity=1.8326603410483767e-3
+
+thread 'runtime_gpu_rotated_frames_com_inertia_and_motor_parity' (2822501) panicked at crates/molla-solvers/tests/runtime_primitives_contract_gpu.rs:235:9:
+assertion failed: worst_position < 1e-3 && worst_rotation < 1e-3 && worst_velocity < 1e-3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test runtime_gpu_warm_resources_are_retained ... warm runtime GPU [buffers, bytes, groups, pipelines, shaders]=[72, 526528, 12, 3, 3]
+ok
+test runtime_gpu_world_anchor_uses_authored_frames ... ok
+
+failures:
+
+failures:
+    runtime_gpu_rotated_frames_com_inertia_and_motor_parity
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.93s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_primitives_contract_gpu`
+make: *** [Makefile:63: test] Error 101

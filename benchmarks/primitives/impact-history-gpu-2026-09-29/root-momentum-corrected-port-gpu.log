@@ -1,0 +1,85 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.66s
+     Running tests/runtime_restitution_gpu.rs (target/debug/deps/runtime_restitution_gpu-229ebd8fcc10f27b)
+
+running 5 tests
+test failed_impact_frame_restores_history_and_recovers_after_compaction ... ok
+test impact_reactions_break_a_joint_and_continue_without_repeating_the_episode ... ok
+test live_normal_impacts_publish_one_impulse_and_match_cpu_rebound ... ok
+test live_zero_depth_contact_retains_penalty_support_without_repeated_impacts ... ok
+test oblique_impact_reports_final_slip_and_matches_cpu_energy_and_impulse ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 71.74s
+
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.02s
+     Running tests/runtime_pose_precision_gpu.rs (target/debug/deps/runtime_pose_precision_gpu-fe0863d3b25e7959)
+
+running 5 tests
+test free_root_motion_survives_frames_capture_rebuilds_faults_and_pose_edits ... retained GPU motion kind=Dynamic, collider=false, travel=6.103515625e-4, expected=6e-4
+retained GPU motion kind=Dynamic, collider=true, travel=6.103515625e-4, expected=6e-4
+ok
+test mutation_preserves_unedited_motion_across_compaction_contact_paths_and_com_changes ... edited-frame precision rejection: solver error: GPU rigid runtime solver fault 16400
+mutation precision initial_contact=false, compilations=7
+edited-frame precision rejection: solver error: GPU rigid runtime solver fault 16384
+mutation precision initial_contact=true, compilations=7
+ok
+test replacing_scene_does_not_reuse_residues_from_equal_numeric_handles ... ok
+test zero_coordinate_break_transfers_child_position_residue_to_free_coordinates ... post-break finite-state rejection: solver error: GPU rigid runtime solver fault 1
+zero-coordinate break child travel=6.103515625e-4, expected=6e-4
+ok
+test zero_coordinate_motion_survives_frames_capture_rebuilds_faults_and_pose_edits ... retained GPU motion kind=Kinematic, collider=false, travel=6.103515625e-4, expected=6e-4
+retained GPU motion kind=Kinematic, collider=true, travel=6.103515625e-4, expected=6e-4
+ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 83.70s
+
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.82s
+     Running tests/runtime_primitives_contract_gpu.rs (target/debug/deps/runtime_primitives_contract_gpu-17b111111ba5223d)
+
+running 10 tests
+test runtime_gpu_distance_mutation_is_solved_and_can_be_removed ... ok
+test runtime_gpu_empty_reaction_readout_stays_on_device ... ok
+test runtime_gpu_empty_scene_and_invalid_step_are_safe ... ok
+test runtime_gpu_fault_is_atomic_and_corrected_inputs_can_resume ... ok
+test runtime_gpu_free_body_matches_cpu_and_publishes_velocity ... ok
+test runtime_gpu_mutations_rebuild_and_preserve_handles ... ok
+test runtime_gpu_rejects_unsupported_mutation_without_advancing ... ok
+test runtime_gpu_rotated_frames_com_inertia_and_motor_parity ... Ball: max position=2.500099310316606e-1 rotation=3.0233894234402303e-5 velocity=6.358673145469026e-5
+
+thread 'runtime_gpu_rotated_frames_com_inertia_and_motor_parity' (1306962) panicked at crates/molla-solvers/tests/runtime_primitives_contract_gpu.rs:280:9:
+assertion failed: worst_position < 1e-3 && worst_rotation < 1e-3 && worst_velocity < 1e-3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test runtime_gpu_warm_resources_are_retained ... 
+thread 'runtime_gpu_warm_resources_are_retained' (1306989) panicked at crates/molla-solvers/tests/runtime_primitives_contract_gpu.rs:332:5:
+assertion `left == right` failed
+  left: 11
+ right: 13
+FAILED
+test runtime_gpu_world_anchor_uses_authored_frames ... ok
+
+failures:
+
+failures:
+    runtime_gpu_rotated_frames_com_inertia_and_motor_parity
+    runtime_gpu_warm_resources_are_retained
+
+test result: FAILED. 8 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 42.45s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_primitives_contract_gpu`
+make: *** [Makefile:110: test-gpu] Error 101

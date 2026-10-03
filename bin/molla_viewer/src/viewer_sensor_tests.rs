@@ -785,9 +785,11 @@ fn viewer_sensor_camera_thumbnails_reset_reuse_faults_and_switch() {
 
 #[test]
 fn viewer_sensor_configurable_lidar_validates_layout_limits() {
-    let mut config = LidarConfig::default();
-    config.ray_count_h = u32::MAX;
-    config.ray_count_v = 2;
+    let mut config = LidarConfig {
+        ray_count_h: u32::MAX,
+        ray_count_v: 2,
+        ..Default::default()
+    };
     assert!(lidar_metadata(&config).is_err());
     config.ray_count_h = 0;
     config.ray_count_v = 0;

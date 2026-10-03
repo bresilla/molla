@@ -1,0 +1,45 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0283]: type annotations needed
+    --> crates/molla-solvers/src/rigid_loop_constraints.rs:105:13
+     |
+ 105 |         let rate = ends
+     |             ^^^^
+...
+ 111 |             .sum();
+     |              --- type must be known at this point
+     |
+     = note: cannot satisfy `_: Sum<f64>`
+     = help: the following types implement trait `Sum<A>`:
+               `DMat2` implements `Sum<&'a DMat2>`
+               `DMat2` implements `Sum`
+               `DMat3` implements `Sum<&'a DMat3>`
+               `DMat3` implements `Sum`
+               `DMat4` implements `Sum<&'a DMat4>`
+               `DMat4` implements `Sum`
+               `DQuat` implements `Sum<&'a DQuat>`
+               `DQuat` implements `Sum`
+             and 200 others
+note: required by a bound in `std::iter::Iterator::sum`
+    --> /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:3597:12
+     |
+3594 |     fn sum<S>(self) -> S
+     |        --- required by a bound in this associated function
+...
+3597 |         S: Sum<Self::Item>,
+     |            ^^^^^^^^^^^^^^^ required by this bound in `Iterator::sum`
+help: consider giving `rate` an explicit type
+     |
+ 105 |         let rate: /* Type */ = ends
+     |                 ++++++++++++
+
+For more information about this error, try `rustc --explain E0283`.
+error: could not compile `molla-solvers` (lib) due to 1 previous error
+make: *** [Makefile:89: test] Error 101

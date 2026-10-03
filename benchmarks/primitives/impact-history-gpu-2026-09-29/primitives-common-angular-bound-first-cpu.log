@@ -1,0 +1,27 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.83s
+     Running tests/runtime_multidof_limits.rs (target/debug/deps/runtime_multidof_limits-6170a08f61f0cbf7)
+
+running 1 test
+route=common_rows external_fixed_loops=1
+bounded_xyz axis=0 angles=[0.10278290508160519, -0.2875747399030654, 0.11334541005059118] violation=2.782905081605183e-3
+
+thread 'd6_common_rows_satisfy_xyz_bounds_and_keep_free_response' (1174370) panicked at crates/molla-solvers/tests/runtime_multidof_limits.rs:83:5:
+axis=0 violation=2.782905081605183e-3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test d6_common_rows_satisfy_xyz_bounds_and_keep_free_response ... FAILED
+
+failures:
+
+failures:
+    d6_common_rows_satisfy_xyz_bounds_and_keep_free_response
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_multidof_limits`
+make: *** [Makefile:132: test] Error 101

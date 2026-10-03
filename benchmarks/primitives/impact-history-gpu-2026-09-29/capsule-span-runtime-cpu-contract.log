@@ -1,0 +1,25 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.66s
+     Running tests/runtime_capsule_manifold.rs (target/debug/deps/runtime_capsule_manifold-99cfc5bee15be1bd)
+
+running 1 test
+
+thread 'cpu_capsule_support_span_preserves_loaded_equilibrium' (3036105) panicked at crates/molla-solvers/tests/runtime_capsule_manifold.rs:105:17:
+hz=60 frame=3 case=0 points=7
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cpu_capsule_support_span_preserves_loaded_equilibrium ... FAILED
+
+failures:
+
+failures:
+    cpu_capsule_support_span_preserves_loaded_equilibrium
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_capsule_manifold`
+make: *** [Makefile:87: test] Error 101

@@ -151,6 +151,7 @@ pub fn reduce_contacts(contacts: &mut Contacts, voxel_size: Real) -> Result<usiz
     let normal_src = contacts.normal.host()?.to_vec();
     let depth_src = contacts.depth.host()?.to_vec();
     let fric_src = contacts.friction.host()?.to_vec();
+    let stat_src = contacts.static_friction.host()?.to_vec();
     let roll_src = contacts.rolling_friction.host()?.to_vec();
     let tors_src = contacts.torsional_friction.host()?.to_vec();
     let rest_src = contacts.restitution.host()?.to_vec();
@@ -208,6 +209,10 @@ pub fn reduce_contacts(contacts: &mut Contacts, voxel_size: Real) -> Result<usiz
     let fric = contacts.friction.host_mut()?;
     for (slot, &src) in kept_indices.iter().enumerate() {
         fric[slot] = fric_src[src];
+    }
+    let stat = contacts.static_friction.host_mut()?;
+    for (slot, &src) in kept_indices.iter().enumerate() {
+        stat[slot] = stat_src[src];
     }
     let roll = contacts.rolling_friction.host_mut()?;
     for (slot, &src) in kept_indices.iter().enumerate() {

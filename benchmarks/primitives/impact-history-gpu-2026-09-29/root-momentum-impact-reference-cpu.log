@@ -1,0 +1,63 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.66s
+     Running tests/runtime_com_roots.rs (target/debug/deps/runtime_com_roots-00add1c400d4889b)
+
+running 4 tests
+authored root Free frames=60 substeps=4 relative momentum errors=[2.973910798506805e-15, 8.240868669731205e-15]
+loaded root Free frames=60 substeps=4 absolute P/L/centroid errors=[3.820199830714189e-15, 2.3810482549019908e-14, 2.1159872246096965e-15]
+moving tree Free frames=60 substeps=4 relative P/L and absolute centroid errors=[6.821291435613213e-14, 3.641033142018727e-14, 5.3438529890894854e-14]
+authored root Free frames=120 substeps=4 relative momentum errors=[5.4008873967146055e-15, 7.706288841888169e-15]
+loaded root Free frames=120 substeps=4 absolute P/L/centroid errors=[5.822058658345461e-15, 3.417964751459409e-14, 4.866020253582432e-15]
+test cpu_com_edits_reseed_implicit_roots_and_preserve_physical_state ... ok
+moving tree Free frames=120 substeps=4 relative P/L and absolute centroid errors=[5.1317724068862996e-14, 2.4015316529131446e-14, 5.892178581711244e-14]
+authored root Free frames=240 substeps=4 relative momentum errors=[6.805677005138212e-15, 1.2848533253359646e-14]
+authored root D6 frames=60 substeps=4 relative momentum errors=[2.973910798506805e-15, 8.240868669731205e-15]
+loaded root Free frames=240 substeps=4 absolute P/L/centroid errors=[8.35696368397923e-15, 2.378402223398193e-14, 4.308555854106998e-15]
+loaded root D6 frames=60 substeps=4 absolute P/L/centroid errors=[3.820199830714189e-15, 2.3810482549019908e-14, 2.1159872246096965e-15]
+authored root D6 frames=120 substeps=4 relative momentum errors=[5.4008873967146055e-15, 7.706288841888169e-15]
+loaded root D6 frames=120 substeps=4 absolute P/L/centroid errors=[5.822058658345461e-15, 3.417964751459409e-14, 4.866020253582432e-15]
+authored root D6 frames=240 substeps=4 relative momentum errors=[6.805677005138212e-15, 1.2848533253359646e-14]
+test cpu_authored_free_and_d6_frames_preserve_free_system_momentum ... ok
+moving tree Free frames=240 substeps=4 relative P/L and absolute centroid errors=[6.102199285442728e-14, 2.4750199821907116e-14, 6.426877702070592e-14]
+loaded root D6 frames=240 substeps=4 absolute P/L/centroid errors=[8.35696368397923e-15, 2.378402223398193e-14, 4.308555854106998e-15]
+test cpu_floating_roots_integrate_applied_wrenches_and_gravity ... ok
+moving tree D6 frames=60 substeps=4 relative P/L and absolute centroid errors=[6.821291435613213e-14, 3.641033142018727e-14, 5.3438529890894854e-14]
+moving tree D6 frames=120 substeps=4 relative P/L and absolute centroid errors=[5.1317724068862996e-14, 2.4015316529131446e-14, 5.892178581711244e-14]
+moving tree D6 frames=240 substeps=4 relative P/L and absolute centroid errors=[6.102199285442728e-14, 2.4750199821907116e-14, 6.426877702070592e-14]
+test cpu_floating_branched_trees_preserve_momentum_under_internal_efforts ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running tests/runtime_restitution.rs (target/debug/deps/runtime_restitution-daf7ed01298d6c08)
+
+running 13 tests
+test resting_exact_touch_retains_the_episode_for_penalty_support ... ok
+test restoring_published_state_after_a_failed_edit_preserves_contact_history ... ok
+test failed_frame_after_impact_restores_the_episode_and_physical_state ... ok
+test breaking_a_support_preserves_an_existing_contact_episode ... ok
+test explicit_velocity_and_material_edits_start_a_fresh_impact_episode ... ok
+test restitution_runs_in_the_sleeping_selection_path ... ok
+test impact_joint_reactions_include_the_impulse_and_can_trigger_breakage ... ok
+test impact_impulse_is_published_once_and_matches_the_velocity_jump ... ok
+test a_remote_impact_does_not_change_an_unconnected_contact_trajectory ... ok
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=0, measured=0e0
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=0.5, measured=5e-1
+normal rebound dt=1.6666666666666666e-2, substeps=16, restitution=1, measured=1e0
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=0, measured=0e0
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=0.5, measured=5e-1
+normal rebound dt=8.333333333333333e-3, substeps=16, restitution=1, measured=1e0
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=0, measured=0e0
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=0.5, measured=5e-1
+normal rebound dt=4.166666666666667e-3, substeps=16, restitution=1, measured=1e0
+test cpu_normal_rebound_consumes_restitution_across_step_sizes ... ok
+test passive_oblique_runtime_impacts_do_not_increase_kinetic_energy ... ok
+test rebound_is_independent_of_onset_penalty_stiffness_damping_and_substeps ... ok
+test tilted_box_impacts_keep_kinetic_energy_below_the_initial_budget ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
+

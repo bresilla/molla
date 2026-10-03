@@ -1,0 +1,38 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.18s
+     Running tests/compliant_loop_rows_gpu.rs (target/debug/deps/compliant_loop_rows_gpu-1d470e05e078ca3c)
+
+running 1 test
+test compliant_loop_rows_match_coordinate_derivatives_and_feedback_in_retained_batches ... 
+thread 'compliant_loop_rows_match_coordinate_derivatives_and_feedback_in_retained_batches' (3632915) panicked at /pkg/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-29.0.4/src/backend/wgpu_core.rs:1081:30:
+wgpu error: Validation Error
+
+Caused by:
+  In Device::create_shader_module, label = 'compliant loop rows'
+    
+Shader 'compliant loop rows' parsing error: name `active` is a reserved keyword
+   ┌─ wgsl:84:9
+   │
+84 │     var active = false;
+   │         ^^^^^^ definition of `active`
+
+
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    compliant_loop_rows_match_coordinate_derivatives_and_feedback_in_retained_batches
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+error: test failed, to rerun pass `-p molla-kernels --test compliant_loop_rows_gpu`
+make: *** [Makefile:110: test-gpu] Error 101

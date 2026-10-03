@@ -1,0 +1,57 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error[E0599]: no function or associated item named `new` found for struct `BodyId` in the current scope
+   --> crates/molla-solvers/src/contact_response_gpu_tests.rs:147:36
+    |
+147 |             bodies: [a.map(BodyId::new), b.map(BodyId::new)],
+    |                                    ^^^ function or associated item not found in `BodyId`
+    |
+help: there is a method `ne` with a similar name
+   --> /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/cmp.rs:264:5
+    |
+264 |     fn ne(&self, other: &Rhs) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no function or associated item named `new` found for struct `BodyId` in the current scope
+   --> crates/molla-solvers/src/contact_response_gpu_tests.rs:147:56
+    |
+147 |             bodies: [a.map(BodyId::new), b.map(BodyId::new)],
+    |                                                        ^^^ function or associated item not found in `BodyId`
+    |
+help: there is a method `ne` with a similar name
+   --> /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/cmp.rs:264:5
+    |
+264 |     fn ne(&self, other: &Rhs) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no function or associated item named `new` found for struct `ShapeId` in the current scope
+   --> crates/molla-solvers/src/contact_response_gpu_tests.rs:148:40
+    |
+148 |             colliders: [a.map(ShapeId::new), b.map(ShapeId::new)],
+    |                                        ^^^ function or associated item not found in `ShapeId`
+    |
+help: there is a method `ne` with a similar name
+   --> /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/cmp.rs:264:5
+    |
+264 |     fn ne(&self, other: &Rhs) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no function or associated item named `new` found for struct `ShapeId` in the current scope
+   --> crates/molla-solvers/src/contact_response_gpu_tests.rs:148:61
+    |
+148 |             colliders: [a.map(ShapeId::new), b.map(ShapeId::new)],
+    |                                                             ^^^ function or associated item not found in `ShapeId`
+    |
+help: there is a method `ne` with a similar name
+   --> /nix/store/sxchw4rph9bylv3xazr3m8l2sca7f5py-rust-default-1.94.1/lib/rustlib/src/rust/library/core/src/cmp.rs:264:5
+    |
+264 |     fn ne(&self, other: &Rhs) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `molla-solvers` (lib test) due to 4 previous errors
+make: *** [Makefile:134: test-primitives-contact-response-gpu] Error 101

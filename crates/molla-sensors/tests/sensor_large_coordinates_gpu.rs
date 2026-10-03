@@ -423,11 +423,11 @@ fn large_world_moving_instances_and_rebuilds_match_brute_force_triangles() {
                     for triangle in &mesh.indices {
                         let vertices =
                             triangle.map(|i| pose.transform_point(mesh.vertices[i as usize]));
-                        if let Some((t, normal)) = triangle_reference(*origin, vertices) {
-                            if t < distance {
-                                distance = t;
-                                reference = Some((id as u32, normal));
-                            }
+                        if let Some((t, normal)) = triangle_reference(*origin, vertices)
+                            && t < distance
+                        {
+                            distance = t;
+                            reference = Some((id as u32, normal));
                         }
                     }
                 }

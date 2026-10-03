@@ -1,0 +1,31 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.61s
+     Running tests/xpbd_capsules.rs (target/debug/deps/xpbd_capsules-9e9215fd71291636)
+
+running 3 tests
+capsule lying: y=0.2000 |v|=0.0000
+test capsule_settles_on_plane ... ok
+two parallel capsules: dx=1.9461
+test capsule_capsule_parallel_no_overlap_after_settling ... ok
+capsule stack: y0=0.2000 y1=0.1993 v0=0.0000 v1=0.0813
+capsule stack poses=[Transform { position: DVec3(-0.6902425674245961, 0.1999984591289193, 0.0), rotation: DQuat(0.0, 0.0, -0.7071067811865476, -0.7071067811865476) }, Transform { position: DVec3(1.0772293500832049, 0.19927673214650343, 0.0), rotation: DQuat(0.0, 0.0, -0.7065949343777013, -0.7076182577575089) }] velocities=[SpatialVector { linear: DVec3(-3.1592506388733455e-10, 0.0, 0.0), angular: DVec3(0.0, 0.0, 0.0) }, SpatialVector { linear: DVec3(0.02054531895327609, -0.07864119197318133, 0.0), angular: DVec3(0.0, 0.0, -0.10494601917298713) }]
+
+thread 'capsule_stack_two' (1228051) panicked at crates/molla-solvers/tests/xpbd_capsules.rs:150:5:
+top capsule at y=0.19927673214650343, expected ~0.6000000000000001
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test capsule_stack_two ... FAILED
+
+failures:
+
+failures:
+    capsule_stack_two
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p molla-solvers --test xpbd_capsules`
+make: *** [Makefile:87: test] Error 101

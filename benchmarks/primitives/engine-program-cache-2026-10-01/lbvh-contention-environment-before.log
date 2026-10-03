@@ -1,0 +1,11 @@
+2026-10-03T04:27:57+02:00
+utilization.gpu [%], memory.used [MiB], power.draw [W], clocks.current.graphics [MHz]
+94 %, 7543 MiB, 270.37 W, 2760 MHz
+# gpu         pid   type     sm    mem    enc    dec    jpg    ofa    command 
+# Idx           #    C/G      %      %      %      %      %      %    name 
+    0       2929     G      -      -      -      -      -      -    gnome-shell    
+    0       9615   C+G      -      -      -      -      -      -    gnome-remote-de
+    0       9657     G      -      -      -      -      -      -    gnome-shell    
+    0       9945   C+G     13      1      4      -      -      -    gnome-remote-de
+    0      49654     G     14      1      -      -      -      -    Xwayland       
+    0    2289973   C+G     68      5      -      -      -      -    astrocraft     

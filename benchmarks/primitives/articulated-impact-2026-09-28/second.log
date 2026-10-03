@@ -1,0 +1,29 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.70s
+     Running tests/articulated_impact.rs (target/debug/deps/articulated_impact-36a1276feece47f0)
+
+running 10 tests
+test moving_surface_transfers_work_and_ignores_normal_belt_velocity ... ok
+test moving_support_work_explains_dynamic_energy_gain ... ok
+test world_hinge_uses_pivot_inertia_and_preserves_the_locked_motion ... ok
+test inherited_kinematic_velocity_uses_physical_not_relative_joint_energy ... ok
+test off_center_rotated_com_and_tensor_match_analytic_impulse ... ok
+test fixed_tree_impact_transfers_through_the_articulation ... ok
+test simultaneous_manifold_contacts_are_order_independent_in_body_response ... ok
+test two_body_rebound_momentum_endpoint_exchange_and_force_preservation ... ok
+test scalar_joint_row_couples_to_contact_and_failures_leave_state_unchanged ... ok
+test oblique_friction_impacts_dissipate_with_world_frame_covariance ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

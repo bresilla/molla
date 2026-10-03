@@ -79,6 +79,57 @@ fn collect_gpu_pairs(lbvh_pairs: &LbvhPairs) -> Vec<(u32, u32)> {
 
 #[test]
 #[ignore = "needs a real wgpu adapter — run via make test-gpu"]
+fn lbvh_refit_accepts_unbounded_plane_and_updates_pairs() {
+    let engine = Engine::new_gpu().unwrap();
+    let mut lbvh = LbvhBroadPhase::new(
+        engine.device().unwrap().clone(),
+        engine.queue().unwrap().clone(),
+        16,
+        64,
+    )
+    .unwrap();
+    let mut bounds = vec![
+        (V3::splat(f64::NEG_INFINITY), V3::splat(f64::INFINITY)),
+        (V3::ZERO, V3::ONE),
+        (V3::splat(3.0), V3::splat(4.0)),
+    ];
+    assert_eq!(
+        collect_gpu_pairs(&lbvh.dispatch(&bounds).unwrap()),
+        vec![(0, 1), (0, 2)]
+    );
+    for (lo, hi, overlap) in [(3.0, 4.0, false), (0.5, 1.5, true), (2.0, 3.0, false)] {
+        bounds[2] = (V3::splat(lo), V3::splat(hi));
+        let mut expected = vec![(0, 1), (0, 2)];
+        if overlap {
+            expected.push((1, 2));
+        }
+        let pairs = lbvh.refit_only(&bounds).unwrap();
+        assert!(!pairs.overflowed);
+        assert_eq!(collect_gpu_pairs(&pairs), expected);
+    }
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu"]
+#[should_panic(expected = "NaN primitive AABB")]
+fn lbvh_refit_still_rejects_nan_bounds() {
+    let engine = Engine::new_gpu().unwrap();
+    let mut lbvh = LbvhBroadPhase::new(
+        engine.device().unwrap().clone(),
+        engine.queue().unwrap().clone(),
+        16,
+        64,
+    )
+    .unwrap();
+    let mut bounds = vec![(V3::ZERO, V3::ONE), (V3::splat(3.0), V3::splat(4.0))];
+    lbvh.dispatch(&bounds).unwrap();
+    bounds[0].0.x = f64::NAN;
+    lbvh.refit_only(&bounds).unwrap();
+}
+
+#[test]
+#[ignore = "needs a real wgpu adapter — run via make test-gpu"]
 fn lbvh_pair_set_matches_cpu_sap_on_1k_scene() {
     // 10x10x10 = 1000 spheres on a 5 m grid, radius 0.35 → moderate
     // overlap density (every sphere pairs with ~6 neighbours).
@@ -356,10 +407,93 @@ fn collision_pipeline_gpu_broad_phase_yields_same_contacts_as_sap() {
     pipe_gpu
         .enable_full_gpu_broad_phase(&engine, 512, 8192, false)
         .expect("enable gpu broad phase");
-    let n_gpu = pipe_gpu.collide(&model, &state, &mut contacts_gpu).unwrap();
+    for frame in 0..32 {
+        let n_gpu = pipe_gpu.collide(&model, &state, &mut contacts_gpu).unwrap();
+        assert_eq!(
+            n_cpu, n_gpu,
+            "frame {frame}: contact count mismatch: cpu={n_cpu}, gpu={n_gpu}"
+        );
+    }
+}
 
-    assert_eq!(
-        n_cpu, n_gpu,
-        "contact count mismatch: cpu={n_cpu}, gpu={n_gpu}"
-    );
+#[test]
+#[ignore = "requires GPU; run via make test-gpu"]
+fn lbvh_complete_topology_and_level_bounds_match_brute_force() {
+    let engine = Engine::new_gpu().unwrap();
+    let mut lbvh = LbvhBroadPhase::new(
+        engine.device().unwrap().clone(),
+        engine.queue().unwrap().clone(),
+        512,
+        65536,
+    )
+    .unwrap();
+    for n in [
+        1, 2, 3, 5, 7, 8, 9, 15, 16, 17, 63, 64, 65, 127, 128, 129, 216, 255, 256, 257,
+    ] {
+        for frame in 0..3 {
+            let bounds: Vec<_> = (0..n)
+                .map(|i| {
+                    let p = V3::new(
+                        ((i * 17 + frame * 3) % 19) as f64,
+                        ((i * 7 + frame) % 13) as f64,
+                        ((i * 3) % 11) as f64,
+                    ) * 0.25;
+                    (p - V3::splat(0.5), p + V3::splat(0.5))
+                })
+                .collect();
+            let mut expected = Vec::new();
+            for a in 0..n {
+                for b in a + 1..n {
+                    if bounds[a].0.cmple(bounds[b].1).all() && bounds[a].1.cmpge(bounds[b].0).all()
+                    {
+                        expected.push((a as u32, b as u32));
+                    }
+                }
+            }
+            let pairs = if frame == 1 {
+                lbvh.refit_only(&bounds)
+            } else {
+                lbvh.dispatch(&bounds)
+            }
+            .unwrap();
+            assert!(!pairs.overflowed);
+            assert_eq!(
+                pairs.a.len(),
+                expected.len(),
+                "duplicate/missing pairs at n={n}, frame={frame}"
+            );
+            assert_eq!(collect_gpu_pairs(&pairs), expected, "n={n}, frame={frame}");
+            let nodes = lbvh.debug_dump_nodes(2 * n - 1).unwrap();
+            let root = if n == 1 { 0 } else { n };
+            assert_eq!(nodes[root].parent, u32::MAX);
+            let mut seen = vec![false; nodes.len()];
+            let mut stack = vec![root];
+            while let Some(index) = stack.pop() {
+                assert!(!seen[index], "cycle or duplicate child at {index}");
+                seen[index] = true;
+                let node = nodes[index];
+                if index < n {
+                    assert_eq!(node.is_leaf, 1);
+                } else {
+                    assert_eq!(node.is_leaf, 0);
+                    let l = node.left as usize;
+                    let r = node.right as usize;
+                    assert_eq!(nodes[l].parent as usize, index);
+                    assert_eq!(nodes[r].parent as usize, index);
+                    for axis in 0..3 {
+                        assert_eq!(
+                            node.aabb_min[axis],
+                            nodes[l].aabb_min[axis].min(nodes[r].aabb_min[axis])
+                        );
+                        assert_eq!(
+                            node.aabb_max[axis],
+                            nodes[l].aabb_max[axis].max(nodes[r].aabb_max[axis])
+                        );
+                    }
+                    stack.extend([l, r]);
+                }
+            }
+            assert!(seen.into_iter().all(|s| s));
+        }
+    }
 }

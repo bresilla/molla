@@ -171,26 +171,35 @@ mod gpu {
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC;
 
-            let buf_a = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_matmul A"),
-                size: bytes_a,
-                usage: storage_usage,
-                mapped_at_creation: false,
-            });
-            let buf_b = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_matmul B"),
-                size: bytes_b,
-                usage: storage_usage,
-                mapped_at_creation: false,
-            });
-            let buf_c = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_matmul C"),
-                size: bytes_c,
-                usage: storage_usage,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf_a, 0, bytemuck::cast_slice(a));
-            queue.write_buffer(&buf_b, 0, bytemuck::cast_slice(b));
+            let buf_a = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_matmul A"),
+                    size: bytes_a,
+                    usage: storage_usage,
+                    mapped_at_creation: false,
+                }
+            );
+            let buf_b = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_matmul B"),
+                    size: bytes_b,
+                    usage: storage_usage,
+                    mapped_at_creation: false,
+                }
+            );
+            let buf_c = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_matmul C"),
+                    size: bytes_c,
+                    usage: storage_usage,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &buf_a, 0, bytemuck::cast_slice(a));
+            molla_core::gpu_write_buffer!(queue, &buf_b, 0, bytemuck::cast_slice(b));
 
             let uniforms = Uniforms {
                 m: m as u32,
@@ -198,13 +207,16 @@ mod gpu {
                 k: k as u32,
                 _pad: 0,
             };
-            let buf_u = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_matmul uniforms"),
-                size: core::mem::size_of::<Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf_u, 0, bytemuck::bytes_of(&uniforms));
+            let buf_u = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_matmul uniforms"),
+                    size: core::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            );
+            molla_core::gpu_write_buffer!(queue, &buf_u, 0, bytemuck::bytes_of(&uniforms));
 
             let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("molla::tile_matmul io bg"),
@@ -249,12 +261,15 @@ mod gpu {
                 pass.set_bind_group(1, &bg_u, &[]);
                 pass.dispatch_workgroups(groups_x, groups_y, 1);
             }
-            let stage = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("molla::tile_matmul stage"),
-                size: bytes_c,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
+            let stage = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::tile_matmul stage"),
+                    size: bytes_c,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }
+            );
             encoder.copy_buffer_to_buffer(&buf_c, 0, &stage, 0, bytes_c);
             queue.submit(std::iter::once(encoder.finish()));
 
@@ -271,7 +286,7 @@ mod gpu {
             receiver
                 .recv()
                 .map_err(|e| Error::Gpu(format!("tile_matmul recv: {e:?}")))??;
-            let data = slice.get_mapped_range();
+            let data = molla_core::gpu_readback!(slice);
             let read: &[f32] = bytemuck::cast_slice(&data);
             c.copy_from_slice(read);
             drop(data);

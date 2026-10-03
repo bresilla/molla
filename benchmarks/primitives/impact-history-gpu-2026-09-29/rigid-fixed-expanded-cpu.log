@@ -1,0 +1,27 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.33s
+     Running tests/runtime_rigid_fixed_loops.rs (target/debug/deps/runtime_rigid_fixed_loops-71b7f9c92463de14)
+
+running 3 tests
+test cpu_rigid_fixed_loop_break_channels_and_explicit_repair_preserve_state ... ok
+test cpu_rigid_fixed_loop_projection_matches_independent_six_dimensional_impulse ... 
+thread 'cpu_rigid_fixed_loop_projection_matches_independent_six_dimensional_impulse' (410443) panicked at crates/molla-solvers/tests/runtime_rigid_fixed_loops.rs:86:5:
+projected angular rate: DVec3(0.00684971204831179, 7.779623107496404e-5, -0.017596107854222384) != DVec3(0.006849816285679808, 7.749849678535467e-5, -0.01759604500156976)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test cpu_rigid_fixed_loops_preserve_rotated_frames_and_balance_anchor_wrenches ... ok
+
+failures:
+
+failures:
+    cpu_rigid_fixed_loop_projection_matches_independent_six_dimensional_impulse
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_rigid_fixed_loops`
+make: *** [Makefile:89: test] Error 101

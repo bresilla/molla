@@ -1,0 +1,67 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.26s
+     Running tests/runtime_break_configuration.rs (target/debug/deps/runtime_break_configuration-6fc0b1535722230b)
+
+running 9 tests
+test break_thresholds_are_inclusive_independent_and_validate_zero_and_infinity ... ok
+test step_checkpoint_restores_solver_state_and_forks_do_not_share_mutable_dynamics ... ok
+test threshold_edits_invalidate_dynamics_without_recompiling_or_changing_state ... ok
+test invalid_break_batch_is_atomic_and_loops_do_not_detach_tree_edges ... ok
+test explicit_filters_expand_compound_colliders_and_future_body_shapes ... ok
+test broken_edges_do_not_propagate_later_structural_or_state_edits ... ok
+test broken_tree_edges_release_authored_topology_and_conflicting_repair_is_atomic ... ok
+test break_removes_only_joint_collision_policy_and_explicit_pairs_survive_compaction ... ok
+test batched_breaks_detach_trees_preserve_state_and_require_explicit_repair ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.07s
+     Running tests/runtime_break_detachment.rs (target/debug/deps/runtime_break_detachment-201c3dbeacdf1fbb)
+
+running 3 tests
+test cpu_loop_break_keeps_tree_load_sharing_and_unrelated_sleep ... ok
+test cpu_detached_tree_and_loop_joints_leave_no_hidden_constraint ... ok
+test cpu_explicit_pair_filters_survive_break_and_control_actual_contact_response ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/runtime_joint_breakage.rs (target/debug/deps/runtime_joint_breakage-6452204f15aa14c8)
+
+running 13 tests
+test contact_load_triggers_break_and_all_substep_contact_samples_are_retained ... ok
+test surviving_motor_efforts_follow_handles_across_new_root_dof_compaction ... ok
+test transient_peak_triggers_below_frame_mean_threshold_and_repair_starts_a_new_episode ... ok
+test angular_stop_peak_is_sampled_before_mean_reduction ... ok
+test compliant_loop_break_preserves_boundary_motion_and_legacy_frame_reactions ... ok
+test sleeping_zero_threshold_joint_waits_for_a_valid_sample_and_readout_is_optional ... ok
+test later_force_failure_rolls_back_state_topology_events_and_input_validity ... ok
+test automatic_break_refreshes_collision_policy_before_the_following_substep ... ok
+test channels_simultaneous_breaks_and_disabled_limits_follow_actual_loads ... ok
+test gravity_break_occurs_before_the_next_substep_not_at_frame_end ... ok
+test sequential_break_boundaries_commit_once_or_roll_back_together ... ok
+test subthreshold_frames_retain_model_identity_and_match_the_ordinary_cpu_path ... ok
+test all_supported_constrained_joint_kinds_break_under_the_same_support_load ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

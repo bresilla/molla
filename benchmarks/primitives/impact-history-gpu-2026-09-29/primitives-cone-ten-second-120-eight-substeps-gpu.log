@@ -1,0 +1,25 @@
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/runtime_cone_limits.rs (target/debug/deps/runtime_cone_limits-7faab4c43142700e)
+
+running 1 test
+test gpu_cone_pendulum_is_bounded_for_ten_seconds ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+cone pendulum rates=[120] duration=10s substeps=8
+cone pendulum progress: hz=120 elapsed=1s active_frames=1 peak=0e0 peak_anchor=0e0 peak_energy=5.598089981231439
+cone pendulum progress: hz=120 elapsed=2s active_frames=2 peak=0e0 peak_anchor=0e0 peak_energy=5.598089981231439
+cone pendulum progress: hz=120 elapsed=3s active_frames=3 peak=0e0 peak_anchor=0e0 peak_energy=5.598089981231439
+cone pendulum progress: hz=120 elapsed=4s active_frames=3 peak=0e0 peak_anchor=0e0 peak_energy=5.598089981231439
+cone pendulum progress: hz=120 elapsed=5s active_frames=3 peak=0e0 peak_anchor=0e0 peak_energy=5.598089981231439
+cone pendulum progress: hz=120 elapsed=6s active_frames=4 peak=0e0 peak_anchor=0e0 peak_energy=5.598089981231439
+cone pendulum progress: hz=120 elapsed=7s active_frames=4 peak=0e0 peak_anchor=0e0 peak_energy=5.598089981231439
+cone pendulum progress: hz=120 elapsed=8s active_frames=4 peak=0e0 peak_anchor=0e0 peak_energy=5.598089981231439
+cone pendulum progress: hz=120 elapsed=9s active_frames=4 peak=0e0 peak_anchor=0e0 peak_energy=5.598089981231439
+cone pendulum progress: hz=120 elapsed=10s active_frames=4 peak=0e0 peak_anchor=0e0 peak_energy=5.598089981231439
+cone pendulum duration=10s dt=0.008333333333333333 substeps=8 active_frames=4 peak=0e0 peak_anchor=0e0 initial_energy=5.595546871377419 peak_energy=5.598089981231439 final_energy=0.7747360567837042
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 66.49s
+

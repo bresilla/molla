@@ -1,0 +1,529 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.42s
+     Running tests/runtime_d6_angular_mass.rs (target/debug/deps/runtime_d6_angular_mass-130d77b786e52dba)
+
+running 1 test
+test gpu_narrow_intervals_remain_bounded_hinges ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } dt=0.00005 width=1e-8
+angular_mass case=0 reversed=false rate_error=3.428606032e-12 linear_error=1.540894364e-11 pose_error=2.827377466e-7 rotation_error=1.189716899e-7
+angular_mass case=1 reversed=false rate_error=1.818989404e-12 linear_error=2.578158093e-12 pose_error=2.845637390e-7 rotation_error=1.164455754e-7
+angular_mass case=2 reversed=false rate_error=1.645078386e-12 linear_error=1.160630914e-11 pose_error=2.863972281e-7 rotation_error=1.139376715e-7
+angular_mass case=3 reversed=false rate_error=8.134767913e-12 linear_error=1.089779825e-11 pose_error=2.845637390e-7 rotation_error=1.164455754e-7
+angular_mass case=4 reversed=false rate_error=4.461526975e-11 linear_error=5.607168031e-11 pose_error=1.295562147e-7 rotation_error=3.568463334e-8
+angular_mass case=5 reversed=false rate_error=3.971951927e-11 linear_error=5.472935594e-11 pose_error=1.275842468e-7 rotation_error=3.830843799e-8
+angular_mass case=6 reversed=false rate_error=4.016657044e-11 linear_error=6.044883715e-11 pose_error=1.256249574e-7 rotation_error=4.097062001e-8
+angular_mass case=7 reversed=false rate_error=3.956040571e-11 linear_error=5.267059633e-11 pose_error=1.275842468e-7 rotation_error=3.830843799e-8
+angular_mass case=8 reversed=true rate_error=9.320694674e-12 linear_error=1.548493959e-11 pose_error=3.602240407e-7 rotation_error=6.961266286e-8
+angular_mass case=9 reversed=true rate_error=4.067384034e-12 linear_error=6.016128566e-12 pose_error=3.622046443e-7 rotation_error=6.763220776e-8
+angular_mass case=10 reversed=true rate_error=1.756029846e-11 linear_error=1.163160322e-11 pose_error=3.641937929e-7 rotation_error=6.568998208e-8
+angular_mass case=11 reversed=true rate_error=3.637977983e-12 linear_error=4.288463200e-12 pose_error=3.622046443e-7 rotation_error=6.763220776e-8
+angular_mass case=12 reversed=true rate_error=4.428795786e-11 linear_error=3.802021577e-11 pose_error=9.796313591e-8 rotation_error=1.366982276e-7
+angular_mass case=13 reversed=true rate_error=3.989355101e-11 linear_error=4.429387005e-11 pose_error=9.603315693e-8 rotation_error=1.384422511e-7
+angular_mass case=14 reversed=true rate_error=3.772447749e-11 linear_error=4.545977496e-11 pose_error=9.413834548e-8 rotation_error=1.402104627e-7
+angular_mass case=15 reversed=true rate_error=4.026504600e-11 linear_error=4.650096205e-11 pose_error=9.603315693e-8 rotation_error=1.384422511e-7
+angular_mass case=16 reversed=false rate_error=1.502229642e-11 linear_error=1.739854690e-11 pose_error=5.511273412e-8 rotation_error=8.383363212e-8
+angular_mass case=17 reversed=false rate_error=7.499885410e-12 linear_error=9.047884863e-12 pose_error=5.706198727e-8 rotation_error=8.569527471e-8
+angular_mass case=18 reversed=false rate_error=9.269511470e-12 linear_error=1.494223307e-11 pose_error=5.903973115e-8 rotation_error=8.761389312e-8
+angular_mass case=19 reversed=false rate_error=7.513659380e-12 linear_error=9.371038988e-12 pose_error=5.706198727e-8 rotation_error=8.569527471e-8
+angular_mass case=20 reversed=false rate_error=4.057535473e-11 linear_error=5.861397587e-11 pose_error=2.069054330e-7 rotation_error=1.050118372e-7
+angular_mass case=21 reversed=false rate_error=4.015189956e-11 linear_error=5.710377055e-11 pose_error=2.067771919e-7 rotation_error=1.022010840e-7
+angular_mass case=22 reversed=false rate_error=4.227270141e-11 linear_error=5.375074322e-11 pose_error=2.066753943e-7 rotation_error=9.939592107e-8
+angular_mass case=23 reversed=false rate_error=3.935075809e-11 linear_error=5.861733688e-11 pose_error=2.067771919e-7 rotation_error=1.022010840e-7
+angular_mass case=24 reversed=true rate_error=4.188822721e-12 linear_error=9.246530536e-12 pose_error=3.457218669e-7 rotation_error=1.375945678e-8
+angular_mass case=25 reversed=true rate_error=7.499885747e-12 linear_error=1.035118406e-11 pose_error=3.468056858e-7 rotation_error=1.147621050e-8
+angular_mass case=26 reversed=true rate_error=5.111448283e-12 linear_error=8.655741426e-12 pose_error=3.479063484e-7 rotation_error=9.324680804e-9
+angular_mass case=27 reversed=true rate_error=8.335656478e-12 linear_error=5.295789235e-12 pose_error=3.468056858e-7 rotation_error=1.147621050e-8
+angular_mass case=28 reversed=true rate_error=4.269857854e-11 linear_error=5.076370591e-11 pose_error=2.019566556e-7 rotation_error=7.720991553e-8
+angular_mass case=29 reversed=true rate_error=3.940328332e-11 linear_error=4.533269995e-11 pose_error=2.021846132e-7 rotation_error=7.757379976e-8
+angular_mass case=30 reversed=true rate_error=3.733084727e-11 linear_error=4.122070429e-11 pose_error=2.024470656e-7 rotation_error=7.801848031e-8
+angular_mass case=31 reversed=true rate_error=4.123934695e-11 linear_error=4.236855849e-11 pose_error=2.021846132e-7 rotation_error=7.757379976e-8
+angular_mass_reaction case=0 force_error=8.491931370e-7 torque_error=5.394982325e-7
+angular_mass_reaction case=1 force_error=1.031263547e-7 torque_error=5.366190475e-7
+angular_mass_reaction case=2 force_error=8.441826108e-7 torque_error=7.272714611e-7
+angular_mass_reaction case=3 force_error=4.359119986e-7 torque_error=1.018797239e-6
+angular_mass_reaction case=4 force_error=2.159332647e-6 torque_error=6.681630219e-6
+angular_mass_reaction case=5 force_error=2.189174084e-6 torque_error=7.176712974e-6
+angular_mass_reaction case=6 force_error=2.440837745e-6 torque_error=8.137735594e-6
+angular_mass_reaction case=7 force_error=2.106823962e-6 torque_error=7.060977681e-6
+angular_mass_reaction case=8 force_error=7.103081834e-7 torque_error=1.226101169e-6
+angular_mass_reaction case=9 force_error=2.406451558e-7 torque_error=3.475127401e-7
+angular_mass_reaction case=10 force_error=6.182480511e-7 torque_error=1.106227349e-6
+angular_mass_reaction case=11 force_error=1.715385608e-7 torque_error=4.675903154e-7
+angular_mass_reaction case=12 force_error=1.469216049e-6 torque_error=3.769966489e-6
+angular_mass_reaction case=13 force_error=1.771754469e-6 torque_error=5.427346350e-6
+angular_mass_reaction case=14 force_error=1.650689729e-6 torque_error=5.496201880e-6
+angular_mass_reaction case=15 force_error=1.860038141e-6 torque_error=5.896399487e-6
+angular_mass_reaction case=16 force_error=1.145882528e-6 torque_error=1.929938913e-6
+angular_mass_reaction case=17 force_error=3.619153540e-7 torque_error=1.499636680e-6
+angular_mass_reaction case=18 force_error=1.006624552e-6 torque_error=1.815753600e-6
+angular_mass_reaction case=19 force_error=3.748414551e-7 torque_error=9.488973121e-7
+angular_mass_reaction case=20 force_error=2.129711245e-6 torque_error=6.932685886e-6
+angular_mass_reaction case=21 force_error=2.284150885e-6 torque_error=7.523799847e-6
+angular_mass_reaction case=22 force_error=2.476538407e-6 torque_error=8.113834720e-6
+angular_mass_reaction case=23 force_error=2.344693636e-6 torque_error=7.344573201e-6
+angular_mass_reaction case=24 force_error=4.234304400e-7 torque_error=9.128294334e-7
+angular_mass_reaction case=25 force_error=4.140474391e-7 torque_error=8.369560383e-7
+angular_mass_reaction case=26 force_error=4.091406560e-7 torque_error=7.491509938e-7
+angular_mass_reaction case=27 force_error=2.118315774e-7 torque_error=6.283310292e-7
+angular_mass_reaction case=28 force_error=1.934540655e-6 torque_error=5.624847284e-6
+angular_mass_reaction case=29 force_error=1.813307444e-6 torque_error=5.962353166e-6
+angular_mass_reaction case=30 force_error=1.547556130e-6 torque_error=5.060216900e-6
+angular_mass_reaction case=31 force_error=1.694742112e-6 torque_error=5.148265231e-6
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 37.28s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.98s
+     Running tests/featherstone_mixed_distance.rs (target/debug/deps/featherstone_mixed_distance-805e37d04c6df793)
+
+running 1 test
+test gpu_mixed_stops_keep_slack_distance_free_and_react_at_maximum ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 10.55s
+
+     Running tests/runtime_d6_angular_locks.rs (target/debug/deps/runtime_d6_angular_locks-826360b15688d9a0)
+
+running 2 tests
+test gpu_mixed_euler_locks_preserve_physical_tangent_response ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+mixed_d6_lock case=0 step=1 rate_error=3.092808728e-10 rotation_error=5.267541005e-9
+mixed_d6_lock case=1 step=1 rate_error=4.656612873e-10 rotation_error=5.267542906e-9
+mixed_d6_lock case=2 step=1 rate_error=3.092808760e-10 rotation_error=5.267541005e-9
+mixed_d6_lock case=3 step=1 rate_error=4.656612894e-10 rotation_error=5.267542906e-9
+mixed_d6_lock case=4 step=1 rate_error=1.299587153e-9 rotation_error=2.063139792e-11
+mixed_d6_lock case=5 step=1 rate_error=0.000000000e0 rotation_error=2.220446049e-16
+mixed_d6_lock case=6 step=1 rate_error=1.299587153e-9 rotation_error=2.063139792e-11
+mixed_d6_lock case=7 step=1 rate_error=0.000000000e0 rotation_error=2.220446049e-16
+mixed_d6_lock case=8 step=1 rate_error=3.092808728e-10 rotation_error=5.267541005e-9
+mixed_d6_lock case=9 step=1 rate_error=4.656612873e-10 rotation_error=5.267542906e-9
+mixed_d6_lock case=10 step=1 rate_error=3.092808760e-10 rotation_error=5.267541005e-9
+mixed_d6_lock case=11 step=1 rate_error=4.656612894e-10 rotation_error=5.267542906e-9
+mixed_d6_lock case=12 step=1 rate_error=1.299587153e-9 rotation_error=2.063139792e-11
+mixed_d6_lock case=13 step=1 rate_error=0.000000000e0 rotation_error=2.220446049e-16
+mixed_d6_lock case=14 step=1 rate_error=1.299587153e-9 rotation_error=2.063139792e-11
+mixed_d6_lock case=15 step=1 rate_error=0.000000000e0 rotation_error=2.220446049e-16
+mixed_d6_lock case=16 step=1 rate_error=1.883784050e-9 rotation_error=1.862604765e-8
+mixed_d6_lock case=17 step=1 rate_error=1.101270003e-9 rotation_error=6.581766293e-8
+mixed_d6_lock case=18 step=1 rate_error=1.743680151e-9 rotation_error=1.862604765e-8
+mixed_d6_lock case=19 step=1 rate_error=1.074298698e-9 rotation_error=6.581766293e-8
+mixed_d6_lock case=20 step=1 rate_error=3.496702666e-9 rotation_error=9.844988709e-8
+mixed_d6_lock case=21 step=1 rate_error=3.119990974e-10 rotation_error=7.447291311e-8
+mixed_d6_lock case=22 step=1 rate_error=3.496702666e-9 rotation_error=9.844988709e-8
+mixed_d6_lock case=23 step=1 rate_error=3.119990974e-10 rotation_error=7.447291311e-8
+mixed_d6_lock case=24 step=1 rate_error=5.549918503e-10 rotation_error=3.435370052e-8
+mixed_d6_lock case=25 step=1 rate_error=1.005302327e-9 rotation_error=3.452509371e-8
+mixed_d6_lock case=26 step=1 rate_error=5.379418214e-10 rotation_error=3.435370052e-8
+mixed_d6_lock case=27 step=1 rate_error=9.313789789e-10 rotation_error=3.452509371e-8
+mixed_d6_lock case=28 step=1 rate_error=1.190925834e-9 rotation_error=3.361468018e-8
+mixed_d6_lock case=29 step=1 rate_error=4.887417889e-11 rotation_error=1.968184278e-8
+mixed_d6_lock case=30 step=1 rate_error=1.190925834e-9 rotation_error=3.361468018e-8
+mixed_d6_lock case=31 step=1 rate_error=4.887417889e-11 rotation_error=1.968184278e-8
+mixed_d6_lock case=32 step=1 rate_error=6.683870683e-10 rotation_error=4.683415626e-8
+mixed_d6_lock case=33 step=1 rate_error=6.985880086e-10 rotation_error=5.490072154e-9
+mixed_d6_lock case=34 step=1 rate_error=4.245069886e-10 rotation_error=4.683415626e-8
+mixed_d6_lock case=35 step=1 rate_error=4.658053913e-10 rotation_error=5.490072154e-9
+mixed_d6_lock case=36 step=1 rate_error=6.634155335e-10 rotation_error=4.683415626e-8
+mixed_d6_lock case=37 step=1 rate_error=1.164189503e-9 rotation_error=5.490072154e-9
+mixed_d6_lock case=38 step=1 rate_error=4.629480416e-11 rotation_error=5.490072154e-9
+mixed_d6_lock case=39 step=1 rate_error=7.167862244e-10 rotation_error=7.654782900e-8
+mixed_d6_lock case=40 step=1 rate_error=2.336785020e-10 rotation_error=2.167270260e-8
+mixed_d6_lock case=41 step=1 rate_error=4.972397829e-10 rotation_error=7.654782900e-8
+mixed_d6_lock case=42 step=1 rate_error=1.988802872e-11 rotation_error=2.167270260e-8
+mixed_d6_lock case=43 step=1 rate_error=6.634155602e-10 rotation_error=7.654782900e-8
+mixed_d6_lock case=44 step=1 rate_error=9.600073062e-10 rotation_error=2.167270260e-8
+mixed_d6_lock case=45 step=1 rate_error=3.974803646e-10 rotation_error=2.167270260e-8
+mixed_d6_lock case=46 step=1 rate_error=1.537465733e-9 rotation_error=4.815128561e-8
+mixed_d6_lock case=47 step=1 rate_error=1.645296545e-9 rotation_error=4.398929056e-8
+mixed_d6_lock case=48 step=1 rate_error=1.416929240e-9 rotation_error=4.815128561e-8
+mixed_d6_lock case=49 step=1 rate_error=1.273891117e-9 rotation_error=4.398929056e-8
+mixed_d6_lock case=50 step=1 rate_error=1.537465733e-9 rotation_error=4.815128561e-8
+mixed_d6_lock case=51 step=1 rate_error=1.710417991e-9 rotation_error=4.398929056e-8
+mixed_d6_lock case=52 step=1 rate_error=3.407633368e-10 rotation_error=4.398929056e-8
+mixed_d6_lock case=53 step=1 rate_error=1.525205886e-9 rotation_error=1.252928980e-7
+mixed_d6_lock case=54 step=1 rate_error=5.527819085e-10 rotation_error=5.516632567e-8
+mixed_d6_lock case=55 step=1 rate_error=1.441721472e-9 rotation_error=1.252928980e-7
+mixed_d6_lock case=56 step=1 rate_error=5.013558880e-10 rotation_error=5.516632567e-8
+mixed_d6_lock case=57 step=1 rate_error=1.537465733e-9 rotation_error=1.252928980e-7
+mixed_d6_lock case=58 step=1 rate_error=9.628691295e-10 rotation_error=5.516632567e-8
+mixed_d6_lock case=59 step=1 rate_error=1.169262350e-10 rotation_error=5.516632567e-8
+mixed_d6_lock case=60 step=1 rate_error=1.154839998e-9 rotation_error=4.242078910e-11
+mixed_d6_lock case=61 step=1 rate_error=1.063831983e-13 rotation_error=5.490072154e-9
+mixed_d6_lock case=62 step=1 rate_error=6.634155335e-10 rotation_error=4.683415652e-8
+mixed_d6_lock case=63 step=1 rate_error=2.328306437e-10 rotation_error=5.490072154e-9
+mixed_d6_lock case=64 step=1 rate_error=1.299595854e-9 rotation_error=1.094367452e-8
+mixed_d6_lock case=65 step=1 rate_error=5.168147621e-14 rotation_error=5.490072154e-9
+mixed_d6_lock case=66 step=1 rate_error=1.154839996e-9 rotation_error=7.065280944e-9
+mixed_d6_lock case=67 step=1 rate_error=8.399343280e-14 rotation_error=2.167270260e-8
+mixed_d6_lock case=68 step=1 rate_error=6.634155603e-10 rotation_error=7.654782922e-8
+mixed_d6_lock case=69 step=1 rate_error=2.328307199e-10 rotation_error=2.167270260e-8
+mixed_d6_lock case=70 step=1 rate_error=1.299576172e-9 rotation_error=7.065280944e-9
+mixed_d6_lock case=71 step=1 rate_error=2.704327183e-13 rotation_error=2.167270260e-8
+mixed_d6_lock case=72 step=1 rate_error=1.423996480e-9 rotation_error=3.792861649e-8
+mixed_d6_lock case=73 step=1 rate_error=1.063438231e-13 rotation_error=4.398929056e-8
+mixed_d6_lock case=74 step=1 rate_error=1.537465732e-9 rotation_error=6.632633918e-8
+mixed_d6_lock case=75 step=1 rate_error=2.328306493e-10 rotation_error=4.398929056e-8
+mixed_d6_lock case=76 step=1 rate_error=1.733163211e-9 rotation_error=3.240112082e-8
+mixed_d6_lock case=77 step=1 rate_error=5.165336134e-14 rotation_error=4.398929056e-8
+mixed_d6_lock case=78 step=1 rate_error=2.255601930e-9 rotation_error=6.353052877e-8
+mixed_d6_lock case=79 step=1 rate_error=8.280197240e-14 rotation_error=5.516632567e-8
+mixed_d6_lock case=80 step=1 rate_error=1.537465732e-9 rotation_error=6.243015689e-8
+mixed_d6_lock case=81 step=1 rate_error=9.599853386e-10 rotation_error=5.516632567e-8
+mixed_d6_lock case=82 step=1 rate_error=2.182240275e-9 rotation_error=6.353052877e-8
+mixed_d6_lock case=83 step=1 rate_error=2.679707516e-13 rotation_error=5.516632567e-8
+mixed_d6_lock case=0 step=2 rate_error=3.092808738e-10 rotation_error=5.267541543e-9
+mixed_d6_lock case=1 step=2 rate_error=4.656612666e-10 rotation_error=5.267546456e-9
+mixed_d6_lock case=2 step=2 rate_error=3.092808744e-10 rotation_error=5.267541543e-9
+mixed_d6_lock case=3 step=2 rate_error=4.656612687e-10 rotation_error=5.267546456e-9
+mixed_d6_lock case=4 step=2 rate_error=1.157716371e-9 rotation_error=4.174718566e-11
+mixed_d6_lock case=5 step=2 rate_error=7.858733738e-14 rotation_error=2.220446049e-16
+mixed_d6_lock case=6 step=2 rate_error=1.157716371e-9 rotation_error=4.174718566e-11
+mixed_d6_lock case=7 step=2 rate_error=7.858733738e-14 rotation_error=2.220446049e-16
+mixed_d6_lock case=8 step=2 rate_error=3.092808738e-10 rotation_error=5.267541543e-9
+mixed_d6_lock case=9 step=2 rate_error=4.656612666e-10 rotation_error=5.267546456e-9
+mixed_d6_lock case=10 step=2 rate_error=3.092808744e-10 rotation_error=5.267541543e-9
+mixed_d6_lock case=11 step=2 rate_error=4.656612687e-10 rotation_error=5.267546456e-9
+mixed_d6_lock case=12 step=2 rate_error=1.157716371e-9 rotation_error=4.174718566e-11
+mixed_d6_lock case=13 step=2 rate_error=7.858733738e-14 rotation_error=2.220446049e-16
+mixed_d6_lock case=14 step=2 rate_error=1.157716371e-9 rotation_error=4.174718566e-11
+mixed_d6_lock case=15 step=2 rate_error=7.858733738e-14 rotation_error=2.220446049e-16
+mixed_d6_lock case=16 step=2 rate_error=1.883784050e-9 rotation_error=3.498604019e-8
+mixed_d6_lock case=17 step=2 rate_error=1.101270259e-9 rotation_error=6.581766293e-8
+mixed_d6_lock case=18 step=2 rate_error=1.743680151e-9 rotation_error=3.498604019e-8
+mixed_d6_lock case=19 step=2 rate_error=1.041250348e-9 rotation_error=6.581766293e-8
+mixed_d6_lock case=20 step=2 rate_error=3.537064281e-9 rotation_error=4.442222683e-8
+mixed_d6_lock case=21 step=2 rate_error=3.120015702e-10 rotation_error=7.447291311e-8
+mixed_d6_lock case=22 step=2 rate_error=3.537064281e-9 rotation_error=4.442222683e-8
+mixed_d6_lock case=23 step=2 rate_error=3.120015702e-10 rotation_error=7.447291311e-8
+mixed_d6_lock case=24 step=2 rate_error=5.549918503e-10 rotation_error=1.834714656e-8
+mixed_d6_lock case=25 step=2 rate_error=1.005302137e-9 rotation_error=3.452509371e-8
+mixed_d6_lock case=26 step=2 rate_error=5.379418214e-10 rotation_error=1.834714656e-8
+mixed_d6_lock case=27 step=2 rate_error=9.313223581e-10 rotation_error=3.452509371e-8
+mixed_d6_lock case=28 step=2 rate_error=1.423996480e-9 rotation_error=5.797514063e-8
+mixed_d6_lock case=29 step=2 rate_error=4.887962453e-11 rotation_error=1.968184278e-8
+mixed_d6_lock case=30 step=2 rate_error=1.423996480e-9 rotation_error=5.797514063e-8
+mixed_d6_lock case=31 step=2 rate_error=4.887962453e-11 rotation_error=1.968184278e-8
+mixed_d6_lock case=32 step=2 rate_error=7.704100626e-10 rotation_error=9.318390408e-8
+mixed_d6_lock case=33 step=2 rate_error=6.673954030e-10 rotation_error=5.490072154e-9
+mixed_d6_lock case=34 step=2 rate_error=7.704236433e-10 rotation_error=9.318390408e-8
+mixed_d6_lock case=35 step=2 rate_error=4.450140684e-10 rotation_error=5.490072154e-9
+mixed_d6_lock case=36 step=2 rate_error=1.169184002e-6 rotation_error=9.373377599e-8
+mixed_d6_lock case=37 step=2 rate_error=9.425194264e-10 rotation_error=5.490072154e-9
+mixed_d6_lock case=38 step=2 rate_error=4.537316682e-11 rotation_error=5.490072154e-9
+mixed_d6_lock case=39 step=2 rate_error=2.089670977e-9 rotation_error=1.484227160e-7
+mixed_d6_lock case=40 step=2 rate_error=2.233189591e-10 rotation_error=2.167270260e-8
+mixed_d6_lock case=41 step=2 rate_error=2.089644232e-9 rotation_error=1.484227160e-7
+mixed_d6_lock case=42 step=2 rate_error=1.988805263e-11 rotation_error=2.167270260e-8
+mixed_d6_lock case=43 step=2 rate_error=2.110364708e-6 rotation_error=1.443799356e-7
+mixed_d6_lock case=44 step=2 rate_error=4.976562425e-10 rotation_error=2.167270260e-8
+mixed_d6_lock case=45 step=2 rate_error=3.974293779e-10 rotation_error=2.167270260e-8
+mixed_d6_lock case=46 step=2 rate_error=1.164290603e-9 rotation_error=1.786793077e-7
+mixed_d6_lock case=47 step=2 rate_error=1.592660115e-9 rotation_error=4.398929056e-8
+mixed_d6_lock case=48 step=2 rate_error=1.164290603e-9 rotation_error=1.786793077e-7
+mixed_d6_lock case=49 step=2 rate_error=1.243804554e-9 rotation_error=4.398929056e-8
+mixed_d6_lock case=50 step=2 rate_error=1.168986518e-6 rotation_error=1.786793077e-7
+mixed_d6_lock case=51 step=2 rate_error=1.609814315e-9 rotation_error=4.398929056e-8
+mixed_d6_lock case=52 step=2 rate_error=9.754743402e-11 rotation_error=4.398929056e-8
+mixed_d6_lock case=53 step=2 rate_error=2.347988772e-9 rotation_error=1.106628401e-7
+mixed_d6_lock case=54 step=2 rate_error=5.484829391e-10 rotation_error=5.516632567e-8
+mixed_d6_lock case=55 step=2 rate_error=2.411256165e-9 rotation_error=1.106628401e-7
+mixed_d6_lock case=56 step=2 rate_error=5.013558980e-10 rotation_error=5.516632567e-8
+mixed_d6_lock case=57 step=2 rate_error=2.109990918e-6 rotation_error=1.077464380e-7
+mixed_d6_lock case=58 step=2 rate_error=4.976562645e-10 rotation_error=5.516632567e-8
+mixed_d6_lock case=59 step=2 rate_error=9.025163539e-11 rotation_error=5.516632567e-8
+mixed_d6_lock case=60 step=2 rate_error=1.154839995e-9 rotation_error=7.513356416e-9
+mixed_d6_lock case=61 step=2 rate_error=1.063923953e-13 rotation_error=5.490072154e-9
+mixed_d6_lock case=62 step=2 rate_error=1.169406410e-6 rotation_error=9.373377626e-8
+mixed_d6_lock case=63 step=2 rate_error=6.880614406e-11 rotation_error=5.490072154e-9
+mixed_d6_lock case=64 step=2 rate_error=1.299579047e-9 rotation_error=1.640272779e-8
+mixed_d6_lock case=65 step=2 rate_error=5.167770218e-14 rotation_error=5.490072154e-9
+mixed_d6_lock case=66 step=2 rate_error=1.154839994e-9 rotation_error=7.537683006e-9
+mixed_d6_lock case=67 step=2 rate_error=8.400224857e-14 rotation_error=2.167270260e-8
+mixed_d6_lock case=68 step=2 rate_error=2.110364708e-6 rotation_error=1.443799359e-7
+mixed_d6_lock case=69 step=2 rate_error=6.880643413e-11 rotation_error=2.167270260e-8
+mixed_d6_lock case=70 step=2 rate_error=1.299595130e-9 rotation_error=7.537683006e-9
+mixed_d6_lock case=71 step=2 rate_error=2.703992596e-13 rotation_error=2.167270260e-8
+mixed_d6_lock case=72 step=2 rate_error=1.423996480e-9 rotation_error=1.357295713e-8
+mixed_d6_lock case=73 step=2 rate_error=1.063923959e-13 rotation_error=4.398929056e-8
+mixed_d6_lock case=74 step=2 rate_error=1.169745276e-6 rotation_error=6.685533599e-8
+mixed_d6_lock case=75 step=2 rate_error=6.880614085e-11 rotation_error=4.398929056e-8
+mixed_d6_lock case=76 step=2 rate_error=1.733163211e-9 rotation_error=3.608266975e-8
+mixed_d6_lock case=77 step=2 rate_error=5.167770590e-14 rotation_error=4.398929056e-8
+mixed_d6_lock case=78 step=2 rate_error=2.255601930e-9 rotation_error=4.767114299e-8
+mixed_d6_lock case=79 step=2 rate_error=8.277030828e-14 rotation_error=5.516632567e-8
+mixed_d6_lock case=80 step=2 rate_error=2.110357622e-6 rotation_error=8.563475568e-8
+mixed_d6_lock case=81 step=2 rate_error=9.585325973e-10 rotation_error=5.516632567e-8
+mixed_d6_lock case=82 step=2 rate_error=2.182240275e-9 rotation_error=4.767114299e-8
+mixed_d6_lock case=83 step=2 rate_error=2.679137848e-13 rotation_error=5.516632567e-8
+ok
+test gpu_standalone_mixed_locks_preserve_physical_tangents ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+standalone_d6_lock case=0 step=1 rate_error=3.092808728e-10 rotation_error=5.267541005e-9
+standalone_d6_lock case=1 step=1 rate_error=4.667775322e-10 rotation_error=5.267542916e-9
+standalone_d6_lock case=2 step=1 rate_error=5.473437804e-6 rotation_error=7.572505560e-8
+standalone_d6_lock case=3 step=1 rate_error=5.473437993e-6 rotation_error=7.572505688e-8
+standalone_d6_lock case=4 step=1 rate_error=5.891759542e-6 rotation_error=1.483473054e-11
+standalone_d6_lock case=5 step=1 rate_error=5.891322871e-6 rotation_error=2.220446049e-16
+standalone_d6_lock case=6 step=1 rate_error=5.891759542e-6 rotation_error=1.483473054e-11
+standalone_d6_lock case=7 step=1 rate_error=5.891322871e-6 rotation_error=2.220446049e-16
+standalone_d6_lock case=8 step=1 rate_error=3.092808728e-10 rotation_error=5.267541005e-9
+standalone_d6_lock case=9 step=1 rate_error=4.667775322e-10 rotation_error=5.267542916e-9
+standalone_d6_lock case=10 step=1 rate_error=5.473437804e-6 rotation_error=7.572505560e-8
+standalone_d6_lock case=11 step=1 rate_error=5.473437993e-6 rotation_error=7.572505688e-8
+standalone_d6_lock case=12 step=1 rate_error=5.891759542e-6 rotation_error=1.483473054e-11
+standalone_d6_lock case=13 step=1 rate_error=5.891769888e-6 rotation_error=2.220446049e-16
+standalone_d6_lock case=14 step=1 rate_error=5.891759542e-6 rotation_error=1.483473054e-11
+standalone_d6_lock case=15 step=1 rate_error=5.891769888e-6 rotation_error=2.220446049e-16
+standalone_d6_lock case=16 step=1 rate_error=1.785268916e-9 rotation_error=1.862604765e-8
+standalone_d6_lock case=17 step=1 rate_error=1.320452377e-10 rotation_error=6.581766293e-8
+standalone_d6_lock case=18 step=1 rate_error=5.473381984e-6 rotation_error=1.150308095e-7
+standalone_d6_lock case=19 step=1 rate_error=5.473426896e-6 rotation_error=5.447149274e-8
+standalone_d6_lock case=20 step=1 rate_error=5.891646766e-6 rotation_error=9.844988709e-8
+standalone_d6_lock case=21 step=1 rate_error=5.893781822e-6 rotation_error=7.447291311e-8
+standalone_d6_lock case=22 step=1 rate_error=5.891646766e-6 rotation_error=9.844988709e-8
+standalone_d6_lock case=23 step=1 rate_error=5.893781822e-6 rotation_error=7.447291311e-8
+standalone_d6_lock case=24 step=1 rate_error=5.549918503e-10 rotation_error=3.435370052e-8
+standalone_d6_lock case=25 step=1 rate_error=7.376468692e-10 rotation_error=3.452509371e-8
+standalone_d6_lock case=26 step=1 rate_error=5.473342479e-6 rotation_error=1.062830259e-7
+standalone_d6_lock case=27 step=1 rate_error=5.473377634e-6 rotation_error=6.907773900e-8
+standalone_d6_lock case=28 step=1 rate_error=5.891761054e-6 rotation_error=3.361468018e-8
+standalone_d6_lock case=29 step=1 rate_error=5.889311316e-6 rotation_error=1.968184278e-8
+standalone_d6_lock case=30 step=1 rate_error=5.891761054e-6 rotation_error=3.361468018e-8
+standalone_d6_lock case=31 step=1 rate_error=5.889311316e-6 rotation_error=1.968184278e-8
+standalone_d6_lock case=32 step=1 rate_error=1.878110277e-6 rotation_error=5.127658844e-8
+standalone_d6_lock case=33 step=1 rate_error=1.877978117e-6 rotation_error=2.177682516e-8
+standalone_d6_lock case=34 step=1 rate_error=1.489034302e-6 rotation_error=4.796187076e-8
+standalone_d6_lock case=35 step=1 rate_error=1.491248452e-6 rotation_error=1.188121195e-8
+standalone_d6_lock case=36 step=1 rate_error=1.890544446e-5 rotation_error=2.003863009e-7
+standalone_d6_lock case=37 step=1 rate_error=1.890552592e-5 rotation_error=1.949138659e-7
+standalone_d6_lock case=38 step=1 rate_error=1.890301610e-5 rotation_error=1.949138659e-7
+standalone_d6_lock case=39 step=1 rate_error=1.646841761e-6 rotation_error=7.845941066e-8
+standalone_d6_lock case=40 step=1 rate_error=1.647081240e-6 rotation_error=2.167270260e-8
+standalone_d6_lock case=41 step=1 rate_error=2.608865170e-6 rotation_error=7.654782900e-8
+standalone_d6_lock case=42 step=1 rate_error=2.606894310e-6 rotation_error=4.739264720e-8
+standalone_d6_lock case=43 step=1 rate_error=2.627808043e-5 rotation_error=2.457807705e-7
+standalone_d6_lock case=44 step=1 rate_error=2.627817828e-5 rotation_error=2.233469439e-7
+standalone_d6_lock case=45 step=1 rate_error=2.628131233e-5 rotation_error=2.233469439e-7
+standalone_d6_lock case=46 step=1 rate_error=1.877897229e-6 rotation_error=6.508904168e-8
+standalone_d6_lock case=47 step=1 rate_error=1.876113045e-6 rotation_error=4.858051743e-8
+standalone_d6_lock case=48 step=1 rate_error=1.489239990e-6 rotation_error=5.343984202e-8
+standalone_d6_lock case=49 step=1 rate_error=1.488424766e-6 rotation_error=4.858051743e-8
+standalone_d6_lock case=50 step=1 rate_error=1.890518156e-5 rotation_error=2.014381816e-7
+standalone_d6_lock case=51 step=1 rate_error=1.890544968e-5 rotation_error=2.010885502e-7
+standalone_d6_lock case=52 step=1 rate_error=1.890301583e-5 rotation_error=2.010885502e-7
+standalone_d6_lock case=53 step=1 rate_error=1.646845360e-6 rotation_error=1.256755517e-7
+standalone_d6_lock case=54 step=1 rate_error=1.649084051e-6 rotation_error=5.516632567e-8
+standalone_d6_lock case=55 step=1 rate_error=2.608907264e-6 rotation_error=1.252928980e-7
+standalone_d6_lock case=56 step=1 rate_error=2.608863429e-6 rotation_error=5.866033658e-8
+standalone_d6_lock case=57 step=1 rate_error=2.627809691e-5 rotation_error=2.290792882e-7
+standalone_d6_lock case=58 step=1 rate_error=2.627801381e-5 rotation_error=2.532421415e-7
+standalone_d6_lock case=59 step=1 rate_error=2.628005099e-5 rotation_error=2.532421415e-7
+standalone_d6_lock case=60 step=1 rate_error=5.932035767e-6 rotation_error=8.699189142e-8
+standalone_d6_lock case=61 step=1 rate_error=2.456780427e-5 rotation_error=2.484270020e-7
+standalone_d6_lock case=62 step=1 rate_error=1.890543172e-5 rotation_error=2.003863011e-7
+standalone_d6_lock case=63 step=1 rate_error=3.042815435e-5 rotation_error=2.653486915e-7
+standalone_d6_lock case=64 step=1 rate_error=7.879724253e-6 rotation_error=8.714793705e-8
+standalone_d6_lock case=65 step=1 rate_error=7.879724290e-6 rotation_error=2.177682526e-8
+standalone_d6_lock case=66 step=1 rate_error=7.694466179e-6 rotation_error=8.879594422e-8
+standalone_d6_lock case=67 step=1 rate_error=2.790486045e-5 rotation_error=2.583405018e-7
+standalone_d6_lock case=68 step=1 rate_error=2.627805771e-5 rotation_error=2.451772300e-7
+standalone_d6_lock case=69 step=1 rate_error=3.548183727e-5 rotation_error=3.666286888e-7
+standalone_d6_lock case=70 step=1 rate_error=8.006325828e-6 rotation_error=8.879594422e-8
+standalone_d6_lock case=71 step=1 rate_error=8.543349647e-6 rotation_error=9.331081168e-8
+standalone_d6_lock case=72 step=1 rate_error=5.932216153e-6 rotation_error=6.907562277e-8
+standalone_d6_lock case=73 step=1 rate_error=2.456782805e-5 rotation_error=2.557228674e-7
+standalone_d6_lock case=74 step=1 rate_error=1.890542155e-5 rotation_error=2.208992946e-7
+standalone_d6_lock case=75 step=1 rate_error=3.042724346e-5 rotation_error=2.899690582e-7
+standalone_d6_lock case=76 step=1 rate_error=7.879811481e-6 rotation_error=6.491454499e-8
+standalone_d6_lock case=77 step=1 rate_error=7.879619928e-6 rotation_error=3.522536645e-8
+standalone_d6_lock case=78 step=1 rate_error=7.694194616e-6 rotation_error=5.380810606e-8
+standalone_d6_lock case=79 step=1 rate_error=2.790361796e-5 rotation_error=3.221599413e-7
+standalone_d6_lock case=80 step=1 rate_error=2.627819953e-5 rotation_error=2.593651127e-7
+standalone_d6_lock case=81 step=1 rate_error=3.548189866e-5 rotation_error=3.233385563e-7
+standalone_d6_lock case=82 step=1 rate_error=8.006130447e-6 rotation_error=5.380810606e-8
+standalone_d6_lock case=83 step=1 rate_error=8.543477400e-6 rotation_error=8.825662964e-8
+standalone_d6_lock case=0 step=2 rate_error=3.092808738e-10 rotation_error=5.267541543e-9
+standalone_d6_lock case=1 step=2 rate_error=4.667775322e-10 rotation_error=5.267549121e-9
+standalone_d6_lock case=2 step=2 rate_error=4.870266666e-7 rotation_error=7.572505603e-8
+standalone_d6_lock case=3 step=2 rate_error=4.870287867e-7 rotation_error=7.572506116e-8
+standalone_d6_lock case=4 step=2 rate_error=5.891759542e-6 rotation_error=3.016946082e-11
+standalone_d6_lock case=5 step=2 rate_error=5.891322871e-6 rotation_error=2.220446049e-16
+standalone_d6_lock case=6 step=2 rate_error=5.891759542e-6 rotation_error=3.016946082e-11
+standalone_d6_lock case=7 step=2 rate_error=5.891322871e-6 rotation_error=2.220446049e-16
+standalone_d6_lock case=8 step=2 rate_error=3.092808738e-10 rotation_error=5.267541543e-9
+standalone_d6_lock case=9 step=2 rate_error=4.667775322e-10 rotation_error=5.267549121e-9
+standalone_d6_lock case=10 step=2 rate_error=4.870266666e-7 rotation_error=7.572505603e-8
+standalone_d6_lock case=11 step=2 rate_error=4.870287867e-7 rotation_error=7.572506116e-8
+standalone_d6_lock case=12 step=2 rate_error=5.891759542e-6 rotation_error=3.016946082e-11
+standalone_d6_lock case=13 step=2 rate_error=5.891769888e-6 rotation_error=2.220446049e-16
+standalone_d6_lock case=14 step=2 rate_error=5.891759542e-6 rotation_error=3.016946082e-11
+standalone_d6_lock case=15 step=2 rate_error=5.891769888e-6 rotation_error=2.220446049e-16
+standalone_d6_lock case=16 step=2 rate_error=1.785268916e-9 rotation_error=3.498604019e-8
+standalone_d6_lock case=17 step=2 rate_error=1.320452377e-10 rotation_error=6.581766293e-8
+standalone_d6_lock case=18 step=2 rate_error=4.869983373e-7 rotation_error=9.172367590e-8
+standalone_d6_lock case=19 step=2 rate_error=4.870301672e-7 rotation_error=5.447149274e-8
+standalone_d6_lock case=20 step=2 rate_error=5.891646766e-6 rotation_error=4.442222683e-8
+standalone_d6_lock case=21 step=2 rate_error=5.893781822e-6 rotation_error=7.447291311e-8
+standalone_d6_lock case=22 step=2 rate_error=5.891646766e-6 rotation_error=4.442222683e-8
+standalone_d6_lock case=23 step=2 rate_error=5.893781822e-6 rotation_error=7.447291311e-8
+standalone_d6_lock case=24 step=2 rate_error=5.549918503e-10 rotation_error=1.834714656e-8
+standalone_d6_lock case=25 step=2 rate_error=7.376468692e-10 rotation_error=3.452509371e-8
+standalone_d6_lock case=26 step=2 rate_error=4.869628151e-7 rotation_error=8.797054713e-8
+standalone_d6_lock case=27 step=2 rate_error=4.870322965e-7 rotation_error=6.907773900e-8
+standalone_d6_lock case=28 step=2 rate_error=5.891761054e-6 rotation_error=5.797514063e-8
+standalone_d6_lock case=29 step=2 rate_error=5.889311316e-6 rotation_error=1.968184278e-8
+standalone_d6_lock case=30 step=2 rate_error=5.891761054e-6 rotation_error=5.797514063e-8
+standalone_d6_lock case=31 step=2 rate_error=5.889311316e-6 rotation_error=1.968184278e-8
+standalone_d6_lock case=32 step=2 rate_error=6.109035476e-10 rotation_error=9.545075261e-8
+standalone_d6_lock case=33 step=2 rate_error=1.948850392e-7 rotation_error=2.177682516e-8
+standalone_d6_lock case=34 step=2 rate_error=2.774183819e-7 rotation_error=9.373377599e-8
+standalone_d6_lock case=35 step=2 rate_error=9.441918928e-10 rotation_error=1.188121195e-8
+standalone_d6_lock case=36 step=2 rate_error=3.033386833e-6 rotation_error=2.317764681e-7
+standalone_d6_lock case=37 step=2 rate_error=1.463905284e-6 rotation_error=2.057074420e-7
+standalone_d6_lock case=38 step=2 rate_error=1.463901611e-6 rotation_error=2.057074420e-7
+standalone_d6_lock case=39 step=2 rate_error=1.471854322e-9 rotation_error=1.443799356e-7
+standalone_d6_lock case=40 step=2 rate_error=1.647081240e-6 rotation_error=2.167270260e-8
+standalone_d6_lock case=41 step=2 rate_error=3.364901936e-6 rotation_error=1.484227160e-7
+standalone_d6_lock case=42 step=2 rate_error=1.862645755e-6 rotation_error=4.739264720e-8
+standalone_d6_lock case=43 step=2 rate_error=2.854821323e-6 rotation_error=2.511578338e-7
+standalone_d6_lock case=44 step=2 rate_error=2.088893098e-6 rotation_error=2.233469439e-7
+standalone_d6_lock case=45 step=2 rate_error=2.088891670e-6 rotation_error=2.233469439e-7
+standalone_d6_lock case=46 step=2 rate_error=1.340725238e-9 rotation_error=1.879802921e-7
+standalone_d6_lock case=47 step=2 rate_error=1.948854446e-7 rotation_error=4.858051743e-8
+standalone_d6_lock case=48 step=2 rate_error=2.776971637e-7 rotation_error=1.786793077e-7
+standalone_d6_lock case=49 step=2 rate_error=1.020885285e-9 rotation_error=4.858051743e-8
+standalone_d6_lock case=50 step=2 rate_error=3.033442648e-6 rotation_error=2.773928096e-7
+standalone_d6_lock case=51 step=2 rate_error=1.463904425e-6 rotation_error=2.076807202e-7
+standalone_d6_lock case=52 step=2 rate_error=1.463901746e-6 rotation_error=2.076807202e-7
+standalone_d6_lock case=53 step=2 rate_error=2.265916546e-9 rotation_error=1.077464380e-7
+standalone_d6_lock case=54 step=2 rate_error=1.649084051e-6 rotation_error=5.516632567e-8
+standalone_d6_lock case=55 step=2 rate_error=3.364873098e-6 rotation_error=1.106628401e-7
+standalone_d6_lock case=56 step=2 rate_error=1.862645121e-6 rotation_error=5.866033658e-8
+standalone_d6_lock case=57 step=2 rate_error=2.854843294e-6 rotation_error=2.527747760e-7
+standalone_d6_lock case=58 step=2 rate_error=2.088893068e-6 rotation_error=2.532421415e-7
+standalone_d6_lock case=59 step=2 rate_error=2.088892360e-6 rotation_error=2.532421415e-7
+standalone_d6_lock case=60 step=2 rate_error=1.713075616e-6 rotation_error=8.689616098e-8
+standalone_d6_lock case=61 step=2 rate_error=5.517198682e-6 rotation_error=2.495417537e-7
+standalone_d6_lock case=62 step=2 rate_error=2.011727664e-6 rotation_error=2.308343320e-7
+standalone_d6_lock case=63 step=2 rate_error=2.406852316e-5 rotation_error=2.019014002e-7
+standalone_d6_lock case=64 step=2 rate_error=1.362090558e-6 rotation_error=8.858441478e-8
+standalone_d6_lock case=65 step=2 rate_error=7.826758968e-6 rotation_error=1.188121203e-8
+standalone_d6_lock case=66 step=2 rate_error=2.605420386e-6 rotation_error=8.533786113e-8
+standalone_d6_lock case=67 step=2 rate_error=2.683748979e-5 rotation_error=4.964300486e-7
+standalone_d6_lock case=68 step=2 rate_error=2.534806543e-6 rotation_error=2.511578339e-7
+standalone_d6_lock case=69 step=2 rate_error=2.384165881e-5 rotation_error=4.980998294e-7
+standalone_d6_lock case=70 step=2 rate_error=1.126022973e-6 rotation_error=8.533786113e-8
+standalone_d6_lock case=71 step=2 rate_error=3.010426552e-6 rotation_error=1.168031472e-7
+standalone_d6_lock case=72 step=2 rate_error=1.713059318e-6 rotation_error=6.144008957e-8
+standalone_d6_lock case=73 step=2 rate_error=5.517321912e-6 rotation_error=2.321190621e-7
+standalone_d6_lock case=74 step=2 rate_error=2.011529566e-6 rotation_error=2.365104448e-7
+standalone_d6_lock case=75 step=2 rate_error=2.406851547e-5 rotation_error=2.232769771e-7
+standalone_d6_lock case=76 step=2 rate_error=1.362147825e-6 rotation_error=6.694309348e-8
+standalone_d6_lock case=77 step=2 rate_error=7.826757988e-6 rotation_error=2.763275132e-8
+standalone_d6_lock case=78 step=2 rate_error=2.605489329e-6 rotation_error=7.762608284e-8
+standalone_d6_lock case=79 step=2 rate_error=2.683622365e-5 rotation_error=5.187892021e-7
+standalone_d6_lock case=80 step=2 rate_error=2.535086796e-6 rotation_error=2.358988160e-7
+standalone_d6_lock case=81 step=2 rate_error=2.384185830e-5 rotation_error=4.871799199e-7
+standalone_d6_lock case=82 step=2 rate_error=1.126397943e-6 rotation_error=7.762608284e-8
+standalone_d6_lock case=83 step=2 rate_error=3.011016968e-6 rotation_error=8.825662964e-8
+standalone_d6_lock case=0 step=3 rate_error=3.092808738e-10 rotation_error=1.878256129e-8
+standalone_d6_lock case=1 step=3 rate_error=4.140113459e-10 rotation_error=5.267546191e-9
+standalone_d6_lock case=2 step=3 rate_error=4.870266666e-7 rotation_error=7.572505845e-8
+standalone_d6_lock case=3 step=3 rate_error=4.870315854e-7 rotation_error=7.572506143e-8
+standalone_d6_lock case=4 step=3 rate_error=5.891759542e-6 rotation_error=4.650419061e-11
+standalone_d6_lock case=5 step=3 rate_error=5.891322871e-6 rotation_error=2.220446049e-16
+standalone_d6_lock case=6 step=3 rate_error=5.891759542e-6 rotation_error=4.650419061e-11
+standalone_d6_lock case=7 step=3 rate_error=5.891322871e-6 rotation_error=2.220446049e-16
+standalone_d6_lock case=8 step=3 rate_error=3.092808738e-10 rotation_error=1.878256129e-8
+standalone_d6_lock case=9 step=3 rate_error=4.140113459e-10 rotation_error=5.267546191e-9
+standalone_d6_lock case=10 step=3 rate_error=4.870266666e-7 rotation_error=7.572505845e-8
+standalone_d6_lock case=11 step=3 rate_error=4.870315854e-7 rotation_error=7.572506143e-8
+standalone_d6_lock case=12 step=3 rate_error=5.891759542e-6 rotation_error=4.650419061e-11
+standalone_d6_lock case=13 step=3 rate_error=5.891919045e-6 rotation_error=2.220446049e-16
+standalone_d6_lock case=14 step=3 rate_error=5.891759542e-6 rotation_error=4.650419061e-11
+standalone_d6_lock case=15 step=3 rate_error=5.891919045e-6 rotation_error=2.220446049e-16
+standalone_d6_lock case=16 step=3 rate_error=1.785268916e-9 rotation_error=5.395885080e-8
+standalone_d6_lock case=17 step=3 rate_error=1.134515441e-9 rotation_error=6.581766293e-8
+standalone_d6_lock case=18 step=3 rate_error=4.869983373e-7 rotation_error=1.054965640e-7
+standalone_d6_lock case=19 step=3 rate_error=4.869674156e-7 rotation_error=5.447149274e-8
+standalone_d6_lock case=20 step=3 rate_error=5.891646766e-6 rotation_error=8.284941248e-8
+standalone_d6_lock case=21 step=3 rate_error=5.893707328e-6 rotation_error=7.447291311e-8
+standalone_d6_lock case=22 step=3 rate_error=5.891646766e-6 rotation_error=8.284941248e-8
+standalone_d6_lock case=23 step=3 rate_error=5.893707328e-6 rotation_error=7.447291311e-8
+standalone_d6_lock case=24 step=3 rate_error=5.549918503e-10 rotation_error=3.054746202e-8
+standalone_d6_lock case=25 step=3 rate_error=8.013458149e-10 rotation_error=3.452509371e-8
+standalone_d6_lock case=26 step=3 rate_error=4.869628151e-7 rotation_error=7.797515309e-8
+standalone_d6_lock case=27 step=3 rate_error=4.870903611e-7 rotation_error=6.907773900e-8
+standalone_d6_lock case=28 step=3 rate_error=5.891761054e-6 rotation_error=8.273080930e-8
+standalone_d6_lock case=29 step=3 rate_error=5.888938768e-6 rotation_error=1.968184278e-8
+standalone_d6_lock case=30 step=3 rate_error=5.891761054e-6 rotation_error=8.273080930e-8
+standalone_d6_lock case=31 step=3 rate_error=5.888938768e-6 rotation_error=1.968184278e-8
+standalone_d6_lock case=32 step=3 rate_error=6.109035476e-10 rotation_error=1.411333674e-7
+standalone_d6_lock case=33 step=3 rate_error=1.939463524e-7 rotation_error=2.177682516e-8
+standalone_d6_lock case=34 step=3 rate_error=4.090910536e-7 rotation_error=1.399926044e-7
+standalone_d6_lock case=35 step=3 rate_error=1.123057091e-9 rotation_error=1.188121195e-8
+standalone_d6_lock case=36 step=3 rate_error=1.857561919e-6 rotation_error=2.619912688e-7
+standalone_d6_lock case=37 step=3 rate_error=1.499625481e-6 rotation_error=1.949138659e-7
+standalone_d6_lock case=38 step=3 rate_error=1.503464725e-6 rotation_error=1.949138659e-7
+standalone_d6_lock case=39 step=3 rate_error=1.437385805e-6 rotation_error=2.172659239e-7
+standalone_d6_lock case=40 step=3 rate_error=1.647440733e-6 rotation_error=2.167270260e-8
+standalone_d6_lock case=41 step=3 rate_error=7.177944330e-7 rotation_error=2.152104696e-7
+standalone_d6_lock case=42 step=3 rate_error=1.863003923e-6 rotation_error=4.739264720e-8
+standalone_d6_lock case=43 step=3 rate_error=1.834738477e-6 rotation_error=2.948256642e-7
+standalone_d6_lock case=44 step=3 rate_error=2.088868015e-6 rotation_error=2.233469439e-7
+standalone_d6_lock case=45 step=3 rate_error=2.089738795e-6 rotation_error=2.233469439e-7
+standalone_d6_lock case=46 step=3 rate_error=1.340725238e-9 rotation_error=1.190211462e-7
+standalone_d6_lock case=47 step=3 rate_error=1.971488069e-7 rotation_error=4.858051743e-8
+standalone_d6_lock case=48 step=3 rate_error=4.094278901e-7 rotation_error=1.190211462e-7
+standalone_d6_lock case=49 step=3 rate_error=2.856462281e-9 rotation_error=4.858051743e-8
+standalone_d6_lock case=50 step=3 rate_error=1.857671391e-6 rotation_error=2.995059890e-7
+standalone_d6_lock case=51 step=3 rate_error=1.499631957e-6 rotation_error=2.010885502e-7
+standalone_d6_lock case=52 step=3 rate_error=1.503471168e-6 rotation_error=2.010885502e-7
+standalone_d6_lock case=53 step=3 rate_error=1.436976151e-6 rotation_error=2.068912108e-7
+standalone_d6_lock case=54 step=3 rate_error=1.649413343e-6 rotation_error=5.516632567e-8
+standalone_d6_lock case=55 step=3 rate_error=7.175875367e-7 rotation_error=1.944385919e-7
+standalone_d6_lock case=56 step=3 rate_error=1.861865188e-6 rotation_error=5.866033658e-8
+standalone_d6_lock case=57 step=3 rate_error=1.834856489e-6 rotation_error=2.947172800e-7
+standalone_d6_lock case=58 step=3 rate_error=2.088867712e-6 rotation_error=2.532421415e-7
+standalone_d6_lock case=59 step=3 rate_error=2.089739027e-6 rotation_error=2.532421415e-7
+standalone_d6_lock case=60 step=3 rate_error=2.962621368e-6 rotation_error=2.121334292e-8
+standalone_d6_lock case=61 step=3 rate_error=5.643603067e-6 rotation_error=2.484270020e-7
+standalone_d6_lock case=62 step=3 rate_error=1.070398507e-6 rotation_error=2.579286253e-7
+standalone_d6_lock case=63 step=3 rate_error=2.393466558e-5 rotation_error=2.680492879e-7
+standalone_d6_lock case=64 step=3 rate_error=1.489488122e-6 rotation_error=8.917717289e-8
+standalone_d6_lock case=65 step=3 rate_error=7.708760956e-6 rotation_error=1.188121203e-8
+standalone_d6_lock case=66 step=3 rate_error=2.524221454e-6 rotation_error=8.430361915e-8
+standalone_d6_lock case=67 step=3 rate_error=2.683335810e-5 rotation_error=2.583405018e-7
+standalone_d6_lock case=68 step=3 rate_error=1.538512520e-6 rotation_error=2.948256644e-7
+standalone_d6_lock case=69 step=3 rate_error=3.576304886e-5 rotation_error=2.785196101e-7
+standalone_d6_lock case=70 step=3 rate_error=1.520750669e-6 rotation_error=8.430361915e-8
+standalone_d6_lock case=71 step=3 rate_error=6.025852460e-6 rotation_error=8.907123112e-8
+standalone_d6_lock case=72 step=3 rate_error=2.962422412e-6 rotation_error=8.632503572e-8
+standalone_d6_lock case=73 step=3 rate_error=5.643570439e-6 rotation_error=2.557228674e-7
+standalone_d6_lock case=74 step=3 rate_error=1.070490879e-6 rotation_error=2.924449740e-7
+standalone_d6_lock case=75 step=3 rate_error=2.393466586e-5 rotation_error=2.915268983e-7
+standalone_d6_lock case=76 step=3 rate_error=1.489637723e-6 rotation_error=1.017541258e-7
+standalone_d6_lock case=77 step=3 rate_error=7.708649682e-6 rotation_error=2.763275132e-8
+standalone_d6_lock case=78 step=3 rate_error=2.524113151e-6 rotation_error=5.437866196e-8
+standalone_d6_lock case=79 step=3 rate_error=2.683216546e-5 rotation_error=3.221599413e-7
+standalone_d6_lock case=80 step=3 rate_error=1.538502673e-6 rotation_error=3.292160290e-7
+standalone_d6_lock case=81 step=3 rate_error=3.576230213e-5 rotation_error=2.607452233e-7
+standalone_d6_lock case=82 step=3 rate_error=1.520873873e-6 rotation_error=5.437866196e-8
+standalone_d6_lock case=83 step=3 rate_error=6.027026518e-6 rotation_error=8.714329576e-8
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 49.89s
+
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.36s
+     Running tests/featherstone_disabled_joints.rs (target/debug/deps/featherstone_disabled_joints-2518add631e2cc96)
+
+running 1 test
+test gpu_disabled_joints_freeze_relative_motion_and_transmit_child_loads ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 10.26s
+

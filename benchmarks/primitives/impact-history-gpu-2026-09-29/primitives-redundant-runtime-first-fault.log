@@ -1,0 +1,86 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.86s
+     Running tests/standalone_redundant_limits.rs (target/debug/deps/standalone_redundant_limits-d931a4bcdd82f5b1)
+
+running 1 test
+test gpu_runtime_redundant_points_and_caps_preserve_permitted_physical_motion ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } dt=0.00001 runtime_mobile_cases=18
+constraint_row id=0 kind=17 coordinate=0 dof=0 bound=0 enabled=[0, 3]
+constraint_row id=1 kind=18 coordinate=0 dof=0 bound=0 enabled=[0, 3]
+constraint_row id=2 kind=23 coordinate=0 dof=0 bound=0 enabled=[0, 2]
+constraint_row id=3 kind=15 coordinate=0 dof=0 bound=-0 enabled=[0, 0]
+constraint_row id=4 kind=17 coordinate=4 dof=0 bound=0 enabled=[0, 5]
+constraint_row id=5 kind=18 coordinate=4 dof=0 bound=0 enabled=[0, 5]
+constraint_row id=6 kind=23 coordinate=4 dof=0 bound=0 enabled=[1, 4]
+constraint_row id=7 kind=15 coordinate=0 dof=1 bound=-0 enabled=[0, 0]
+constraint_row id=8 kind=17 coordinate=8 dof=0 bound=0 enabled=[0, 9]
+constraint_row id=9 kind=18 coordinate=8 dof=0 bound=0 enabled=[0, 9]
+constraint_row id=10 kind=23 coordinate=8 dof=0 bound=0 enabled=[2, 8]
+constraint_row id=11 kind=15 coordinate=0 dof=2 bound=-0 enabled=[0, 0]
+constraint_row id=12 kind=17 coordinate=12 dof=0 bound=0 enabled=[0, 3]
+constraint_row id=13 kind=18 coordinate=12 dof=0 bound=0 enabled=[0, 3]
+constraint_row id=14 kind=23 coordinate=12 dof=0 bound=0 enabled=[0, 2]
+constraint_row id=15 kind=15 coordinate=0 dof=0 bound=-0 enabled=[0, 0]
+constraint_row id=16 kind=17 coordinate=16 dof=0 bound=0 enabled=[0, 5]
+constraint_row id=17 kind=18 coordinate=16 dof=0 bound=0 enabled=[0, 5]
+constraint_row id=18 kind=23 coordinate=16 dof=0 bound=0 enabled=[1, 4]
+constraint_row id=19 kind=15 coordinate=0 dof=1 bound=-0 enabled=[0, 0]
+constraint_row id=20 kind=17 coordinate=20 dof=0 bound=0 enabled=[0, 9]
+constraint_row id=21 kind=18 coordinate=20 dof=0 bound=0 enabled=[0, 9]
+constraint_row id=22 kind=23 coordinate=20 dof=0 bound=0 enabled=[2, 8]
+constraint_row id=23 kind=15 coordinate=0 dof=2 bound=-0 enabled=[0, 0]
+constraint_row id=24 kind=17 coordinate=27 dof=3 bound=0 enabled=[0, 3]
+constraint_row id=25 kind=18 coordinate=27 dof=3 bound=0 enabled=[0, 3]
+constraint_row id=26 kind=23 coordinate=27 dof=3 bound=0 enabled=[0, 2]
+constraint_row id=27 kind=15 coordinate=0 dof=3 bound=-0 enabled=[0, 0]
+constraint_row id=28 kind=17 coordinate=34 dof=3 bound=0 enabled=[0, 5]
+constraint_row id=29 kind=18 coordinate=34 dof=3 bound=0 enabled=[0, 5]
+constraint_row id=30 kind=23 coordinate=34 dof=3 bound=0 enabled=[1, 4]
+constraint_row id=31 kind=15 coordinate=0 dof=4 bound=-0 enabled=[0, 0]
+constraint_row id=32 kind=17 coordinate=41 dof=3 bound=0 enabled=[0, 9]
+constraint_row id=33 kind=18 coordinate=41 dof=3 bound=0 enabled=[0, 9]
+constraint_row id=34 kind=23 coordinate=41 dof=3 bound=0 enabled=[2, 8]
+constraint_row id=35 kind=15 coordinate=0 dof=5 bound=-0 enabled=[0, 0]
+constraint_row id=36 kind=17 coordinate=48 dof=3 bound=0 enabled=[0, 3]
+constraint_row id=37 kind=18 coordinate=48 dof=3 bound=0 enabled=[0, 3]
+constraint_row id=38 kind=23 coordinate=48 dof=3 bound=0 enabled=[0, 2]
+constraint_row id=39 kind=15 coordinate=0 dof=3 bound=-0 enabled=[0, 0]
+constraint_row id=40 kind=17 coordinate=55 dof=3 bound=0 enabled=[0, 5]
+constraint_row id=41 kind=18 coordinate=55 dof=3 bound=0 enabled=[0, 5]
+constraint_row id=42 kind=23 coordinate=55 dof=3 bound=0 enabled=[1, 4]
+constraint_row id=43 kind=15 coordinate=0 dof=4 bound=-0 enabled=[0, 0]
+constraint_row id=44 kind=17 coordinate=62 dof=3 bound=0 enabled=[0, 9]
+constraint_row id=45 kind=18 coordinate=62 dof=3 bound=0 enabled=[0, 9]
+constraint_row id=46 kind=23 coordinate=62 dof=3 bound=0 enabled=[2, 8]
+constraint_row id=47 kind=15 coordinate=0 dof=5 bound=-0 enabled=[0, 0]
+constraint_row id=48 kind=3 coordinate=0 dof=0 bound=1 enabled=[0, 0]
+constraint_row id=49 kind=15 coordinate=0 dof=0 bound=-0 enabled=[0, 0]
+constraint_row id=50 kind=3 coordinate=0 dof=0 bound=1 enabled=[0, 0]
+constraint_row id=51 kind=15 coordinate=0 dof=1 bound=-0 enabled=[0, 0]
+constraint_row id=52 kind=3 coordinate=0 dof=0 bound=1 enabled=[0, 0]
+constraint_row id=53 kind=15 coordinate=0 dof=2 bound=-0 enabled=[0, 0]
+constraint_row id=54 kind=3 coordinate=0 dof=0 bound=1 enabled=[0, 0]
+constraint_row id=55 kind=15 coordinate=0 dof=0 bound=-0 enabled=[0, 0]
+constraint_row id=56 kind=3 coordinate=0 dof=0 bound=1 enabled=[0, 0]
+constraint_row id=57 kind=15 coordinate=0 dof=1 bound=-0 enabled=[0, 0]
+constraint_row id=58 kind=3 coordinate=0 dof=0 bound=1 enabled=[0, 0]
+constraint_row id=59 kind=15 coordinate=0 dof=2 bound=-0 enabled=[0, 0]
+
+thread 'gpu_runtime_redundant_points_and_caps_preserve_permitted_physical_motion' (281472) panicked at crates/molla-solvers/tests/standalone_redundant_limits.rs:714:20:
+called `Result::unwrap()` on an `Err` value: Solver("GPU rigid runtime solver fault 82756096")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    gpu_runtime_redundant_points_and_caps_preserve_permitted_physical_motion
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 28.65s
+
+error: test failed, to rerun pass `-p molla-solvers --test standalone_redundant_limits`
+make: *** [Makefile:515: test-primitives-redundant-runtime-mobile-gpu] Error 101

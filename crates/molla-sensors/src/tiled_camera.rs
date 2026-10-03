@@ -1240,7 +1240,7 @@ pub(crate) fn checked_pixel_count(
         .ok_or_else(|| Error::Solver("camera: pixel count exceeds u32".into()))?;
     let binding_bytes = (pixels as u64 * 16).max(cameras as u64 * 32);
     if pixels == 0
-        || binding_bytes > limits.max_storage_buffer_binding_size as u64
+        || binding_bytes > limits.max_storage_buffer_binding_size
         || binding_bytes > limits.max_buffer_size
         || width.div_ceil(8) > limits.max_compute_workgroups_per_dimension
         || height.div_ceil(8) > limits.max_compute_workgroups_per_dimension
@@ -1305,6 +1305,19 @@ pub(crate) fn validate_camera_pose(pose: Transform) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// `i`-th aperture sample (`1..k`) of the standard concentric-disc
+/// mapping: well-stratified, uniform-on-the-disc, deterministic.
+/// `(0, 0)` is reserved for the centre pass (handled by the caller).
+fn concentric_disc_sample(i: u32, k: u32) -> [f32; 2] {
+    let n = k.max(2);
+    // Slot inside the disc — golden-angle Fibonacci spiral so the K
+    // samples (centre + K-1) stay separated regardless of K.
+    let frac = (i as f32) / ((n - 1) as f32);
+    let r = frac.sqrt(); // uniform-on-the-disc radial CDF.
+    let theta = (i as f32) * std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
+    [r * theta.cos(), r * theta.sin()]
 }
 
 #[cfg(test)]
@@ -1434,17 +1447,4 @@ mod capacity_tests {
         assert!(checked_pixel_count(1, 9, 1, &dispatch_limits).is_err());
         assert!(checked_pixel_count(1, 1, 2, &dispatch_limits).is_err());
     }
-}
-
-/// `i`-th aperture sample (`1..k`) of the standard concentric-disc
-/// mapping: well-stratified, uniform-on-the-disc, deterministic.
-/// `(0, 0)` is reserved for the centre pass (handled by the caller).
-fn concentric_disc_sample(i: u32, k: u32) -> [f32; 2] {
-    let n = k.max(2);
-    // Slot inside the disc — golden-angle Fibonacci spiral so the K
-    // samples (centre + K-1) stay separated regardless of K.
-    let frac = (i as f32) / ((n - 1) as f32);
-    let r = frac.sqrt(); // uniform-on-the-disc radial CDF.
-    let theta = (i as f32) * std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
-    [r * theta.cos(), r * theta.sin()]
 }

@@ -1,0 +1,35 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.33s
+     Running tests/runtime_primitives_contract_gpu.rs (target/debug/deps/runtime_primitives_contract_gpu-17b111111ba5223d)
+
+running 10 tests
+test runtime_gpu_distance_mutation_is_solved_and_can_be_removed ... ok
+test runtime_gpu_empty_reaction_readout_stays_on_device ... ok
+test runtime_gpu_empty_scene_and_invalid_step_are_safe ... ok
+test runtime_gpu_fault_is_atomic_and_corrected_inputs_can_resume ... ok
+test runtime_gpu_free_body_matches_cpu_and_publishes_velocity ... ok
+test runtime_gpu_mutations_rebuild_and_preserve_handles ... ok
+test runtime_gpu_rejects_unsupported_mutation_without_advancing ... ok
+test runtime_gpu_rotated_frames_com_inertia_and_motor_parity ... Ball initial corrected CPU=Transform { position: DVec3(1.455671722954549e-5, 1.9996536584861737, 4.6270310653753755e-5), rotation: DQuat(9.145946822791492e-6, 2.7015441916329058e-6, 0.14943460461713154, 0.9887716110669718) } GPU=Transform { position: DVec3(1.4567210200766567e-5, 1.9996534585952759, 4.626287045539357e-5), rotation: DQuat(9.1459469331312e-6, 2.7015444175049197e-6, 0.14943459630012512, 0.9887715578079224) }
+Ball initial corrected CPU=Transform { position: DVec3(-0.14773567552225875, 2.4773249563404263, 6.791368316477335e-5), rotation: DQuat(-2.2811818695817054e-6, -3.3049327144030888e-6, 0.1494412932575955, 0.9887706002169416) } GPU=Transform { position: DVec3(-0.14773567020893097, 2.4773247241973877, 6.788929749745876e-5), rotation: DQuat(-2.2879864900460234e-6, -3.2866373658180237e-6, 0.14944128692150116, 0.9887705445289612) }
+Ball: max position=7.99078676401037e-6 rotation=9.103133886636135e-7 velocity=2.269954325668079e-5
+Revolute initial corrected CPU=Transform { position: DVec3(1.5356906339351883e-5, 1.999654010267834, 5.874544961763373e-5), rotation: DQuat(1.4666239186180238e-6, -2.421593283307526e-6, 0.14943489913601343, 0.988771566597763) } GPU=Transform { position: DVec3(1.536473246233072e-5, 1.999653935432434, 5.875290298718028e-5), rotation: DQuat(1.466624667045835e-6, -2.4215933080995455e-6, 0.1494349092245102, 0.9887715578079224) }
+Revolute initial corrected CPU=Transform { position: DVec3(-0.2700277326912218, 2.456135394573476, -0.022140225153922617), rotation: DQuat(0.01925857762774892, 0.11054738051005215, 0.02778614146082332, 0.9932956831643038) } GPU=Transform { position: DVec3(-0.27002769708633423, 2.4561352729797363, -0.02214025892317295), rotation: DQuat(0.01925859972834587, 0.11054744571447372, 0.027786217629909515, 0.9932956695556641) }
+Revolute: max position=1.6819538301538055e-6 rotation=6.815550700443582e-7 velocity=7.305726866616847e-6
+Prismatic initial corrected CPU=Transform { position: DVec3(-2.043210501036924e-5, 1.999582876447949, -9.805651467340026e-6), rotation: DQuat(-1.4717731160928343e-6, -5.7498886877149e-7, 0.14944025712486225, 0.9887707568228131) } GPU=Transform { position: DVec3(-2.0425295588211156e-5, 1.9995826482772827, -9.835439414018765e-6), rotation: DQuat(-1.471773089178896e-6, -5.749892579842708e-7, 0.14944025874137878, 0.9887707829475403) }
+Prismatic initial corrected CPU=Transform { position: DVec3(-0.28795363230521814, 2.294908329625199, -0.26091974584613026), rotation: DQuat(0.06720239034499334, 0.21007820287038995, 0.1261183506757062, 0.9671841339856161) } GPU=Transform { position: DVec3(-0.287953644990921, 2.294908046722412, -0.2609197795391083), rotation: DQuat(0.0672023817896843, 0.210078164935112, 0.12611834704875946, 0.9671840667724609) }
+Prismatic: max position=8.661885086735947e-6 rotation=8.683682849606026e-7 velocity=1.6529837824052882e-5
+ok
+test runtime_gpu_warm_resources_are_retained ... warm runtime GPU [buffers, bytes, groups, pipelines, shaders]=[87, 527072, 14, 4, 4]
+ok
+test runtime_gpu_world_anchor_uses_authored_frames ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 49.58s
+

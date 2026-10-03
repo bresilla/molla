@@ -9,7 +9,7 @@ use super::RigidWorld;
 use crate::rigid_islands::RigidIsland;
 use crate::wheel_forces::WheelForces;
 
-/// CPU automatic sleep thresholds in metres/second, radians/second and seconds.
+/// Automatic sleep thresholds in metres/second, radians/second and seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SleepSettings {
     pub linear_speed: Real,
@@ -27,6 +27,7 @@ impl Default for SleepSettings {
     }
 }
 
+#[derive(Clone)]
 struct QuietWindow {
     island: RigidIsland,
     elapsed: Real,
@@ -34,7 +35,7 @@ struct QuietWindow {
     wheels: (std::sync::Arc<()>, u64),
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Settling {
     settings: Option<SleepSettings>,
     windows: BTreeMap<BodyHandle, QuietWindow>,
@@ -162,6 +163,13 @@ impl RigidWorld {
                 self.scene
                     .body_velocity(body)
                     .is_ok_and(|v| v == SpatialVector::ZERO)
+                    && (!self.scene.body(body).is_some_and(|b| b.enabled)
+                        || self
+                            .scene
+                            .kinematic_acceleration(body)
+                            .ok()
+                            .flatten()
+                            .is_none_or(|a| a == SpatialVector::ZERO))
             });
             if !quiet {
                 continue;
@@ -229,10 +237,9 @@ fn driven_bodies(scene: &RigidScene) -> Result<BTreeSet<BodyHandle>> {
         if (range[0] as usize..range[1] as usize).any(|i| {
             effort[i] != 0.0
                 || commanded(modes[i], velocities[i], positions[i], damping[i], caps[i])
-        }) {
-            if let Some(body) = scene.body_handle(molla_core::BodyId(children[joint] as u32)) {
-                bodies.insert(body);
-            }
+        }) && let Some(body) = scene.body_handle(molla_core::BodyId(children[joint] as u32))
+        {
+            bodies.insert(body);
         }
     }
     for (id, joint) in scene.loop_joints() {

@@ -108,8 +108,8 @@ fn changing_com_preserves_velocity_field_and_applied_wrench() {
     scene.control_mut().body_external_f.host_mut().unwrap()[0] = force;
     let before = scene.state().body_qd.host().unwrap()[0];
     let pose = scene.state().body_q.host().unwrap()[0];
-    let coordinates = scene.state().joint_q.host().unwrap().to_vec();
-    let rates = scene.state().joint_qd.host().unwrap().to_vec();
+    let mut coordinates = scene.state().joint_q.host().unwrap().to_vec();
+    let mut rates = scene.state().joint_qd.host().unwrap().to_vec();
     let com = Vec3::new(0.7, -0.2, 0.3);
     scene
         .set_body_mass_properties(body, properties(3.0, com, Mat3::IDENTITY))
@@ -125,6 +125,8 @@ fn changing_com_preserves_velocity_field_and_applied_wrench() {
         near(wrench.linear, force.linear);
         near(wrench.angular + shift.cross(wrench.linear), force.angular);
     }
+    coordinates[..3].copy_from_slice(&(pose.position + shift).to_array());
+    rates[..3].copy_from_slice(&after.linear.to_array());
     assert_eq!(scene.state().joint_q.host().unwrap(), coordinates);
     assert_eq!(scene.state().joint_qd.host().unwrap(), rates);
     let mut evaluated = scene.model().state().unwrap();
@@ -140,6 +142,8 @@ fn changing_com_preserves_velocity_field_and_applied_wrench() {
         .copy_from_slice(&rates);
     eval_fk(scene.model(), &mut evaluated).unwrap();
     eval_body_velocities(scene.model(), &mut evaluated).unwrap();
+    near(evaluated.body_q.host().unwrap()[0].position, pose.position);
+    assert_eq!(evaluated.body_q.host().unwrap()[0].rotation, pose.rotation);
     near(evaluated.body_qd.host().unwrap()[0].linear, after.linear);
     near(evaluated.body_qd.host().unwrap()[0].angular, after.angular);
 }

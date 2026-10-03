@@ -1,0 +1,48 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.70s
+     Running tests/runtime_break_detachment.rs (target/debug/deps/runtime_break_detachment-af8248ccab034191)
+
+running 4 tests
+test gpu_detached_tree_and_loop_joints_leave_no_hidden_constraint ... ok
+test gpu_ignores_broken_compliant_loop_metadata_but_rejects_explicit_repair ... ok
+test gpu_loop_break_keeps_tree_load_sharing_and_unrelated_sleep ... ok
+test gpu_unrepresentable_threshold_is_rejected_without_advancing ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 325.99s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.02s
+     Running tests/runtime_joint_breakage_gpu.rs (target/debug/deps/runtime_joint_breakage_gpu-9849c4c3f062985d)
+
+running 7 tests
+test delayed_stop_peaks_produce_sequential_break_boundaries_not_frame_mean_decisions ... ok
+test gravity_break_preserves_first_boundary_across_queued_substeps_and_continues_free_motion ... ok
+test later_gpu_failure_rolls_back_the_original_model_and_discards_provisional_events ... post-break overflow: model build error: runtime pose must be finite with a unit quaternion
+ok
+test simultaneous_breaks_cross_workgroups_without_losing_triggers ... ok
+test simultaneous_gpu_channels_are_collected_before_halt_and_match_cpu ... ok
+test subthreshold_and_sleeping_frames_keep_compact_transfer_and_zero_waits_for_a_sample ... ok
+test tree_and_loop_joint_kinds_detach_at_the_same_support_load ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 529.00s
+
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'

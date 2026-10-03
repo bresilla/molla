@@ -128,9 +128,15 @@ struct FrictionPlane<'a> {
 }
 
 impl Terrain for FrictionPlane<'_> {
-    fn height(&self, _: Real, _: Real) -> Real { 0.0 }
-    fn normal(&self, _: Real, _: Real) -> [Real; 3] { [0.0, 1.0, 0.0] }
-    fn friction(&self) -> Real { self.reference }
+    fn height(&self, _: Real, _: Real) -> Real {
+        0.0
+    }
+    fn normal(&self, _: Real, _: Real) -> [Real; 3] {
+        [0.0, 1.0, 0.0]
+    }
+    fn friction(&self) -> Real {
+        self.reference
+    }
     fn friction_at(&self, x: Real, z: Real) -> Real {
         self.sample.map_or(self.reference, |sample| {
             sample(self.origin + self.forward * x + self.side * z)

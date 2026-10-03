@@ -1,0 +1,15 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.34s
+     Running tests/runtime_locked_drive_planes.rs (target/debug/deps/runtime_locked_drive_planes-72fbf7c6a2d41ea4)
+
+running 1 test
+locked_drive_planes cases=24 frames=101 seconds=1.005 oracle_peak=6.636546028590902e-8 anchor_peak=0e0 lock_peak=1.9938723738985628e-6 parity_peak=0e0
+test cpu_noncoaxial_two_free_axis_chains_match_projected_initial_mobility ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+

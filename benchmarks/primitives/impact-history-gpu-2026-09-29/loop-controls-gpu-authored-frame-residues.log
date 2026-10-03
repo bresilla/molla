@@ -1,0 +1,36 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.71s
+     Running tests/runtime_loop_controls.rs (target/debug/deps/runtime_loop_controls-6d091bb7df08fa1c)
+
+running 3 tests
+test gpu_compliant_loop_controls_match_coupled_linear_angular_oracle ... loop controls hz=60 substeps=1: 288 cases passed
+loop controls hz=60 substeps=4: 288 cases passed
+loop controls hz=120 substeps=1: 288 cases passed
+loop controls hz=120 substeps=4: 288 cases passed
+
+thread 'gpu_compliant_loop_controls_match_coupled_linear_angular_oracle' (274848) panicked at crates/molla-solvers/tests/runtime_loop_controls.rs:330:21:
+load hz=240 substeps=1 frame=11 case=Case { body: BodyHandle(730), joint: JointHandle(732), kind: Revolute, origin: DVec3(1944.0, 2.0, -3.0), rotation: DQuat(0.06812327793826826, -0.18662454822852997, 0.3360626807021292, 0.920647799997774), inertia: 100.0, motor: JointMotor { mode: None, target_position: -0.1, target_velocity: -0.2, stiffness: 18.0, damping: 4.5, max_force: 0.25, model: Force }, position: -0.013227509628473941, velocity: -0.3497382989084368 } expected=-1.9237482698069666 actual=DVec3(-1.3547675609588623, -1.1411049365997314, -0.7488950490951538) pose=Transform { position: DVec3(1944.0, 2.0, -3.0), rotation: DQuat(0.06203289330005646, -0.18884308636188507, 0.33482104539871216, 0.9210782051086426) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24637886881828308, -0.20752204954624176, -0.13619451224803925) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test gpu_compliant_loops_preserve_weak_modes_beside_null_modes ... ok
+test gpu_rotated_high_inertia_compliant_loop_matches_near_rest_oracle ... angular predictor frame=10 expected_q=-0.010297585267053795 actual_q=-0.01029758807271719 expected_rate=-0.3474078576667667 actual_rate=-0.3474079668521881 pose=Transform { position: DVec3(0.0, 2.0, -3.0), rotation: DQuat(0.06338217109441757, -0.18835237622261047, 0.3350973427295685, 0.9209863543510437) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.24473720788955688, -0.20613929629325867, -0.13528703153133392) }
+angular predictor frame=11 expected_q=-0.011757732685865848 actual_q=-0.011757736094295979 expected_rate=-0.3504353805148927 actual_rate=-0.3504354953765869 pose=Transform { position: DVec3(0.0, 2.0, -3.0), rotation: DQuat(0.06270977109670639, -0.18859697878360748, 0.3349597156047821, 0.9210323691368103) } velocity=SpatialVector { linear: DVec3(0.0, 0.0, 0.0), angular: DVec3(-0.2468700110912323, -0.20793572068214417, -0.13646599650382996) }
+loop controls hz=240 substeps=1: 1 cases passed
+ok
+
+failures:
+
+failures:
+    gpu_compliant_loop_controls_match_coupled_linear_angular_oracle
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 89.89s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_loop_controls`
+make: *** [Makefile:112: test-gpu] Error 101

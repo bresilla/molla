@@ -1,0 +1,18 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.82s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 5 tests
+test impact_episodes_gpu::tests::frame_rollback_sticky_fault_and_capacity_failure_preserve_history ... ok
+test impact_episodes_gpu::tests::history_rehash_and_dense_shape_remapping_retain_pair_identity ... ok
+test impact_episodes_gpu::tests::normal_preparation_episode_suppression_and_force_gather_share_one_encoder ... ok
+test impact_episodes_gpu::tests::one_hundred_queued_manifold_changes_match_pair_reference_across_workgroups ... ok
+test impact_episodes_gpu::tests::onset_suppression_pair_reordering_separation_and_normal_changes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 180 filtered out; finished in 1.22s
+

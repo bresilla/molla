@@ -1,0 +1,20 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.87s
+     Running tests/runtime_com_roots.rs (target/debug/deps/runtime_com_roots-d606b3d019b1a690)
+
+running 1 test
+test gpu_floating_branched_trees_preserve_momentum_under_internal_efforts ... moving tree Free frames=60 substeps=4 relative P/L and absolute centroid errors=[1.1060640599412241e-6, 1.1240713710280044e-6, 1.2086671081636837e-5]
+moving tree Free frames=120 substeps=4 relative P/L and absolute centroid errors=[1.6095167036335185e-6, 2.9009042974509145e-6, 1.0705606361927266e-5]
+moving tree Free frames=240 substeps=4 relative P/L and absolute centroid errors=[2.3818836156557106e-6, 6.822965674254762e-6, 6.114104004363978e-5]
+moving tree D6 frames=60 substeps=4 relative P/L and absolute centroid errors=[1.1060640599412241e-6, 1.1240713710280044e-6, 1.2086671081636837e-5]
+moving tree D6 frames=120 substeps=4 relative P/L and absolute centroid errors=[1.6095167036335185e-6, 2.9009042974509145e-6, 1.0705606361927266e-5]
+moving tree D6 frames=240 substeps=4 relative P/L and absolute centroid errors=[2.3818836156557106e-6, 6.822965674254762e-6, 6.114104004363978e-5]
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 37.06s
+

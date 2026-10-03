@@ -1,0 +1,64 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-storage v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-storage)
+   Compiling molla-compute v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute)
+   Compiling molla-compute-primitives v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-compute-primitives)
+   Compiling molla-sim v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sim)
+   Compiling molla-geometry v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-geometry)
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-fem v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-fem)
+   Compiling molla-sensors v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sensors)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+   Compiling molla v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 41.03s
+     Running benches/bench_sensor_physics_latency.rs (target/debug/deps/bench_sensor_physics_latency-e252b537862911ca)
+adapter=Some(AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" }) profile=debug cases=8 samples=2 warmup=1 repeats=1 pid=1766522 smoke=true
+bodies=4 shapes=5 actual_rays=1024 pixels=0 host_bytes=53248 lidar_arrays=LidarBatchStorage { host_bytes: 192880, device_bytes: 110752, total_bytes: 303632, descriptor_device_bytes: 128 }
+case=cpu_a1_steps1_lidar1k_device repeat=0 setup_ms=170.823 timer=true VmHWM:	  244748 kB; VmRSS:	  244748 kB
+summary case=cpu_a1_steps1_lidar1k_device repeat=0 n=2 complete_p50_us=841.888 complete_p95_us=867.992 p95_bootstrap95_us=[841.888,867.992] physics_cpu_p50_us=87.077 gpu_queue_span_p50_us=625.664 VmHWM:	  260104 kB; VmRSS:	  260104 kB lidar=RayQueryStats { encoded_queries: 4, submissions: 0, primitive_preparations: 0, mesh_preparations: 0, merge_preparations: 0, scene_builds: 1, scene_preparations: 2, refit_preparations: 2, scene_rebuilds: 0, scene_quality_checks: 0 }
+case	repeat	phase	index	rays	pixels	bodies	physics_cpu_elapsed_us	sensor_encode_us	submit_elapsed_us	complete_us	gpu_queue_span_us	cpu_pose_upload_bytes	sensor_descriptor_pose_upload_bytes	physics_uniform_bytes_source_count	result_download_bytes	physics_submissions_source_count	sensor_submissions	readback_submissions	timer_marker_submissions	blocking_waits	sensor_dispatches	allocations	reallocations	requested_bytes
+cpu_a1_steps1_lidar1k_device	0	first	0	1024	0	4	210.503	229735.247	231179.640	231364.140	230868.992	128	128	0	0	0	1	0	1	1	6	11728	2593	4208537
+cpu_a1_steps1_lidar1k_device	0	warmup	1	1024	0	4	185.883	247.680	1175.492	1300.108	940.032	128	128	0	0	0	1	0	1	1	6	250	40	80010
+cpu_a1_steps1_lidar1k_device	0	sample	2	1024	0	4	95.294	70.459	761.986	867.992	651.264	128	128	0	0	0	1	0	1	1	6	184	25	63764
+cpu_a1_steps1_lidar1k_device	0	sample	3	1024	0	4	87.077	77.304	726.165	841.888	625.664	128	128	0	0	0	1	0	1	1	6	184	25	63764
+bodies=4 shapes=5 actual_rays=1024 pixels=0 host_bytes=53248 lidar_arrays=LidarBatchStorage { host_bytes: 192880, device_bytes: 110752, total_bytes: 303632, descriptor_device_bytes: 128 }
+case=cpu_a1_steps1_lidar1k_host repeat=0 setup_ms=71.165 timer=true VmHWM:	  260120 kB; VmRSS:	  260120 kB
+summary case=cpu_a1_steps1_lidar1k_host repeat=0 n=2 complete_p50_us=1010.297 complete_p95_us=1093.074 p95_bootstrap95_us=[1010.297,1093.074] physics_cpu_p50_us=89.519 gpu_queue_span_p50_us=612.352 VmHWM:	  261948 kB; VmRSS:	  261948 kB lidar=RayQueryStats { encoded_queries: 4, submissions: 0, primitive_preparations: 0, mesh_preparations: 0, merge_preparations: 0, scene_builds: 1, scene_preparations: 2, refit_preparations: 2, scene_rebuilds: 0, scene_quality_checks: 0 }
+cpu_a1_steps1_lidar1k_host	0	first	0	1024	0	4	132.446	208280.919	209394.979	210013.673	209168.384	128	128	0	53248	0	1	1	1	0	6	11746	2588	4260704
+cpu_a1_steps1_lidar1k_host	0	warmup	1	1024	0	4	132.092	264.664	1020.328	1416.476	878.592	128	128	0	53248	0	1	1	1	0	6	285	35	135467
+cpu_a1_steps1_lidar1k_host	0	sample	2	1024	0	4	92.798	70.136	713.162	1093.074	612.352	128	128	0	53248	0	1	1	1	0	6	222	23	122929
+cpu_a1_steps1_lidar1k_host	0	sample	3	1024	0	4	89.519	67.842	683.089	1010.297	619.520	128	128	0	53248	0	1	1	1	0	6	222	23	122929
+camera_arrays=CameraStorageUsage { pixels: 307200, cameras: 1, host_bytes: 67584168, device_bytes: 44236896, aperture_device_bytes: 4915216, total_bytes: 111821064 }
+bodies=4 shapes=5 actual_rays=100096 pixels=307200 host_bytes=21703788 lidar_arrays=LidarBatchStorage { host_bytes: 18819352, device_bytes: 10810912, total_bytes: 29630264, descriptor_device_bytes: 512 }
+cloud=CloudProcessingStats { frames: 0, encoded_frames: 0, submissions: 0, copied_bytes: 0, kernel_dispatches: 0, buffer_allocations: 8, buffer_bytes: 28831516, binding_preparations: 1 } grid=CloudGridStats { frames: 0, submissions: 0, copied_bytes: 0, kernel_dispatches: 0, buffer_allocations: 8, buffer_bytes: 12323048, binding_preparations: 1, encoded_frames: 0 } cloud_pool=SensorFramePoolStats { buffer_allocations: 2, reserved_frames: 0, backpressure: 0 } grid_pool=SensorFramePoolStats { buffer_allocations: 4, reserved_frames: 0, backpressure: 0 }
+case=cpu_a1_steps1_cloud100k_camera640_device repeat=0 setup_ms=473.016 timer=true VmHWM:	  373724 kB; VmRSS:	  373724 kB
+summary case=cpu_a1_steps1_cloud100k_camera640_device repeat=0 n=2 complete_p50_us=2252.902 complete_p95_us=2372.227 p95_bootstrap95_us=[2252.902,2372.227] physics_cpu_p50_us=91.309 gpu_queue_span_p50_us=1949.696 VmHWM:	  386304 kB; VmRSS:	  386304 kB lidar=RayQueryStats { encoded_queries: 4, submissions: 0, primitive_preparations: 0, mesh_preparations: 0, merge_preparations: 0, scene_builds: 1, scene_preparations: 2, refit_preparations: 2, scene_rebuilds: 0, scene_quality_checks: 0 }
+cloud=CloudProcessingStats { frames: 0, encoded_frames: 4, submissions: 0, copied_bytes: 22421504, kernel_dispatches: 12, buffer_allocations: 8, buffer_bytes: 28831516, binding_preparations: 2 } grid=CloudGridStats { frames: 0, submissions: 0, copied_bytes: 44843008, kernel_dispatches: 20, buffer_allocations: 8, buffer_bytes: 12323048, binding_preparations: 2, encoded_frames: 4 } cloud_pool=SensorFramePoolStats { buffer_allocations: 2, reserved_frames: 4, backpressure: 0 } grid_pool=SensorFramePoolStats { buffer_allocations: 4, reserved_frames: 4, backpressure: 0 }
+camera=CameraDispatchStats { submissions: 0, encoded_frames: 4, ray_passes: 4, trace_passes: 4, accumulation_passes: 0, resolve_passes: 0, rays_preparations: 1, trace_preparations: 1, accumulator_preparations: 0, accumulator_buffer_allocations: 0 } query=RayQueryStats { encoded_queries: 4, submissions: 0, primitive_preparations: 0, mesh_preparations: 0, merge_preparations: 0, scene_builds: 1, scene_preparations: 2, refit_preparations: 2, scene_rebuilds: 0, scene_quality_checks: 0 }
+cpu_a1_steps1_cloud100k_camera640_device	0	first	0	100096	307200	4	136.761	252984.852	255062.368	255854.161	255168.512	128	544	0	0	0	1	0	1	1	20	23488	5190	8489512
+cpu_a1_steps1_cloud100k_camera640_device	0	warmup	1	100096	307200	4	150.905	544.410	2901.905	3523.801	3038.208	128	544	0	0	0	1	0	1	1	20	541	76	203767
+cpu_a1_steps1_cloud100k_camera640_device	0	sample	2	100096	307200	4	99.878	216.707	1790.723	2372.227	1971.200	128	544	0	0	0	1	0	1	1	20	417	51	177459
+cpu_a1_steps1_cloud100k_camera640_device	0	sample	3	100096	307200	4	91.309	223.439	1823.942	2252.902	1949.696	128	544	0	0	0	1	0	1	1	20	417	51	177459
+camera_arrays=CameraStorageUsage { pixels: 307200, cameras: 1, host_bytes: 67584168, device_bytes: 44236896, aperture_device_bytes: 4915216, total_bytes: 111821064 }
+bodies=4 shapes=5 actual_rays=100096 pixels=307200 host_bytes=21703788 lidar_arrays=LidarBatchStorage { host_bytes: 18819352, device_bytes: 10810912, total_bytes: 29630264, descriptor_device_bytes: 512 }
+cloud=CloudProcessingStats { frames: 0, encoded_frames: 0, submissions: 0, copied_bytes: 0, kernel_dispatches: 0, buffer_allocations: 8, buffer_bytes: 28831516, binding_preparations: 1 } grid=CloudGridStats { frames: 0, submissions: 0, copied_bytes: 0, kernel_dispatches: 0, buffer_allocations: 8, buffer_bytes: 12323048, binding_preparations: 1, encoded_frames: 0 } cloud_pool=SensorFramePoolStats { buffer_allocations: 2, reserved_frames: 0, backpressure: 0 } grid_pool=SensorFramePoolStats { buffer_allocations: 4, reserved_frames: 0, backpressure: 0 }
+case=cpu_a1_steps1_cloud100k_camera640_host repeat=0 setup_ms=327.482 timer=true VmHWM:	  385276 kB; VmRSS:	  382012 kB
+summary case=cpu_a1_steps1_cloud100k_camera640_host repeat=0 n=2 complete_p50_us=32937.925 complete_p95_us=33106.363 p95_bootstrap95_us=[32937.925,33106.363] physics_cpu_p50_us=176.706 gpu_queue_span_p50_us=2178.048 VmHWM:	  410672 kB; VmRSS:	  401224 kB lidar=RayQueryStats { encoded_queries: 4, submissions: 0, primitive_preparations: 0, mesh_preparations: 0, merge_preparations: 0, scene_builds: 1, scene_preparations: 2, refit_preparations: 2, scene_rebuilds: 0, scene_quality_checks: 0 }
+cloud=CloudProcessingStats { frames: 0, encoded_frames: 4, submissions: 0, copied_bytes: 22421504, kernel_dispatches: 12, buffer_allocations: 8, buffer_bytes: 28831516, binding_preparations: 2 } grid=CloudGridStats { frames: 0, submissions: 0, copied_bytes: 44843008, kernel_dispatches: 20, buffer_allocations: 8, buffer_bytes: 12323048, binding_preparations: 2, encoded_frames: 4 } cloud_pool=SensorFramePoolStats { buffer_allocations: 2, reserved_frames: 4, backpressure: 0 } grid_pool=SensorFramePoolStats { buffer_allocations: 4, reserved_frames: 4, backpressure: 0 }
+camera=CameraDispatchStats { submissions: 0, encoded_frames: 4, ray_passes: 4, trace_passes: 4, accumulation_passes: 0, resolve_passes: 0, rays_preparations: 1, trace_preparations: 1, accumulator_preparations: 0, accumulator_buffer_allocations: 0 } query=RayQueryStats { encoded_queries: 4, submissions: 0, primitive_preparations: 0, mesh_preparations: 0, merge_preparations: 0, scene_builds: 1, scene_preparations: 2, refit_preparations: 2, scene_rebuilds: 0, scene_quality_checks: 0 }
+cpu_a1_steps1_cloud100k_camera640_host	0	first	0	100096	307200	4	133.383	243549.370	245655.373	287031.811	245684.224	128	544	0	21703788	0	1	1	1	1	20	23527	5192	30188860
+cpu_a1_steps1_cloud100k_camera640_host	0	warmup	1	100096	307200	4	189.210	696.790	2597.592	36173.501	2668.544	128	544	0	21703788	0	1	1	1	1	20	583	78	21919099
+cpu_a1_steps1_cloud100k_camera640_host	0	sample	2	100096	307200	4	176.706	284.405	2008.728	32937.925	2178.048	128	544	0	21703788	0	1	1	1	1	20	460	54	21894359
+cpu_a1_steps1_cloud100k_camera640_host	0	sample	3	100096	307200	4	177.356	296.554	2159.620	33106.363	2223.104	128	544	0	21703788	0	1	1	1	1	20	459	54	21894327
+bodies=4 shapes=5 actual_rays=1024 pixels=0 host_bytes=53248 lidar_arrays=LidarBatchStorage { host_bytes: 192880, device_bytes: 110752, total_bytes: 303632, descriptor_device_bytes: 128 }
+case=gpu_a1_steps1_lidar1k_device repeat=0 setup_ms=127295.838 timer=true VmHWM:	 5821792 kB; VmRSS:	 5380984 kB
+summary case=gpu_a1_steps1_lidar1k_device repeat=0 n=2 complete_p50_us=2726.012 complete_p95_us=2980.415 p95_bootstrap95_us=[2726.012,2980.415] physics_cpu_p50_us=298.518 gpu_queue_span_p50_us=1838.080 VmHWM:	 5821792 kB; VmRSS:	 5380992 kB lidar=RayQueryStats { encoded_queries: 4, submissions: 0, primitive_preparations: 0, mesh_preparations: 0, merge_preparations: 0, scene_builds: 1, scene_preparations: 2, refit_preparations: 2, scene_rebuilds: 0, scene_quality_checks: 0 }
+gpu_a1_steps1_lidar1k_device	0	first	0	1024	0	4	981.224	209908.057	212071.382	212762.548	211763.200	0	128	48	0	5	1	0	1	1	6	11851	2645	4304514
+gpu_a1_steps1_lidar1k_device	0	warmup	1	1024	0	4	824.221	277.798	1635.976	3298.891	2498.560	0	128	48	0	5	1	0	1	1	6	372	92	131024
+gpu_a1_steps1_lidar1k_device	0	sample	2	1024	0	4	298.518	91.400	1114.398	2726.012	1838.080	0	128	48	0	5	1	0	1	1	6	215	49	87500
+gpu_a1_steps1_lidar1k_device	0	sample	3	1024	0	4	711.246	181.750	1924.590	2980.415	2118.656	0	128	48	0	5	1	0	1	1	6	216	44	85425
+make: *** [Makefile:132: test] Terminated

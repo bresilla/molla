@@ -187,19 +187,22 @@ impl Dense3Kernel {
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC;
         let mk_buf = |label: &str| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes,
-                usage: usage_storage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes,
+                    usage: usage_storage,
+                    mapped_at_creation: false,
+                }
+            )
         };
 
         let in_buf = mk_buf("molla::dense3 input");
         let out_l = mk_buf("molla::dense3 out left");
         let out_m = mk_buf("molla::dense3 out middle");
         let out_r = mk_buf("molla::dense3 out right");
-        queue.write_buffer(&in_buf, 0, bytemuck::cast_slice(&packed));
+        molla_core::gpu_write_buffer!(queue, &in_buf, 0, bytemuck::cast_slice(&packed));
 
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::dense3 io bg"),
@@ -230,13 +233,16 @@ impl Dense3Kernel {
             _pad1: 0,
             _pad2: 0,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("molla::dense3 uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::dense3 uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         let bg_u = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::dense3 uniforms bg"),
             layout: &self.layout_uniforms,
@@ -269,12 +275,15 @@ impl Dense3Kernel {
 
         // Stage outputs into mappable buffers.
         let mk_stage = |label: &str| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let stage_l = mk_stage("molla::dense3 stage left");
         let stage_m = mk_stage("molla::dense3 stage middle");
@@ -298,7 +307,7 @@ impl Dense3Kernel {
             receiver
                 .recv()
                 .map_err(|e| Error::Gpu(format!("dense3 readback recv: {e:?}")))??;
-            let data = slice.get_mapped_range();
+            let data = molla_core::gpu_readback!(slice);
             let v: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
             drop(data);
             buf.unmap();
@@ -480,12 +489,15 @@ impl Dense3Kernel {
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC;
         let mk_buf = |label: &str| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes,
-                usage: usage_storage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes,
+                    usage: usage_storage,
+                    mapped_at_creation: false,
+                }
+            )
         };
 
         let pack_mats = |slice: &[Mat3]| -> Vec<f32> {
@@ -519,17 +531,33 @@ impl Dense3Kernel {
         let adj_v_buf = mk_buf("adj_svd adj_v");
         let adj_a_buf = mk_buf("adj_svd adj_a");
 
-        queue.write_buffer(&a_buf, 0, bytemuck::cast_slice(&pack_mats(a)));
-        queue.write_buffer(&u_buf, 0, bytemuck::cast_slice(&pack_mats(u)));
-        queue.write_buffer(&sigma_buf, 0, bytemuck::cast_slice(&pack_vecs(sigma)));
-        queue.write_buffer(&v_buf, 0, bytemuck::cast_slice(&pack_mats(v)));
-        queue.write_buffer(&adj_u_buf, 0, bytemuck::cast_slice(&pack_mats(adj_u)));
-        queue.write_buffer(
+        molla_core::gpu_write_buffer!(queue, &a_buf, 0, bytemuck::cast_slice(&pack_mats(a)));
+        molla_core::gpu_write_buffer!(queue, &u_buf, 0, bytemuck::cast_slice(&pack_mats(u)));
+        molla_core::gpu_write_buffer!(
+            queue,
+            &sigma_buf,
+            0,
+            bytemuck::cast_slice(&pack_vecs(sigma))
+        );
+        molla_core::gpu_write_buffer!(queue, &v_buf, 0, bytemuck::cast_slice(&pack_mats(v)));
+        molla_core::gpu_write_buffer!(
+            queue,
+            &adj_u_buf,
+            0,
+            bytemuck::cast_slice(&pack_mats(adj_u))
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
             &adj_sigma_buf,
             0,
             bytemuck::cast_slice(&pack_vecs(adj_sigma)),
         );
-        queue.write_buffer(&adj_v_buf, 0, bytemuck::cast_slice(&pack_mats(adj_v)));
+        molla_core::gpu_write_buffer!(
+            queue,
+            &adj_v_buf,
+            0,
+            bytemuck::cast_slice(&pack_mats(adj_v))
+        );
 
         let uniforms = Uniforms {
             matrix_count: n as u32,
@@ -537,13 +565,16 @@ impl Dense3Kernel {
             _pad1: 0,
             _pad2: 0,
         };
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("adj_svd uniforms"),
-            size: core::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let uniform_buf = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("adj_svd uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("adj_svd encoder"),
@@ -564,12 +595,15 @@ impl Dense3Kernel {
         )?;
 
         // Stage adj_a for readback.
-        let stage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("adj_svd stage"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let stage = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("adj_svd stage"),
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         encoder.copy_buffer_to_buffer(&adj_a_buf, 0, &stage, 0, bytes);
         queue.submit(std::iter::once(encoder.finish()));
 
@@ -586,7 +620,7 @@ impl Dense3Kernel {
         receiver
             .recv()
             .map_err(|e| Error::Gpu(format!("adj_svd readback recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = molla_core::gpu_readback!(slice);
         let raw: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         stage.unmap();

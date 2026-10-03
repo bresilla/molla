@@ -1,0 +1,61 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.70s
+     Running tests/multidof_dynamics.rs (target/debug/deps/multidof_dynamics-6e639201d93a1829)
+
+running 5 tests
+test ball_jacobian_columns_are_target_shifted_twists ... ok
+test ball_pendulum_mass_matrix_matches_analytic ... ok
+test d6_locked_axes_zero_their_rows_and_cross_check ... ok
+test ball_revolute_chain_crba_matches_rnea ... ok
+test free_base_chain_crba_matches_rnea ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/multidof_oracle.rs (target/debug/deps/multidof_oracle-45e0d05cb5926572)
+
+running 1 test
+test d6_locked_to_revolute_matches_crba_and_rnea ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/reaction_wrenches.rs (target/debug/deps/reaction_wrenches-4016a88d12324db2)
+
+running 5 tests
+test joint_wrench_indices_are_local_to_the_requested_articulation ... ok
+test free_body_requires_no_joint_wrench_at_its_applied_acceleration ... ok
+test ball_wrench_matches_offset_com_full_inertia_newton_euler_oracle ... ok
+test fixed_chain_reports_anchor_wrenches_including_external_com_loads ... ok
+test solved_scalar_stop_reports_transmission_without_a_motor_command ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/rnea_inverse_dynamics.rs (target/debug/deps/rnea_inverse_dynamics-0791f8b84d84374f)
+
+running 3 tests
+test rnea_empty_returns_empty ... ok
+test pendulum_gravity_torque_matches_rnea ... ok
+test rnea_decomposes_into_mass_matrix_plus_bias ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime_tree.rs (target/debug/deps/runtime_tree-fff3d18e1f1c33b9)
+
+running 10 tests
+test rerooted_teleport_moves_solver_descendants_not_authored_children ... ok
+test constraint_loops_remain_atomic_errors ... ok
+test reversed_free_joint_matches_unconstrained_body_motion ... ok
+test reversed_d6_jacobian_and_inverse_dynamics_match_finite_differences ... ok
+test world_anchor_can_pin_a_nonroot_and_detach_with_current_velocity ... ok
+test reversed_frame_edits_and_suspension_keep_authored_endpoints ... ok
+test reversed_prismatic_limits_and_impulses_keep_logical_signs ... ok
+test fixing_a_hinge_child_reroots_without_reversing_motor_semantics ... ok
+test merging_at_two_existing_children_reverses_only_the_needed_branch ... ok
+test reversed_ball_motor_targets_authored_relative_orientation ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

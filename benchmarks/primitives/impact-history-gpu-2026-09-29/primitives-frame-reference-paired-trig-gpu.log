@@ -1,0 +1,49 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+   Compiling molla-actuators v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-actuators)
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.73s
+     Running `target/debug/examples/check_primitives_shaders`
+shader_wiring_ok	module=mass_response	entry_points=1
+shader_wiring_ok	module=jacobian_response	entry_points=1
+shader_wiring_ok	module=reaction_response	entry_points=1
+shader_wiring_ok	module=featherstone	entry_points=1
+shader_wiring_ok	module=runtime_distance	entry_points=2
+shader_wiring_ok	module=body_damping	entry_points=1
+shader_wiring_ok	module=scalar_publication	entry_points=1
+shader_wiring_ok	module=floating_momentum	entry_points=1
+shader_wiring_complete	modules=8	device_execution=false
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.72s
+     Running unittests src/lib.rs (target/debug/deps/molla_solvers-6a2d90588238e86c)
+
+running 1 test
+test rigid_world::gpu::scale_tests::paired_fk_chains_retain_frames_after_model_upload_edits ... adapter=AdapterInfo { vendor: 4318, name: "NVIDIA GeForce RTX 4080", backend: "Vulkan", is_software: false, driver: "NVIDIA", driver_info: "595.91.07" } paired_fk_frame_mutation=true
+distance_scale_stage_wait stage=paired-chain-refresh
+distance_scale_stage_complete stage=paired-chain-refresh
+distance_scale_stage_wait stage=paired-chain-poses
+distance_scale_stage_complete stage=paired-chain-poses
+distance_scale_stage_wait stage=paired-chain-position-tails
+distance_scale_stage_complete stage=paired-chain-position-tails
+distance_scale_stage_wait stage=paired-chain-quaternions
+distance_scale_stage_complete stage=paired-chain-quaternions
+paired_chain fixed_only=false edit=0 bodies=14 position_error=9.237055565e-14 rotation_error=2.141509470e-9
+
+thread 'rigid_world::gpu::scale_tests::paired_fk_chains_retain_frames_after_model_upload_edits' (396958) panicked at crates/molla-solvers/src/rigid_distance_scale_gpu_tests.rs:233:13:
+assertion failed: rotation_error <= 1e-12
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    rigid_world::gpu::scale_tests::paired_fk_chains_retain_frames_after_model_upload_edits
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 239 filtered out; finished in 44.96s
+
+error: test failed, to rerun pass `-p molla-solvers --lib`
+make: *** [Makefile:532: test-primitives-frame-reference-gpu] Error 101

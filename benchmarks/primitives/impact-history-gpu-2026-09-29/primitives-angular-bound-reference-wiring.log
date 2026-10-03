@@ -1,0 +1,20 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+error: struct update has no effect, all the fields in the struct have already been specified
+   --> crates/molla-solvers/src/distance_gpu.rs:791:39
+    |
+791 | ...                   ..Default::default()
+    |                         ^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_update
+    = note: `-D clippy::needless-update` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_update)]`
+
+error: could not compile `molla-solvers` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `molla-solvers` (lib test) due to 1 previous error
+make: *** [Makefile:392: clippy-check] Error 101

@@ -1,0 +1,412 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Checking molla-sensors v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-sensors)
+    Checking molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Checking molla-fem v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-fem)
+error: an array of `Range` that is only one element
+  --> crates/molla-sensors/tests/sensor_image_direct_gpu.rs:46:14
+   |
+46 |             &[3..6],
+   |              ^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+   = note: `-D clippy::single-range-in-vec-init` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::single_range_in_vec_init)]`
+help: if you wanted a `Vec` that contains the entire range, try
+   |
+46 -             &[3..6],
+46 +             &(3..6).collect::<std::vec::Vec<usize>>(),
+   |
+help: if you wanted an array of len 6, try
+   |
+46 -             &[3..6],
+46 +             &[3; 6],
+   |
+
+error: this range is empty so it will yield no values
+   --> crates/molla-sensors/tests/sensor_pending_pipeline_gpu.rs:159:33
+    |
+159 |                 assert!(p.slice(2..1).is_err());
+    |                                 ^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#reversed_empty_ranges
+    = note: `-D clippy::reversed-empty-ranges` implied by `-D clippy::correctness`
+    = help: to override `-D clippy::correctness` add `#[allow(clippy::reversed_empty_ranges)]`
+help: consider using the following if you are attempting to iterate over this range in reverse
+    |
+159 -                 assert!(p.slice(2..1).is_err());
+159 +                 assert!(p.slice((1..2).rev()).is_err());
+    |
+
+error: an array of `Range` that is only one element
+   --> crates/molla-sensors/tests/sensor_pending_pipeline_gpu.rs:208:14
+    |
+208 |             &[1..8],
+    |              ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+    = note: `-D clippy::single-range-in-vec-init` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::single_range_in_vec_init)]`
+help: if you wanted a `Vec` that contains the entire range, try
+    |
+208 -             &[1..8],
+208 +             &(1..8).collect::<std::vec::Vec<usize>>(),
+    |
+help: if you wanted an array of len 8, try
+    |
+208 -             &[1..8],
+208 +             &[1; 8],
+    |
+
+error: an array of `Range` that is only one element
+   --> crates/molla-sensors/tests/sensor_pending_pipeline_gpu.rs:321:22
+    |
+321 |                     &[0..1],
+    |                      ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+    |
+321 -                     &[0..1],
+321 +                     &(0..1).collect::<std::vec::Vec<usize>>(),
+    |
+help: if you wanted an array of len 1, try
+    |
+321 -                     &[0..1],
+321 +                     &[0; 1],
+    |
+
+error: an array of `Range` that is only one element
+   --> crates/molla-sensors/tests/sensor_pending_pipeline_gpu.rs:344:22
+    |
+344 |                     &[0..2],
+    |                      ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+    |
+344 -                     &[0..2],
+344 +                     &(0..2).collect::<std::vec::Vec<usize>>(),
+    |
+help: if you wanted an array of len 2, try
+    |
+344 -                     &[0..2],
+344 +                     &[0; 2],
+    |
+
+error: an array of `Range` that is only one element
+   --> crates/molla-sensors/tests/sensor_pending_pipeline_gpu.rs:356:18
+    |
+356 |                 &[0..1],
+    |                  ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+    |
+356 -                 &[0..1],
+356 +                 &(0..1).collect::<std::vec::Vec<usize>>(),
+    |
+help: if you wanted an array of len 1, try
+    |
+356 -                 &[0..1],
+356 +                 &[0; 1],
+    |
+
+error: an array of `Range` that is only one element
+   --> crates/molla-sensors/tests/sensor_pending_pipeline_gpu.rs:373:22
+    |
+373 |                     &[0..1],
+    |                      ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+    |
+373 -                     &[0..1],
+373 +                     &(0..1).collect::<std::vec::Vec<usize>>(),
+    |
+help: if you wanted an array of len 1, try
+    |
+373 -                     &[0..1],
+373 +                     &[0; 1],
+    |
+
+error: an array of `Range` that is only one element
+   --> crates/molla-sensors/tests/sensor_pending_pipeline_gpu.rs:457:18
+    |
+457 |                 &[0..1],
+    |                  ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+    |
+457 -                 &[0..1],
+457 +                 &(0..1).collect::<std::vec::Vec<usize>>(),
+    |
+help: if you wanted an array of len 1, try
+    |
+457 -                 &[0..1],
+457 +                 &[0; 1],
+    |
+
+error: could not compile `molla-sensors` (test "sensor_image_direct_gpu") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `molla-sensors` (test "sensor_pending_pipeline_gpu") due to 7 previous errors
+error: manual implementation of `.is_multiple_of()`
+   --> crates/molla-sensors/benches/bench_sensor_latency.rs:304:20
+    |
+304 |                 if index % 2 == 0 {
+    |                    ^^^^^^^^^^^^^^ help: replace with: `index.is_multiple_of(2)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_is_multiple_of
+    = note: `-D clippy::manual-is-multiple-of` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_is_multiple_of)]`
+
+error: manually reimplementing `div_ceil`
+   --> crates/molla-sensors/benches/bench_sensor_latency.rs:489:30
+    |
+489 |             max_total_bytes: (bytes + 7) / 8 * 8,
+    |                              ^^^^^^^^^^^^^^^ help: consider using `.div_ceil()`: `bytes.div_ceil(8)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_div_ceil
+    = note: `-D clippy::manual-div-ceil` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_div_ceil)]`
+
+error: manually reimplementing `div_ceil`
+  --> crates/molla-sensors/tests/sensor_scene_refit_gpu.rs:23:30
+   |
+23 |             max_total_bytes: (bytes + 7) / 8 * 8,
+   |                              ^^^^^^^^^^^^^^^ help: consider using `.div_ceil()`: `bytes.div_ceil(8)`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_div_ceil
+   = note: `-D clippy::manual-div-ceil` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::manual_div_ceil)]`
+
+error: could not compile `molla-sensors` (bench "bench_sensor_latency") due to 2 previous errors
+error: an array of `Range` that is only one element
+   --> crates/molla-sensors/tests/sensor_allocation_gpu.rs:702:18
+    |
+702 |                 &[0..0],
+    |                  ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+    = note: `-D clippy::single-range-in-vec-init` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::single_range_in_vec_init)]`
+help: if you wanted a `Vec` that contains the entire range, try
+    |
+702 -                 &[0..0],
+702 +                 &(0..0).collect::<std::vec::Vec<usize>>(),
+    |
+help: if you wanted an array of len 0, try
+    |
+702 -                 &[0..0],
+702 +                 &[0; 0],
+    |
+
+error: an array of `Range` that is only one element
+   --> crates/molla-sensors/tests/sensor_allocation_gpu.rs:733:18
+    |
+733 |                 &[0..0],
+    |                  ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+    |
+733 -                 &[0..0],
+733 +                 &(0..0).collect::<std::vec::Vec<usize>>(),
+    |
+help: if you wanted an array of len 0, try
+    |
+733 -                 &[0..0],
+733 +                 &[0; 0],
+    |
+
+error: an array of `Range` that is only one element
+   --> crates/molla-sensors/tests/sensor_allocation_gpu.rs:746:18
+    |
+746 |                 &[0..0],
+    |                  ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+    |
+746 -                 &[0..0],
+746 +                 &(0..0).collect::<std::vec::Vec<usize>>(),
+    |
+help: if you wanted an array of len 0, try
+    |
+746 -                 &[0..0],
+746 +                 &[0; 0],
+    |
+
+error: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+   --> crates/molla-sensors/tests/sensor_grid_gpu.rs:409:5
+    |
+409 |     drop(channel);
+    |     ^^^^^^^^^^^^^
+    |
+note: argument has type `molla_sensors::SnapshotChannel<'_, molla_sensors::CloudPoint>`
+   --> crates/molla-sensors/tests/sensor_grid_gpu.rs:409:10
+    |
+409 |     drop(channel);
+    |          ^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#drop_non_drop
+    = note: `-D clippy::drop-non-drop` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::drop_non_drop)]`
+
+error: could not compile `molla-sensors` (test "sensor_grid_gpu") due to 1 previous error
+error: could not compile `molla-sensors` (test "sensor_allocation_gpu") due to 3 previous errors
+error: could not compile `molla-sensors` (test "sensor_scene_refit_gpu") due to 1 previous error
+error: an array of `Range` that is only one element
+   --> crates/molla-sensors/tests/sensor_grid_direct_gpu.rs:222:14
+    |
+222 |             &[3..260],
+    |              ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+    = note: `-D clippy::single-range-in-vec-init` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::single_range_in_vec_init)]`
+help: if you wanted a `Vec` that contains the entire range, try
+    |
+222 -             &[3..260],
+222 +             &(3..260).collect::<std::vec::Vec<usize>>(),
+    |
+help: if you wanted an array of len 260, try
+    |
+222 -             &[3..260],
+222 +             &[3; 260],
+    |
+
+error: could not compile `molla-sensors` (test "sensor_grid_direct_gpu") due to 1 previous error
+error: an array of `Range` that is only one element
+    --> crates/molla-sensors/src/device_results.rs:1287:22
+     |
+1287 |                     &[0..1],
+     |                      ^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+     = note: `-D clippy::single-range-in-vec-init` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::single_range_in_vec_init)]`
+help: if you wanted a `Vec` that contains the entire range, try
+     |
+1287 -                     &[0..1],
+1287 +                     &(0..1).collect::<std::vec::Vec<usize>>(),
+     |
+help: if you wanted an array of len 1, try
+     |
+1287 -                     &[0..1],
+1287 +                     &[0; 1],
+     |
+
+error: an array of `Range` that is only one element
+    --> crates/molla-sensors/src/device_results.rs:1320:22
+     |
+1320 |                     &[0..1],
+     |                      ^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+     |
+1320 -                     &[0..1],
+1320 +                     &(0..1).collect::<std::vec::Vec<usize>>(),
+     |
+help: if you wanted an array of len 1, try
+     |
+1320 -                     &[0..1],
+1320 +                     &[0; 1],
+     |
+
+error: an array of `Range` that is only one element
+    --> crates/molla-sensors/src/device_results.rs:1336:34
+     |
+1336 | ...                   &[0..1],
+     |                        ^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+     |
+1336 -                                 &[0..1],
+1336 +                                 &(0..1).collect::<std::vec::Vec<usize>>(),
+     |
+help: if you wanted an array of len 1, try
+     |
+1336 -                                 &[0..1],
+1336 +                                 &[0; 1],
+     |
+
+error: an array of `Range` that is only one element
+    --> crates/molla-sensors/src/device_results.rs:1482:26
+     |
+1482 |                         &[0..1],
+     |                          ^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+     |
+1482 -                         &[0..1],
+1482 +                         &(0..1).collect::<std::vec::Vec<usize>>(),
+     |
+help: if you wanted an array of len 1, try
+     |
+1482 -                         &[0..1],
+1482 +                         &[0; 1],
+     |
+
+error: an array of `Range` that is only one element
+    --> crates/molla-sensors/src/device_results.rs:1496:22
+     |
+1496 |                     &[0..1],
+     |                      ^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+     |
+1496 -                     &[0..1],
+1496 +                     &(0..1).collect::<std::vec::Vec<usize>>(),
+     |
+help: if you wanted an array of len 1, try
+     |
+1496 -                     &[0..1],
+1496 +                     &[0; 1],
+     |
+
+error: an array of `Range` that is only one element
+    --> crates/molla-sensors/src/device_results.rs:1539:22
+     |
+1539 |                     &[0..4],
+     |                      ^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+     |
+1539 -                     &[0..4],
+1539 +                     &(0..4).collect::<std::vec::Vec<usize>>(),
+     |
+help: if you wanted an array of len 4, try
+     |
+1539 -                     &[0..4],
+1539 +                     &[0; 4],
+     |
+
+error: an array of `Range` that is only one element
+    --> crates/molla-sensors/src/device_results.rs:1573:22
+     |
+1573 |                     &[0..4],
+     |                      ^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_range_in_vec_init
+help: if you wanted a `Vec` that contains the entire range, try
+     |
+1573 -                     &[0..4],
+1573 +                     &(0..4).collect::<std::vec::Vec<usize>>(),
+     |
+help: if you wanted an array of len 4, try
+     |
+1573 -                     &[0..4],
+1573 +                     &[0; 4],
+     |
+
+error: could not compile `molla-sensors` (lib test) due to 7 previous errors
+make: *** [Makefile:344: clippy-check] Error 101

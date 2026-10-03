@@ -1,0 +1,16 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-kernels v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-kernels)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.85s
+     Running tests/cone_geometry_gpu.rs (target/debug/deps/cone_geometry_gpu-6a45058879caaa0f)
+
+running 2 tests
+test cone_geometry_matches_cpu_in_retained_batches ... cone geometry cases=4410 swing_peak=4.4786877073654807e-7 scaled_jacobian_peak=6.606504903174937e-4
+ok
+test cone_geometry_reports_antipodal_and_invalid_status ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+

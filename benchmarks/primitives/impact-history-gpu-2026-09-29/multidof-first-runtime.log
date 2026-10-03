@@ -1,0 +1,32 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+make[1]: Entering directory '/home/bresilla/data/code/OUSD/molla'
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running tests/runtime_multidof_feedback_gpu.rs (target/debug/deps/runtime_multidof_feedback_gpu-c96cf063213942db)
+
+running 1 test
+test multidof_drives_use_nonzero_coordinates_and_match_cpu_with_stable_feedback ... 
+thread 'multidof_drives_use_nonzero_coordinates_and_match_cpu_with_stable_feedback' (860052) panicked at crates/molla-solvers/tests/runtime_multidof_feedback_gpu.rs:71:25:
+kind=D6 stable=false GPU nonzero-coordinate equilibrium: SpatialVector { linear: DVec3(0.0049113985151052475, -0.004166659899055958, 0.0032558327075093985), angular: DVec3(0.009239718317985535, -0.005607275757938623, 0.004087424837052822) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    multidof_drives_use_nonzero_coordinates_and_match_cpu_with_stable_feedback
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.36s
+
+error: test failed, to rerun pass `-p molla-solvers --test runtime_multidof_feedback_gpu`
+make[1]: *** [Makefile:110: test-gpu] Error 101
+make[1]: Leaving directory '/home/bresilla/data/code/OUSD/molla'
+make: *** [Makefile:257: test-primitives-multidof-feedback-gpu] Error 2

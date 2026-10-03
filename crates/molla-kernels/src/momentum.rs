@@ -67,12 +67,15 @@ impl MomentumMonitor {
             compilation_options: Default::default(),
             cache: None,
         });
-        let diagnostics = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("momentum stage totals and deltas"),
-            size: 20 * 16,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
+        let diagnostics = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("momentum stage totals and deltas"),
+                size: 20 * 16,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
         Self {
             layout,
             pipeline,
@@ -116,11 +119,14 @@ impl MomentumMonitor {
             }
             None => (b.body_mass, b.body_mass, 0),
         };
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("momentum phase"),
-            contents: bytemuck::cast_slice(&[b.particles, b.bodies, phase, dofs]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = molla_core::gpu_buffer_init!(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("momentum phase"),
+                contents: bytemuck::cast_slice(&[b.particles, b.bodies, phase, dofs]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            }
+        );
         let buffers = [
             b.particle_mass,
             b.particle_velocity,

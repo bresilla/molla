@@ -1,0 +1,13 @@
+warning: Git tree '/home/bresilla/data/code/OUSD/molla' is dirty
+------------------------------------------
+Project: molla v0.0.1
+Display: x11 backend
+------------------------------------------
+    Finished `release` profile [optimized] target(s) in 0.08s
+     Running benches/runtime_primitives.rs (target/release/deps/runtime_primitives-fec4336174b03ab8)
+Error: "invalid benchmark settings"
+error: bench failed, to rerun pass `-p molla-solvers --bench runtime_primitives`
+
+Caused by:
+  process didn't exit successfully: `/home/bresilla/data/code/OUSD/molla/target/release/deps/runtime_primitives-fec4336174b03ab8 --backend cpu --counts 0 --bench` (exit status: 1)
+make: *** [Makefile:335: bench-primitives] Error 1

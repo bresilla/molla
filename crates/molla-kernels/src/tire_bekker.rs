@@ -320,28 +320,34 @@ impl TireBekkerFemTerrainOwner {
         let f32_bytes = |len: usize| (len.max(1) * core::mem::size_of::<f32>()) as u64;
         let upload_map = |label: &str, rows: &Option<Vec<f32>>| -> Option<wgpu::Buffer> {
             rows.as_ref().map(|map| {
-                let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(label),
-                    size: f32_bytes(map.len()),
-                    usage: usage_ro,
-                    mapped_at_creation: false,
-                });
+                let buf = molla_core::gpu_create_buffer!(
+                    device,
+                    &wgpu::BufferDescriptor {
+                        label: Some(label),
+                        size: f32_bytes(map.len()),
+                        usage: usage_ro,
+                        mapped_at_creation: false,
+                    }
+                );
                 if !map.is_empty() {
-                    queue.write_buffer(&buf, 0, bytemuck::cast_slice(map));
+                    molla_core::gpu_write_buffer!(queue, &buf, 0, bytemuck::cast_slice(map));
                 }
                 buf
             })
         };
         let upload_vec4_map = |label: &str, rows: &Option<Vec<[f32; 4]>>| -> Option<wgpu::Buffer> {
             rows.as_ref().map(|map| {
-                let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(label),
-                    size: (map.len().max(1) * core::mem::size_of::<[f32; 4]>()) as u64,
-                    usage: usage_ro,
-                    mapped_at_creation: false,
-                });
+                let buf = molla_core::gpu_create_buffer!(
+                    device,
+                    &wgpu::BufferDescriptor {
+                        label: Some(label),
+                        size: (map.len().max(1) * core::mem::size_of::<[f32; 4]>()) as u64,
+                        usage: usage_ro,
+                        mapped_at_creation: false,
+                    }
+                );
                 if !map.is_empty() {
-                    queue.write_buffer(&buf, 0, bytemuck::cast_slice(map));
+                    molla_core::gpu_write_buffer!(queue, &buf, 0, bytemuck::cast_slice(map));
                 }
                 buf
             })
@@ -487,12 +493,15 @@ impl TireBekkerGpuKernel {
         let contact_bytes =
             |len: usize| (len.max(1) * core::mem::size_of::<TireBekkerContactCell>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let usage_ro = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let usage_rw = wgpu::BufferUsages::STORAGE
@@ -512,17 +521,38 @@ impl TireBekkerGpuKernel {
         let stage_height = stage_f32(device, "tire_bekker stage height", n);
         let stage_sinkage = stage_f32(device, "tire_bekker stage sinkage", n);
 
-        queue.write_buffer(&rest_buf, 0, bytemuck::cast_slice(&input.rest_heights));
-        queue.write_buffer(&height_in_buf, 0, bytemuck::cast_slice(&input.heights));
-        queue.write_buffer(&sinkage_in_buf, 0, bytemuck::cast_slice(&input.sinkage));
+        molla_core::gpu_write_buffer!(
+            queue,
+            &rest_buf,
+            0,
+            bytemuck::cast_slice(&input.rest_heights)
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &height_in_buf,
+            0,
+            bytemuck::cast_slice(&input.heights)
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &sinkage_in_buf,
+            0,
+            bytemuck::cast_slice(&input.sinkage)
+        );
         if input.contacts.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &contact_buf,
                 0,
                 bytemuck::cast_slice(&[TireBekkerContactCell::default()]),
             );
         } else {
-            queue.write_buffer(&contact_buf, 0, bytemuck::cast_slice(&input.contacts));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &contact_buf,
+                0,
+                bytemuck::cast_slice(&input.contacts)
+            );
         }
         let uniforms = BekkerUniforms {
             dims: [input.nx, input.nz, input.contacts.len() as u32, 0],
@@ -535,7 +565,7 @@ impl TireBekkerGpuKernel {
             ],
             soil1: [input.bekker_n, 0.0, 0.0, 0.0],
         };
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_bekker io bg"),
@@ -597,12 +627,15 @@ impl TireBekkerGpuKernel {
         let contact_bytes =
             |len: usize| (len.max(1) * core::mem::size_of::<TireBekkerContactCell>()) as u64;
         let mk_buf = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bytes.max(4),
-                usage,
-                mapped_at_creation: false,
-            })
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes.max(4),
+                    usage,
+                    mapped_at_creation: false,
+                }
+            )
         };
         let usage_ro = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let usage_rw = wgpu::BufferUsages::STORAGE
@@ -624,17 +657,38 @@ impl TireBekkerGpuKernel {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
-        queue.write_buffer(&rest_buf, 0, bytemuck::cast_slice(&input.rest_heights));
-        queue.write_buffer(&height_in_buf, 0, bytemuck::cast_slice(&input.heights));
-        queue.write_buffer(&sinkage_in_buf, 0, bytemuck::cast_slice(&input.sinkage));
+        molla_core::gpu_write_buffer!(
+            queue,
+            &rest_buf,
+            0,
+            bytemuck::cast_slice(&input.rest_heights)
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &height_in_buf,
+            0,
+            bytemuck::cast_slice(&input.heights)
+        );
+        molla_core::gpu_write_buffer!(
+            queue,
+            &sinkage_in_buf,
+            0,
+            bytemuck::cast_slice(&input.sinkage)
+        );
         if input.contacts.is_empty() {
-            queue.write_buffer(
+            molla_core::gpu_write_buffer!(
+                queue,
                 &contact_buf,
                 0,
                 bytemuck::cast_slice(&[TireBekkerContactCell::default()]),
             );
         } else {
-            queue.write_buffer(&contact_buf, 0, bytemuck::cast_slice(&input.contacts));
+            molla_core::gpu_write_buffer!(
+                queue,
+                &contact_buf,
+                0,
+                bytemuck::cast_slice(&input.contacts)
+            );
         }
         let uniforms = BekkerUniforms {
             dims: [input.nx, input.nz, input.contacts.len() as u32, 0],
@@ -647,7 +701,7 @@ impl TireBekkerGpuKernel {
             ],
             soil1: [input.bekker_n, 0.0, 0.0, 0.0],
         };
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        molla_core::gpu_write_buffer!(queue, &uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let bg_io = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("molla::tire_bekker resident io bg"),
@@ -745,12 +799,15 @@ fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
 }
 
 fn stage_f32(device: &wgpu::Device, label: &str, len: usize) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: (len.max(1) * core::mem::size_of::<f32>()) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    })
+    molla_core::gpu_create_buffer!(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (len.max(1) * core::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }
+    )
 }
 
 fn read_f32(device: &wgpu::Device, buf: &wgpu::Buffer, label: &str) -> Result<Vec<f32>> {
@@ -763,7 +820,7 @@ fn read_f32(device: &wgpu::Device, buf: &wgpu::Buffer, label: &str) -> Result<Ve
     rx.recv()
         .map_err(|_| Error::Solver(format!("{label}: map callback dropped")))?
         .map_err(|e| Error::Solver(format!("{label}: map failed: {e:?}")))?;
-    let data = slice.get_mapped_range();
+    let data = molla_core::gpu_readback!(slice);
     let out = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     buf.unmap();

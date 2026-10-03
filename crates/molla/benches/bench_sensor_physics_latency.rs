@@ -7,6 +7,8 @@ mod cloud_chain;
 mod metrics;
 #[path = "support/sensor_physics.rs"]
 mod physics;
+#[path = "../../molla-sensors/benches/support/run_mode.rs"]
+mod run_mode;
 #[path = "../../molla-sensors/benches/support/timing.rs"]
 mod timing;
 
@@ -521,7 +523,7 @@ fn run(
 
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let (mut samples, mut warmup, mut repeats) = (64usize, 8usize, 3usize);
+    let (mut samples, mut warmup, mut repeats) = run_mode::defaults(&args);
     let (mut full, mut timestamps) = (false, true);
     let mut filter = String::new();
     let mut destination = None;
@@ -542,10 +544,10 @@ fn main() {
                     _ => destination = Some(value.clone()),
                 }
             }
-            "--bench" => {}
+            "--bench" | "--smoke" | "--test" => {}
             "--help" => {
                 println!(
-                    "--physics-matrix --samples N --warmup N --repeats N --filter SUBSTRING --output NEW.tsv --no-timestamps"
+                    "--bench selects 64 samples, 8 warmup and 3 repeats; otherwise smoke defaults are 2/1/1. --smoke | --test --physics-matrix --samples N --warmup N --repeats N --filter SUBSTRING --output NEW.tsv --no-timestamps"
                 );
                 return;
             }
@@ -592,7 +594,7 @@ fn main() {
     writeln!(output, "case\trepeat\tphase\tindex\trays\tpixels\tbodies\tphysics_cpu_elapsed_us\tsensor_encode_us\tsubmit_elapsed_us\tcomplete_us\tgpu_queue_span_us\tcpu_pose_upload_bytes\tsensor_descriptor_pose_upload_bytes\tphysics_uniform_bytes_source_count\tresult_download_bytes\tphysics_submissions_source_count\tsensor_submissions\treadback_submissions\ttimer_marker_submissions\tblocking_waits\tsensor_dispatches\tallocations\treallocations\trequested_bytes").unwrap();
     let engine = timing::engine(timestamps);
     eprintln!(
-        "adapter={:?} profile={} cases={} samples={samples} warmup={warmup} repeats={repeats} pid={}",
+        "adapter={:?} profile={} cases={} samples={samples} warmup={warmup} repeats={repeats} pid={} smoke={}",
         engine.adapter_info(),
         if cfg!(debug_assertions) {
             "debug"
@@ -600,7 +602,8 @@ fn main() {
             "release"
         },
         cases.len(),
-        std::process::id()
+        std::process::id(),
+        run_mode::is_smoke(&args)
     );
     for repeat in 0..repeats {
         for case in cases
