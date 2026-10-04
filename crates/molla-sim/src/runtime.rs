@@ -2691,7 +2691,8 @@ fn seed_joint(model: &Model, state: &mut State, joint: JointId) -> Result<()> {
         }
         x if x == JointType::Revolute as u32 => {
             let axis = model.joint_axis.host()?[j];
-            let r = relative.rotation;
+            // The angle reads from the quaternion's w >= 0 half, in [-pi, pi].
+            let r = if relative.rotation.w < 0.0 { -relative.rotation } else { relative.rotation };
             q[c] = 2.0 * Vec3::new(r.x, r.y, r.z).dot(axis).atan2(r.w);
             qd[v] = angular.dot(axis);
         }

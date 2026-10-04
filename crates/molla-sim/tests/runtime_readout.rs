@@ -456,3 +456,23 @@ fn joint_response_edits_retain_episode_stamps_while_physical_configuration_inval
         Some(original[1].clone())
     );
 }
+
+#[test]
+fn a_revolute_joint_at_rest_reads_zero_whatever_its_frame_quaternion_sign() {
+    let mut scene = RigidScene::new().unwrap();
+    let a = scene.insert_body(BodyDesc::default()).unwrap();
+    let b = scene.insert_body(BodyDesc::default()).unwrap();
+    let joint = scene
+        .insert_joint(JointDesc {
+            parent: Some(a),
+            child: b,
+            kind: JointType::Revolute,
+            frame_parent: Transform::IDENTITY,
+            frame_child: Transform::new(Vec3::ZERO, -molla_math::Quat::IDENTITY),
+            axis: Vec3::Z,
+        })
+        .unwrap();
+    let index = scene.joint_index(joint).unwrap().index();
+    let coordinate = scene.model().joint_coord_offset.host().unwrap()[index] as usize;
+    assert_eq!(scene.state().joint_q.host().unwrap()[coordinate], 0.0);
+}
