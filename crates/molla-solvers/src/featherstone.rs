@@ -1768,8 +1768,12 @@ fn cpu_step_inner<const LOCAL: bool>(
                     } else {
                         0.0
                     };
-                    // Backward Euler over drive and brake together; the brake
-                    // takes −c·q̇⁺ of the predicted rate, the drive the rest.
+                    // The generalised force the rest of the subtree, gravity
+                    // and contacts put on this DOF.
+                    let load = -sv_dot(s_k, p_a[j]);
+                    // Backward Euler over drive and brake together under that
+                    // load; the brake takes −c·q̇⁺ of the predicted rate, the
+                    // drive the rest.
                     let implicit_drive = if stable_motor_feedback
                         && (1..=3).contains(&(mode as u32))
                         && inertia > 0.0
@@ -1780,9 +1784,11 @@ fn cpu_step_inner<const LOCAL: bool>(
                             kp
                         };
                         let drive_load = (kd + stiffness * dt) * scale * dt / inertia;
-                        let total = ((drive - stiffness * dt * qd_now) * scale - damping * qd_now)
+                        let total = ((drive - stiffness * dt * qd_now) * scale
+                            - damping * qd_now
+                            - (drive_load + brake_load) * load)
                             / (1.0 + drive_load + brake_load);
-                        total + damping * (qd_now + dt / inertia * total)
+                        total + damping * (qd_now + dt / inertia * (total + load))
                     } else {
                         drive * scale
                     };
@@ -1794,7 +1800,8 @@ fn cpu_step_inner<const LOCAL: bool>(
                             .unwrap_or(Real::INFINITY),
                     );
                     let brake_torque = if brake_load > 0.0 {
-                        -damping * (qd_now + dt / inertia * drive_torque) / (1.0 + brake_load)
+                        -damping * (qd_now + dt / inertia * (drive_torque + load))
+                            / (1.0 + brake_load)
                     } else {
                         0.0
                     };

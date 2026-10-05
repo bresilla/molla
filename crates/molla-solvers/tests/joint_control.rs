@@ -612,3 +612,34 @@ fn generic_translation_position_drive_holds_nonzero_target() {
     }
     assert!((world.scene.body_pose(b).unwrap().position.y - 0.7).abs() < 1e-5);
 }
+
+#[test]
+fn stiff_drive_on_a_light_body_holds_an_external_load() {
+    let mut world = world();
+    let rod = body(&mut world, 4.0);
+    let slide = joint(&mut world, None, rod, JointType::Prismatic);
+    world
+        .scene
+        .add_body_wrench(rod, SpatialVector::new(Vec3::Y * -2.0e4, Vec3::ZERO))
+        .unwrap();
+    world
+        .scene
+        .set_joint_motor(
+            slide,
+            JointAxis::LinX,
+            JointMotor {
+                mode: JointTargetMode::PositionVelocity,
+                stiffness: 2.0e7,
+                damping: 8.0e5,
+                max_force: 1.0e5,
+                ..JointMotor::default()
+            },
+        )
+        .unwrap();
+    for _ in 0..240 {
+        world.step(1.0 / 120.0).unwrap();
+    }
+    let sag = 2.0e4 / 2.0e7;
+    let q = world.scene.body_pose(rod).unwrap().position.y;
+    assert!((q + sag).abs() < 0.2 * sag, "{q} != -{sag}");
+}
