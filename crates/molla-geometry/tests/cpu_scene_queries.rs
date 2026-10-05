@@ -91,6 +91,39 @@ fn heightfield_sampling_rays_and_hull_contacts_share_triangle_diagonal() {
 }
 
 #[test]
+fn ball_on_a_sloped_heightfield_meets_the_plane_under_its_centre_once() {
+    let hf =
+        Heightfield::from_scaled(2, 2, vec![0.0, 0.0, 0.0, 1.0], Vec3::new(2.0, 2.0, 2.0)).unwrap();
+    let mut scene = RigidScene::new().unwrap();
+    let terrain = scene
+        .insert_collider(ColliderDesc::new(ColliderGeometry::Heightfield(hf)))
+        .unwrap();
+    let mut body = BodyDesc::default();
+    body.params.pose = Transform::from_translation(Vec3::new(0.5, 1.5, 0.5));
+    let body = scene.insert_body(body).unwrap();
+    let mut ball = ColliderDesc::new(ColliderGeometry::Ball { radius: 0.5 });
+    ball.parent = Some(body);
+    scene.insert_collider(ball).unwrap();
+    let mut contacts = Contacts::with_capacity(0);
+    CollisionPipeline::new()
+        .collide(scene.model(), scene.state(), &mut contacts)
+        .unwrap();
+    assert_eq!(contacts.count, 1);
+    close(
+        contacts.depth.host().unwrap()[0],
+        0.5 - 0.5 / 3.0_f64.sqrt(),
+    );
+    vector_close(
+        contacts.normal.host().unwrap()[0],
+        Vec3::new(-1.0, 1.0, -1.0).normalize(),
+    );
+    assert_eq!(
+        scene.collider_handle(molla_core::ShapeId(contacts.a_shape.host().unwrap()[0])),
+        Some(terrain)
+    );
+}
+
+#[test]
 fn heightfield_validation_is_atomic_and_accepts_flat_or_inverted_y_scale() {
     for (rows, cols, heights, scale) in [
         (1, 2, vec![0.0; 2], Vec3::ONE),

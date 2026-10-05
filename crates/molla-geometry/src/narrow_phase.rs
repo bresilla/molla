@@ -2058,6 +2058,10 @@ fn heightfield_pair(
         );
         return;
     }
+    if let ShapeGeometry::Sphere { radius } = other_geom {
+        heightfield_sphere_pair(field, field_xf, radius, other_xf, pair, flip_output, out);
+        return;
+    }
     // Other shape's AABB → field-local frame.
     let (oa, ob) = shape_world_aabb_quick(other_geom, other_xf);
     let (lo, hi) = transform_aabb_to_mesh_local(oa, ob, field_xf);
@@ -2103,6 +2107,42 @@ fn heightfield_pair(
             }
         }
     }
+}
+
+/// One contact for a sphere against the height surface's plane under its centre.
+fn heightfield_sphere_pair(
+    field: &molla_sim::Heightfield,
+    field_xf: &Transform,
+    radius: Real,
+    sphere_xf: &Transform,
+    pair: ShapePair,
+    flip_output: bool,
+    out: &mut Vec<ContactManifold>,
+) {
+    let centre = field_xf.inverse_transform_point(sphere_xf.position);
+    let Some((height, normal_local)) = field.height_and_normal(centre.x, centre.z) else {
+        return;
+    };
+    let depth = radius - (centre.y - height) * normal_local.y;
+    if depth <= 0.0 {
+        return;
+    }
+    let normal_world = field_xf.rotation * normal_local;
+    out.push(ContactManifold {
+        a_shape: pair.a,
+        b_shape: pair.b,
+        point: sphere_xf.position - normal_world * (radius - depth * 0.5),
+        normal: if flip_output {
+            -normal_world
+        } else {
+            normal_world
+        },
+        depth,
+        friction: 0.0,
+        rolling_friction: 0.0,
+        torsional_friction: 0.0,
+        restitution: 0.0,
+    });
 }
 
 /// Emit penetrating hull-vertex contacts against the triangulated height surface.
