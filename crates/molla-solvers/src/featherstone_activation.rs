@@ -306,6 +306,7 @@ impl FeatherstoneSolver {
                 Some(&active),
                 None,
                 defer_constraints,
+                self.regularized_friction,
             )?;
             constraints(self, &scratch, output, sub_dt, &mask)?;
             for reading in &mut self.contact_forces {
@@ -372,6 +373,7 @@ impl FeatherstoneSolver {
                 Some(&active),
                 None,
                 false,
+                self.regularized_friction,
             )?;
             for reading in &mut self.contact_forces {
                 reading.sample_dt = sub_dt;

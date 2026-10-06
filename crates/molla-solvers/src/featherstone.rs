@@ -118,6 +118,9 @@ pub struct FeatherstoneSolver {
     /// Solve radial bounds and caps through coupled anchor effective mass.
     /// Enabled by default; false selects the standalone position-clamp path.
     pub rigorous_distance: bool,
+    /// Contact friction as a regularized force beside each penalty normal, as
+    /// before the exact Coulomb solve, instead of that solve. Default `false`.
+    pub regularized_friction: bool,
     backend: FeatherstoneBackend,
 }
 
@@ -137,6 +140,7 @@ impl FeatherstoneSolver {
             stable_motor_feedback: false,
             rigorous_d_solve: false,
             rigorous_distance: true,
+            regularized_friction: false,
             backend: FeatherstoneBackend::Cpu,
             contact_forces: Vec::new(),
             joint_efforts: Vec::new(),
@@ -197,6 +201,7 @@ impl FeatherstoneSolver {
             stable_motor_feedback: false,
             rigorous_d_solve: false,
             rigorous_distance: true,
+            regularized_friction: false,
             backend: FeatherstoneBackend::Gpu(GpuBackend {
                 device,
                 queue,
@@ -983,6 +988,7 @@ impl FeatherstoneSolver {
             input,
             output,
             dt,
+            !self.regularized_friction,
             &mut self.contact_forces,
             selected,
         )?;
@@ -1006,6 +1012,7 @@ impl FeatherstoneSolver {
             input,
             output,
             dt,
+            self.regularized_friction,
             &mut self.contact_forces,
             readings,
             selected,
@@ -1129,6 +1136,7 @@ impl FeatherstoneSolver {
                     None,
                     mass_seed,
                     defer_constraints,
+                    self.regularized_friction,
                 )?;
                 for reading in &mut self.contact_forces {
                     reading.sample_dt = dt;
@@ -1340,6 +1348,7 @@ fn cpu_step(
     activation: Option<&activation::ActiveSet>,
     mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
     defer_constraints: bool,
+    regularized_friction: bool,
 ) -> Result<()> {
     efforts.clear();
     efforts.resize(model.joint_dof_total, JointEffort::default());
@@ -1360,6 +1369,7 @@ fn cpu_step(
             activation,
             mass_seed,
             defer_constraints,
+            regularized_friction,
         )
     } else {
         cpu_step_inner::<true>(
@@ -1378,6 +1388,7 @@ fn cpu_step(
             activation,
             mass_seed,
             defer_constraints,
+            regularized_friction,
         )
     }
 }
@@ -1398,6 +1409,7 @@ fn cpu_step_inner<const LOCAL: bool>(
     activation: Option<&activation::ActiveSet>,
     mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
     defer_constraints: bool,
+    regularized_friction: bool,
 ) -> Result<()> {
     let setup_span = tracing::debug_span!("aba_setup").entered();
     if model.joint_count == 0 {
@@ -1481,8 +1493,11 @@ fn cpu_step_inner<const LOCAL: bool>(
     let mut body_f_in = state_in.body_f.host()?.to_vec();
     crate::body_wrenches::add_control(control, &mut body_f_in)?;
     crate::joint_compliance::apply(model, state_out, &motor_inertias, dt, &mut body_f_in)?;
-    *contact_forces =
-        crate::penalty_contact::eval_normal_contacts(model, state_out, contacts, &mut body_f_in)?;
+    *contact_forces = if regularized_friction {
+        crate::penalty_contact::eval_penalty_contacts(model, state_out, contacts, &mut body_f_in)?
+    } else {
+        crate::penalty_contact::eval_normal_contacts(model, state_out, contacts, &mut body_f_in)?
+    };
     if let Some(active) = activation {
         active.filter_readings(model, contact_forces)?;
         if !active.joints.iter().any(|&selected| selected) {
@@ -2241,6 +2256,7 @@ fn cpu_step_inner<const LOCAL: bool>(
     } // end per-articulation outer loop
 
     if !defer_constraints
+        && !regularized_friction
         && crate::contact_friction::apply(model, state_out, &mut qd_new, dt, contact_forces)?
     {
         let corrected = qd_new.clone();

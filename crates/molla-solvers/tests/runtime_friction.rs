@@ -403,3 +403,41 @@ fn a_sleeping_contact_does_not_leak_impulses_and_surface_edits_wake_it() {
     assert!(!world.is_sleeping(body));
     assert!(world.scene.body_velocity(body).unwrap().linear.dot(tangent) > 0.001);
 }
+
+#[test]
+fn regularized_friction_slides_a_block_at_the_dynamic_coefficient() {
+    let slope: f64 = 0.5;
+    let (mut world, body, _, tangent) = block(slope, 0.4, 0.2, Quat::IDENTITY, Vec3::ZERO);
+    world.solver.regularized_friction = true;
+    let mut begin = 0.0;
+    for i in 0..240 {
+        world.step(1.0 / 240.0).unwrap();
+        if i == 119 {
+            begin = world
+                .scene
+                .body_velocity(body)
+                .unwrap()
+                .linear
+                .dot(-tangent);
+        }
+    }
+    let end = world
+        .scene
+        .body_velocity(body)
+        .unwrap()
+        .linear
+        .dot(-tangent);
+    let measured = (end - begin) / 0.5;
+    let expected = 10.0 * (slope.sin() - 0.2 * slope.cos());
+    assert!(
+        (measured - expected).abs() < 0.05,
+        "{measured} != {expected}"
+    );
+    assert!(
+        world
+            .contact_pairs()
+            .iter()
+            .flat_map(|p| &p.points)
+            .all(|p| p.friction_regime == FrictionRegime::Regularized)
+    );
+}

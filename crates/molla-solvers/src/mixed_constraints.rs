@@ -91,11 +91,14 @@ fn project(
     Ok(())
 }
 
+/// `friction` false leaves contact friction to the penalty forces:
+/// only joint and distance rows are solved.
 pub(crate) fn apply(
     scene: &RigidScene,
     input: &State,
     output: &mut State,
     dt: Real,
+    friction: bool,
     forces: &mut [ContactForce],
     selected: Option<&[bool]>,
 ) -> Result<ConstraintReadings> {
@@ -137,7 +140,7 @@ pub(crate) fn apply(
         }
     }
     if angular.is_empty() {
-        return apply_iteration(scene, input, output, dt, forces, selected, None);
+        return apply_iteration(scene, input, output, dt, friction, forces, selected, None);
     }
     let base = output.joint_qd.host()?.to_vec();
     let mut prediction = base.clone();
@@ -151,6 +154,7 @@ pub(crate) fn apply(
             input,
             output,
             dt,
+            friction,
             forces,
             selected,
             Some(&prediction),
@@ -183,6 +187,7 @@ fn apply_iteration(
     input: &State,
     output: &mut State,
     dt: Real,
+    friction: bool,
     forces: &mut [ContactForce],
     selected: Option<&[bool]>,
     prediction: Option<&[Real]>,
@@ -207,7 +212,8 @@ fn apply_iteration(
         .iter()
         .any(|row| row.direct.is_some())
         .then(|| dof_articulations(starts, offsets, &arts, model.joint_dof_total));
-    let (owners, contacts) = contact_friction::prepare(model, input, forces, dt)?;
+    let frictional: &[ContactForce] = if friction { forces } else { &[] };
+    let (owners, contacts) = contact_friction::prepare(model, input, frictional, dt)?;
     let contacts: Vec<_> = contacts
         .into_values()
         .flatten()

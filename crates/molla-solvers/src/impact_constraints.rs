@@ -342,12 +342,20 @@ fn sticking_active_set(
     None
 }
 
+/// Scaled residual at which the coupled impact iteration stops.
+const CONVERGED: Real = 1e-10;
+/// Sweeps without halving the residual after which the iteration is stalled.
+const STALL_SWEEPS: usize = 256;
+/// Scaled residual a stalled iteration still answers with.
+const STALLED_ACCEPTED: Real = 1e-4;
+
 /// Solve normal complementarity and maximum-dissipation tangent disks jointly.
 ///
 /// `gram` is row-major `J M^-1 J^T`; `free` includes predictor and boundary motion.
 /// Normal residual is `v_n + e * min(v_incoming, 0)`. Each tangent disk has radius
 /// `mu * (base_normal_impulse + solved_normal_impulse)`. Normal complementarity
-/// does not include the derivative of that radius. Nonconvergence is an error.
+/// does not include the derivative of that radius. An iteration that stalls
+/// above `STALLED_ACCEPTED` without a sticking fallback is an error.
 pub fn solve(gram: &[Real], free: &[Real], domains: &[Domain]) -> Result<Solution> {
     solve_with_velocity(gram, free, domains, FrictionVelocity::PostImpact)
 }
@@ -420,8 +428,10 @@ fn solve_with_velocity(
     let mut sticking = vec![false; domains.len()];
     for _ in 0..=domains.len() {
         lambda.fill(0.);
-        let mut converged = false;
-        for _ in 0..32768 {
+        let (mut converged, mut stalled) = (false, false);
+        // The best residual so far and the sweep that last halved it.
+        let (mut best, mut best_sweep) = (Real::INFINITY, 0);
+        for sweep in 0..32768 {
             for (b, &domain) in domains.iter().enumerate() {
                 let r = offsets[b];
                 if let Domain::Contact(c) = domain {
@@ -519,11 +529,19 @@ fn solve_with_velocity(
                     residual = residual.max(stationarity.max(complementarity) / tangent_scale);
                 }
             }
-            if residual <= 1e-10 {
+            if residual <= CONVERGED {
                 converged = true;
                 break;
             }
+            if residual <= 0.5 * best {
+                (best, best_sweep) = (residual, sweep);
+            } else if sweep - best_sweep >= STALL_SWEEPS {
+                stalled = residual <= STALLED_ACCEPTED;
+                break;
+            }
         }
+        // The exact sticking set answers a small stalled problem; a larger one
+        // keeps the stalled impulses when they are close enough.
         if !converged {
             if let Some(candidate) = sticking_active_set(gram, &shifted, domains, &dynamic) {
                 lambda = candidate;
@@ -535,7 +553,7 @@ fn solve_with_velocity(
                             <= 1e-9;
                     }
                 }
-            } else {
+            } else if !stalled {
                 return Err(Error::Solver(
                     "coupled impact response did not converge".into(),
                 ));

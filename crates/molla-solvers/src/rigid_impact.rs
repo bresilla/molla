@@ -11,6 +11,10 @@ use molla_sim::runtime::{BodyHandle, ColliderHandle, RigidScene, SceneStamp};
 use molla_sim::{BodyFlags, Contacts, ShapeFlags, State, eval_body_velocities};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Approach speed (m/s) below which a new contact settles as a resting one
+/// instead of starting an impact, as PhysX's bounce threshold.
+const IMPACT_ONSET_SPEED: Real = 0.2;
+
 #[derive(Clone, Default)]
 pub(crate) struct PublishedImpactState(BTreeMap<BodyHandle, (Transform, SpatialVector)>);
 
@@ -334,7 +338,7 @@ impl ImpactCache {
                     .map(|s| normal_speed(scene, state, &s.contact))
                     .collect::<Result<Vec<_>>>()?
                     .iter()
-                    .any(|&v| v < -1e-4);
+                    .any(|&v| v < -IMPACT_ONSET_SPEED);
             let offset = if onset {
                 samples.iter().map(|s| s.depth).fold(0., Real::max)
             } else {
@@ -395,12 +399,16 @@ impl ImpactCache {
             .collect())
     }
 
+    /// `frictionless` leaves an impact's tangential part to the regularized
+    /// contact friction: only its normal is arrested.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply(
         &mut self,
         scene: &RigidScene,
         input: &State,
         output: &mut State,
         dt: Real,
+        frictionless: bool,
         forces: &mut [ContactForce],
         readings: &mut ConstraintReadings,
         selected: Option<&[bool]>,
@@ -439,6 +447,9 @@ impl ImpactCache {
             if !sample.new {
                 contact.restitution = 0.;
             }
+            if frictionless {
+                (contact.static_friction, contact.dynamic_friction) = (0., 0.);
+            }
             constraints.push(ImpactConstraint::Contact(contact));
             ids.push(id);
         }
@@ -474,8 +485,18 @@ impl ImpactCache {
                 ImpactConstraint::Nonnegative(row)
             });
         }
-        let result = apply_impact(model, &mut state, &constraints)
-            .map_err(|e| Error::Solver(format!("runtime impact velocity response: {e}")))?;
+        let result = match apply_impact(model, &mut state, &constraints) {
+            Ok(result) => result,
+            // An impact the solver cannot settle is left to the contact springs.
+            Err(Error::Solver(message)) if message.contains("did not converge") => {
+                return Ok(false);
+            }
+            Err(e) => {
+                return Err(Error::Solver(format!(
+                    "runtime impact velocity response: {e}"
+                )));
+            }
+        };
         for (block, &id) in ids.iter().enumerate() {
             let sample = &self.samples[id];
             let impulse = result.contact_impulses[block].unwrap();
