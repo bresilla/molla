@@ -1,10 +1,12 @@
 use molla_math::{Mat3, Quat, SpatialVector, Transform, Vec3};
+use molla_sim::joint_control::{JointAxis, JointMotor};
 use molla_sim::runtime::{
     BodyDesc, BodyHandle, ColliderDesc, ColliderGeometry, ColliderHandle, JointBreakLimits,
     JointDesc, RigidScene,
 };
 use molla_sim::{
-    BodyParams, ColliderMass, ContactMaterial, FrictionCoefficients, JointType, MassProperties,
+    BodyParams, ColliderMass, ContactMaterial, FrictionCoefficients, JointTargetMode, JointType,
+    MassProperties,
 };
 use molla_solvers::rigid_world::RigidWorld;
 
@@ -632,4 +634,84 @@ fn impact_joint_reactions_include_the_impulse_and_can_trigger_breakage() {
         assert!((world.scene.body_velocity(ball).unwrap().linear.y - 0.5).abs() < 1e-8);
         assert!((world.scene.body_velocity(child).unwrap().linear.y - 0.5).abs() < 1e-8);
     }
+}
+
+/// A body comes down on a stiff drive-held leg: the impact reaches the body
+/// through the drive instead of pushing the leg in.
+#[test]
+fn a_drive_held_leg_keeps_its_length_through_a_landing() {
+    let mut scene = RigidScene::new().unwrap();
+    scene.set_gravity(-Vec3::Y * 9.81).unwrap();
+    let falling = SpatialVector::new(-Vec3::Y * 2.6, Vec3::ZERO);
+    let mut part = |height: f64, mass: f64| {
+        scene
+            .insert_body(BodyDesc {
+                params: BodyParams::new().with_position(Vec3::Y * height),
+                velocity: falling,
+                additional_mass: Some(MassProperties {
+                    mass,
+                    local_com: Vec3::ZERO,
+                    inertia: Mat3::IDENTITY * mass * 0.1,
+                }),
+                ..Default::default()
+            })
+            .unwrap()
+    };
+    let body = part(0.901, 500.);
+    let leg = part(0.101, 18.);
+    let slide = scene
+        .insert_joint(JointDesc {
+            parent: Some(body),
+            child: leg,
+            kind: JointType::Prismatic,
+            axis: Vec3::Y,
+            frame_parent: Transform::from_translation(-Vec3::Y * 0.8),
+            frame_child: Transform::IDENTITY,
+        })
+        .unwrap();
+    scene
+        .set_joint_limits(slide, JointAxis::LinX, Some([-0.3, 0.3]))
+        .unwrap();
+    scene
+        .set_joint_motor(
+            slide,
+            JointAxis::LinX,
+            JointMotor {
+                mode: JointTargetMode::Position,
+                stiffness: 2e7,
+                damping: 2e6,
+                max_force: 2e6,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let mut pad = ColliderDesc::new(ColliderGeometry::Cuboid {
+        half_extents: Vec3::new(0.2, 0.1, 0.2),
+    });
+    pad.parent = Some(leg);
+    pad.mass = ColliderMass::Mass(0.);
+    scene.insert_collider(pad).unwrap();
+    let mut ground = ColliderDesc::new(ColliderGeometry::Cuboid {
+        half_extents: Vec3::new(5., 0.1, 5.),
+    });
+    ground.pose = Transform::from_translation(-Vec3::Y * 0.1);
+    scene.insert_collider(ground).unwrap();
+    let mut world = RigidWorld::from_scene(scene).unwrap();
+    world.solver.substeps = 1;
+    let (mut worst, mut fastest): (f64, f64) = (0., 0.);
+    for step in 0..6 {
+        world.step(1. / 60.).unwrap();
+        let length = world.scene.body_pose(body).unwrap().position.y
+            - world.scene.body_pose(leg).unwrap().position.y;
+        worst = worst.max((length - 0.8).abs());
+        if step > 0 {
+            let speed = world.scene.body_velocity(body).unwrap().linear.length();
+            fastest = fastest.max(speed);
+        }
+    }
+    assert!(worst < 0.02, "leg length off by {worst}");
+    assert!(
+        fastest < 1.,
+        "body still moving at {fastest} after the landing"
+    );
 }

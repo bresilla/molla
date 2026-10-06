@@ -3,12 +3,14 @@
 use crate::{
     distance_constraints::{self, ConstraintReadings, DistanceBound},
     penalty_contact::{ContactForce, FrictionRegime},
-    rigid_impulse::{ImpactConstraint, ImpactContact, ImpactRow, apply_impact},
+    rigid_impulse::{
+        ImpactConstraint, ImpactContact, ImpactDrive, ImpactRow, apply_impact_with_drives,
+    },
 };
 use molla_core::{BodyId, Error, Result, ShapeId};
 use molla_math::{Real, SpatialVector, Transform, Vec3};
 use molla_sim::runtime::{BodyHandle, ColliderHandle, RigidScene, SceneStamp};
-use molla_sim::{BodyFlags, Contacts, ShapeFlags, State, eval_body_velocities};
+use molla_sim::{BodyFlags, Contacts, JointTargetMode, ShapeFlags, State, eval_body_velocities};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Approach speed (m/s) below which a new contact settles as a resting one
@@ -111,6 +113,46 @@ fn normal_speed(scene: &RigidScene, state: &State, contact: &ImpactContact) -> R
     Ok(speed)
 }
 
+/// Each force-model drive of `arts` as its implicit step answers a change of its
+/// joint rate across `span`, up to its force cap.
+fn drives(scene: &RigidScene, arts: &[usize], span: Real) -> Result<Vec<ImpactDrive>> {
+    let model = scene.model();
+    let control = scene.control();
+    let starts = model.articulation_start.host()?;
+    let offsets = model.joint_dof_offset.host()?;
+    let modes = control.joint_target_mode.host()?;
+    let stiffness = control.joint_target_kp.host()?;
+    let damping = control.joint_target_kd.host()?;
+    let caps = control.joint_motor_max_force.host()?;
+    let models = control.joint_motor_model.host()?;
+    let mut drives = Vec::new();
+    for &art in arts {
+        let first = offsets[starts[art] as usize] as usize;
+        let last = offsets[starts[art + 1] as usize] as usize;
+        for dof in first..last {
+            let mode = modes.get(dof).copied().unwrap_or(0);
+            if !(1..=3).contains(&mode) || models.get(dof) == Some(&1) {
+                continue;
+            }
+            let spring = if mode == JointTargetMode::Velocity as u32 {
+                0.
+            } else {
+                stiffness[dof]
+            };
+            let impedance = (spring * span + damping[dof]) * span;
+            if !impedance.is_finite() || impedance <= 0. {
+                continue;
+            }
+            drives.push(ImpactDrive {
+                dof,
+                impedance,
+                cap: caps.get(dof).copied().unwrap_or(Real::INFINITY) * span,
+            });
+        }
+    }
+    Ok(drives)
+}
+
 impl ImpactCache {
     pub(crate) fn record_published(&mut self, scene: &RigidScene) {
         self.published.record(scene);
@@ -191,6 +233,18 @@ impl ImpactCache {
             });
         }
         Ok(rows)
+    }
+
+    /// The drives the position rows meet, each over a unit step.
+    pub(crate) fn position_drives(
+        &self,
+        scene: &RigidScene,
+        selected: Option<&[bool]>,
+    ) -> Result<Vec<ImpactDrive>> {
+        let arts: Vec<_> = (0..scene.model().articulation_count)
+            .filter(|&a| self.selection[a] && selected.is_none_or(|s| s[a]))
+            .collect();
+        drives(scene, &arts, 1.)
     }
 
     pub(crate) fn prepare(
@@ -485,7 +539,8 @@ impl ImpactCache {
                 ImpactConstraint::Nonnegative(row)
             });
         }
-        let result = match apply_impact(model, &mut state, &constraints) {
+        let drives = drives(scene, &arts, dt)?;
+        let result = match apply_impact_with_drives(model, &mut state, &constraints, &drives) {
             Ok(result) => result,
             // An impact the solver cannot settle is left to the contact springs.
             Err(Error::Solver(message)) if message.contains("did not converge") => {

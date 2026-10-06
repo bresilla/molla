@@ -12,6 +12,7 @@ mod compact;
 mod impact;
 mod response_batch;
 pub use impact::{ImpactConstraint, ImpactContact, ImpactResponse, ImpactRow, apply_impact};
+pub(crate) use impact::{ImpactDrive, apply_impact_with_drives};
 
 /// Apply a world impulse and COM angular impulse through the articulation mass matrix.
 pub fn apply_impulse(

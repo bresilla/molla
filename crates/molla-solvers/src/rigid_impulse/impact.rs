@@ -109,6 +109,54 @@ pub fn apply_impact(
     state: &mut State,
     constraints: &[ImpactConstraint],
 ) -> Result<ImpactResponse> {
+    apply_impact_with_drives(model, state, constraints, &[])
+}
+
+/// A joint drive as an impact meets it: across the step it answers a change of
+/// its joint rate with `impedance` times that change, up to `cap` either way.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ImpactDrive {
+    pub dof: usize,
+    pub impedance: Real,
+    pub cap: Real,
+}
+
+/// [`apply_impact`] with joint drives resisting it; a drive the impact pushes
+/// past its cap yields and holds with the cap.
+pub(crate) fn apply_impact_with_drives(
+    model: &Model,
+    state: &mut State,
+    constraints: &[ImpactConstraint],
+    drives: &[ImpactDrive],
+) -> Result<ImpactResponse> {
+    let mut yielded: Vec<Option<Real>> = vec![None; drives.len()];
+    for _ in 0..=drives.len() {
+        let mut next = state.clone_host()?;
+        let result = respond(model, &mut next, constraints, drives, &yielded)?;
+        let (before, after) = (state.joint_qd.host()?, next.joint_qd.host()?);
+        let mut settled = true;
+        for (drive, load) in drives.iter().zip(&mut yielded) {
+            let impulse = -drive.impedance * (after[drive.dof] - before[drive.dof]);
+            if load.is_none() && impulse.abs() > drive.cap {
+                *load = Some(drive.cap.copysign(impulse));
+                settled = false;
+            }
+        }
+        if settled {
+            *state = next;
+            return Ok(result);
+        }
+    }
+    Err(Error::Solver("impact drive yield did not converge".into()))
+}
+
+fn respond(
+    model: &Model,
+    state: &mut State,
+    constraints: &[ImpactConstraint],
+    drives: &[ImpactDrive],
+    yielded: &[Option<Real>],
+) -> Result<ImpactResponse> {
     if state.body_q.len() != model.body_count
         || state.body_qd.len() != model.body_count
         || state.joint_qd.len() != model.joint_dof_total
@@ -142,6 +190,39 @@ pub fn apply_impact(
             .any(|q| !q.position.is_finite() || !q.rotation.is_finite())
     {
         return Err(Error::Solver("nonfinite articulated impact state".into()));
+    }
+    // Holding drives add their impedance to their joint rate; yielded ones
+    // push with their cap before the impact.
+    let mut inertia = vec![0.; model.joint_dof_total];
+    let mut loads = vec![0.; model.joint_dof_total];
+    for (drive, load) in drives.iter().zip(yielded) {
+        match load {
+            Some(load) => loads[drive.dof] += load,
+            None => inertia[drive.dof] += drive.impedance,
+        }
+    }
+    if loads.iter().any(|&load| load != 0.) {
+        let starts = if model.articulation_count == 0 {
+            vec![0, model.joint_count as u32]
+        } else {
+            model.articulation_start.host()?.to_vec()
+        };
+        let dofs = model.joint_dof_offset.host()?;
+        let mut jump = vec![0.; model.joint_dof_total];
+        let mut response = ArticulatedResponse::with_joint_inertia(model, &input, &inertia);
+        for (art, range) in starts.windows(2).enumerate() {
+            let first = dofs[range[0] as usize] as usize;
+            let last = dofs[range[1] as usize] as usize;
+            if loads[first..last].iter().any(|&load| load != 0.) {
+                let change = response.solve(art, &loads[first..last])?;
+                jump[first..last].copy_from_slice(&change);
+            }
+        }
+        drop(response);
+        for (rate, change) in input.joint_qd.host_mut()?.iter_mut().zip(jump) {
+            *rate += change;
+        }
+        eval_body_velocities(model, &mut input)?;
     }
     let mut rows = Vec::new();
     let mut frames = Vec::new();
@@ -241,7 +322,7 @@ pub fn apply_impact(
             "articulated impact capacity overflow".into()
         ))?
     ];
-    let mut response = ArticulatedResponse::new(model, &input);
+    let mut response = ArticulatedResponse::with_joint_inertia(model, &input, &inertia);
     let mut projections = Vec::new();
     let mut dynamic_velocity = vec![0.; count];
     for art in 0..starts.len() - 1 {

@@ -9,6 +9,7 @@ pub(crate) struct ArticulatedResponse<'a> {
     state: &'a State,
     masses: BTreeMap<usize, (Vec<Real>, crate::rigid_impulse::MassFactor)>,
     seeded: BTreeMap<usize, (Vec<Real>, Option<crate::rigid_impulse::MassFactor>)>,
+    inertia: Option<&'a [Real]>,
     jacobians: BTreeMap<(usize, usize), Vec<Real>>,
 }
 
@@ -19,8 +20,20 @@ impl<'a> ArticulatedResponse<'a> {
             state,
             masses: BTreeMap::new(),
             seeded: BTreeMap::new(),
+            inertia: None,
             jacobians: BTreeMap::new(),
         }
+    }
+
+    /// The response with `inertia` added on each joint rate's own diagonal.
+    pub(crate) fn with_joint_inertia(
+        model: &'a Model,
+        state: &'a State,
+        inertia: &'a [Real],
+    ) -> Self {
+        let mut response = Self::new(model, state);
+        response.inertia = Some(inertia);
+        response
     }
 
     /// Starts from the matrices `seed` recorded, when it was recorded at `state`.
@@ -40,13 +53,27 @@ impl<'a> ArticulatedResponse<'a> {
 
     fn factor(&mut self, art: usize, n: usize) -> Result<&crate::rigid_impulse::MassFactor> {
         if let std::collections::btree_map::Entry::Vacant(entry) = self.masses.entry(art) {
-            let (matrix, factor) = match self.seeded.remove(&art) {
+            let (mut matrix, mut factor) = match self.seeded.remove(&art) {
                 Some((matrix, factor)) if matrix.len() == n * n => (matrix, factor),
                 _ => (
                     crate::response_mass_matrix(self.model, self.state, art)?,
                     None,
                 ),
             };
+            if let Some(inertia) = self.inertia {
+                let first = if self.model.articulation_count == 0 {
+                    0
+                } else {
+                    let start = self.model.articulation_start.host()?[art] as usize;
+                    self.model.joint_dof_offset.host()?[start] as usize
+                };
+                for (i, &added) in inertia[first..first + n].iter().enumerate() {
+                    if added != 0. {
+                        matrix[i * n + i] += added;
+                        factor = None;
+                    }
+                }
+            }
             let factor = match factor.filter(|f| f.full_rank_cholesky(n).is_some()) {
                 Some(factor) => factor,
                 None => {

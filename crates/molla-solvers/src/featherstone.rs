@@ -1051,7 +1051,8 @@ impl FeatherstoneSolver {
             projected.joint_qd.host_mut()?.fill(0.);
             projected.body_qd.host_mut()?.fill(SpatialVector::ZERO);
             let rows = cache.position_rows(scene, &projected, selected)?;
-            crate::rigid_impulse::apply_impact(model, &mut projected, &rows)
+            let drives = cache.position_drives(scene, selected)?;
+            crate::rigid_impulse::apply_impact_with_drives(model, &mut projected, &rows, &drives)
                 .map_err(|e| Error::Solver(format!("runtime impact position correction: {e}")))?;
             let mut q = input.joint_q.host()?.to_vec();
             let mut rates = projected.joint_qd.host()?.to_vec();
