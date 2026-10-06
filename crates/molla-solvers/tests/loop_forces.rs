@@ -181,3 +181,131 @@ fn loop_motor_cap_and_world_anchor_are_applied() {
     assert!((v.linear.x - 2.0).abs() < 1e-8, "{v:?}");
     assert!(v.linear.y.abs() < 1e-9 && v.angular.length() < 1e-9);
 }
+
+/// A three-point hitch: a driven four-bar whose lift cylinders close on the
+/// carrier through balls. Every closure is planar, so several of its rows
+/// repeat what the tree already holds, at single-precision offsets.
+#[test]
+fn lift_linkage_with_redundant_closures_holds_its_load() {
+    let mut w = RigidWorld::new().unwrap();
+    w.solver.substeps = 8;
+    w.scene.set_gravity(Vec3::new(0.0, 0.0, -9.81)).unwrap();
+    let base = body(&mut w, Vec3::ZERO, 355.0);
+    w.scene.set_body_kind(base, BodyKind::Fixed).unwrap();
+    let mut part = |position: Vec3, mass: f64, com: Vec3, inertia: Vec3| {
+        w.scene
+            .insert_body(BodyDesc {
+                params: BodyParams::new().with_pose(Transform::from_translation(position)),
+                additional_mass: Some(MassProperties {
+                    mass,
+                    local_com: com,
+                    inertia: Mat3::from_diagonal(inertia),
+                }),
+                ..Default::default()
+            })
+            .unwrap()
+    };
+    let upper = part(
+        Vec3::new(0.0, 0.94, 1.12),
+        8.0,
+        Vec3::new(0.0, -0.2595, -0.1383),
+        Vec3::new(0.319, 0.668, 0.821),
+    );
+    let lower = part(
+        Vec3::new(0.0, 1.01, 1.01),
+        5.0,
+        Vec3::new(0.0, -0.2988, -0.1421),
+        Vec3::new(0.228, 0.391, 0.521),
+    );
+    let carrier = part(
+        Vec3::new(0.0, 0.40390694, 0.83413899),
+        65.0,
+        Vec3::new(0.0, -0.2276, -0.0975),
+        Vec3::new(16.49, 37.10, 40.66),
+    );
+    let mut cylinders = Vec::new();
+    for side in [1.0, -1.0] {
+        let cylinder = part(
+            Vec3::new(0.28 * side, 1.005, 1.58957148),
+            4.0,
+            Vec3::new(0.0, -0.035, -0.1467),
+            Vec3::new(0.156, 0.092, 0.071),
+        );
+        let rod = part(
+            Vec3::new(0.27999991 * side, 0.55831915, 0.81975639),
+            2.0,
+            Vec3::new(0.0, 0.1114, 0.1942),
+            Vec3::new(0.0478, 0.0344, 0.0140),
+        );
+        cylinders.push((side, cylinder, rod));
+    }
+    let hinge = |parent, child, at: Vec3| {
+        let mut joint = desc(Some(parent), child, JointType::Revolute);
+        joint.frame_parent.position = at;
+        joint
+    };
+    let lift = w
+        .scene
+        .insert_joint(hinge(base, upper, Vec3::new(4.1e-8, 0.93999994, 1.12)))
+        .unwrap();
+    w.scene
+        .set_joint_motor(
+            lift,
+            JointAxis::AngX,
+            JointMotor {
+                mode: JointTargetMode::PositionVelocity,
+                stiffness: 515662.0,
+                damping: 8594.4,
+                max_force: 4500.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    w.scene
+        .insert_joint(hinge(
+            upper,
+            carrier,
+            Vec3::new(-2.3e-8, -0.536093, -0.28586102),
+        ))
+        .unwrap();
+    w.scene
+        .insert_joint(hinge(base, lower, Vec3::new(4.4e-8, 1.01, 1.01)))
+        .unwrap();
+    let mut closure = hinge(
+        carrier,
+        lower,
+        Vec3::new(-3.0e-10, -0.0069678724, -0.11478871),
+    );
+    closure.frame_child.position = Vec3::new(-2.7e-8, -0.61306095, -0.2906497);
+    w.scene.insert_loop_joint(closure, softness()).unwrap();
+    let tilt = Quat::from_xyzw(0.9656447, 1.0229776e-7, 7.860208e-8, 0.25986585);
+    for &(side, cylinder, rod) in &cylinders {
+        w.scene
+            .insert_joint(hinge(
+                base,
+                cylinder,
+                Vec3::new(0.28 * side, 1.005, 1.5895715),
+            ))
+            .unwrap();
+        let mut slide = desc(Some(cylinder), rod, JointType::Prismatic);
+        slide.axis = Vec3::Z;
+        slide.frame_parent = Transform::new(Vec3::new(-8.9e-8, -0.44668084, -0.7698151), tilt);
+        slide.frame_child = Transform::new(Vec3::ZERO, tilt);
+        w.scene.insert_joint(slide).unwrap();
+        let mut ball = desc(Some(carrier), rod, JointType::Ball);
+        ball.frame_parent = Transform::new(Vec3::new(0.28 * side, 0.15441227, -0.014382362), tilt);
+        ball.frame_child = Transform::new(Vec3::new(1.2e-7, 6e-8, 2.4e-7), tilt);
+        w.scene.insert_loop_joint(ball, softness()).unwrap();
+    }
+    w.step(1.0 / 120.0).unwrap();
+    for body in [upper, lower, carrier] {
+        let speed = w.scene.body_velocity(body).unwrap().linear.length();
+        assert!(speed < 0.1, "linkage speed {speed}");
+    }
+    for (_, cylinder, rod) in cylinders {
+        for body in [cylinder, rod] {
+            let speed = w.scene.body_velocity(body).unwrap().linear.length();
+            assert!(speed < 0.1, "cylinder speed {speed}");
+        }
+    }
+}

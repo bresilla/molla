@@ -384,9 +384,9 @@ fn apply_rows(
         }
     }
     let impulses = if response_articulations > 1 {
-        bounded_solve_inner::<true, true>(&response, &rhs, &bounds)?
+        bounded_solve_inner::<true, false>(&response, &rhs, &bounds)?
     } else {
-        bounded_solve_inner::<false, true>(&response, &rhs, &bounds)?
+        bounded_solve_inner::<false, false>(&response, &rhs, &bounds)?
     };
     let mut reactions: Vec<(JointHandle, LoopReaction)> = Vec::new();
     for (row, impulse) in rows.iter().zip(impulses) {
