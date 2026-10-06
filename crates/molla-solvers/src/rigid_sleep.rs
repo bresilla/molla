@@ -474,7 +474,7 @@ impl RigidWorld {
                     .borrow_mut()
                     .resting_selection(scene, Some(selected))?;
                 let mut next_readings = if common {
-                    solver.correct_mixed_cpu(scene, input, output, sub_dt, Some(&resting))?
+                    solver.correct_mixed_cpu(scene, input, output, sub_dt, Some(&resting), None)?
                 } else {
                     crate::distance_constraints::apply_selected(
                         scene,

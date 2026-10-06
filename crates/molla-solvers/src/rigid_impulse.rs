@@ -206,12 +206,14 @@ pub(crate) fn solve_mass(matrix: &[Real], rhs: &[Real], n: usize) -> Result<Vec<
 }
 
 /// Reusable normalized Cholesky or spectral pseudoinverse of one mass matrix.
+#[derive(Clone)]
 pub(crate) struct MassFactor {
     n: usize,
     scale: Real,
     decomposition: MassDecomposition,
 }
 
+#[derive(Clone)]
 enum MassDecomposition {
     Zero,
     Cholesky(Vec<Real>),

@@ -5,6 +5,7 @@ use crate::{
     contact_friction,
     coupled_constraints::{self, Domain},
     distance_constraints::{self, ConstraintReadings, DistanceBound},
+    joint_mass::MassSeed,
     penalty_contact::{ContactForce, FrictionRegime},
 };
 use molla_core::{Error, Result};
@@ -12,6 +13,9 @@ use molla_math::{Quat, Real, SpatialVector, Vec3};
 use molla_sim::State;
 use molla_sim::runtime::RigidScene;
 use std::collections::{BTreeMap, BTreeSet};
+
+/// How close (m or rad) a joint stop must come within one step to be a row.
+const STOP_REACH: Real = 0.02;
 
 pub(crate) fn needed(scene: &RigidScene) -> Result<bool> {
     let model = scene.model();
@@ -93,6 +97,7 @@ fn project(
 
 /// `friction` false leaves contact friction to the penalty forces:
 /// only joint and distance rows are solved.
+/// `seed` holds mass matrices already factored at `input`.
 pub(crate) fn apply(
     scene: &RigidScene,
     input: &State,
@@ -101,6 +106,7 @@ pub(crate) fn apply(
     friction: bool,
     forces: &mut [ContactForce],
     selected: Option<&[bool]>,
+    seed: Option<&MassSeed<'_>>,
 ) -> Result<ConstraintReadings> {
     let model = scene.model();
     let starts = model.articulation_start.host()?;
@@ -140,7 +146,9 @@ pub(crate) fn apply(
         }
     }
     if angular.is_empty() {
-        return apply_iteration(scene, input, output, dt, friction, forces, selected, None);
+        return apply_iteration(
+            scene, input, output, dt, friction, forces, selected, None, seed,
+        );
     }
     let base = output.joint_qd.host()?.to_vec();
     let mut prediction = base.clone();
@@ -158,6 +166,7 @@ pub(crate) fn apply(
             forces,
             selected,
             Some(&prediction),
+            seed,
         )?;
         prediction.copy_from_slice(output.joint_qd.host()?);
         let q = input.joint_q.host()?;
@@ -191,6 +200,7 @@ fn apply_iteration(
     forces: &mut [ContactForce],
     selected: Option<&[bool]>,
     prediction: Option<&[Real]>,
+    seed: Option<&MassSeed<'_>>,
 ) -> Result<ConstraintReadings> {
     let model = scene.model();
     let starts = model.articulation_start.host()?;
@@ -208,6 +218,19 @@ fn apply_iteration(
         prediction,
         &mut scalars,
     )?;
+    // A joint stop the predicted rate keeps clear of through this step adds no row.
+    let predicted = output.joint_qd.host()?;
+    scalars.retain(|row| {
+        row.joint.is_some()
+            || row.velocity_only
+            || row
+                .direct
+                .is_none_or(|(dof, sign)| (sign * predicted[dof] - row.target) * dt <= STOP_REACH)
+    });
+    // No stop near and no friction to solve: nothing couples this step.
+    if scalars.is_empty() && !friction {
+        return Ok(readings);
+    }
     let dof_owners = scalars
         .iter()
         .any(|row| row.direct.is_some())
@@ -281,7 +304,10 @@ fn apply_iteration(
             .1
             .push(i);
     }
-    let mut response = ArticulatedResponse::new(model, input);
+    let mut response = match seed {
+        Some(seed) => ArticulatedResponse::seeded(model, input, seed)?,
+        None => ArticulatedResponse::new(model, input),
+    };
     let predicted = output.joint_qd.host()?.to_vec();
     let mut rates = predicted.clone();
     for (contact_ids, scalar_ids) in islands.into_values() {

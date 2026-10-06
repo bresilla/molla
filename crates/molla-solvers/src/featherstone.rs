@@ -870,7 +870,7 @@ impl FeatherstoneSolver {
             forces,
             bounds,
             false,
-            |_, _, _, _| Ok(()),
+            |_, _, _, _, _| Ok(()),
         )
     }
 
@@ -894,7 +894,13 @@ impl FeatherstoneSolver {
         ) -> Result<()>,
         bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
         defer_constraints: bool,
-        mut constraints: impl FnMut(&mut Self, &State, &mut State, Real) -> Result<()>,
+        mut constraints: impl FnMut(
+            &mut Self,
+            &State,
+            &mut State,
+            Real,
+            &crate::joint_mass::MassSeed<'_>,
+        ) -> Result<()>,
     ) -> Result<()> {
         self.contact_forces.clear();
         if !dt.is_finite() || dt <= 0.0 {
@@ -926,6 +932,11 @@ impl FeatherstoneSolver {
             }
         };
         for substep in 0..n {
+            // Momentum transport shifts poses off their coordinates; the step reads
+            // them from the coordinates, so the mass the forces seed matches it.
+            if substep > 0 {
+                eval_fk(model, &mut scratch)?;
+            }
             tracing::debug_span!("collision").in_scope(|| {
                 pipeline.collide_prepared(bounds, &scratch, contacts, &mut excluded)
             })?;
@@ -950,6 +961,12 @@ impl FeatherstoneSolver {
                 ));
             }
             scratch.body_f.host_mut()?.copy_from_slice(&applied);
+            // The deferred corrections respond at the same substep state.
+            let response = if defer_constraints {
+                mass_seed.clone()
+            } else {
+                crate::joint_mass::MassSeed::new(model)
+            };
             tracing::debug_span!("featherstone_substep").in_scope(|| {
                 self.step_inner_seeded(
                     model,
@@ -962,7 +979,7 @@ impl FeatherstoneSolver {
                     defer_constraints,
                 )
             })?;
-            constraints(self, &scratch, state_out, sub_dt)?;
+            constraints(self, &scratch, state_out, sub_dt, &response)?;
             state_out.body_f.host_mut()?.copy_from_slice(&persistent);
             samples.append(&mut self.contact_forces);
             self.accumulate_efforts(&mut efforts, 1.0 / n as Real);
@@ -982,6 +999,7 @@ impl FeatherstoneSolver {
         output: &mut State,
         dt: Real,
         selected: Option<&[bool]>,
+        seed: Option<&crate::joint_mass::MassSeed<'_>>,
     ) -> Result<crate::distance_constraints::ConstraintReadings> {
         let mut readings = crate::mixed_constraints::apply(
             scene,
@@ -991,6 +1009,7 @@ impl FeatherstoneSolver {
             !self.regularized_friction,
             &mut self.contact_forces,
             selected,
+            seed,
         )?;
         self.drift_cpu_mode(scene.model(), input, dt, output, selected, true)?;
         crate::distance_constraints::refresh_readings(scene, output, &mut readings)?;
@@ -2306,8 +2325,11 @@ fn cpu_step_inner<const LOCAL: bool>(
     state_out.joint_q.host_mut()?.copy_from_slice(&q_new);
     state_out.joint_qd.host_mut()?.copy_from_slice(&qd_new);
     drift_kinematic(model, state_in, dt, state_out)?;
-    eval_fk(model, state_out)?;
-    eval_body_velocities(model, state_out)?;
+    // A deferred correction integrates the corrected rates and evaluates the poses itself.
+    if !defer_constraints {
+        eval_fk(model, state_out)?;
+        eval_body_velocities(model, state_out)?;
+    }
 
     if let Some(active) = activation {
         active.restore(model, state_in, state_out)?;

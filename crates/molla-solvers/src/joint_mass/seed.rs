@@ -4,6 +4,7 @@ use molla_core::{Error, Result};
 use molla_math::{Real, Transform};
 use molla_sim::{Model, State};
 
+#[derive(Clone)]
 pub(crate) struct MassSeed<'a> {
     model: &'a Model,
     coordinates: Vec<Real>,
@@ -43,13 +44,34 @@ impl<'a> MassSeed<'a> {
         model: &Model,
         state: &State,
     ) -> Result<BTreeMap<usize, (Vec<Real>, Option<crate::rigid_impulse::MassFactor>)>> {
+        Ok(if self.recorded_at(model, state)? {
+            self.matrices
+        } else {
+            BTreeMap::new()
+        })
+    }
+
+    /// A copy of the matrices when `state` is the configuration they were recorded at.
+    pub(crate) fn matrices_at(
+        &self,
+        model: &Model,
+        state: &State,
+    ) -> Result<BTreeMap<usize, (Vec<Real>, Option<crate::rigid_impulse::MassFactor>)>> {
+        Ok(if self.recorded_at(model, state)? {
+            self.matrices.clone()
+        } else {
+            BTreeMap::new()
+        })
+    }
+
+    fn recorded_at(&self, model: &Model, state: &State) -> Result<bool> {
         if self.matrices.is_empty() || !std::ptr::eq(self.model, model) {
-            return Ok(BTreeMap::new());
+            return Ok(false);
         }
         let same = |a: Real, b: Real| a.is_finite() && a.to_bits() == b.to_bits();
         let q = state.joint_q.host()?;
         let poses = state.body_q.host()?;
-        let valid = self.coordinates.len() == q.len()
+        Ok(self.coordinates.len() == q.len()
             && self.coordinates.iter().zip(q).all(|(&a, &b)| same(a, b))
             && self.poses.len() == poses.len()
             && self.poses.iter().zip(poses).all(|(a, b)| {
@@ -64,12 +86,7 @@ impl<'a> MassSeed<'a> {
                             .chain(b.rotation.to_array()),
                     )
                     .all(|(a, b)| same(a, b))
-            });
-        Ok(if valid {
-            self.matrices
-        } else {
-            BTreeMap::new()
-        })
+            }))
     }
 }
 

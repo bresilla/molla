@@ -8,6 +8,7 @@ pub(crate) struct ArticulatedResponse<'a> {
     model: &'a Model,
     state: &'a State,
     masses: BTreeMap<usize, (Vec<Real>, crate::rigid_impulse::MassFactor)>,
+    seeded: BTreeMap<usize, (Vec<Real>, Option<crate::rigid_impulse::MassFactor>)>,
     jacobians: BTreeMap<(usize, usize), Vec<Real>>,
 }
 
@@ -17,8 +18,20 @@ impl<'a> ArticulatedResponse<'a> {
             model,
             state,
             masses: BTreeMap::new(),
+            seeded: BTreeMap::new(),
             jacobians: BTreeMap::new(),
         }
+    }
+
+    /// Starts from the matrices `seed` recorded, when it was recorded at `state`.
+    pub(crate) fn seeded(
+        model: &'a Model,
+        state: &'a State,
+        seed: &crate::joint_mass::MassSeed<'_>,
+    ) -> Result<Self> {
+        let mut response = Self::new(model, state);
+        response.seeded = seed.matrices_at(model, state)?;
+        Ok(response)
     }
 
     pub(crate) fn state(&self) -> &'a State {
@@ -27,9 +40,20 @@ impl<'a> ArticulatedResponse<'a> {
 
     fn factor(&mut self, art: usize, n: usize) -> Result<&crate::rigid_impulse::MassFactor> {
         if let std::collections::btree_map::Entry::Vacant(entry) = self.masses.entry(art) {
-            let matrix = crate::response_mass_matrix(self.model, self.state, art)?;
-            let _span = tracing::debug_span!("response_mass_factor", dofs = n).entered();
-            let factor = crate::rigid_impulse::MassFactor::new(&matrix, n)?;
+            let (matrix, factor) = match self.seeded.remove(&art) {
+                Some((matrix, factor)) if matrix.len() == n * n => (matrix, factor),
+                _ => (
+                    crate::response_mass_matrix(self.model, self.state, art)?,
+                    None,
+                ),
+            };
+            let factor = match factor.filter(|f| f.full_rank_cholesky(n).is_some()) {
+                Some(factor) => factor,
+                None => {
+                    let _span = tracing::debug_span!("response_mass_factor", dofs = n).entered();
+                    crate::rigid_impulse::MassFactor::new(&matrix, n)?
+                }
+            };
             entry.insert((matrix, factor));
         }
         Ok(&self.masses[&art].1)
