@@ -384,6 +384,7 @@ impl RigidWorld {
         let compliant = std::cell::RefCell::new(Vec::new());
         let bounds = self.bounds.prepare(scene);
         let common = crate::mixed_constraints::needed(scene)?;
+        let contact_impacts = self.solver.contact_impacts;
         let impacts = std::cell::RefCell::new(self.impacts.clone());
         self.solver.step_with_active_constraints(
             scene.model(),
@@ -464,7 +465,9 @@ impl RigidWorld {
                     *compliant.borrow_mut() = reactions;
                 }
                 substep += 1;
-                impacts.borrow_mut().prepare(scene, state, contacts)?;
+                if contact_impacts {
+                    impacts.borrow_mut().prepare(scene, state, contacts)?;
+                }
                 Ok(articulations)
             },
             Some(&bounds),
@@ -510,14 +513,16 @@ impl RigidWorld {
                     }
                     reaction_substep += 1;
                 }
-                crate::rigid_momentum::transport(
-                    scene.model(),
-                    input,
-                    output,
-                    sub_dt,
-                    position_reference.as_ref(),
-                    Some(selected),
-                )?;
+                if solver.momentum_transport {
+                    crate::rigid_momentum::transport(
+                        scene.model(),
+                        input,
+                        output,
+                        sub_dt,
+                        position_reference.as_ref(),
+                        Some(selected),
+                    )?;
+                }
                 crate::distance_constraints::refresh_readings(scene, output, &mut next_readings)?;
                 readings.accumulate(next_readings, weight, dt);
                 Ok(())

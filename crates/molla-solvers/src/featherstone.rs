@@ -121,6 +121,12 @@ pub struct FeatherstoneSolver {
     /// Contact friction as a regularized force beside each penalty normal, as
     /// before the exact Coulomb solve, instead of that solve. Default `false`.
     pub regularized_friction: bool,
+    /// Move each unrestricted floating articulation to the world momentum its
+    /// substep impulses imply after the runtime corrections. Default `true`.
+    pub momentum_transport: bool,
+    /// Arrest each new contact with a velocity impact and a position projection
+    /// after the substep, beside its penalty force. Default `true`.
+    pub contact_impacts: bool,
     backend: FeatherstoneBackend,
 }
 
@@ -141,6 +147,8 @@ impl FeatherstoneSolver {
             rigorous_d_solve: false,
             rigorous_distance: true,
             regularized_friction: false,
+            momentum_transport: true,
+            contact_impacts: true,
             backend: FeatherstoneBackend::Cpu,
             contact_forces: Vec::new(),
             joint_efforts: Vec::new(),
@@ -202,6 +210,8 @@ impl FeatherstoneSolver {
             rigorous_d_solve: false,
             rigorous_distance: true,
             regularized_friction: false,
+            momentum_transport: true,
+            contact_impacts: true,
             backend: FeatherstoneBackend::Gpu(GpuBackend {
                 device,
                 queue,
@@ -934,7 +944,7 @@ impl FeatherstoneSolver {
         for substep in 0..n {
             // Momentum transport shifts poses off their coordinates; the step reads
             // them from the coordinates, so the mass the forces seed matches it.
-            if substep > 0 {
+            if substep > 0 && self.momentum_transport {
                 eval_fk(model, &mut scratch)?;
             }
             tracing::debug_span!("collision").in_scope(|| {

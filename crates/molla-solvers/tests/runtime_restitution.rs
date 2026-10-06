@@ -105,6 +105,19 @@ fn cpu_normal_rebound_consumes_restitution_across_step_sizes() {
     }
 }
 
+/// The fixture's spring has no damping, so without the impact it returns the landing.
+#[test]
+fn without_contact_impacts_the_penalty_spring_takes_the_landing() {
+    let (mut world, body, _) = fixture(0.);
+    world.solver.contact_impacts = false;
+    for _ in 0..60 {
+        world.step(1. / 240.).unwrap();
+    }
+    let returned = world.scene.body_velocity(body).unwrap().linear.y;
+    assert!(returned > 0.9, "returned {returned}");
+    assert!(rebound(0., 1. / 240.) < 0.02);
+}
+
 #[test]
 fn rebound_is_independent_of_onset_penalty_stiffness_damping_and_substeps() {
     for substeps in [1, 4, 16] {
