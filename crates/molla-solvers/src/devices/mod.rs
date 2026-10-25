@@ -32,6 +32,9 @@ use molla_sim::runtime::{JointHandle, RigidScene};
 use crate::featherstone::JointEffort;
 use crate::loop_forces::LoopReaction;
 
+/// How near its target (rad or m) a position-controlled motor stops.
+pub const HOLD_TOLERANCE: Real = 1e-5;
+
 /// What a motor is told to do.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MotorCommand {
@@ -137,7 +140,13 @@ impl MotorController {
                 self.previous_error = Some(error);
                 let [p, i, d] = self.limits.pid;
                 let speed = self.speed.abs().min(self.limits.max_velocity);
-                (p * error + i * self.integral + d * derivative).clamp(-speed, speed)
+                // At the target the motor holds still rather than creeping
+                // at a speed that only tends to zero.
+                if error.abs() <= HOLD_TOLERANCE {
+                    0.0
+                } else {
+                    (p * error + i * self.integral + d * derivative).clamp(-speed, speed)
+                }
             }
         };
         let velocity = match self.limits.acceleration {
@@ -145,6 +154,27 @@ impl MotorController {
             None => target,
         };
         self.velocity = velocity;
+        Some(velocity)
+    }
+
+    /// [`Self::velocity`] of a joint whose travel ends at `stops` (`NaN`
+    /// for no end): a position target past a stop is held at the stop, and
+    /// no speed drives the joint further into one.
+    pub fn velocity_within(&mut self, position: Real, dt: Real, stops: [Real; 2]) -> Option<Real> {
+        let command = self.command;
+        if let MotorCommand::Position(target) = command {
+            let below = if stops[0].is_nan() { target } else { target.max(stops[0]) };
+            self.command = MotorCommand::Position(if stops[1].is_nan() { below } else { below.min(stops[1]) });
+        }
+        let velocity = self.velocity(position, dt);
+        self.command = command;
+        let velocity = velocity?;
+        let pushing = (velocity < 0.0 && position <= stops[0] + HOLD_TOLERANCE)
+            || (velocity > 0.0 && position >= stops[1] - HOLD_TOLERANCE);
+        if pushing {
+            self.velocity = 0.0;
+            return Some(0.0);
+        }
         Some(velocity)
     }
 }
@@ -264,6 +294,29 @@ mod tests {
         );
         c.set_command(MotorCommand::Force(3.0));
         assert!(c.velocity(0.0, 0.01).is_none());
+    }
+
+    #[test]
+    fn position_control_stops_dead_within_the_hold_tolerance() {
+        let mut c = MotorController::new(MotorLimits::default());
+        c.set_command(MotorCommand::Position(1.0));
+        assert!((c.velocity(1.0 - 1e-3, 0.01).unwrap() - 1e-2).abs() < 1e-9);
+        assert_eq!(c.velocity(1.0 - HOLD_TOLERANCE * 0.5, 0.01), Some(0.0));
+        assert_eq!(c.velocity(1.0 + HOLD_TOLERANCE * 0.5, 0.01), Some(0.0));
+    }
+
+    #[test]
+    fn a_motor_holds_at_its_stops_instead_of_pushing_into_them() {
+        let mut c = MotorController::new(MotorLimits::default());
+        c.set_command(MotorCommand::Position(2.0));
+        assert_eq!(c.velocity_within(1.0, 0.01, [f64::NAN, 1.0]), Some(0.0));
+        assert!(c.velocity_within(0.5, 0.01, [f64::NAN, 1.0]).unwrap() > 0.0);
+        assert!((c.velocity_within(0.99, 0.01, [0.0, 1.0]).unwrap() - 0.1).abs() < 1e-9);
+        c.set_command(MotorCommand::Velocity(-3.0));
+        assert_eq!(c.velocity_within(0.0, 0.01, [0.0, 1.0]), Some(0.0));
+        assert_eq!(c.velocity_within(0.5, 0.01, [0.0, 1.0]), Some(-3.0));
+        assert_eq!(c.velocity_within(0.5, 0.01, [f64::NAN, f64::NAN]), Some(-3.0));
+        assert_eq!(c.command, MotorCommand::Velocity(-3.0));
     }
 
     #[test]

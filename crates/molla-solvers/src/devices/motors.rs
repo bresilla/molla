@@ -226,11 +226,13 @@ impl Motors {
     pub(crate) fn before_step(&mut self, scene: &mut RigidScene, dt: Real) -> Result<()> {
         self.motors.retain(|joint, _| scene.joint(*joint).is_some());
         for (&joint, motor) in &mut self.motors {
-            let Some((q, _, _)) = coordinate(scene, joint)? else {
+            let Some((q, _, dof)) = coordinate(scene, joint)? else {
                 continue;
             };
             let axis = axis_of(scene, joint)?;
-            let drive = match motor.controller.velocity(q, dt) {
+            let model = scene.model();
+            let stops = [model.joint_limit_lower.host()?[dof], model.joint_limit_upper.host()?[dof]];
+            let drive = match motor.controller.velocity_within(q, dt, stops) {
                 Some(velocity) => JointMotor {
                     mode: JointTargetMode::Velocity,
                     target_velocity: velocity,
