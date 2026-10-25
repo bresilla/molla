@@ -330,6 +330,8 @@ struct Snapshot {
     body_handles: Vec<BodyHandle>,
     colliders: BTreeMap<ColliderHandle, Vec<ShapeId>>,
     shape_colliders: Vec<ColliderHandle>,
+    /// Each body's colliders, in handle order.
+    body_colliders: BTreeMap<BodyHandle, Vec<ColliderHandle>>,
     joints: BTreeMap<JointHandle, JointId>,
     joint_layouts: BTreeMap<JointHandle, [Option<usize>; 6]>,
     soft_joints: BTreeSet<JointHandle>,
@@ -1010,9 +1012,7 @@ impl RigidScene {
     }
 
     pub fn body_colliders(&self, id: BodyHandle) -> impl Iterator<Item = ColliderHandle> + '_ {
-        self.colliders()
-            .filter(move |(_, c)| c.parent == Some(id))
-            .map(|(id, _)| id)
+        self.snapshot.body_colliders.get(&id).into_iter().flatten().copied()
     }
 
     pub fn set_body_damping(&mut self, id: BodyHandle, linear: Real, angular: Real) -> Result<()> {
@@ -2475,7 +2475,14 @@ fn compile(d: &Description, gravity: Vec3, old: Option<&Snapshot>) -> Result<Sna
     for (&handle, &index) in &bodies {
         body_handles[index.index()] = handle;
     }
+    let mut body_colliders = BTreeMap::<BodyHandle, Vec<ColliderHandle>>::new();
+    for (&id, desc) in &d.colliders {
+        if let Some(parent) = desc.parent {
+            body_colliders.entry(parent).or_default().push(id);
+        }
+    }
     Ok(Snapshot {
+        body_colliders,
         model_stamp: SceneStamp(Arc::new(())),
         stamp: SceneStamp(Arc::new(())),
         model,
