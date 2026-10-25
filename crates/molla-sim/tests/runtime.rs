@@ -162,6 +162,26 @@ fn collider_edits_and_cascading_removal_preserve_body_state() {
 }
 
 #[test]
+fn collider_batches_land_in_one_rebuild_or_not_at_all() {
+    let mut scene = RigidScene::new().unwrap();
+    let body = scene.insert_body(BodyDesc::default()).unwrap();
+    let old = [0, 1].map(|_| scene.insert_collider(collider(body)).unwrap());
+    let revision = scene.revision();
+    let new = scene.edit_colliders(vec![collider(body); 3], &old).unwrap();
+    assert_eq!(scene.revision(), revision + 1);
+    assert_eq!(scene.model().shape_count, 3);
+    assert!(old.iter().all(|&id| scene.collider_index(id).is_none()));
+    assert!(new.iter().all(|&id| scene.collider_index(id).is_some()));
+    let mut bad = collider(body);
+    bad.geometry = ColliderGeometry::Ball { radius: -1.0 };
+    assert!(scene.edit_colliders(vec![bad], &new[..1]).is_err());
+    assert!(scene.edit_colliders(Vec::new(), &old[..1]).is_err());
+    assert_eq!(scene.revision(), revision + 1);
+    assert_eq!(scene.model().shape_count, 3);
+    assert!(scene.collider_index(new[0]).is_some());
+}
+
+#[test]
 fn free_root_coordinates_preserve_offset_com_twist() {
     let mut scene = RigidScene::new().unwrap();
     let mut desc = BodyDesc::default();

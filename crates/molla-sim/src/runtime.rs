@@ -2055,6 +2055,28 @@ impl RigidScene {
         })
     }
 
+    /// Removes `removes` and inserts `inserts` in one rebuild of the model;
+    /// the new handles in the order given. Nothing changes when any fails.
+    pub fn edit_colliders(
+        &mut self,
+        inserts: Vec<ColliderDesc>,
+        removes: &[ColliderHandle],
+    ) -> Result<Vec<ColliderHandle>> {
+        let gone: BTreeSet<ColliderHandle> = removes.iter().copied().collect();
+        self.edit(|d| {
+            for id in &gone {
+                d.colliders.remove(id).ok_or_else(|| missing("collider"))?;
+                d.collider_stamps.remove(id);
+            }
+            d.collider_pair_exclusions
+                .retain(|(a, b)| !gone.contains(a) && !gone.contains(b));
+            inserts
+                .into_iter()
+                .map(|desc| d.insert_collider(desc))
+                .collect()
+        })
+    }
+
     pub fn insert_joint(&mut self, desc: JointDesc) -> Result<JointHandle> {
         self.edit(|d| d.insert_joint(desc))
     }
