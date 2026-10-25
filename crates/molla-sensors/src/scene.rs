@@ -1,22 +1,27 @@
 //! Owned, revisioned geometry/color snapshots with shared local-space mesh BVHs.
 
+use crate::SceneRebuildPolicy;
 use crate::readback::DeviceBuffer;
 use crate::scene_geometry::{DEFAULT_QUERY_BYTES, SceneGeometry};
 pub use crate::scene_identity::{
     SceneIdentitySnapshot, SensorBodyHandle, SensorSceneRemap, SensorShapeHandle,
 };
+use crate::scene_trace::SceneTrace;
 use molla_compute::Engine;
 use molla_core::{BodyId, Error, Result};
 use molla_math::{Real, Transform, Vec3};
-use molla_sim::{Model, ShapeGeometry, TriMesh};
+use molla_sim::{Model, ShapeGeometry, State, TriMesh};
 use molla_storage::{Buffer, BufferUsage};
 use std::{
     collections::HashMap,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
 };
+
+/// A closest-hit hierarchy over a scene, shared by every query of one policy.
+pub(crate) type SharedTrace = Arc<Mutex<SceneTrace>>;
 
 static NEXT_SCENE: AtomicU64 = AtomicU64::new(1);
 
@@ -74,6 +79,7 @@ pub struct SensorScene {
     options: SensorSceneOptions,
     unsupported: Vec<UnsupportedShape>,
     identities: SceneIdentitySnapshot,
+    traces: Mutex<Vec<(SceneRebuildPolicy, SharedTrace)>>,
 }
 
 impl SensorScene {
@@ -381,11 +387,32 @@ impl SensorScene {
             options,
             unsupported,
             identities,
+            traces: Mutex::new(Vec::new()),
         })
     }
 
     pub fn stamp(&self) -> SceneStamp {
         self.stamp
+    }
+
+    /// The hierarchy queries of `policy` trace this scene through, built on
+    /// the first such query from its poses; true when this call built it.
+    pub(crate) fn shared_trace(
+        &self,
+        engine: &Engine,
+        state: &State,
+        policy: SceneRebuildPolicy,
+    ) -> Result<(SharedTrace, bool)> {
+        let mut traces = self
+            .traces
+            .lock()
+            .map_err(|_| Error::Solver("sensor scene: trace cache poisoned".into()))?;
+        if let Some((_, trace)) = traces.iter().find(|(p, _)| *p == policy) {
+            return Ok((trace.clone(), false));
+        }
+        let trace = Arc::new(Mutex::new(SceneTrace::new(engine, self, state, policy)?));
+        traces.push((policy, trace.clone()));
+        Ok((trace, true))
     }
 
     /// Retain a cheap immutable identity snapshot alongside asynchronous results.

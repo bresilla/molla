@@ -15,7 +15,6 @@ pub(crate) struct SceneTrace {
     bindings: BindingsCache<SceneTraceBindings>,
     rebuild: Option<SceneRebuildKernel>,
     interval: u32,
-    until_rebuild: u32,
 }
 
 impl SceneTrace {
@@ -53,7 +52,6 @@ impl SceneTrace {
             bindings: BindingsCache::with_capacity(128),
             rebuild,
             interval: policy.interval,
-            until_rebuild: 0,
         })
     }
 
@@ -73,6 +71,7 @@ impl SceneTrace {
         count: u32,
         max_distance: f32,
         refresh_bounds: bool,
+        until_rebuild: &mut u32,
     ) -> Result<(u64, u64, u64, bool, bool)> {
         self.acceleration.preflight(engine, scene, state)?;
         let before = self.acceleration.stats();
@@ -83,15 +82,15 @@ impl SceneTrace {
         let mut quality_checked = false;
         let mut rebuild_dispatches = 0;
         if let Some(rebuild) = &self.rebuild {
-            if self.until_rebuild == 0 {
+            if *until_rebuild == 0 {
                 rebuild_dispatches += rebuild.encode(encoder);
                 self.acceleration.encode(encoder, state)?;
                 rebuild_dispatches += rebuild.finish_quality(encoder);
-                self.until_rebuild = self.interval - 1;
+                *until_rebuild = self.interval - 1;
                 quality_checked = rebuild.quality_state().is_some();
                 rebuilt = !quality_checked;
             } else {
-                self.until_rebuild -= 1;
+                *until_rebuild -= 1;
             }
         }
         let after = self.acceleration.stats();

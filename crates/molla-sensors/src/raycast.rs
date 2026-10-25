@@ -10,7 +10,7 @@ use crate::device_results::{
     SensorFramePoolConfig,
 };
 use crate::readback::{DeviceBuffer, ReadbackConfig, ReadbackRing, ReadbackStamp, ReadbackStats};
-use crate::scene::{SceneStamp, SensorScene};
+use crate::scene::{SceneStamp, SensorScene, SharedTrace};
 use crate::scene_trace::SceneTrace;
 use molla_compute::Engine;
 use molla_core::{BodyId, Error, Result};
@@ -173,7 +173,8 @@ pub struct Raycaster {
     mesh_kernel: MeshBvhRaycastKernel,
     mesh_cache: HashMap<u32, CachedMesh>,
     primitive_bindings: Vec<RaycastBindings>,
-    scene_trace: Option<SceneTrace>,
+    scene_trace: Option<SharedTrace>,
+    until_rebuild: u32,
     rebuild_policy: SceneRebuildPolicy,
     upload_origins: Vec<[f32; 4]>,
     upload_directions: Vec<[f32; 4]>,
@@ -198,6 +199,13 @@ struct CachedQuery {
     bindings: Vec<MeshBvhRaycastBindings>,
     merge: RaycastMergeBindings,
     checked_epoch: u64,
+}
+
+/// The scene's shared hierarchy, locked for one query.
+fn lock_trace(trace: &SharedTrace) -> Result<std::sync::MutexGuard<'_, SceneTrace>> {
+    trace
+        .lock()
+        .map_err(|_| Error::Solver("raycaster: scene trace poisoned".into()))
 }
 
 impl Raycaster {
@@ -306,6 +314,7 @@ impl Raycaster {
             mesh_cache: HashMap::new(),
             primitive_bindings: Vec::with_capacity(2),
             scene_trace: None,
+            until_rebuild: 0,
             rebuild_policy: SceneRebuildPolicy::default(),
             upload_origins: crate::host_arrays::filled(cap, [0.0; 4])?,
             upload_directions: crate::host_arrays::filled(cap, [0.0; 4])?,
@@ -359,7 +368,7 @@ impl Raycaster {
     pub fn set_scene_rebuild_policy(&mut self, policy: SceneRebuildPolicy) -> Result<()> {
         policy.validate()?;
         if let Some(trace) = &self.scene_trace {
-            trace.check_policy(policy, &self.hit_t.device.limits())?;
+            lock_trace(trace)?.check_policy(policy, &self.hit_t.device.limits())?;
         }
         if self.rebuild_policy != policy {
             self.scene_trace = None;
@@ -553,29 +562,29 @@ impl Raycaster {
         if count == 0 {
             return Ok(0);
         }
-        if self
-            .scene_trace
-            .as_ref()
-            .is_none_or(|trace| trace.stamp != scene.stamp())
-        {
-            self.scene_trace = Some(SceneTrace::new(engine, scene, state, self.rebuild_policy)?);
-            self.query_stats.scene_builds += 1;
+        let current = match &self.scene_trace {
+            Some(trace) => lock_trace(trace)?.stamp == scene.stamp(),
+            None => false,
+        };
+        if !current {
+            let (trace, built) = scene.shared_trace(engine, state, self.rebuild_policy)?;
+            self.scene_trace = Some(trace);
+            self.until_rebuild = 0;
+            self.query_stats.scene_builds += u64::from(built);
             refresh_bounds = true;
         }
-        let (dispatches, prepared, refit_prepared, rebuilt, quality_checked) = self
-            .scene_trace
-            .as_mut()
-            .expect("initialized trace")
-            .encode(
-                engine,
-                encoder,
-                scene,
-                state,
-                outputs,
-                count,
-                max_distance,
-                refresh_bounds,
-            )?;
+        let trace = self.scene_trace.as_ref().expect("initialized trace");
+        let (dispatches, prepared, refit_prepared, rebuilt, quality_checked) = lock_trace(trace)?.encode(
+            engine,
+            encoder,
+            scene,
+            state,
+            outputs,
+            count,
+            max_distance,
+            refresh_bounds,
+            &mut self.until_rebuild,
+        )?;
         self.query_stats.scene_preparations += prepared;
         self.query_stats.refit_preparations += refit_prepared;
         self.query_stats.scene_rebuilds += u64::from(rebuilt);
