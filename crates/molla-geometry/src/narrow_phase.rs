@@ -1506,6 +1506,91 @@ fn gjk_epa_pair_with_hulls(
     })
 }
 
+/// What a triangle's plane says about a curved convex shape against it.
+#[derive(Debug, PartialEq)]
+enum FaceContact {
+    /// The shape lies wholly on its side of the plane: no contact.
+    Apart,
+    /// The face itself is the contact: `normal` points from the triangle
+    /// toward the shape, `point` is midway between the surfaces.
+    Face { normal: Vec3, depth: Real, point: Vec3 },
+    /// Near an edge, deep, or a shape the test does not take: GJK and EPA.
+    Unresolved,
+}
+
+/// A triangle (world vertices) against a curved convex shape, from the
+/// shape's support along the face normal. The face is the contact when its
+/// normal is the shortest way apart: the shape sinks under half its extent
+/// along the normal, and both its deepest point and where the segment from
+/// that point to its centre crosses the plane lie inside every edge by more
+/// than the depth plus the sideways offset of its highest point.
+fn face_contact(v: [Vec3; 3], geom: ShapeGeometry, xf: &Transform) -> FaceContact {
+    if !matches!(
+        geom,
+        ShapeGeometry::Sphere { .. }
+            | ShapeGeometry::Capsule { .. }
+            | ShapeGeometry::Cylinder { .. }
+            | ShapeGeometry::RoundCylinder { .. }
+            | ShapeGeometry::Cone { .. }
+            | ShapeGeometry::Ellipsoid { .. }
+    ) {
+        return FaceContact::Unresolved;
+    }
+    let cross = (v[1] - v[0]).cross(v[2] - v[0]);
+    let area = cross.length();
+    if !(area > 1e-12) {
+        return FaceContact::Unresolved;
+    }
+    let face = cross / area;
+    let normal = if (xf.position - v[0]).dot(face) < 0.0 { -face } else { face };
+    let deep = support_centre(geom, xf, -normal);
+    let depth = (v[0] - deep).dot(normal);
+    if depth <= 0.0 {
+        return FaceContact::Apart;
+    }
+    let far = support_centre(geom, xf, normal);
+    let extent = (far - deep).dot(normal);
+    let rise = (xf.position - deep).dot(normal);
+    if !(depth < 0.5 * extent) || !(rise > depth) {
+        return FaceContact::Unresolved;
+    }
+    let foot = deep + normal * depth;
+    let crossing = deep + (xf.position - deep) * (depth / rise);
+    let sideways = {
+        let offset = far - foot;
+        (offset - normal * offset.dot(normal)).length()
+    };
+    let margin = depth + sideways;
+    for k in 0..3 {
+        let (a, b) = (v[k], v[(k + 1) % 3]);
+        let inward = face.cross(b - a).normalize_or_zero();
+        if (foot - a).dot(inward) <= margin || (crossing - a).dot(inward) <= margin {
+            return FaceContact::Unresolved;
+        }
+    }
+    FaceContact::Face {
+        normal,
+        depth,
+        point: deep + normal * (0.5 * depth),
+    }
+}
+
+/// The middle of a shape's farthest points along unit `dir`: a flat cap or
+/// a side line lying across `dir` gives its centre, not one rim point. Of
+/// two pairs of slightly tilted supports, the pair spanning the farthest
+/// points widest gives their middle.
+fn support_centre(geom: ShapeGeometry, xf: &Transform, dir: Vec3) -> Vec3 {
+    let across = dir.any_orthonormal_vector() * 1e-4;
+    let pairs = [across, dir.cross(across)].map(|tilt| {
+        let (a, b) = (
+            crate::support::support(geom, xf, dir + tilt),
+            crate::support::support(geom, xf, dir - tilt),
+        );
+        ((a - b).length_squared(), (a + b) * 0.5)
+    });
+    if pairs[0].0 >= pairs[1].0 { pairs[0].1 } else { pairs[1].1 }
+}
+
 /// Triangle-mesh narrow phase: dispatch each mesh triangle to the
 /// generic GJK+EPA pair routine. `flip_output` is true when the
 /// mesh side is the contact pair's `b` (so each emitted manifold
@@ -1585,6 +1670,25 @@ fn trimesh_pair(
         let v0 = mesh.vertices[tri[0] as usize];
         let v1 = mesh.vertices[tri[1] as usize];
         let v2 = mesh.vertices[tri[2] as usize];
+        let world = [mesh_xf.transform_point(v0), mesh_xf.transform_point(v1), mesh_xf.transform_point(v2)];
+        match face_contact(world, other_geom, other_xf) {
+            FaceContact::Apart => continue,
+            FaceContact::Face { normal, depth, point } => {
+                out.push(ContactManifold {
+                    a_shape: pair.a,
+                    b_shape: pair.b,
+                    point,
+                    normal: if flip_output { -normal } else { normal },
+                    depth,
+                    friction: 0.0,
+                    rolling_friction: 0.0,
+                    torsional_friction: 0.0,
+                    restitution: 0.0,
+                });
+                continue;
+            }
+            FaceContact::Unresolved => {}
+        }
         let tri_geom = ShapeGeometry::Triangle { v0, v1, v2 };
         let pair_for_call = if flip_output {
             ShapePair {
@@ -2927,5 +3031,86 @@ mod tests {
             }
             assert!(range[1] - range[0] > 1.9);
         }
+    }
+
+    const FLOOR: [Vec3; 3] = [Vec3::new(-4., 0., -4.), Vec3::new(0., 0., 4.), Vec3::new(4., 0., -4.)];
+
+    /// Curved shapes sunk `sink` into the floor at `x, z`: a tyre lying across
+    /// X, a ball, a capsule lying along Z and an upright cylinder.
+    fn resting(sink: Real, x: Real, z: Real) -> [(ShapeGeometry, Transform); 4] {
+        let at = |lift: Real, rotation: Quat| Transform::new(Vec3::new(x, lift - sink, z), rotation);
+        [
+            (
+                ShapeGeometry::RoundCylinder { half_height: 0.1, radius: 0.22, border_radius: 0.03 },
+                at(0.25, Quat::from_rotation_z(std::f64::consts::FRAC_PI_2)),
+            ),
+            (ShapeGeometry::Sphere { radius: 0.3 }, at(0.3, Quat::IDENTITY)),
+            (
+                ShapeGeometry::Capsule { half_height: 0.4, radius: 0.1 },
+                at(0.1, Quat::from_rotation_x(std::f64::consts::FRAC_PI_2)),
+            ),
+            (ShapeGeometry::Cylinder { half_height: 0.2, radius: 0.15 }, at(0.2, Quat::IDENTITY)),
+        ]
+    }
+
+    #[test]
+    fn a_shape_resting_on_a_face_takes_the_contact_gjk_and_epa_find() {
+        let tri = ShapeGeometry::Triangle { v0: FLOOR[0], v1: FLOOR[1], v2: FLOOR[2] };
+        for (geom, xf) in resting(0.004, 0.3, -1.0) {
+            let FaceContact::Face { normal, depth, point } = face_contact(FLOOR, geom, &xf) else {
+                panic!("{geom:?} should rest on the face");
+            };
+            let epa = gjk_epa_pair(tri, &Transform::IDENTITY, geom, &xf, ShapePair { a: 0, b: 1 }).unwrap();
+            assert_eq!(normal, Vec3::Y);
+            assert!((epa.normal - normal).length() < 1e-3, "{geom:?}: {:?}", epa.normal);
+            assert!((epa.depth - depth).abs() < 1e-5, "{geom:?}: {} vs {depth}", epa.depth);
+            assert!((point.y + 0.002).abs() < 1e-9 && (point.y - epa.point.y).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn a_tyre_or_cap_across_the_face_contacts_at_its_middle() {
+        let [(tyre, tyre_xf), _, _, (cylinder, cylinder_xf)] = resting(0.004, 0.3, -1.0);
+        for (geom, xf) in [(tyre, tyre_xf), (cylinder, cylinder_xf)] {
+            let FaceContact::Face { point, .. } = face_contact(FLOOR, geom, &xf) else { panic!() };
+            assert!((point.x - 0.3).abs() < 1e-4 && (point.z + 1.0).abs() < 1e-4, "{geom:?}: {point:?}");
+        }
+    }
+
+    #[test]
+    fn a_shape_clear_of_the_plane_is_apart_as_gjk_finds() {
+        let tri = ShapeGeometry::Triangle { v0: FLOOR[0], v1: FLOOR[1], v2: FLOOR[2] };
+        for (geom, xf) in resting(-0.01, 0.3, -1.0).into_iter().chain(resting(-0.01, 9.0, 0.0)) {
+            assert_eq!(face_contact(FLOOR, geom, &xf), FaceContact::Apart, "{geom:?}");
+            assert!(gjk_epa_pair(tri, &Transform::IDENTITY, geom, &xf, ShapePair { a: 0, b: 1 }).is_none());
+        }
+    }
+
+    #[test]
+    fn edges_and_flat_shapes_are_left_to_gjk_and_epa() {
+        for (geom, xf) in resting(0.004, 0.3, -3.998) {
+            assert_eq!(face_contact(FLOOR, geom, &xf), FaceContact::Unresolved, "{geom:?}");
+        }
+        let boxed = Transform::new(Vec3::new(0.3, 0.096, -1.0), Quat::IDENTITY);
+        let geom = ShapeGeometry::Box { half_extents: Vec3::splat(0.1) };
+        assert_eq!(face_contact(FLOOR, geom, &boxed), FaceContact::Unresolved);
+    }
+
+    #[test]
+    fn a_floor_mesh_contacts_a_tyre_once_through_its_face() {
+        let mut model = Model::empty();
+        model.meshes.push(molla_sim::TriMesh {
+            vertices: vec![FLOOR[0], FLOOR[1], FLOOR[2], Vec3::new(0., 0., -12.)],
+            indices: vec![[0, 1, 2], [0, 2, 3]],
+        });
+        let [(tyre, xf), ..] = resting(0.004, 0.3, -1.0);
+        let mut out = Vec::new();
+        trimesh_pair(&model, 0, &Transform::IDENTITY, tyre, &xf, ShapePair { a: 0, b: 1 }, false, &mut out, None);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].normal, Vec3::Y);
+        let mut flipped = Vec::new();
+        trimesh_pair(&model, 0, &Transform::IDENTITY, tyre, &xf, ShapePair { a: 1, b: 0 }, true, &mut flipped, None);
+        assert_eq!(flipped[0].normal, -Vec3::Y);
+        assert_eq!((flipped[0].a_shape, flipped[0].b_shape), (1, 0));
     }
 }
