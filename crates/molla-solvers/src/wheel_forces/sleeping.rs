@@ -39,12 +39,12 @@ pub(super) fn query_ground<'a>(
     mut include: impl FnMut(ColliderHandle) -> bool,
 ) -> Result<Option<GroundHit<'a>>> {
     let _span = tracing::debug_span!("wheel_ground_query").entered();
-    let Some(hit) = queries.cast_ray_filtered(
+    let Some(hit) = queries.cast_ray_among(
         scene,
+        grounds.keys().copied().filter(|&id| include(id)),
         Vec3::new(hub.x, top + 1.0, hub.z),
         -Vec3::Y,
         top - bottom + 2.0,
-        |id| grounds.contains_key(&id) && include(id),
     )?
     else {
         return Ok(None);

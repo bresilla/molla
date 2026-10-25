@@ -559,3 +559,25 @@ fn convex_and_mesh_rays_include_endpoints_and_parallel_slabs() {
         );
     }
 }
+
+#[test]
+fn a_ray_among_given_colliders_passes_through_the_rest() {
+    use molla_geometry::raycast_cpu::CpuRaycaster;
+    let mut scene = RigidScene::new().unwrap();
+    let mut ball = |x: f64| {
+        let mut desc = ColliderDesc::new(ColliderGeometry::Ball { radius: 0.5 });
+        desc.pose = Transform::from_translation(Vec3::X * x);
+        scene.insert_collider(desc).unwrap()
+    };
+    let (near, middle, far) = (ball(2.0), ball(5.0), ball(8.0));
+    let mut queries = CpuRaycaster::default();
+    let hit = |queries: &mut CpuRaycaster, ids: &[_]| {
+        queries
+            .cast_ray_among(&scene, ids.iter().copied(), Vec3::ZERO, Vec3::X, 20.0)
+            .unwrap()
+    };
+    assert_eq!(hit(&mut queries, &[far, middle]).unwrap().collider, middle);
+    close(hit(&mut queries, &[far]).unwrap().distance, 7.5);
+    assert_eq!(hit(&mut queries, &[near, far]).unwrap().collider, near);
+    assert!(hit(&mut queries, &[]).is_none());
+}

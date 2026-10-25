@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, btree_map::Entry};
 
 use molla_core::{Error, Result};
 use molla_math::{Real, Vec3};
-use molla_sim::runtime::{BodyHandle, ColliderGeometry, ColliderHandle, RigidScene, SceneStamp};
+use molla_sim::runtime::{
+    BodyHandle, ColliderDesc, ColliderGeometry, ColliderHandle, RigidScene, SceneStamp,
+};
 use molla_sim::{Heightfield, TriMesh};
 
 use crate::{Aabb, MeshBvh, collider_query::collider_local_aabb, convex_hull};
@@ -63,13 +65,50 @@ impl CpuRaycaster {
         max_distance: Real,
         include: impl FnMut(ColliderHandle) -> bool,
     ) -> Result<Option<RayHit>> {
+        self.refresh(scene);
+        cast_prepared(
+            self,
+            scene,
+            scene.colliders(),
+            origin,
+            direction,
+            max_distance,
+            include,
+        )
+    }
+
+    /// The nearest hit among the colliders `ids` only, without visiting the
+    /// rest of the scene.
+    pub fn cast_ray_among(
+        &mut self,
+        scene: &RigidScene,
+        ids: impl IntoIterator<Item = ColliderHandle>,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: Real,
+    ) -> Result<Option<RayHit>> {
+        self.refresh(scene);
+        let candidates = ids
+            .into_iter()
+            .filter_map(|id| scene.collider(id).map(|desc| (id, desc)));
+        cast_prepared(
+            self,
+            scene,
+            candidates,
+            origin,
+            direction,
+            max_distance,
+            |_| true,
+        )
+    }
+
+    fn refresh(&mut self, scene: &RigidScene) {
         let stamp = scene.stamp();
         if self.stamp.as_ref() != Some(&stamp) {
             self.colliders
                 .retain(|id, cached| scene.collider_stamp(*id).as_ref() == Some(&cached.stamp));
             self.stamp = Some(stamp);
         }
-        cast_prepared(self, scene, origin, direction, max_distance, include)
     }
 }
 
@@ -94,9 +133,10 @@ pub fn cast_ray_filtered(
     CpuRaycaster::default().cast_ray_filtered(scene, origin, direction, max_distance, include)
 }
 
-fn cast_prepared(
+fn cast_prepared<'s>(
     cache: &mut CpuRaycaster,
-    scene: &RigidScene,
+    scene: &'s RigidScene,
+    candidates: impl Iterator<Item = (ColliderHandle, &'s ColliderDesc)>,
     origin: Vec3,
     direction: Vec3,
     max_distance: Real,
@@ -114,7 +154,7 @@ fn cast_prepared(
     let direction = (direction / magnitude).normalize();
     let mut best: Option<RayHit> = None;
     let mut limit = max_distance;
-    for (id, desc) in scene.colliders() {
+    for (id, desc) in candidates {
         if !scene.collider_is_enabled(id)? || !include(id) {
             continue;
         }
