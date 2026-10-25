@@ -10,7 +10,7 @@
 //! Half-space planes have an infinite AABB by construction — they are
 //! emitted against every non-static shape regardless of axis.
 
-use molla_math::{Real, Vec3};
+use molla_math::Real;
 use molla_sim::{Model, ShapeGeometry, State};
 
 /// Pair-level filter: returns true if the broad phase should keep
@@ -89,6 +89,8 @@ pub struct BroadPhase {
     /// Indices of infinite-AABB shapes (planes). They get paired against
     /// every non-static finite shape.
     infinite_idx: Vec<u32>,
+    /// Shape centres along one axis, for choosing the sweep axis.
+    centres: Vec<Real>,
 }
 
 impl BroadPhase {
@@ -159,10 +161,9 @@ impl BroadPhase {
             return;
         }
 
-        // Pick the axis with the largest variance of centroid positions
-        // — that minimises sweep collisions on average. Cheap to
-        // estimate using min+max range.
-        let axis = best_sweep_axis(&self.aabbs, &self.finite_idx);
+        // Sweep the axis the shapes spread furthest along, as their middle
+        // half spreads: a few far-off shapes do not pick it.
+        let axis = best_sweep_axis(&self.aabbs, &self.finite_idx, &mut self.centres);
 
         // Sort finite shape indices by AABB min on the chosen axis.
         self.finite_idx.sort_by(|&a, &b| {
@@ -254,24 +255,32 @@ pub fn brute_force_pairs(model: &Model, state: &State, margin: Real, out: &mut V
     }
 }
 
-/// Centroid range along each world axis. Finite AABBs only.
-fn best_sweep_axis(aabbs: &[Aabb], finite_idx: &[u32]) -> usize {
-    let mut min = Vec3::splat(Real::INFINITY);
-    let mut max = Vec3::splat(-Real::INFINITY);
-    for &k in finite_idx {
-        let c = aabbs[k as usize];
-        let mid = (c.min + c.max) * 0.5;
-        min = min.min(mid);
-        max = max.max(mid);
+/// The axis along which the middle half of the finite shapes' centres spreads furthest.
+fn best_sweep_axis(aabbs: &[Aabb], finite_idx: &[u32], centres: &mut Vec<Real>) -> usize {
+    let mut best = (0, -1.0);
+    for axis in 0..3 {
+        centres.clear();
+        centres.extend(
+            finite_idx
+                .iter()
+                .map(|&k| {
+                    (aabb_axis(&aabbs[k as usize], axis, true)
+                        + aabb_axis(&aabbs[k as usize], axis, false))
+                        * 0.5
+                })
+                .filter(|c| c.is_finite()),
+        );
+        if centres.len() < 2 {
+            continue;
+        }
+        let (q1, q3) = (centres.len() / 4, centres.len() * 3 / 4);
+        let low = *centres.select_nth_unstable_by(q1, Real::total_cmp).1;
+        let high = *centres.select_nth_unstable_by(q3, Real::total_cmp).1;
+        if high - low > best.1 {
+            best = (axis, high - low);
+        }
     }
-    let r = max - min;
-    if r.x >= r.y && r.x >= r.z {
-        0
-    } else if r.y >= r.z {
-        1
-    } else {
-        2
-    }
+    best.0
 }
 
 #[inline]
@@ -287,6 +296,7 @@ fn aabb_axis(a: &Aabb, axis: usize, is_min: bool) -> Real {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use molla_math::Vec3;
     use molla_sim::ModelBuilder;
 
     fn build_two_sphere_scene() -> (Model, State) {
@@ -322,5 +332,24 @@ mod tests {
         bf_sorted.sort();
         sap_sorted.sort();
         assert_eq!(bf_sorted, sap_sorted);
+    }
+
+    #[test]
+    fn the_sweep_runs_along_the_spread_not_toward_a_far_off_shape() {
+        let cube = |c: Vec3| Aabb {
+            min: c - Vec3::splat(0.5),
+            max: c + Vec3::splat(0.5),
+        };
+        let mut aabbs: Vec<Aabb> = (0..40)
+            .map(|k| cube(Vec3::new((k % 3) as Real, (k % 2) as Real, 4.0 * k as Real)))
+            .collect();
+        aabbs.push(cube(Vec3::new(0.0, -5.0e4, 0.0)));
+        aabbs.push(cube(Vec3::new(0.0, 5.0e4, 0.0)));
+        let all: Vec<u32> = (0..aabbs.len() as u32).collect();
+        assert_eq!(
+            best_sweep_axis(&aabbs, &all, &mut Vec::new()),
+            2,
+            "the shapes line up along Z"
+        );
     }
 }
