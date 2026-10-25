@@ -74,3 +74,52 @@ fn mesh_and_hull_bounds_take_their_cached_box_through_the_pose() {
         "an unturned hull's box is exact"
     );
 }
+
+#[test]
+fn the_kept_static_sweep_pairs_what_brute_force_pairs_as_bodies_move() {
+    use crate::broad_phase::{BroadPhase, brute_force_pairs};
+    use molla_math::Quat;
+    use molla_sim::runtime::BodyDesc;
+    let mut scene = RigidScene::new().unwrap();
+    let mut grid = ColliderDesc::new(ColliderGeometry::Cuboid {
+        half_extents: Vec3::new(0.5, 0.5, 0.5),
+    });
+    for k in 0..60 {
+        grid.pose = Transform::new(
+            Vec3::new(1.5 * (k % 10) as Real, 0.0, 1.5 * (k / 10) as Real),
+            Quat::IDENTITY,
+        );
+        scene.insert_collider(grid.clone()).unwrap();
+    }
+    let mut ground = ColliderDesc::new(ColliderGeometry::Cuboid {
+        half_extents: Vec3::new(200.0, 0.1, 200.0),
+    });
+    ground.pose = Transform::new(Vec3::new(0.0, -0.6, 0.0), Quat::IDENTITY);
+    scene.insert_collider(ground).unwrap();
+    for k in 0..6 {
+        let body = scene.insert_body(BodyDesc::default()).unwrap();
+        let mut ball = ColliderDesc::new(ColliderGeometry::Ball { radius: 0.6 });
+        ball.parent = Some(body);
+        ball.pose = Transform::new(Vec3::new(2.0 * k as Real, 0.0, 3.0), Quat::IDENTITY);
+        scene.insert_collider(ball).unwrap();
+    }
+    let mut cache = SceneShapeBounds::default();
+    let mut broad = BroadPhase::new();
+    let mut state = scene.state().clone_host().unwrap();
+    for step in 0..4 {
+        for q in state.body_q.host_mut().unwrap().iter_mut() {
+            q.position += Vec3::new(0.7, 0.0, 0.9 * step as Real);
+        }
+        let bounds = cache.prepare(&scene);
+        assert!(bounds.stamp().is_some());
+        let (mut kept, mut every) = (Vec::new(), Vec::new());
+        broad.sap_pairs_prepared(&bounds, &state, 0.01, &mut kept);
+        brute_force_pairs(scene.model(), &state, 0.01, &mut every);
+        let mut kept: Vec<_> = kept.iter().map(|p| (p.a, p.b)).collect();
+        let mut every: Vec<_> = every.iter().map(|p| (p.a, p.b)).collect();
+        kept.sort();
+        every.sort();
+        assert!(!every.is_empty(), "step {step}: the test scene has pairs");
+        assert_eq!(kept, every, "step {step}");
+    }
+}

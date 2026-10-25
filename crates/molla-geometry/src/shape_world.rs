@@ -17,7 +17,7 @@ use heightfield_bounds::HeightfieldTiles;
 mod scene_bounds_tests;
 
 /// Heightfield, mesh and hull bounds and tile maxima retained until the
-/// compiled scene identity changes.
+/// compiled model changes.
 #[derive(Default)]
 pub struct SceneShapeBounds {
     stamp: Option<SceneStamp>,
@@ -29,7 +29,7 @@ pub struct SceneShapeBounds {
 
 impl SceneShapeBounds {
     pub fn prepare<'a>(&'a mut self, scene: &'a RigidScene) -> PreparedShapeBounds<'a> {
-        let stamp = scene.stamp();
+        let stamp = scene.model_stamp();
         if self.stamp.as_ref() != Some(&stamp) {
             let model = scene.model();
             self.heightfields = model
@@ -56,6 +56,7 @@ impl SceneShapeBounds {
             tiles: Cow::Borrowed(&self.tiles),
             meshes: Cow::Borrowed(&self.meshes),
             hulls: Cow::Borrowed(&self.hulls),
+            stamp: self.stamp.clone(),
         }
     }
 }
@@ -68,6 +69,8 @@ pub struct PreparedShapeBounds<'a> {
     tiles: Cow<'a, [Option<HeightfieldTiles>]>,
     meshes: Cow<'a, [(Vec3, Vec3)]>,
     hulls: Cow<'a, [(Vec3, Vec3)]>,
+    /// The compiled model of the scene they were prepared for, when they came from one.
+    stamp: Option<SceneStamp>,
 }
 
 impl<'a> PreparedShapeBounds<'a> {
@@ -96,11 +99,16 @@ impl<'a> PreparedShapeBounds<'a> {
                     .collect(),
             ),
             hulls: Cow::Owned(model.hulls.iter().map(|hull| local_bounds(hull)).collect()),
+            stamp: None,
         }
     }
 
     pub fn model(&self) -> &'a Model {
         self.model
+    }
+
+    pub fn stamp(&self) -> Option<&SceneStamp> {
+        self.stamp.as_ref()
     }
 
     pub(crate) fn heightfield_may_contact(

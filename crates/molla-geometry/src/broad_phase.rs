@@ -10,7 +10,8 @@
 //! Half-space planes have an infinite AABB by construction — they are
 //! emitted against every non-static shape regardless of axis.
 
-use molla_math::Real;
+use molla_math::{Real, Transform};
+use molla_sim::runtime::SceneStamp;
 use molla_sim::{Model, ShapeGeometry, State};
 
 /// Pair-level filter: returns true if the broad phase should keep
@@ -91,7 +92,24 @@ pub struct BroadPhase {
     infinite_idx: Vec<u32>,
     /// Shape centres along one axis, for choosing the sweep axis.
     centres: Vec<Real>,
+    /// The compiled model the static shapes below were sorted for, the
+    /// margin and poses they were bounded at, and the sweep axis.
+    cached: Option<SceneStamp>,
+    margin: Real,
+    static_poses: Vec<Transform>,
+    axis: usize,
+    /// Static shapes in classes by their length along the sweep axis, each
+    /// class sorted by `aabbs[i].min[axis]` beside its longest length, and
+    /// the static shapes too long for any class.
+    statics: Vec<(Real, Vec<u32>)>,
+    long_statics: Vec<u32>,
+    /// Shapes on bodies, sorted by `aabbs[i].min[axis]` each call.
+    moving: Vec<u32>,
 }
+
+/// The longest static shape along the sweep axis, metres, of each class;
+/// longer ones are tested against every moving shape.
+const STATIC_CLASSES: [Real; 4] = [1.0, 4.0, 16.0, 64.0];
 
 impl BroadPhase {
     pub(crate) fn shape_aabb(&self, shape: usize) -> Aabb {
@@ -122,7 +140,174 @@ impl BroadPhase {
         margin: Real,
         out: &mut Vec<ShapePair>,
     ) {
-        self.sap_pairs_with_bounds(bounds.model(), out, |i| bounds.world_aabb(state, i, margin));
+        match bounds.stamp() {
+            Some(stamp) => self.sap_pairs_cached(bounds, state, margin, out, stamp),
+            None => self.sap_pairs_with_bounds(bounds.model(), out, |i| {
+                bounds.world_aabb(state, i, margin)
+            }),
+        }
+    }
+
+    /// Sweep-and-prune that keeps the static shapes bounded and sorted
+    /// while the scene keeps its identity: each call bounds and sorts only
+    /// the shapes on bodies, sweeps them against each other, and tests each
+    /// against the static shapes within reach of it along the sweep axis.
+    fn sap_pairs_cached(
+        &mut self,
+        bounds: &crate::shape_world::PreparedShapeBounds<'_>,
+        state: &State,
+        margin: Real,
+        out: &mut Vec<ShapePair>,
+        stamp: &SceneStamp,
+    ) {
+        out.clear();
+        let model = bounds.model();
+        let n = model.shape_count;
+        if n < 2 {
+            return;
+        }
+        let shape_body = model.shape_body.host().expect("shape_body");
+        let body_world = model.body_world.host().expect("body_world");
+        let poses = model.shape_transform.host().expect("shape_transform");
+        let unmoved = self
+            .statics
+            .iter()
+            .flat_map(|(_, class)| class)
+            .chain(&self.long_statics)
+            .zip(&self.static_poses)
+            .all(|(&k, pose)| poses.get(k as usize) == Some(pose));
+        if self.cached.as_ref() != Some(stamp)
+            || self.aabbs.len() != n
+            || self.margin != margin
+            || !unmoved
+        {
+            self.aabbs.clear();
+            self.aabbs
+                .extend((0..n).map(|i| bounds.world_aabb(state, i, margin)));
+            self.finite_idx.clear();
+            self.infinite_idx.clear();
+            for i in 0..n {
+                if matches!(model.shape_geometry[i], ShapeGeometry::Plane { .. }) {
+                    self.infinite_idx.push(i as u32);
+                } else {
+                    self.finite_idx.push(i as u32);
+                }
+            }
+            let axis = best_sweep_axis(&self.aabbs, &self.finite_idx, &mut self.centres);
+            self.statics = STATIC_CLASSES.iter().map(|_| (0.0, Vec::new())).collect();
+            self.long_statics.clear();
+            for &k in &self.finite_idx {
+                if shape_body[k as usize] >= 0 {
+                    continue;
+                }
+                let a = &self.aabbs[k as usize];
+                let length = aabb_axis(a, axis, false) - aabb_axis(a, axis, true);
+                match STATIC_CLASSES.iter().position(|&longest| length <= longest) {
+                    Some(c) => {
+                        let (reach, class) = &mut self.statics[c];
+                        *reach = reach.max(length);
+                        class.push(k);
+                    }
+                    None => self.long_statics.push(k),
+                }
+            }
+            for (_, class) in &mut self.statics {
+                class.sort_by(|&a, &b| {
+                    aabb_axis(&self.aabbs[a as usize], axis, true).total_cmp(&aabb_axis(
+                        &self.aabbs[b as usize],
+                        axis,
+                        true,
+                    ))
+                });
+            }
+            self.static_poses.clear();
+            self.static_poses.extend(
+                self.statics
+                    .iter()
+                    .flat_map(|(_, class)| class)
+                    .chain(&self.long_statics)
+                    .map(|&k| poses[k as usize]),
+            );
+            self.axis = axis;
+            self.margin = margin;
+            self.cached = Some(stamp.clone());
+        } else {
+            for i in 0..n {
+                if shape_body[i] >= 0 {
+                    self.aabbs[i] = bounds.world_aabb(state, i, margin);
+                }
+            }
+        }
+        let axis = self.axis;
+        self.moving.clear();
+        self.moving.extend(
+            self.finite_idx
+                .iter()
+                .copied()
+                .filter(|&k| shape_body[k as usize] >= 0),
+        );
+        self.moving.sort_by(|&a, &b| {
+            aabb_axis(&self.aabbs[a as usize], axis, true).total_cmp(&aabb_axis(
+                &self.aabbs[b as usize],
+                axis,
+                true,
+            ))
+        });
+        let push = |out: &mut Vec<ShapePair>, i: u32, j: u32| {
+            out.push(ShapePair {
+                a: i.min(j),
+                b: i.max(j),
+            })
+        };
+
+        for (ii, &i) in self.moving.iter().enumerate() {
+            let aabb_i = self.aabbs[i as usize];
+            for &j in &self.moving[ii + 1..] {
+                let aabb_j = self.aabbs[j as usize];
+                if aabb_axis(&aabb_j, axis, true) > aabb_axis(&aabb_i, axis, false) {
+                    break;
+                }
+                if aabb_i.intersects(&aabb_j)
+                    && pair_passes_filters(model, shape_body, body_world, i as usize, j as usize)
+                {
+                    push(out, i, j);
+                }
+            }
+            let hi = aabb_axis(&aabb_i, axis, false);
+            for (reach, class) in &self.statics {
+                let lo = aabb_axis(&aabb_i, axis, true) - reach;
+                let start =
+                    class.partition_point(|&s| aabb_axis(&self.aabbs[s as usize], axis, true) < lo);
+                for &s in &class[start..] {
+                    let aabb_s = self.aabbs[s as usize];
+                    if aabb_axis(&aabb_s, axis, true) > hi {
+                        break;
+                    }
+                    if aabb_i.intersects(&aabb_s)
+                        && pair_passes_filters(
+                            model, shape_body, body_world, i as usize, s as usize,
+                        )
+                    {
+                        push(out, i, s);
+                    }
+                }
+            }
+            for &s in &self.long_statics {
+                if aabb_i.intersects(&self.aabbs[s as usize])
+                    && pair_passes_filters(model, shape_body, body_world, i as usize, s as usize)
+                {
+                    push(out, i, s);
+                }
+            }
+        }
+
+        for &p in &self.infinite_idx {
+            for &f in &self.finite_idx {
+                if pair_passes_filters(model, shape_body, body_world, p as usize, f as usize) {
+                    push(out, p, f);
+                }
+            }
+        }
     }
 
     fn sap_pairs_with_bounds(
