@@ -16,45 +16,58 @@ use heightfield_bounds::HeightfieldTiles;
 #[path = "scene_bounds_tests.rs"]
 mod scene_bounds_tests;
 
-/// Heightfield bounds and tile maxima retained until the compiled scene identity changes.
+/// Heightfield, mesh and hull bounds and tile maxima retained until the
+/// compiled scene identity changes.
 #[derive(Default)]
 pub struct SceneShapeBounds {
     stamp: Option<SceneStamp>,
     heightfields: Vec<(Vec3, Vec3)>,
     tiles: Vec<Option<HeightfieldTiles>>,
+    meshes: Vec<(Vec3, Vec3)>,
+    hulls: Vec<(Vec3, Vec3)>,
 }
 
 impl SceneShapeBounds {
     pub fn prepare<'a>(&'a mut self, scene: &'a RigidScene) -> PreparedShapeBounds<'a> {
         let stamp = scene.stamp();
         if self.stamp.as_ref() != Some(&stamp) {
-            self.heightfields = scene
-                .model()
+            let model = scene.model();
+            self.heightfields = model
                 .heightfields
                 .iter()
                 .map(|field| field.local_aabb())
                 .collect();
             self.stamp = Some(stamp);
-            self.tiles = scene
-                .model()
+            self.tiles = model
                 .heightfields
                 .iter()
                 .map(HeightfieldTiles::new)
                 .collect();
+            self.meshes = model
+                .meshes
+                .iter()
+                .map(|mesh| local_bounds(&mesh.vertices))
+                .collect();
+            self.hulls = model.hulls.iter().map(|hull| local_bounds(hull)).collect();
         }
         PreparedShapeBounds {
             model: scene.model(),
             heightfields: Cow::Borrowed(&self.heightfields),
             tiles: Cow::Borrowed(&self.tiles),
+            meshes: Cow::Borrowed(&self.meshes),
+            hulls: Cow::Borrowed(&self.hulls),
         }
     }
 }
 
-/// Heightfield bounds reusable while the model remains immutably borrowed.
+/// Heightfield, mesh and hull bounds reusable while the model remains
+/// immutably borrowed.
 pub struct PreparedShapeBounds<'a> {
     model: &'a Model,
     heightfields: Cow<'a, [(Vec3, Vec3)]>,
     tiles: Cow<'a, [Option<HeightfieldTiles>]>,
+    meshes: Cow<'a, [(Vec3, Vec3)]>,
+    hulls: Cow<'a, [(Vec3, Vec3)]>,
 }
 
 impl<'a> PreparedShapeBounds<'a> {
@@ -75,6 +88,14 @@ impl<'a> PreparedShapeBounds<'a> {
                     .map(HeightfieldTiles::new)
                     .collect(),
             ),
+            meshes: Cow::Owned(
+                model
+                    .meshes
+                    .iter()
+                    .map(|mesh| local_bounds(&mesh.vertices))
+                    .collect(),
+            ),
+            hulls: Cow::Owned(model.hulls.iter().map(|hull| local_bounds(hull)).collect()),
         }
     }
 
@@ -113,18 +134,30 @@ impl<'a> PreparedShapeBounds<'a> {
         tiles.may_contact(field, local)
     }
 
+    /// A shape's world bounds. Heightfields, meshes and hulls take their
+    /// cached local box through the pose, so a mesh's vertices are not
+    /// walked on every query; the box is loose by the turn of the pose.
     pub fn world_aabb(&self, state: &State, shape: usize, margin: Real) -> Aabb {
         let pose = shape_world_transform(self.model, state, shape);
-        if let ShapeGeometry::Heightfield { field_id } = self.model.shape_geometry[shape] {
-            return self
-                .heightfields
-                .get(field_id as usize)
-                .map_or_else(Aabb::infinite, |&(lo, hi)| {
-                    transformed_bounds(lo, hi, pose, margin)
-                });
+        let local = match self.model.shape_geometry[shape] {
+            ShapeGeometry::Heightfield { field_id } => self.heightfields.get(field_id as usize),
+            ShapeGeometry::TriMesh { mesh_id } => self.meshes.get(mesh_id as usize),
+            ShapeGeometry::ConvexHull { hull_id } => self.hulls.get(hull_id as usize),
+            _ => return shape_aabb_at_pose(self.model, shape, pose, margin),
+        };
+        match local {
+            Some(&(lo, hi)) if lo.cmple(hi).all() => transformed_bounds(lo, hi, pose, margin),
+            _ => Aabb::infinite(),
         }
-        shape_aabb_at_pose(self.model, shape, pose, margin)
     }
+}
+
+/// The local box round a set of points; inverted when there are none.
+fn local_bounds(points: &[Vec3]) -> (Vec3, Vec3) {
+    points.iter().fold(
+        (Vec3::splat(Real::INFINITY), Vec3::splat(-Real::INFINITY)),
+        |(lo, hi), &p| (lo.min(p), hi.max(p)),
+    )
 }
 
 fn transformed_bounds(lo: Vec3, hi: Vec3, pose: Transform, margin: Real) -> Aabb {
