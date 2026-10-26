@@ -986,3 +986,29 @@ fn a_braked_tandem_on_rocking_bogies_stays_parked() {
     let v = w.scene.body_velocity(chassis).unwrap().linear;
     assert!(v.length() < 0.02, "braked tandem still moving at {v:?}");
 }
+
+#[test]
+fn a_wheel_reads_the_ground_beneath_it_among_others() {
+    let (mut w, chassis, _, _, ground) = fixture(false);
+    w.wheels.remove_ground(ground);
+    w.scene.remove_collider(ground).unwrap();
+    let slab = |w: &mut RigidWorld, x: f64, top: f64, z: f64| {
+        let mut desc = ColliderDesc::new(ColliderGeometry::Cuboid {
+            half_extents: Vec3::new(1.0, 0.5, 1.0),
+        });
+        desc.pose = Transform::from_translation(Vec3::new(x, top - 0.5, z));
+        let id = w.scene.insert_collider(desc).unwrap();
+        w.wheels.register_ground(&w.scene, id, None).unwrap();
+        id
+    };
+    let beneath = slab(&mut w, 3.0, 0.0, -2.0);
+    slab(&mut w, -2.0, 0.2, 3.0);
+    slab(&mut w, 8.0, 0.2, -2.0);
+    w.scene
+        .set_body_pose(chassis, Transform::from_translation(Vec3::new(3.0, 0.49, -2.0)))
+        .unwrap();
+    w.step(0.001).unwrap();
+    let samples = w.wheels.samples(&w.scene);
+    assert!(!samples.is_empty());
+    assert!(samples.iter().all(|sample| sample.ground == beneath));
+}

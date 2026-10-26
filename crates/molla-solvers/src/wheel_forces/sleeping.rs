@@ -30,18 +30,28 @@ impl GroundSurface<'_> {
     }
 }
 
+/// The ground under `hub`, by a ray straight down through the grounds whose
+/// world `bounds` cover it.
 pub(super) fn query_ground<'a>(
     queries: &mut CpuRaycaster,
     scene: &RigidScene,
     grounds: &'a BTreeMap<ColliderHandle, GroundMaterial>,
+    bounds: &BTreeMap<ColliderHandle, molla_geometry::aabb::Aabb>,
     (top, bottom): (Real, Real),
     hub: Vec3,
     mut include: impl FnMut(ColliderHandle) -> bool,
 ) -> Result<Option<GroundHit<'a>>> {
     let _span = tracing::debug_span!("wheel_ground_query").entered();
+    let under = |b: &molla_geometry::aabb::Aabb| {
+        b.min.x <= hub.x && hub.x <= b.max.x && b.min.z <= hub.z && hub.z <= b.max.z
+    };
     let Some(hit) = queries.cast_ray_among(
         scene,
-        grounds.keys().copied().filter(|&id| include(id)),
+        bounds
+            .iter()
+            .filter(|(_, b)| under(b))
+            .map(|(&id, _)| id)
+            .filter(|&id| include(id)),
         Vec3::new(hub.x, top + 1.0, hub.z),
         -Vec3::Y,
         top - bottom + 2.0,
@@ -125,7 +135,7 @@ impl WheelForces {
         {
             let hub = scene.body_pose(w.body)?.transform_point(w.local_hub);
             let Some(hit) =
-                query_ground(&mut self.queries, scene, &self.grounds, range, hub, |id| {
+                query_ground(&mut self.queries, scene, &self.grounds, &self.ground_bounds, range, hub, |id| {
                     !excluded(Some(w.body), scene.collider(id).and_then(|c| c.parent))
                 })?
             else {

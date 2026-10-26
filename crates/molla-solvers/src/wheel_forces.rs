@@ -114,6 +114,8 @@ pub struct WheelForces {
     sample_dependencies: readout::SampleDependencies,
     prepared_stamp: Option<SceneStamp>,
     height_range: Option<(Real, Real)>,
+    /// World bounds of each enabled ground, as prepared.
+    ground_bounds: BTreeMap<ColliderHandle, molla_geometry::aabb::Aabb>,
     exclusions: Vec<(ShapeId, ShapeId)>,
     activation_revision: u64,
     activation_identity: Arc<()>,
@@ -333,6 +335,7 @@ impl WheelForces {
         self.activation_revision = self.activation_revision.wrapping_add(1);
         self.prepared_stamp = None;
         self.grounds.remove(&id);
+        self.ground_bounds.remove(&id);
         self.shear.retain(|_, shear| shear.ground != id);
         self.invalidate();
     }
@@ -431,11 +434,13 @@ impl WheelForces {
         }
         let mut top = Real::NEG_INFINITY;
         let mut bottom = Real::INFINITY;
+        self.ground_bounds.clear();
         for &id in self.grounds.keys() {
             if scene.collider_is_enabled(id)? {
                 let bounds = collider_world_aabb(scene, id)?;
                 top = top.max(bounds.max.y);
                 bottom = bottom.min(bounds.min.y);
+                self.ground_bounds.insert(id, bounds);
             }
         }
         self.height_range = (top.is_finite() && bottom.is_finite()).then_some((top, bottom));
@@ -532,7 +537,7 @@ impl WheelForces {
             let pose = poses[body];
             let hub = pose.transform_point(w.local_hub);
             let Some(hit) =
-                query_ground(&mut self.queries, scene, &self.grounds, range, hub, |id| {
+                query_ground(&mut self.queries, scene, &self.grounds, &self.ground_bounds, range, hub, |id| {
                     !excluded(Some(w.body), scene.collider(id).and_then(|c| c.parent))
                 })?
             else {
