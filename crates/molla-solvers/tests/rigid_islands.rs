@@ -364,3 +364,38 @@ fn tyre_samples_supply_ground_dependencies_without_rigid_contacts() {
     world.wheels.remove_ground(collider);
     assert!(world.islands().unwrap().groups()[0].boundaries.is_empty());
 }
+
+#[test]
+fn a_world_s_islands_are_shared_between_steps_and_follow_its_contacts() {
+    let mut scene = RigidScene::new().unwrap();
+    let mut ground = ColliderDesc::new(ColliderGeometry::Cuboid {
+        half_extents: Vec3::new(4.0, 0.5, 4.0),
+    });
+    ground.pose = Transform::from_translation(-Vec3::Y * 0.5);
+    scene.insert_collider(ground).unwrap();
+    let ball = |scene: &mut RigidScene, x: Real| {
+        let ball = body(scene, Vec3::new(x, 0.25, 0.0), BodyKind::Dynamic);
+        let mut collider = ColliderDesc::new(ColliderGeometry::Ball { radius: 0.25 });
+        collider.parent = Some(ball);
+        scene.insert_collider(collider).unwrap();
+        ball
+    };
+    let (a, b) = (ball(&mut scene, -2.0), ball(&mut scene, 2.0));
+    let mut world = RigidWorld::from_scene(scene).unwrap();
+    world.step(1.0 / 60.0).unwrap();
+    let first = world.islands().unwrap();
+    assert!(Arc::ptr_eq(&first, &world.islands().unwrap()));
+    assert_eq!(groups(&first), vec![vec![a], vec![b]]);
+    world
+        .scene
+        .set_body_pose(b, Transform::from_translation(Vec3::new(-2.0, 0.9, 0.0)))
+        .unwrap();
+    assert!(!Arc::ptr_eq(&first, &world.islands().unwrap()));
+    world.step(1.0 / 60.0).unwrap();
+    assert_eq!(groups(&world.islands().unwrap()), vec![vec![a], vec![b]]);
+    let landed = (0..60).any(|_| {
+        world.step(1.0 / 60.0).unwrap();
+        groups(&world.islands().unwrap()) == vec![vec![a, b]]
+    });
+    assert!(landed, "the falling ball never joined the one below");
+}

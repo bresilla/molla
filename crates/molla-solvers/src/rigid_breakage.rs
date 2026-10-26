@@ -175,7 +175,7 @@ impl RigidWorld {
         self.devices.replace_reactions(loop_reactions);
         self.cone_readings = readings.cones;
         self.distance_stamp = Some(self.scene.dynamics_stamp());
-        self.contact_revision = Some(self.scene.stamp());
+        self.contacts_current();
         if readout {
             self.reaction_frame = frame;
             self.reaction_stamp = Some(self.scene.dynamics_stamp());

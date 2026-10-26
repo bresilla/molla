@@ -403,7 +403,7 @@ impl RigidWorld {
         gpu.diagnostics.last_state_readback_bytes = readback_bytes;
         self.distance_readings = readings.distance;
         self.solver.publish_frame_readouts(contacts, Vec::new());
-        self.contact_revision = Some(self.scene.stamp());
+        self.contacts_current();
         self.cone_readings = readings.cones;
         self.distance_stamp = Some(self.scene.dynamics_stamp());
         if self.reaction_readout {

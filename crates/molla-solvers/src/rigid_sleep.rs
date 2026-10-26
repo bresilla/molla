@@ -540,7 +540,7 @@ impl RigidWorld {
         sleeping.acknowledge(&self.scene);
         self.sleeping = sleeping;
         self.wheels.publish(&self.scene, wheel_step);
-        self.contact_revision = Some(self.scene.stamp());
+        self.contacts_current();
         Ok(())
     }
 }

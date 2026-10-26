@@ -1,7 +1,7 @@
 //! Rigid-world stepping and stable-handle contact readout.
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use molla_core::{Error, Result};
 use molla_geometry::raycast_cpu::CpuRaycaster;
@@ -75,8 +75,19 @@ pub struct RigidWorld {
     reaction_stamp: Option<molla_sim::runtime::DynamicsStamp>,
     break_events: Vec<JointBreakEvent>,
     completed_steps: u64,
+    /// Counts the steps whose contacts became current.
+    contact_epoch: u64,
+    islands: Mutex<Option<CachedIslands>>,
     #[cfg(feature = "gpu")]
     gpu: Option<gpu::RuntimeGpu>,
+}
+
+/// Islands built from one step's contacts, for the scene and wheels they saw.
+struct CachedIslands {
+    scene: SceneStamp,
+    wheels: (Arc<()>, u64),
+    epoch: u64,
+    islands: Arc<crate::rigid_islands::RigidIslands>,
 }
 
 impl RigidWorld {
@@ -112,9 +123,17 @@ impl RigidWorld {
             reaction_stamp: None,
             break_events: Vec::new(),
             completed_steps: 0,
+            contact_epoch: 0,
+            islands: Mutex::new(None),
             #[cfg(feature = "gpu")]
             gpu: None,
         })
+    }
+
+    /// The step's contacts are the scene's current ones.
+    fn contacts_current(&mut self) {
+        self.contact_revision = Some(self.scene.stamp());
+        self.contact_epoch += 1;
     }
 
     pub fn step(&mut self, dt: Real) -> Result<()> {
@@ -629,12 +648,34 @@ impl RigidWorld {
             self.settling.clear_windows();
         }
         self.wheels.publish(&self.scene, wheel_step);
-        self.contact_revision = Some(self.scene.stamp());
+        self.contacts_current();
         Ok(())
     }
 
     /// Built-in dependencies from active joints and the latest valid contact/tyre samples.
-    pub fn islands(&self) -> Result<crate::rigid_islands::RigidIslands> {
+    /// Between steps they are built once and shared until the scene or its wheels change.
+    pub fn islands(&self) -> Result<Arc<crate::rigid_islands::RigidIslands>> {
+        let current = self.contact_revision == Some(self.scene.stamp());
+        let mut cache = self.islands.lock().unwrap_or_else(PoisonError::into_inner);
+        if current
+            && let Some(cached) = cache.as_ref()
+            && cached.epoch == self.contact_epoch
+            && cached.scene == self.scene.stamp()
+            && self.wheels.matches_activation(&cached.wheels)
+        {
+            return Ok(cached.islands.clone());
+        }
+        let islands = Arc::new(self.build_islands()?);
+        *cache = current.then(|| CachedIslands {
+            scene: self.scene.stamp(),
+            wheels: self.wheels.activation_stamp(),
+            epoch: self.contact_epoch,
+            islands: islands.clone(),
+        });
+        Ok(islands)
+    }
+
+    fn build_islands(&self) -> Result<crate::rigid_islands::RigidIslands> {
         let scene = &self.scene;
         let mut connections = Vec::new();
         let mut handles = vec![None; scene.model().body_count];
