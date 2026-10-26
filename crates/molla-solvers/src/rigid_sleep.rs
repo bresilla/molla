@@ -312,6 +312,7 @@ impl RigidWorld {
             return Err(invalid("step dt must be positive and finite"));
         }
         self.quarantined = self.scene.quarantine_non_finite()?;
+        let joint_islands = self.joint_islands()?;
         let scene = &self.scene;
         let mut sleeping = self.sleeping.clone();
         sleeping.refresh(scene, &self.wheels);
@@ -400,7 +401,7 @@ impl RigidWorld {
                     b.map(|id| handles[id.index()]),
                 )
             },
-            |state, contacts, sub_dt, wrenches| {
+            |state, contacts, sub_dt, wrenches, mass_seed| {
                 let mut edges = connections.clone();
                 let present = contact_edges(scene, contacts, &handles, &mut edges, &mut sleeping)?;
                 let changed: Vec<_> = sleeping
@@ -452,6 +453,7 @@ impl RigidWorld {
                 let reactions = if any_awake {
                     crate::loop_forces::apply_selected(
                         scene,
+                        &joint_islands,
                         &mut response,
                         sub_dt,
                         wrenches,
@@ -468,16 +470,24 @@ impl RigidWorld {
                 if contact_impacts {
                     impacts.borrow_mut().prepare(scene, state, contacts)?;
                 }
+                response.export_mass(mass_seed)?;
                 Ok(articulations)
             },
             Some(&bounds),
             common,
-            |solver, input, output, sub_dt, selected| {
+            |solver, input, output, sub_dt, selected, mass_seed| {
                 let resting = impacts
                     .borrow_mut()
                     .resting_selection(scene, Some(selected))?;
                 let mut next_readings = if common {
-                    solver.correct_mixed_cpu(scene, input, output, sub_dt, Some(&resting), None)?
+                    solver.correct_mixed_cpu(
+                        scene,
+                        input,
+                        output,
+                        sub_dt,
+                        Some(&resting),
+                        Some(mass_seed),
+                    )?
                 } else {
                     crate::distance_constraints::apply_selected(
                         scene,

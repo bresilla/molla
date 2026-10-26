@@ -51,6 +51,27 @@ impl<'a> JointMass<'a> {
         Ok(result)
     }
 
+    /// Records every matrix built here, with its full-rank factor, into `seed`.
+    pub(crate) fn export(self, seed: &mut MassSeed<'_>) -> Result<()> {
+        let matrices = self
+            .entries
+            .into_iter()
+            .enumerate()
+            .filter_map(|(art, entry)| {
+                entry.map(|entry| {
+                    (
+                        art,
+                        (
+                            entry.matrix,
+                            entry.factor.and_then(MassFactor::into_full_rank),
+                        ),
+                    )
+                })
+            })
+            .collect();
+        seed.record(self.model, self.state, matrices)
+    }
+
     fn entry(&mut self, articulation: usize) -> Result<&mut Entry> {
         if self.entries[articulation].is_none() {
             self.entries[articulation] = Some(Entry {

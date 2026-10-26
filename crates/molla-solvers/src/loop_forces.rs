@@ -225,18 +225,20 @@ fn rows(scene: &RigidScene, state: &State, selected: Option<&[bool]>) -> Result<
 }
 
 /// Adds every loop joint's wrenches into `forces` and returns each joint's
-/// reaction on its child.
+/// reaction on its child. `islands` are the scene's joint-only islands.
 pub(crate) fn apply(
     scene: &RigidScene,
+    islands: &crate::rigid_islands::RigidIslands,
     cache: &mut crate::articulated_response::ArticulatedResponse<'_>,
     dt: Real,
     forces: &mut [SpatialVector],
 ) -> Result<Vec<(JointHandle, LoopReaction)>> {
-    apply_selected(scene, cache, dt, forces, None)
+    apply_selected(scene, islands, cache, dt, forces, None)
 }
 
 pub(crate) fn apply_selected(
     scene: &RigidScene,
+    islands: &crate::rigid_islands::RigidIslands,
     cache: &mut crate::articulated_response::ArticulatedResponse<'_>,
     dt: Real,
     forces: &mut [SpatialVector],
@@ -252,7 +254,6 @@ pub(crate) fn apply_selected(
     let mut reactions = if scene.model().articulation_count == 1 {
         apply_rows(scene, cache, dt, forces, &rows, &[0])?
     } else {
-        let islands = crate::rigid_islands::RigidIslands::build(scene, [])?;
         let mut groups =
             std::collections::BTreeMap::<(Vec<usize>, Option<JointHandle>), Vec<Row>>::new();
         for row in rows {

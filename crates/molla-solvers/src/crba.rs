@@ -41,12 +41,20 @@ pub fn mass_matrix(model: &Model, state: &State, articulation: usize) -> Result<
     matrix::<true>(model, state, articulation)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Response matrices this thread has built.
+    pub(crate) static RESPONSE_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Mass matrix with partial angular columns retained for coupled constraint response.
 pub fn response_mass_matrix(
     model: &Model,
     state: &State,
     articulation: usize,
 ) -> Result<Vec<Real>> {
+    #[cfg(test)]
+    RESPONSE_BUILDS.with(|builds| builds.set(builds.get() + 1));
     matrix::<false>(model, state, articulation)
 }
 

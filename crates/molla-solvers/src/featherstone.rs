@@ -971,12 +971,6 @@ impl FeatherstoneSolver {
                 ));
             }
             scratch.body_f.host_mut()?.copy_from_slice(&applied);
-            // The deferred corrections respond at the same substep state.
-            let response = if defer_constraints {
-                mass_seed.clone()
-            } else {
-                crate::joint_mass::MassSeed::new(model)
-            };
             tracing::debug_span!("featherstone_substep").in_scope(|| {
                 self.step_inner_seeded(
                     model,
@@ -985,10 +979,16 @@ impl FeatherstoneSolver {
                     contacts,
                     sub_dt,
                     state_out,
-                    Some(mass_seed),
+                    &mut mass_seed,
                     defer_constraints,
                 )
             })?;
+            // The deferred corrections respond at the same substep state.
+            let response = if defer_constraints {
+                mass_seed
+            } else {
+                crate::joint_mass::MassSeed::new(model)
+            };
             constraints(self, &scratch, state_out, sub_dt, &response)?;
             state_out.body_f.host_mut()?.copy_from_slice(&persistent);
             samples.append(&mut self.contact_forces);
@@ -1105,19 +1105,26 @@ impl FeatherstoneSolver {
         state_out: &mut State,
     ) -> Result<()> {
         self.step_inner_seeded(
-            model, state_in, control, contacts, dt, state_out, None, false,
+            model,
+            state_in,
+            control,
+            contacts,
+            dt,
+            state_out,
+            &mut crate::joint_mass::MassSeed::new(model),
+            false,
         )
     }
 
-    fn step_inner_seeded(
+    fn step_inner_seeded<'m>(
         &mut self,
-        model: &Model,
+        model: &'m Model,
         state_in: &State,
         control: &Control,
         contacts: &Contacts,
         dt: Real,
         state_out: &mut State,
-        mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
+        mass_seed: &mut crate::joint_mass::MassSeed<'m>,
         defer_constraints: bool,
     ) -> Result<()> {
         self.contact_forces.clear();
@@ -1361,9 +1368,11 @@ pub(crate) fn build_motion_subspace(
     }
 }
 
+/// One Featherstone substep. `mass_seed` brings matrices recorded at `state_in`
+/// and takes back every matrix the step used there.
 #[allow(clippy::too_many_arguments)]
-fn cpu_step(
-    model: &Model,
+fn cpu_step<'m>(
+    model: &'m Model,
     state_in: &State,
     control: &Control,
     contacts: &Contacts,
@@ -1376,7 +1385,7 @@ fn cpu_step(
     contact_forces: &mut Vec<crate::penalty_contact::ContactForce>,
     efforts: &mut Vec<JointEffort>,
     activation: Option<&activation::ActiveSet>,
-    mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
+    mass_seed: &mut crate::joint_mass::MassSeed<'m>,
     defer_constraints: bool,
     regularized_friction: bool,
 ) -> Result<()> {
@@ -1423,8 +1432,8 @@ fn cpu_step(
     }
 }
 
-fn cpu_step_inner<const LOCAL: bool>(
-    model: &Model,
+fn cpu_step_inner<'m, const LOCAL: bool>(
+    model: &'m Model,
     state_in: &State,
     control: &Control,
     contacts: &Contacts,
@@ -1437,7 +1446,7 @@ fn cpu_step_inner<const LOCAL: bool>(
     contact_forces: &mut Vec<crate::penalty_contact::ContactForce>,
     efforts: &mut [JointEffort],
     activation: Option<&activation::ActiveSet>,
-    mass_seed: Option<crate::joint_mass::MassSeed<'_>>,
+    mass_seed: &mut crate::joint_mass::MassSeed<'m>,
     defer_constraints: bool,
     regularized_friction: bool,
 ) -> Result<()> {
@@ -1500,7 +1509,8 @@ fn cpu_step_inner<const LOCAL: bool>(
     eval_fk(model, state_out)?;
     eval_body_velocities(model, state_out)?;
 
-    let mut joint_mass = crate::joint_mass::JointMass::with_seed(model, state_out, mass_seed)?;
+    let seed = std::mem::replace(mass_seed, crate::joint_mass::MassSeed::new(model));
+    let mut joint_mass = crate::joint_mass::JointMass::with_seed(model, state_out, Some(seed))?;
     let motor_inertias = effective_drive_inertias(
         model,
         control,
@@ -2284,6 +2294,7 @@ fn cpu_step_inner<const LOCAL: bool>(
         )?;
         drop(integration_span);
     } // end per-articulation outer loop
+    joint_mass.export(mass_seed)?;
 
     if !defer_constraints
         && !regularized_friction

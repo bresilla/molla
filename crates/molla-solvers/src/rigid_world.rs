@@ -42,6 +42,10 @@ pub use gpu::{GpuContactCapacity, GpuRuntimeDiagnostics};
 #[path = "rigid_bounds_tests.rs"]
 mod bounds_tests;
 
+#[cfg(test)]
+#[path = "rigid_step_cache_tests.rs"]
+mod step_cache_tests;
+
 #[derive(Clone, Debug)]
 pub struct ContactPair {
     pub colliders: [ColliderHandle; 2],
@@ -78,6 +82,7 @@ pub struct RigidWorld {
     /// Counts the steps whose contacts became current.
     contact_epoch: u64,
     islands: Mutex<Option<CachedIslands>>,
+    joint_islands: Option<(SceneStamp, Arc<crate::rigid_islands::RigidIslands>)>,
     #[cfg(feature = "gpu")]
     gpu: Option<gpu::RuntimeGpu>,
 }
@@ -125,6 +130,7 @@ impl RigidWorld {
             completed_steps: 0,
             contact_epoch: 0,
             islands: Mutex::new(None),
+            joint_islands: None,
             #[cfg(feature = "gpu")]
             gpu: None,
         })
@@ -134,6 +140,19 @@ impl RigidWorld {
     fn contacts_current(&mut self) {
         self.contact_revision = Some(self.scene.stamp());
         self.contact_epoch += 1;
+    }
+
+    /// Islands of the scene's joints alone, built once per scene.
+    fn joint_islands(&mut self) -> Result<Arc<crate::rigid_islands::RigidIslands>> {
+        let stamp = self.scene.stamp();
+        if let Some((built, islands)) = &self.joint_islands
+            && *built == stamp
+        {
+            return Ok(islands.clone());
+        }
+        let islands = Arc::new(crate::rigid_islands::RigidIslands::build(&self.scene, [])?);
+        self.joint_islands = Some((stamp, islands.clone()));
+        Ok(islands)
     }
 
     pub fn step(&mut self, dt: Real) -> Result<()> {
@@ -480,6 +499,7 @@ impl RigidWorld {
             return Err(Error::Solver("step dt must be positive and finite".into()));
         }
         self.quarantined = self.scene.quarantine_non_finite()?;
+        let joint_islands = self.joint_islands()?;
         let scene = &self.scene;
         self.pipeline
             .set_extra_shape_exclusions(self.wheels.prepare(scene)?);
@@ -553,7 +573,13 @@ impl RigidWorld {
                     &mut wheel_step,
                     |a, b| excluded.borrow_mut()(a, b),
                 )?;
-                let reactions = crate::loop_forces::apply(scene, &mut response, sub_dt, wrenches)?;
+                let reactions = crate::loop_forces::apply(
+                    scene,
+                    &joint_islands,
+                    &mut response,
+                    sub_dt,
+                    wrenches,
+                )?;
                 devices.record_reactions(&reactions, weight, substep == 0);
                 if capture {
                     *compliant.borrow_mut() = reactions;

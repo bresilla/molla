@@ -61,6 +61,10 @@ fn fixture(kind: BodyKind) -> (RigidScene, [[BodyHandle; 2]; 2]) {
     (scene, groups)
 }
 
+fn joint_islands(scene: &RigidScene) -> crate::rigid_islands::RigidIslands {
+    crate::rigid_islands::RigidIslands::build(scene, []).unwrap()
+}
+
 #[test]
 fn selected_loop_rows_preserve_active_response_and_skip_sleeping_boundaries() {
     for kind in [BodyKind::Fixed, BodyKind::Kinematic] {
@@ -69,6 +73,7 @@ fn selected_loop_rows_preserve_active_response_and_skip_sleeping_boundaries() {
         let mut full = vec![seed; scene.model().body_count];
         apply(
             &scene,
+            &joint_islands(&scene),
             &mut ArticulatedResponse::new(scene.model(), scene.state()),
             1.0 / 960.0,
             &mut full,
@@ -87,6 +92,7 @@ fn selected_loop_rows_preserve_active_response_and_skip_sleeping_boundaries() {
             let mut actual = vec![seed; full.len()];
             apply_selected(
                 &scene,
+                &joint_islands(&scene),
                 &mut ArticulatedResponse::new(scene.model(), scene.state()),
                 1.0 / 960.0,
                 &mut actual,
@@ -127,6 +133,7 @@ fn invalid_or_split_loop_selection_leaves_force_buffer_unchanged() {
         assert!(
             apply_selected(
                 &scene,
+                &joint_islands(&scene),
                 &mut ArticulatedResponse::new(scene.model(), scene.state()),
                 1.0 / 960.0,
                 &mut actual,
@@ -149,6 +156,7 @@ fn sleeping_mass_scale_and_singular_inertia_do_not_change_active_forces() {
         let mut forces = vec![SpatialVector::ZERO; scene.model().body_count];
         apply_selected(
             scene,
+            &joint_islands(scene),
             &mut ArticulatedResponse::new(scene.model(), scene.state()),
             1.0 / 960.0,
             &mut forces,
@@ -242,6 +250,7 @@ fn island_partition_preserves_static_only_effort_and_sorted_reactions() {
     let mut forces = vec![SpatialVector::ZERO; scene.model().body_count];
     let reactions = apply(
         &scene,
+        &joint_islands(&scene),
         &mut ArticulatedResponse::new(scene.model(), scene.state()),
         1.0 / 240.0,
         &mut forces,
@@ -275,6 +284,7 @@ fn compare_partition(scene: &RigidScene, dt: Real) {
     let mut actual = vec![seed; expected.len()];
     let reactions = apply(
         scene,
+        &joint_islands(scene),
         &mut ArticulatedResponse::new(scene.model(), scene.state()),
         dt,
         &mut actual,

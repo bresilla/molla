@@ -223,10 +223,10 @@ impl FeatherstoneSolver {
             dt,
             output,
             excluded,
-            |state, contacts, dt, wrenches| forces(state, contacts, dt, wrenches),
+            |state, contacts, dt, wrenches, _| forces(state, contacts, dt, wrenches),
             bounds,
             false,
-            |_, _, _, _, _| Ok(()),
+            |_, _, _, _, _, _| Ok(()),
         )
     }
 
@@ -245,10 +245,18 @@ impl FeatherstoneSolver {
             &mut Contacts,
             Real,
             &mut [molla_math::SpatialVector],
+            &mut crate::joint_mass::MassSeed<'_>,
         ) -> Result<Vec<bool>>,
         bounds: Option<&crate::geometry::shape_world::PreparedShapeBounds<'_>>,
         defer_constraints: bool,
-        mut constraints: impl FnMut(&mut Self, &State, &mut State, Real, &[bool]) -> Result<()>,
+        mut constraints: impl FnMut(
+            &mut Self,
+            &State,
+            &mut State,
+            Real,
+            &[bool],
+            &crate::joint_mass::MassSeed<'_>,
+        ) -> Result<()>,
     ) -> Result<()> {
         self.contact_forces.clear();
         if self.is_gpu() || !dt.is_finite() || dt <= 0.0 {
@@ -280,7 +288,8 @@ impl FeatherstoneSolver {
         for substep in 0..count {
             pipeline.collide_prepared(bounds, &scratch, contacts, &mut excluded)?;
             applied.copy_from_slice(&persistent);
-            let mask = forces(&scratch, contacts, sub_dt, &mut applied)?;
+            let mut mass_seed = crate::joint_mass::MassSeed::new(model);
+            let mask = forces(&scratch, contacts, sub_dt, &mut applied, &mut mass_seed)?;
             let active = ActiveSet::new(model, contacts, &mask)?;
             if applied
                 .iter()
@@ -304,11 +313,11 @@ impl FeatherstoneSolver {
                 &mut self.contact_forces,
                 &mut self.substep_efforts,
                 Some(&active),
-                None,
+                &mut mass_seed,
                 defer_constraints,
                 self.regularized_friction,
             )?;
-            constraints(self, &scratch, output, sub_dt, &mask)?;
+            constraints(self, &scratch, output, sub_dt, &mask, &mass_seed)?;
             for reading in &mut self.contact_forces {
                 reading.sample_dt = sub_dt;
                 reading.normal_impulse = reading.normal_force * sub_dt;
@@ -371,7 +380,7 @@ impl FeatherstoneSolver {
                 &mut self.contact_forces,
                 &mut self.substep_efforts,
                 Some(&active),
-                None,
+                &mut crate::joint_mass::MassSeed::new(model),
                 false,
                 self.regularized_friction,
             )?;
