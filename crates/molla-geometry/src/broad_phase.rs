@@ -260,45 +260,56 @@ impl BroadPhase {
             })
         };
 
-        for (ii, &i) in self.moving.iter().enumerate() {
-            let aabb_i = self.aabbs[i as usize];
-            for &j in &self.moving[ii + 1..] {
-                let aabb_j = self.aabbs[j as usize];
-                if aabb_axis(&aabb_j, axis, true) > aabb_axis(&aabb_i, axis, false) {
-                    break;
-                }
-                if aabb_i.intersects(&aabb_j)
-                    && pair_passes_filters(model, shape_body, body_world, i as usize, j as usize)
-                {
-                    push(out, i, j);
-                }
-            }
-            let hi = aabb_axis(&aabb_i, axis, false);
-            for (reach, class) in &self.statics {
-                let lo = aabb_axis(&aabb_i, axis, true) - reach;
-                let start =
-                    class.partition_point(|&s| aabb_axis(&self.aabbs[s as usize], axis, true) < lo);
-                for &s in &class[start..] {
-                    let aabb_s = self.aabbs[s as usize];
-                    if aabb_axis(&aabb_s, axis, true) > hi {
+        // Runs of moving shapes sweep across the pool; their pairs come back
+        // in the moving order.
+        let (aabbs, moving, statics, long_statics) =
+            (&self.aabbs, &self.moving, &self.statics, &self.long_statics);
+        let parts = crate::parallel::map_chunks(moving, |first, chunk| {
+            let mut out = Vec::new();
+            for (k, &i) in chunk.iter().enumerate() {
+                let aabb_i = aabbs[i as usize];
+                for &j in &moving[first + k + 1..] {
+                    let aabb_j = aabbs[j as usize];
+                    if aabb_axis(&aabb_j, axis, true) > aabb_axis(&aabb_i, axis, false) {
                         break;
                     }
-                    if aabb_i.intersects(&aabb_s)
-                        && pair_passes_filters(
-                            model, shape_body, body_world, i as usize, s as usize,
-                        )
+                    if aabb_i.intersects(&aabb_j)
+                        && pair_passes_filters(model, shape_body, body_world, i as usize, j as usize)
                     {
-                        push(out, i, s);
+                        push(&mut out, i, j);
+                    }
+                }
+                let hi = aabb_axis(&aabb_i, axis, false);
+                for (reach, class) in statics {
+                    let lo = aabb_axis(&aabb_i, axis, true) - reach;
+                    let start =
+                        class.partition_point(|&s| aabb_axis(&aabbs[s as usize], axis, true) < lo);
+                    for &s in &class[start..] {
+                        let aabb_s = aabbs[s as usize];
+                        if aabb_axis(&aabb_s, axis, true) > hi {
+                            break;
+                        }
+                        if aabb_i.intersects(&aabb_s)
+                            && pair_passes_filters(
+                                model, shape_body, body_world, i as usize, s as usize,
+                            )
+                        {
+                            push(&mut out, i, s);
+                        }
+                    }
+                }
+                for &s in long_statics {
+                    if aabb_i.intersects(&aabbs[s as usize])
+                        && pair_passes_filters(model, shape_body, body_world, i as usize, s as usize)
+                    {
+                        push(&mut out, i, s);
                     }
                 }
             }
-            for &s in &self.long_statics {
-                if aabb_i.intersects(&self.aabbs[s as usize])
-                    && pair_passes_filters(model, shape_body, body_world, i as usize, s as usize)
-                {
-                    push(out, i, s);
-                }
-            }
+            out
+        });
+        for part in parts {
+            out.extend(part);
         }
 
         for &p in &self.infinite_idx {

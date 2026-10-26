@@ -35,7 +35,12 @@ impl MeshBvhCache {
         self.builds
     }
 
-    pub(crate) fn get(&mut self, id: usize, mesh: &TriMesh) -> &MeshBvh {
+    /// The BVH `prepare` made current for this query.
+    pub(crate) fn prepared(&self, id: usize) -> Option<&MeshBvh> {
+        self.entries.get(id)?.as_ref().filter(|cached| cached.checked).map(|cached| &cached.bvh)
+    }
+
+    pub(crate) fn prepare(&mut self, id: usize, mesh: &TriMesh) -> &MeshBvh {
         let entry = &mut self.entries[id];
         let unchanged = entry.as_ref().is_some_and(|cached| {
             cached.checked
@@ -74,15 +79,15 @@ mod tests {
         let (one, other) = (RigidScene::new().unwrap(), RigidScene::new().unwrap());
         let mut cache = MeshBvhCache::default();
         cache.begin_query(1, Some(&one.model_stamp()));
-        cache.get(0, &mesh(0.0));
+        cache.prepare(0, &mesh(0.0));
         cache.begin_query(1, Some(&one.model_stamp()));
-        cache.get(0, &mesh(5.0));
+        cache.prepare(0, &mesh(5.0));
         assert_eq!(cache.builds(), 1);
         cache.begin_query(1, Some(&other.model_stamp()));
-        cache.get(0, &mesh(5.0));
+        cache.prepare(0, &mesh(5.0));
         assert_eq!(cache.builds(), 2);
         cache.begin_query(1, None);
-        cache.get(0, &mesh(9.0));
+        cache.prepare(0, &mesh(9.0));
         assert_eq!(cache.builds(), 3);
     }
 }

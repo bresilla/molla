@@ -72,7 +72,7 @@ pub(crate) fn pair_contact_cached(
     _default_friction: Real,
     default_restitution: Real,
     out: &mut Vec<ContactManifold>,
-    mesh_cache: Option<&mut MeshBvhCache>,
+    mesh_cache: Option<&MeshBvhCache>,
 ) {
     let geom_a = model.shape_geometry[pair.a as usize];
     let geom_b = model.shape_geometry[pair.b as usize];
@@ -1605,7 +1605,7 @@ fn trimesh_pair(
     pair: ShapePair,
     flip_output: bool,
     out: &mut Vec<ContactManifold>,
-    cache: Option<&mut MeshBvhCache>,
+    cache: Option<&MeshBvhCache>,
 ) {
     let mesh = match model.meshes.get(mesh_id as usize) {
         Some(m) => m,
@@ -1657,11 +1657,12 @@ fn trimesh_pair(
     let (other_min, other_max) = shape_world_aabb_quick(other_geom, other_xf);
     let local_aabb = transform_aabb_to_mesh_local(other_min, other_max, mesh_xf);
     let temporary;
-    let bvh = if let Some(cache) = cache {
-        cache.get(mesh_id as usize, mesh)
-    } else {
-        temporary = MeshBvh::build(&mesh.vertices, &mesh.indices, 4);
-        &temporary
+    let bvh = match cache.and_then(|cache| cache.prepared(mesh_id as usize)) {
+        Some(bvh) => bvh,
+        None => {
+            temporary = MeshBvh::build(&mesh.vertices, &mesh.indices, 4);
+            &temporary
+        }
     };
     let mut candidates = Vec::new();
     bvh.triangles_overlapping_aabb(local_aabb.0, local_aabb.1, &mut candidates);
