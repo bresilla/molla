@@ -456,7 +456,7 @@ impl CollisionPipeline {
         contacts.clear();
         self.last_cpu_np_calls = 0;
         self.last_broad_phase_pairs = 0;
-        self.mesh_cache.begin_query(model.meshes.len());
+        self.mesh_cache.begin_query(model.meshes.len(), bounds.and_then(|bounds| bounds.stamp()));
         if model.shape_count < 2 {
             // No pairs possible; still write an empty body-contact
             // CSR so `body_contact_offsets` / `body_contact_indices`
