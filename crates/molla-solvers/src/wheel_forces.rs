@@ -17,7 +17,9 @@ mod readout;
 pub use readout::{WheelSampleIter, WheelSamples};
 mod sleeping;
 pub(crate) use sleeping::SleepWheelGeometry;
-use sleeping::query_ground;
+#[cfg(test)]
+mod parallel_tests;
+use sleeping::{GroundHit, query_ground};
 
 #[derive(Clone)]
 pub struct WheelDesc {
@@ -511,6 +513,7 @@ impl WheelForces {
         let poses = state.body_q.host()?;
         let velocities = state.body_qd.host()?;
         let model = scene.model();
+        let mut wheels = Vec::new();
         for w in self.wheels.values().filter(|w| active(scene, w)) {
             let body = scene
                 .body_index(w.body)
@@ -526,7 +529,7 @@ impl WheelForces {
                     sample.dt = 0.0;
                     sample.output.slip_ratio = 0.0;
                     sample.output.slip_angle = 0.0;
-                    samples.push(sample);
+                    wheels.push(Wheel::Held(sample));
                 }
                 continue;
             }
@@ -543,13 +546,6 @@ impl WheelForces {
             else {
                 shear.remove(&w.body);
                 continue;
-            };
-            let normal = hit.normal;
-            let friction = hit.friction;
-            let terrain = Surface {
-                point: hit.point,
-                normal,
-                friction,
             };
             let center = pose.transform_point(model.body_com.host()?[body]);
             let velocity = velocities[body].linear + velocities[body].angular.cross(hub - center);
@@ -572,8 +568,7 @@ impl WheelForces {
                 normal_stiffness: w.normal_stiffness,
                 normal_damping: w.normal_damping,
             };
-            let (mut output, pressure) = if let Some(state) = pressure_states.get(&w.body) {
-                let distance = (hub - hit.point).dot(normal);
+            if pressure_states.contains_key(&w.body) {
                 let history = shear.entry(w.body).or_insert_with(|| WheelShear {
                     ground: hit.collider,
                     state: Default::default(),
@@ -583,23 +578,78 @@ impl WheelForces {
                     history.ground = hit.collider;
                     history.state = Default::default();
                 }
-                let friction_at = |point| hit.surface.sample(point);
-                let (output, sample) = crate::pressure_tire::evaluate_with_surface(
+            }
+            wheels.push(Wheel::Grounded {
+                desc: w,
+                body,
+                distance: (hub - hit.point).dot(hit.normal),
+                hit,
+                center,
+                contact,
+            });
+        }
+        // Brush tyres, each against its own tread history, on the pool.
+        let mut histories = shear.iter_mut();
+        let mut tyres = Vec::new();
+        for wheel in &wheels {
+            if let Wheel::Grounded {
+                desc,
+                hit,
+                contact,
+                distance,
+                ..
+            } = wheel
+                && let Some(state) = pressure_states.get(&desc.body)
+            {
+                let (_, history) = histories
+                    .find(|(body, _)| **body == desc.body)
+                    .ok_or_else(|| invalid("missing tyre tread history"))?;
+                tyres.push(Tyre {
                     state,
-                    &contact,
-                    normal,
-                    distance,
-                    hit.surface.reference,
-                    Some((&mut history.state, dt)),
-                    hit.surface
-                        .grid
-                        .map(|_| &friction_at as &dyn Fn(Vec3) -> Real),
-                )?;
+                    contact,
+                    hit,
+                    distance: *distance,
+                    history: &mut history.state,
+                });
+            }
+        }
+        let evaluated = if parallel_tyres(tyres.len()) {
+            molla_geometry::parallel::map_parts(tyres, |tyre| tyre.evaluate(dt))
+        } else {
+            tyres.into_iter().map(|tyre| tyre.evaluate(dt)).collect()
+        };
+        let mut evaluated = evaluated.into_iter();
+        for wheel in wheels {
+            let (w, body, hit, center, contact) = match wheel {
+                Wheel::Held(sample) => {
+                    samples.push(sample);
+                    continue;
+                }
+                Wheel::Grounded {
+                    desc,
+                    body,
+                    hit,
+                    center,
+                    contact,
+                    ..
+                } => (desc, body, hit, center, contact),
+            };
+            let normal = hit.normal;
+            let friction = hit.friction;
+            let (mut output, pressure) = if pressure_states.contains_key(&w.body) {
+                let (output, sample) = evaluated
+                    .next()
+                    .ok_or_else(|| invalid("missing tyre evaluation"))??;
                 if !output.in_contact {
                     shear.remove(&w.body);
                 }
                 (output, Some(sample))
             } else {
+                let terrain = Surface {
+                    point: hit.point,
+                    normal,
+                    friction,
+                };
                 (
                     wheel_ground_wrench(&contact, &terrain, w.tire.as_ref()),
                     None,
@@ -650,6 +700,64 @@ impl WheelForces {
             });
         }
         Ok(())
+    }
+}
+
+/// Fewest brush tyres worth evaluating across the pool.
+const MIN_PARALLEL_TYRES: usize = 8;
+
+#[cfg(test)]
+thread_local! {
+    /// Brush tyres stepped on this thread are evaluated one by one.
+    pub(crate) static SERIAL_TYRES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn parallel_tyres(count: usize) -> bool {
+    #[cfg(test)]
+    if SERIAL_TYRES.get() {
+        return false;
+    }
+    count >= MIN_PARALLEL_TYRES
+}
+
+/// One active wheel of a step: its retained sample while its body sleeps, or
+/// the ground under it.
+enum Wheel<'a> {
+    Held(WheelSample),
+    Grounded {
+        desc: &'a WheelDesc,
+        body: usize,
+        hit: GroundHit<'a>,
+        center: Vec3,
+        contact: WheelContact,
+        distance: Real,
+    },
+}
+
+/// A brush tyre to evaluate against its own tread history.
+struct Tyre<'a> {
+    state: &'a PressureTireState,
+    contact: &'a WheelContact,
+    hit: &'a GroundHit<'a>,
+    distance: Real,
+    history: &'a mut crate::pressure_tire::PressureShear,
+}
+
+impl Tyre<'_> {
+    fn evaluate(self, dt: Real) -> Result<(TireOutput, PressureTireSample)> {
+        let friction_at = |point| self.hit.surface.sample(point);
+        crate::pressure_tire::evaluate_with_surface(
+            self.state,
+            self.contact,
+            self.hit.normal,
+            self.distance,
+            self.hit.surface.reference,
+            Some((self.history, dt)),
+            self.hit
+                .surface
+                .grid
+                .map(|_| &friction_at as &dyn Fn(Vec3) -> Real),
+        )
     }
 }
 
