@@ -307,7 +307,8 @@ fn evaluate_persistent_inner<T: Terrain + ?Sized, const CACHED: bool>(
     Ok(output)
 }
 
-/// The tread points of a tyre of this geometry, shared by every brush that has it.
+/// The tread points of a tyre of this geometry, shared by every brush on this
+/// thread that has it.
 fn brush_profile(
     radius: f64,
     width: f64,
@@ -315,21 +316,22 @@ fn brush_profile(
     width_segments: usize,
 ) -> std::sync::Arc<[[f64; 3]]> {
     type Geometry = (u64, u64, usize, usize);
-    static BUILT: std::sync::Mutex<Vec<(Geometry, std::sync::Arc<[[f64; 3]]>)>> =
-        std::sync::Mutex::new(Vec::new());
+    thread_local! {
+        static BUILT: std::cell::RefCell<Vec<(Geometry, std::sync::Arc<[[f64; 3]]>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
     let geometry = (radius.to_bits(), width.to_bits(), segments, width_segments);
-    let mut built = BUILT
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((_, profile)) = built.iter().find(|(at, _)| *at == geometry) {
-        return profile.clone();
-    }
-    if built.len() == 256 {
-        built.remove(0);
-    }
-    let profile = tread_points(radius, width, segments, width_segments);
-    built.push((geometry, profile.clone()));
-    profile
+    BUILT.with_borrow_mut(|built| {
+        if let Some((_, profile)) = built.iter().find(|(at, _)| *at == geometry) {
+            return profile.clone();
+        }
+        if built.len() == 256 {
+            built.remove(0);
+        }
+        let profile = tread_points(radius, width, segments, width_segments);
+        built.push((geometry, profile.clone()));
+        profile
+    })
 }
 
 fn tread_points(
