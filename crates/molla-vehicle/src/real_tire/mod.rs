@@ -113,6 +113,7 @@ pub use fem::sidewall::{
     TetraSidewallLaminateSanityReport, TetraSidewallLaminateStretchDiagnostics,
     TetraTreadBeltStretchDiagnostics,
 };
+pub use fem::solver::TetraTireFemCavitySurface;
 pub(crate) use fem::state::{SidewallDihedral, StructuralEdge, TetraElement, tire_nodes_finite};
 pub use fem::state::{TetraTireFem, TetraTireFemGpuSnapshot};
 

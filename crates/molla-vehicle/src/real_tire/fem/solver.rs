@@ -4,6 +4,20 @@
 
 use crate::terrain::{FlatTerrain, Terrain};
 
+/// Indexed cavity tube and axial caps with polytropic pressure constants.
+pub struct TetraTireFemCavitySurface<'a> {
+    pub tube: &'a [[u32; 3]],
+    pub negative_cap: &'a [[u32; 2]],
+    pub positive_cap: &'a [[u32; 2]],
+    pub node_count: usize,
+    pub rest_volume_m3: f64,
+    pub pressure_pa: f64,
+    pub gamma: f64,
+    pub coupling: f64,
+    pub width_m: f64,
+    pub area_per_bead_m2: f64,
+}
+
 use super::super::internal::{
     add, cross, dot, finite_nonnegative, finite_or, finite_positive_or, finite_vec3, normalize,
     scale, sub,
@@ -517,7 +531,8 @@ impl TetraTireFem {
         (p_ref * ratio * coupling).clamp(0.0, 50.0 * p_ref.max(1.0e4))
     }
 
-    fn cavity_radial_force_per_bead_n(&self) -> f64 {
+    /// Current gas-law radial load per bead in newtons, without exporting mesh state.
+    pub fn cavity_radial_force_per_bead_n(&self) -> f64 {
         if self.bead_offsets.is_empty() {
             return 0.0;
         }
@@ -525,6 +540,27 @@ impl TetraTireFem {
             std::f64::consts::TAU * self.params.inner_radius * self.params.width;
         let area_per_bead = bead_surface_area / self.bead_offsets.len() as f64;
         self.effective_cavity_pressure_pa() * area_per_bead
+    }
+
+    /// Borrows the cavity triangulation and fixed gas-law configuration.
+    pub fn cavity_surface(&self) -> TetraTireFemCavitySurface<'_> {
+        TetraTireFemCavitySurface {
+            tube: &self.cavity_tube_tris,
+            negative_cap: &self.cavity_neg_edges,
+            positive_cap: &self.cavity_pos_edges,
+            node_count: self.pos.len(),
+            rest_volume_m3: self.cavity_volume_rest,
+            pressure_pa: self.params.pressure_pa.max(0.0),
+            gamma: self.params.cavity_polytropic_gamma.max(0.1),
+            coupling: self.params.cavity_carcass_coupling.clamp(0.0, 1.0),
+            width_m: self.params.width,
+            area_per_bead_m2: if self.bead_offsets.is_empty() {
+                0.0
+            } else {
+                std::f64::consts::TAU * self.params.inner_radius * self.params.width
+                    / self.bead_offsets.len() as f64
+            },
+        }
     }
 
     fn max_tet_volume_error_m3(&self) -> f64 {
@@ -2445,16 +2481,32 @@ impl TetraTireFem {
                 tet.fiber_k2_d,
             );
 
+            let fibers = [
+                (tet.fiber_dir, tet.fiber_k1, tet.fiber_k2),
+                (tet.fiber_dir_b, tet.fiber_k1_b, tet.fiber_k2_b),
+                (tet.fiber_dir_c, tet.fiber_k1_c, tet.fiber_k2_c),
+                (tet.fiber_dir_d, tet.fiber_k1_d, tet.fiber_k2_d),
+            ]
+            .map(|(dir, k1, k2)| {
+                (
+                    dir,
+                    if self.params.semi_implicit_stiffness_scale > 0.0 {
+                        super::math::holzapfel_fiber_tangent(f_def, dir, k1, k2)
+                    } else {
+                        0.0
+                    },
+                )
+            });
             for a in 0..4 {
                 let f = scale(mat_vec(p_stress, tet.grads[a]), -tet.volume);
                 force[tet.ids[a]] = add(force[tet.ids[a]], f);
                 let grad_norm2 = dot(tet.grads[a], tet.grads[a]);
-                let fibre_tangent = tet.fiber_k1.abs() * (1.0 + tet.fiber_k2.abs())
-                    + tet.fiber_k1_b.abs() * (1.0 + tet.fiber_k2_b.abs())
-                    + tet.fiber_k1_c.abs() * (1.0 + tet.fiber_k2_c.abs())
-                    + tet.fiber_k1_d.abs() * (1.0 + tet.fiber_k2_d.abs());
+                let fibre_tangent = fibers
+                    .iter()
+                    .map(|(dir, tangent)| tangent * dot(tet.grads[a], *dir).powi(2))
+                    .sum::<f64>();
                 node_stiffness_diag[tet.ids[a]] +=
-                    tet.volume * (mu.abs() + lambda.abs() + fibre_tangent) * grad_norm2;
+                    tet.volume * ((mu.abs() + lambda.abs()) * grad_norm2 + fibre_tangent);
             }
         }
 

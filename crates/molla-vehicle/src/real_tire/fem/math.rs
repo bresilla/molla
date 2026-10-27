@@ -50,6 +50,68 @@ pub(crate) fn add_holzapfel_fiber_stress(
     }
 }
 
+pub(crate) fn holzapfel_fiber_tangent(f: [[f64; 3]; 3], a: [f64; 3], k1: f64, k2: f64) -> f64 {
+    if k1 <= 0.0 {
+        return 0.0;
+    }
+    let fa = mat_vec(f, a);
+    let i4 = dot(fa, fa);
+    if i4 <= 1.0 {
+        return 0.0;
+    }
+    let stretch = i4 - 1.0;
+    let exponent = k2.max(0.0) * stretch * stretch;
+    let slope = if exponent < 30.0 {
+        1.0 + 2.0 * exponent
+    } else {
+        1.0
+    };
+    2.0 * k1 * exponent.min(30.0).exp() * (stretch + 2.0 * i4 * slope)
+}
+
+#[cfg(test)]
+mod fiber_tangent_tests {
+    use super::*;
+
+    #[test]
+    fn fiber_tangent_matches_directional_stress_derivative() {
+        let a = [0.6, 0.8, 0.];
+        let mut maximum = 0f64;
+        for stretch in [0.8, 1.001, 1.3, 2.1, 3.] {
+            let f = [[stretch, 0.1, 0.], [0., stretch, 0.], [0., 0., 1.]];
+            let q = normalize(mat_vec(f, a));
+            for g in [[0.3, -0.7, 0.2], [1., 0., 0.], [0., 0., 1.]] {
+                for k1 in [-1., 0., 2.3] {
+                    for k2 in [-1., 0., 2., 5.] {
+                        let h = 1e-5;
+                        let sample = |step: f64| {
+                            let perturbed = std::array::from_fn(|i| {
+                                std::array::from_fn(|j| f[i][j] + h * step * q[i] * g[j])
+                            });
+                            let mut p = [[0.; 3]; 3];
+                            add_holzapfel_fiber_stress(&mut p, perturbed, a, k1, k2);
+                            dot(mat_vec(p, g), q)
+                        };
+                        let expected = (sample(-2.) - 8. * sample(-1.) + 8. * sample(1.)
+                            - sample(2.))
+                            / (12. * h);
+                        let actual = holzapfel_fiber_tangent(f, a, k1, k2) * dot(g, a).powi(2);
+                        let error = (actual - expected).abs() / (1. + expected.abs());
+                        maximum = maximum.max(error);
+                        assert!(
+                            actual.is_finite() && actual >= 0. && error < 1e-8,
+                            "stretch={stretch} k1={k1} k2={k2} g={g:?} error={error:e}"
+                        );
+                    }
+                }
+            }
+        }
+        println!(
+            "180 fiber directional derivatives, including disabled/compressed/exponent-clamped branches; maximum scaled error {maximum:e}"
+        );
+    }
+}
+
 pub(crate) fn det3(m: [[f64; 3]; 3]) -> f64 {
     m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
         - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])

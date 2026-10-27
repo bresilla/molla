@@ -5819,6 +5819,82 @@ fn cavity_pressure_load_tracks_inflation_pressure() {
 }
 
 #[test]
+fn cavity_scalar_export_matches_live_mesh_snapshot() {
+    for segments in [8, 16, 32] {
+        let mut tire = TetraTireFem::new(
+            1.25,
+            0.,
+            TetraTireFemParams {
+                segments,
+                radial_layers: 3,
+                width_layers: 3,
+                ..Default::default()
+            },
+        );
+        for pressure in [0., 80_000., 200_000., 350_000.] {
+            tire.set_pressure(pressure);
+            for _ in 0..3 {
+                let mut snapshot = tire.gpu_snapshot();
+                let scalar = tire.cavity_radial_force_per_bead_n() as f32;
+                assert_eq!(
+                    scalar.to_bits(),
+                    snapshot.cavity_radial_force_per_bead.to_bits()
+                );
+                assert!(scalar.is_finite() && scalar >= 0.);
+                let hub = tire.hub().map(|v| v as f32);
+                for p in &mut snapshot.positions {
+                    p[1] = hub[1] + (p[1] - hub[1]) * 0.99;
+                }
+                tire.apply_gpu_node_state(
+                    &snapshot.positions,
+                    &snapshot.velocities,
+                    [hub[0], hub[1], hub[2], 0., 0., 0., 0., 0.],
+                )
+                .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn cavity_scalar_export_paired_cost() {
+    use std::{hint::black_box, time::Instant};
+    let tire = TetraTireFem::new(
+        0.,
+        200_000.,
+        TetraTireFemParams {
+            segments: 32,
+            radial_layers: 3,
+            width_layers: 3,
+            ..Default::default()
+        },
+    );
+    let expected = tire.gpu_snapshot().cavity_radial_force_per_bead.to_bits();
+    for round in 0..8 {
+        let mut ns = [0; 2];
+        for candidate in if round % 2 == 0 { [0, 1] } else { [1, 0] } {
+            let start = Instant::now();
+            for _ in 0..64 {
+                let value = if candidate == 0 {
+                    black_box(&tire).gpu_snapshot().cavity_radial_force_per_bead
+                } else {
+                    black_box(&tire).cavity_radial_force_per_bead_n() as f32
+                };
+                assert_eq!(black_box(value).to_bits(), expected);
+            }
+            ns[candidate] = start.elapsed().as_nanos();
+        }
+        println!(
+            "cavity_scalar_cost {{\"round\":{round},\"calls\":64,\"snapshot_ns\":{},\"scalar_ns\":{},\"nodes\":{},\"tets\":{}}}",
+            ns[0],
+            ns[1],
+            tire.gpu_snapshot().positions.len(),
+            tire.tetra_count()
+        );
+    }
+}
+
+#[test]
 fn tetra_diagnostics_report_cavity_and_xpbd_state() {
     let mut tire = TetraTireFem::new(
         0.0,
