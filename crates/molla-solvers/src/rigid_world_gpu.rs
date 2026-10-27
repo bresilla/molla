@@ -7,7 +7,7 @@ use molla_compute::Engine;
 use molla_core::{Error, Result};
 use molla_math::{GpuSpatialVector, GpuTransform, Real};
 use molla_sim::runtime::JointHandle;
-use molla_sim::runtime::{RigidScene, SceneStamp};
+use molla_sim::runtime::{DynamicsStamp, RigidScene, SceneStamp};
 use molla_sim::{Contacts, State};
 use molla_storage::{Buffer, BufferElement};
 use std::collections::BTreeMap;
@@ -21,6 +21,22 @@ mod contacts;
 mod damping;
 #[path = "rigid_momentum_gpu.rs"]
 mod momentum;
+#[path = "rigid_soil_gpu.rs"]
+mod soil;
+#[path = "rigid_soil_completion.rs"]
+mod soil_completion;
+pub use soil::{
+    MpmSoilBodyContactMotion, MpmSoilBodyImpulse, MpmSoilBodyWrench, MpmSoilContactMotionFrame,
+    MpmSoilFrameLoadObservation, MpmSoilFrameLoads, MpmSoilFrameProfile, MpmSoilMachineTiming,
+    MpmSoilMotionInfo, MpmSoilNewtonWork, MpmSoilReactionInfo, MpmSoilRuntimeStats,
+    MpmSoilSurfaceFrame, MpmSoilTransferInfo, MpmSoilWrenchFrame,
+};
+#[cfg(test)]
+#[path = "rigid_dynamics_parity_tests.rs"]
+mod dynamics_parity;
+#[cfg(test)]
+#[path = "rigid_paired_runtime_tests.rs"]
+mod paired_runtime_tests;
 #[path = "rigid_contact_precision_gpu.rs"]
 mod precision;
 #[cfg(test)]
@@ -36,7 +52,17 @@ pub(super) struct RuntimeGpu {
     compiled: Option<Compiled>,
     upload: Vec<u8>,
     diagnostics: GpuRuntimeDiagnostics,
+    render_stamp: Option<DynamicsStamp>,
     contact_capacity: GpuContactCapacity,
+    rounding: crate::kernels::FeatherstoneRounding,
+    execution: crate::kernels::FeatherstoneExecution,
+    paired_rates: bool,
+    native_prediction: Option<(Real, u64)>,
+    soil: Option<soil::RuntimeSoil>,
+    #[cfg(test)]
+    dynamics_probe: Option<dynamics_parity::Probe>,
+    #[cfg(test)]
+    fail_after_substep: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -52,12 +78,42 @@ pub struct GpuRuntimeDiagnostics {
     pub last_state_readback_bytes: u64,
 }
 
+/// Live same-device transforms, encoded as position vec4 then xyzw quaternion vec4.
+/// Retained bindings must recheck both buffer identities and the active side before
+/// each draw. These are not snapshots; queue draws before the next world mutation.
+pub struct GpuBodyRenderView<'a> {
+    buffers: [&'a wgpu::Buffer; 2],
+    active_side: usize,
+    body_count: usize,
+    committed_frame: u64,
+}
+
+impl<'a> GpuBodyRenderView<'a> {
+    pub fn buffers(&self) -> [&'a wgpu::Buffer; 2] {
+        self.buffers
+    }
+
+    pub fn active_side(&self) -> usize {
+        self.active_side
+    }
+
+    pub fn body_count(&self) -> usize {
+        self.body_count
+    }
+
+    pub fn committed_frame(&self) -> u64 {
+        self.committed_frame
+    }
+}
+
 struct Compiled {
+    native_prediction: Option<[crate::native_prediction_gpu::PreparedNativePrediction; 2]>,
     stamp: SceneStamp,
+    render_side: usize,
     solver_status: wgpu::Buffer,
     states: [State; 2],
     readback: wgpu::Buffer,
-    offsets: [u64; 13],
+    offsets: [u64; 15],
     break_readback: wgpu::Buffer,
     capture: bool,
     distance: Option<crate::distance_gpu::DistanceGpu>,
@@ -71,6 +127,16 @@ struct Compiled {
 }
 
 impl Compiled {
+    fn native_mass(&self) -> Option<[&wgpu::Buffer; 2]> {
+        self.native_prediction
+            .as_ref()
+            .map(|p| p.each_ref().map(|p| p.mass_matrix()))
+    }
+    fn native_jacobians(&self) -> Option<[&wgpu::Buffer; 2]> {
+        self.native_prediction
+            .as_ref()
+            .map(|p| p.each_ref().map(|p| p.com_jacobians()))
+    }
     fn failure(&self, engine: &Engine, status: u32) -> Error {
         let detail = self
             .contacts
@@ -101,6 +167,29 @@ impl Compiled {
 }
 
 const BREAK_STOP: u32 = 1 << 30;
+
+#[cfg(test)]
+fn trace_soil_runtime(stage: &str) {
+    if std::env::var_os("MOLLA_SOIL_RUNTIME_TRACE").is_some() {
+        eprintln!("soil runtime: {stage}");
+    }
+}
+
+#[cfg(test)]
+fn check_soil_submission(engine: &Engine, stage: &str) {
+    if std::env::var_os("MOLLA_SOIL_RUNTIME_GPU_CHECKPOINTS").is_some() {
+        eprintln!("soil GPU checkpoint: {stage} begin");
+        let result = engine.device().unwrap().poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(5)),
+        });
+        if let Err(error) = result {
+            eprintln!("soil GPU checkpoint: {stage} failed: {error}");
+            std::process::exit(76);
+        }
+        eprintln!("soil GPU checkpoint: {stage} complete");
+    }
+}
 
 struct Segment {
     readings: ConstraintReadings,
@@ -196,9 +285,78 @@ fn validate(scene: &RigidScene) -> Result<()> {
     Ok(())
 }
 
+fn validate_paired(scene: &RigidScene, capture: bool) -> Result<()> {
+    let model = scene.model();
+    if capture
+        || scene.colliders().next().is_some()
+        || scene.loop_joints().next().is_some()
+        || scene.breakable_joints().next().is_some()
+        || model.body_count == 0
+        || model
+            .body_flags
+            .host()?
+            .iter()
+            .any(|f| f & molla_sim::BodyFlags::IMMOVABLE != 0)
+        || model.joint_type.host()?.iter().any(|&k| {
+            k == molla_sim::JointType::Distance as u32 || k > molla_sim::JointType::D6 as u32
+        })
+        || model
+            .joint_limit_lower
+            .host()?
+            .iter()
+            .chain(model.joint_limit_upper.host()?)
+            .chain(model.joint_velocity_limit.host()?)
+            .any(|v| v.is_finite())
+    {
+        return Err(unsupported(
+            "paired rates outside unrestricted dynamic trees without external constraints or reaction capture",
+        ));
+    }
+    Ok(())
+}
+
 impl RigidWorld {
+    /// Borrow current GPU body transforms; scene edits and failed steps invalidate the view.
+    pub fn gpu_body_render_view(&self) -> Result<GpuBodyRenderView<'_>> {
+        let gpu = self
+            .gpu
+            .as_ref()
+            .ok_or_else(|| unsupported("CPU render buffers"))?;
+        gpu.engine.check_device()?;
+        let compiled = gpu
+            .compiled
+            .as_ref()
+            .ok_or_else(|| unsupported("missing GPU state"))?;
+        if gpu.render_stamp.as_ref() != Some(&self.scene.dynamics_stamp())
+            || compiled.stamp != self.scene.model_stamp()
+            || self.mpm_soil_stats().is_some_and(|soil| soil.faulted)
+        {
+            return Err(Error::Gpu(
+                "GPU body render state is not published for this scene".into(),
+            ));
+        }
+        let buffers = [0, 1].map(|side| compiled.states[side].body_q.device_buffer());
+        let [Some(first), Some(second)] = buffers else {
+            return Err(Error::Gpu("GPU body render buffers are empty".into()));
+        };
+        Ok(GpuBodyRenderView {
+            buffers: [first, second],
+            active_side: compiled.render_side,
+            body_count: self.scene.model().body_count,
+            committed_frame: gpu.diagnostics.completed_frames,
+        })
+    }
+
     pub fn gpu_diagnostics(&self) -> Option<GpuRuntimeDiagnostics> {
         self.gpu.as_ref().map(|gpu| gpu.diagnostics)
+    }
+
+    /// Reports the compiled world's native control/prediction path.
+    pub fn gpu_uses_native_prediction(&self) -> bool {
+        self.gpu
+            .as_ref()
+            .and_then(|gpu| gpu.compiled.as_ref())
+            .is_some_and(|compiled| compiled.native_prediction.is_some())
     }
 
     pub fn gpu_contact_capacity(&self) -> Option<GpuContactCapacity> {
@@ -216,6 +374,113 @@ impl RigidWorld {
         engine: Arc<Engine>,
         contact_capacity: GpuContactCapacity,
     ) -> Result<Self> {
+        Self::from_scene_gpu_with_options(
+            scene,
+            engine,
+            contact_capacity,
+            crate::kernels::FeatherstoneRounding::Storage,
+        )
+    }
+
+    /// Construct with fixed capacities and an explicit immutable rounding backend.
+    pub fn from_scene_gpu_with_options(
+        scene: RigidScene,
+        engine: Arc<Engine>,
+        contact_capacity: GpuContactCapacity,
+        rounding: crate::kernels::FeatherstoneRounding,
+    ) -> Result<Self> {
+        Self::from_scene_gpu_with_machine_options(
+            scene,
+            engine,
+            contact_capacity,
+            rounding,
+            crate::kernels::FeatherstoneExecution::Generic,
+        )
+    }
+
+    pub fn from_scene_gpu_with_machine_options(
+        scene: RigidScene,
+        engine: Arc<Engine>,
+        contact_capacity: GpuContactCapacity,
+        rounding: crate::kernels::FeatherstoneRounding,
+        execution: crate::kernels::FeatherstoneExecution,
+    ) -> Result<Self> {
+        Self::from_scene_gpu_rate_mode(
+            scene,
+            engine,
+            contact_capacity,
+            rounding,
+            execution,
+            false,
+            None,
+        )
+    }
+
+    /// Construct experimental paired-rate dynamics for unrestricted dynamic trees.
+    pub fn from_scene_gpu_with_paired_machine_options(
+        scene: RigidScene,
+        engine: Arc<Engine>,
+        contact_capacity: GpuContactCapacity,
+        rounding: crate::kernels::FeatherstoneRounding,
+        execution: crate::kernels::FeatherstoneExecution,
+    ) -> Result<Self> {
+        Self::from_scene_gpu_rate_mode(
+            scene,
+            engine,
+            contact_capacity,
+            rounding,
+            execution,
+            true,
+            None,
+        )
+    }
+
+    /// Constructs native force/direct-effort prediction with paired drift at a fixed substep.
+    /// Predictor storage covers both state parities; soil coupling borrows their mass matrices.
+    pub fn from_scene_gpu_with_native_prediction(
+        scene: RigidScene,
+        engine: Arc<Engine>,
+        substep_dt: Real,
+        max_prediction_bytes: u64,
+    ) -> Result<Self> {
+        if !substep_dt.is_finite()
+            || !(substep_dt as f32).is_finite()
+            || substep_dt as f32 <= 0.0
+            || engine
+                .device()
+                .is_none_or(|d| !d.features().contains(wgpu::Features::SHADER_F64))
+            || max_prediction_bytes
+                < 2 * crate::native_prediction_gpu::PreparedNativePrediction::required_bytes(
+                    scene.model(),
+                )?
+        {
+            return Err(unsupported(
+                "native prediction timestep, storage budget or f64 device",
+            ));
+        }
+        Self::from_scene_gpu_rate_mode(
+            scene,
+            engine,
+            GpuContactCapacity::default(),
+            crate::kernels::FeatherstoneRounding::Storage,
+            crate::kernels::FeatherstoneExecution::Generic,
+            true,
+            Some((substep_dt, max_prediction_bytes)),
+        )
+    }
+
+    fn from_scene_gpu_rate_mode(
+        scene: RigidScene,
+        engine: Arc<Engine>,
+        contact_capacity: GpuContactCapacity,
+        rounding: crate::kernels::FeatherstoneRounding,
+        execution: crate::kernels::FeatherstoneExecution,
+        paired_rates: bool,
+        native_prediction: Option<(Real, u64)>,
+    ) -> Result<Self> {
+        if paired_rates {
+            validate_paired(&scene, false)?;
+        }
         if contact_capacity.pairs == 0
             || contact_capacity.contacts_per_island == 0
             || contact_capacity
@@ -233,9 +498,20 @@ impl RigidWorld {
             compiled: None,
             upload: Vec::new(),
             diagnostics: GpuRuntimeDiagnostics::default(),
+            render_stamp: None,
             contact_capacity,
+            rounding,
+            execution,
+            paired_rates,
+            native_prediction,
+            soil: None,
+            #[cfg(test)]
+            dynamics_probe: None,
+            #[cfg(test)]
+            fail_after_substep: None,
         };
         gpu.compile(&mut world.scene, &mut world.solver, false, false)?;
+        gpu.render_stamp = Some(world.scene.dynamics_stamp());
         world.gpu = Some(gpu);
         Ok(world)
     }
@@ -253,6 +529,9 @@ impl RigidWorld {
         if !self.devices.is_empty() || !self.wheels.is_empty() || !self.tracks.is_empty() {
             return Err(unsupported("actuator devices, wheels or tracks"));
         }
+        if let Some(soil) = &self.gpu.as_ref().unwrap().soil {
+            soil.validate_step(&self.scene)?;
+        }
         let changed = self.settling.changed_inputs(&self.scene, &self.wheels);
         let mut sleeping = self.sleeping.clone();
         let configured = self.solver.substeps;
@@ -262,6 +541,7 @@ impl RigidWorld {
         let mut original = None;
         let mut original_gpu = None;
         let diagnostics = self.gpu.as_ref().unwrap().diagnostics;
+        self.gpu.as_mut().unwrap().render_stamp = None;
         let mut upload_bytes = 0;
         let mut readback_bytes = 0;
         let mut readings = ConstraintReadings::default();
@@ -273,6 +553,9 @@ impl RigidWorld {
             while completed < substeps {
                 validate(&self.scene)?;
                 sleeping.refresh(&self.scene, &self.wheels);
+                if let Some(soil) = &self.gpu.as_ref().unwrap().soil {
+                    soil.wake(&self.scene, &mut sleeping);
+                }
                 let graph = self.islands()?;
                 let (selected, active) =
                     sleeping.selection(&self.scene, self.scene.state(), &graph)?;
@@ -362,38 +645,54 @@ impl RigidWorld {
                 self.scene.restore_step(checkpoint)?;
             }
             let gpu = self.gpu.as_mut().unwrap();
-            if let Some((compiled, solver)) = original_gpu {
-                gpu.compiled = Some(compiled);
-                self.solver = solver;
-                self.solver.substeps = configured;
-            }
-            if let Some(contacts) = gpu.compiled.as_mut().and_then(|c| c.contacts.as_mut()) {
-                contacts.rollback_episodes(&gpu.engine);
-            }
-            if let Some(compiled) = &mut gpu.compiled
-                && let (states, Some(precision)) = compiled.precision_parts()
-            {
-                if detached {
-                    precision.restore_frame(
-                        &gpu.engine,
-                        &self.solver,
-                        states,
-                        self.scene.state(),
-                    )?;
-                } else {
-                    precision.rollback(&gpu.engine, &self.solver, states)?;
+            let failed_device = gpu.engine.check_device().is_err();
+            let soil_rollback = if failed_device {
+                if let Some(soil) = &mut gpu.soil {
+                    soil.quarantine();
                 }
+                Ok(())
+            } else if let Some(soil) = &mut gpu.soil {
+                soil.rollback(gpu.compiled.as_mut().map(|c| &mut c.states))
             } else {
-                gpu.compiled = None;
+                Ok(())
+            };
+            if !failed_device {
+                if let Some((compiled, solver)) = original_gpu {
+                    gpu.compiled = Some(compiled);
+                    self.solver = solver;
+                    self.solver.substeps = configured;
+                }
+                if let Some(contacts) = gpu.compiled.as_mut().and_then(|c| c.contacts.as_mut()) {
+                    contacts.rollback_episodes(&gpu.engine);
+                }
+                if let Some(compiled) = &mut gpu.compiled
+                    && let (states, Some(precision)) = compiled.precision_parts()
+                {
+                    if detached {
+                        precision.restore_frame(
+                            &gpu.engine,
+                            &self.solver,
+                            states,
+                            self.scene.state(),
+                        )?;
+                    } else {
+                        precision.rollback(&gpu.engine, &self.solver, states)?;
+                    }
+                } else {
+                    gpu.compiled = None;
+                }
             }
             let compilations = gpu.diagnostics.model_compilations;
             gpu.diagnostics = diagnostics;
             gpu.diagnostics.model_compilations = compilations;
             self.reaction_frame = crate::joint_reactions::ReactionFrame::default();
             self.solver.publish_frame_readouts(Vec::new(), Vec::new());
-            return Err(error);
+            return soil_rollback.and(Err(error));
         }
         let gpu = self.gpu.as_mut().unwrap();
+        if let Some(soil) = &mut gpu.soil {
+            soil.commit();
+        }
         if let Some(contacts) = gpu.compiled.as_mut().and_then(|c| c.contacts.as_mut()) {
             contacts.commit_episodes(&self.scene);
         }
@@ -401,6 +700,7 @@ impl RigidWorld {
         gpu.diagnostics.last_substeps = substeps;
         gpu.diagnostics.last_state_upload_bytes = upload_bytes;
         gpu.diagnostics.last_state_readback_bytes = readback_bytes;
+        gpu.render_stamp = Some(self.scene.dynamics_stamp());
         self.distance_readings = readings.distance;
         self.solver.publish_frame_readouts(contacts, Vec::new());
         self.contacts_current();
@@ -419,19 +719,71 @@ impl RigidWorld {
 }
 
 fn map_read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<()> {
+    map_read_with_completion(device, buffer, None)
+}
+
+fn map_read_with_completion(
+    device: &wgpu::Device,
+    buffer: &wgpu::Buffer,
+    completion: Option<&soil_completion::CompletionDeadline<'_>>,
+) -> Result<()> {
     let (tx, rx) = std::sync::mpsc::channel();
     buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .map_err(|e| Error::Gpu(e.to_string()))?;
-    rx.recv()
-        .map_err(|e| Error::Gpu(e.to_string()))?
-        .map_err(|e| Error::Gpu(e.to_string()))
+    let mapping = if let Some(completion) = completion {
+        completion.poll(device)?;
+        completion.receive(&rx)?
+    } else {
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(e.to_string()))?;
+        rx.recv().map_err(|e| Error::Gpu(e.to_string()))?
+    };
+    mapping.map_err(|e| Error::Gpu(e.to_string()))
+}
+
+fn defer_native_drift(native: bool, projected: bool, probe: bool) -> bool {
+    cfg!(feature = "deferred-native-drift") && native && projected && !probe
+}
+
+#[test]
+fn deferred_native_drift_selection() {
+    for native in [false, true] {
+        for projected in [false, true] {
+            for probe in [false, true] {
+                assert_eq!(
+                    defer_native_drift(native, projected, probe),
+                    cfg!(feature = "deferred-native-drift") && native && projected && !probe
+                );
+            }
+        }
+    }
 }
 
 impl RuntimeGpu {
+    fn has_prediction_probe(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.dynamics_probe.is_some()
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    }
+
+    fn native_drift_deferred(&self) -> bool {
+        defer_native_drift(
+            self.compiled
+                .as_ref()
+                .is_some_and(|c| c.native_prediction.is_some()),
+            self.soil
+                .as_ref()
+                .is_some_and(|s| s.has_prepared_projection()),
+            self.has_prediction_probe(),
+        )
+    }
     fn compile(
         &mut self,
         scene: &mut RigidScene,
@@ -439,6 +791,7 @@ impl RuntimeGpu {
         capture: bool,
         detachment: bool,
     ) -> Result<Option<(Compiled, FeatherstoneSolver)>> {
+        self.render_stamp = None;
         let device = self
             .engine
             .device()
@@ -471,6 +824,9 @@ impl RuntimeGpu {
         detachment: bool,
     ) -> Result<(Compiled, FeatherstoneSolver, u64)> {
         validate(scene)?;
+        if self.paired_rates {
+            validate_paired(scene, capture)?;
+        }
         let device = self
             .engine
             .device()
@@ -479,19 +835,42 @@ impl RuntimeGpu {
             .engine
             .queue()
             .ok_or_else(|| Error::Gpu("missing GPU queue".into()))?;
+        let construction_trace =
+            std::env::var_os("MOLLA_GPU_CONSTRUCTION_TRACE").map(|_| std::time::Instant::now());
+        let trace = |stage: &str| {
+            if let Some(start) = construction_trace {
+                eprintln!(
+                    "GPU construction rigid-world t={:.6}s {stage}",
+                    start.elapsed().as_secs_f64()
+                );
+            }
+        };
+        trace("uploads begin");
         scene.upload_model_to_device(device, queue)?;
         scene.upload_controls_to_device(device, queue)?;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let created = FeatherstoneSolver::new_gpu(&self.engine, scene.model());
+        let construct = if self.paired_rates {
+            FeatherstoneSolver::new_gpu_with_paired_rates
+        } else {
+            FeatherstoneSolver::new_gpu_with_options
+        };
+        trace("featherstone begin");
+        let created = if self.native_prediction.is_some() {
+            FeatherstoneSolver::new_gpu_for_native_prediction(&self.engine, scene.model())
+        } else {
+            construct(&self.engine, scene.model(), self.rounding, self.execution)
+        };
+        trace("featherstone created; validation wait begin");
         if let Some(error) = wait(device, scope.pop())? {
             return Err(Error::Gpu(format!(
                 "GPU runtime pipeline validation: {error}"
             )));
         }
         let mut created = created?;
+        trace("featherstone validated");
         created.substeps = solver.substeps;
         created.joint_damping = solver.joint_damping;
-        created.rigorous_d_solve = solver.rigorous_d_solve;
+        created.rigorous_d_solve = self.native_prediction.is_some() || solver.rigorous_d_solve;
         created.rigorous_distance = solver.rigorous_distance;
         created.stable_motor_feedback = solver.stable_motor_feedback;
         let mut states = [scene.state().clone_host()?, scene.state().clone_host()?];
@@ -499,6 +878,7 @@ impl RuntimeGpu {
             state.upload_to_device(device, queue)?;
         }
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        trace("contacts begin");
         let contacts = contacts::RuntimeContacts::new(
             &self.engine,
             scene,
@@ -514,12 +894,15 @@ impl RuntimeGpu {
                 "GPU runtime contact pipeline validation: {error}"
             )));
         }
+        trace("contacts validated");
         let (mut contacts, distance, mut motion) = if let Some((contacts, distance)) = contacts? {
             (Some(contacts), distance, None)
         } else {
             let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            trace("precision begin");
             let motion =
                 precision::RuntimePrecision::new(&self.engine, scene, &states, &mut created, None)?;
+            trace("precision ready");
             let residues = motion
                 .as_ref()
                 .map(|_| {
@@ -535,6 +918,7 @@ impl RuntimeGpu {
                     })
                 })
                 .transpose()?;
+            trace("distance begin");
             let distance = crate::distance_gpu::DistanceGpu::new(
                 &self.engine,
                 scene,
@@ -557,6 +941,7 @@ impl RuntimeGpu {
             created.set_external_scalar_bounds(distance.is_some())?;
             (None, distance, motion)
         };
+        trace("distance ready");
         let residues = contacts
             .as_mut()
             .and_then(|c| c.precision.as_mut())
@@ -657,12 +1042,15 @@ impl RuntimeGpu {
         }
         let reactions = reactions?;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        trace("momentum begin");
         let momentum = momentum::MomentumGpu::new(
             &self.engine,
             scene.model(),
             &states,
             contacts.as_ref().map(|c| c.projection_reference()),
-            created.gpu_velocity_delta_buffer().unwrap(),
+            created
+                .gpu_paired_velocity_delta_buffer()
+                .unwrap_or_else(|| created.gpu_velocity_delta_buffer().unwrap()),
             contacts.as_ref().map(|c| c.momentum_correction()),
             &created,
         );
@@ -672,6 +1060,7 @@ impl RuntimeGpu {
             )));
         }
         let momentum = momentum?;
+        trace("momentum ready");
         let reaction_sizes = reactions
             .as_ref()
             .filter(|_| capture)
@@ -679,7 +1068,8 @@ impl RuntimeGpu {
         let model = scene.model();
         let retained_precision =
             motion.is_some() || contacts.as_ref().is_some_and(|c| c.precision.is_some());
-        let mut offsets = [0; 13];
+        let paired_rates = created.gpu_paired_velocity_delta_buffer().is_some();
+        let mut offsets = [0; 15];
         for (i, bytes) in [
             4,
             model.body_count as u64 * 32,
@@ -701,6 +1091,16 @@ impl RuntimeGpu {
             } else {
                 0
             },
+            if paired_rates {
+                model.joint_dof_total as u64 * 8
+            } else {
+                0
+            },
+            if paired_rates {
+                model.body_count as u64 * 32
+            } else {
+                0
+            },
         ]
         .into_iter()
         .enumerate()
@@ -711,7 +1111,7 @@ impl RuntimeGpu {
             device,
             &wgpu::BufferDescriptor {
                 label: Some("molla rigid frame readback"),
-                size: offsets[12],
+                size: offsets[14],
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             }
@@ -731,8 +1131,31 @@ impl RuntimeGpu {
             + u64::from(contacts.is_some() && distance.is_some())
             + reactions.as_ref().map_or(0, |r| r.bind_groups_created)
             + u64::from(momentum.is_some()) * 2;
+        let native_prediction = if let Some((dt, budget)) = self.native_prediction {
+            let configured = created.substeps;
+            created.substeps = 1;
+            let prepare = |index: usize| {
+                crate::native_prediction_gpu::PreparedNativePrediction::new(
+                    &self.engine,
+                    &created,
+                    scene.model(),
+                    scene.control(),
+                    &states[index],
+                    &states[1 - index],
+                    dt,
+                    budget / 2,
+                )
+            };
+            let prepared = [prepare(0)?, prepare(1)?];
+            created.substeps = configured;
+            Some(prepared)
+        } else {
+            None
+        };
         let mut next = Compiled {
+            native_prediction,
             stamp: scene.model_stamp(),
+            render_side: 0,
             solver_status: created.gpu_status_buffer().unwrap().clone(),
             states,
             readback,
@@ -749,6 +1172,7 @@ impl RuntimeGpu {
             momentum,
         };
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        trace("activation begin");
         let activation = activation::RuntimeActivation::new(&self.engine, scene, &created, &next);
         if let Some(error) = wait(device, scope.pop())? {
             return Err(Error::Gpu(format!(
@@ -757,6 +1181,7 @@ impl RuntimeGpu {
         }
         next.activation = activation?;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        trace("damping begin");
         let damping = damping::RuntimeDamping::new(
             &self.engine,
             scene,
@@ -768,6 +1193,7 @@ impl RuntimeGpu {
             return Err(Error::Gpu(format!("GPU body damping validation: {error}")));
         }
         next.damping = damping?;
+        trace("ready");
         let bind_groups = bind_groups + u64::from(next.damping.is_some()) * 2;
         Ok((next, created, bind_groups))
     }
@@ -780,6 +1206,8 @@ impl RuntimeGpu {
         selection: activation::FrameSelection<'_>,
         capture: bool,
     ) -> Result<Segment> {
+        #[cfg(test)]
+        trace_soil_runtime("segment begin");
         let selected = selection.bodies;
         let active = selection.articulations;
         self.engine.check_device()?;
@@ -803,7 +1231,35 @@ impl RuntimeGpu {
         let device = self.engine.device().unwrap();
         let queue = self.engine.queue().unwrap();
         scene.upload_controls_to_device(device, queue)?;
+        let prediction_probe = self.has_prediction_probe();
         let compiled = self.compiled.as_mut().unwrap();
+        if let Some(soil) = &mut self.soil {
+            soil.prepare(&self.engine, scene, &compiled.states)?;
+            if soil.projection_config.is_some()
+                && (compiled.contacts.is_some()
+                    || compiled.distance.is_some()
+                    || compiled.reactions.is_some())
+            {
+                return Err(Error::Solver(
+                    "mass coupling cannot share a separate constraint solver".into(),
+                ));
+            }
+            soil.prepare_projection(
+                &self.engine,
+                scene,
+                &compiled.states,
+                solver,
+                compiled.native_mass(),
+                compiled.native_jacobians(),
+            )?;
+        }
+        let deferred_drift = defer_native_drift(
+            compiled.native_prediction.is_some(),
+            self.soil
+                .as_ref()
+                .is_some_and(|s| s.has_prepared_projection()),
+            prediction_probe,
+        );
         solver.set_gpu_active_articulations(active)?;
         if let Some(distance) = &mut compiled.distance {
             distance.set_active(queue, active)?;
@@ -851,11 +1307,28 @@ impl RuntimeGpu {
             bytemuck::bytes_of(&0u32),
         );
         let substeps = solver.substeps.max(1);
+        #[cfg(test)]
+        trace_soil_runtime("controls and input uploaded");
         let sub_dt = dt / substeps as Real;
+        if self
+            .native_prediction
+            .is_some_and(|(expected, _)| expected.to_bits() != sub_dt.to_bits())
+        {
+            return Err(unsupported(
+                "native prediction substep changed; rebuild world",
+            ));
+        }
         if sub_dt as f32 == 0.0 {
             return Err(Error::Solver("GPU substep underflows f32".into()));
         }
         let configured = solver.substeps;
+        if let Some(prediction) = &compiled.native_prediction {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            for p in prediction {
+                p.reset_internal(&mut encoder);
+            }
+            queue.submit([encoder.finish()]);
+        }
         if let Some(damping) = &mut compiled.damping {
             damping.prepare_frame(&self.engine, scene, &compiled.states[0], sub_dt)?;
         }
@@ -882,14 +1355,31 @@ impl RuntimeGpu {
                 compiled.contacts.as_ref().unwrap(),
             )?;
         }
+        if let Some(soil) = &mut self.soil {
+            soil.begin(&self.engine, sub_dt as f32)?;
+            soil.begin_profile(queue, sub_dt as f32, substeps);
+        }
         solver.substeps = 1;
         if let Some(momentum) = &compiled.momentum {
             momentum.prepare(&self.engine, sub_dt);
         }
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let result = (|| {
+            #[cfg(test)]
+            trace_soil_runtime("frame prepared; refreshing kinematics");
+            #[cfg(test)]
+            check_soil_submission(&self.engine, "frame preparation");
+            let refresh_start = self
+                .soil
+                .as_ref()
+                .and_then(|soil| soil.profile_host_start());
             if scene.model().joint_count != 0 {
                 let [input, scratch] = &mut compiled.states;
+                solver.set_gpu_dispatch_timestamps(
+                    self.soil
+                        .as_mut()
+                        .and_then(|s| s.machine_timestamp("refresh", None)),
+                );
                 solver.refresh_gpu(scene.model(), input, scene.control(), scratch)?;
                 let mut encoder = device.create_command_encoder(&Default::default());
                 for (from, to) in [
@@ -908,11 +1398,21 @@ impl RuntimeGpu {
                 ] {
                     encoder.copy_buffer_to_buffer(from, 0, to, 0, from.size());
                 }
+                if solver.gpu_uses_paired_rates() {
+                    let from = solver.gpu_body_velocity_compensation_buffer(scratch)?;
+                    let to = solver.gpu_body_velocity_compensation_buffer(input)?;
+                    encoder.copy_buffer_to_buffer(from, 0, to, 0, from.size());
+                }
                 queue.submit([encoder.finish()]);
             }
+            if let Some(soil) = &mut self.soil {
+                soil.profile_host_end(soil::ProfileHostStage::Refresh, refresh_start);
+            }
+            #[cfg(test)]
+            check_soil_submission(&self.engine, "kinematic refresh");
             for i in 0..substeps {
-                let [a, b] = &mut compiled.states;
-                let (input, output) = if i % 2 == 0 { (a, b) } else { (b, a) };
+                #[cfg(test)]
+                trace_soil_runtime(&format!("substep {i}/{substeps} begin"));
                 if let Some(contacts) = &compiled.contacts {
                     contacts.predict(&self.engine, i % 2, compiled.activation.as_ref())?;
                 }
@@ -922,14 +1422,110 @@ impl RuntimeGpu {
                 if let Some(loops) = &compiled.loops {
                     loops.dispatch(&self.engine, i % 2, sub_dt);
                 }
-                solver.step(
-                    scene.model(),
-                    input,
-                    scene.control(),
-                    &Contacts::with_capacity(0),
-                    sub_dt,
-                    output,
-                )?;
+                if let Some(soil) = &mut self.soil {
+                    let start = soil.profile_host_start();
+                    soil.before_step(
+                        &self.engine,
+                        scene,
+                        &mut compiled.states,
+                        i % 2,
+                        sub_dt as f32,
+                    )?;
+                    soil.profile_host_end(soil::ProfileHostStage::Soil, start);
+                }
+                #[cfg(test)]
+                check_soil_submission(&self.engine, "soil coupling");
+                let [a, b] = &mut compiled.states;
+                let (input, output) = if i % 2 == 0 { (a, b) } else { (b, a) };
+                #[cfg(test)]
+                trace_soil_runtime("soil submitted; machine dispatch begin");
+                let dynamics_start = self
+                    .soil
+                    .as_ref()
+                    .and_then(|soil| soil.profile_host_start());
+                let dynamics_timestamps = self
+                    .soil
+                    .as_mut()
+                    .filter(|_| scene.model().joint_count != 0)
+                    .and_then(|s| s.machine_timestamp("dynamics", Some(i)));
+                if let Some(prediction) = &compiled.native_prediction {
+                    let predict = if deferred_drift {
+                        crate::native_prediction_gpu::PreparedNativePrediction::rates_profiled
+                    } else {
+                        crate::native_prediction_gpu::PreparedNativePrediction::step_profiled
+                    };
+                    predict(
+                        &prediction[i % 2],
+                        solver,
+                        scene.model(),
+                        scene.control(),
+                        input,
+                        output,
+                        sub_dt,
+                        dynamics_timestamps,
+                    )?;
+                } else {
+                    solver.set_gpu_dispatch_timestamps(dynamics_timestamps);
+                    solver.step(
+                        scene.model(),
+                        input,
+                        scene.control(),
+                        &Contacts::with_capacity(0),
+                        sub_dt,
+                        output,
+                    )?;
+                }
+                #[cfg(test)]
+                if let Some(probe) = &mut self.dynamics_probe {
+                    assert!(compiled.distance.is_none() && active == [true]);
+                    probe.check(&self.engine, solver, scene, input, output, sub_dt)?;
+                }
+                if let Some(soil) = &mut self.soil {
+                    soil.profile_host_end(soil::ProfileHostStage::Dynamics, dynamics_start);
+                }
+                let projected = if let Some(soil) = &mut self.soil {
+                    let start = soil.profile_host_start();
+                    let projected = soil.after_prediction(
+                        &self.engine,
+                        &mut compiled.states,
+                        i % 2,
+                        sub_dt as f32,
+                    )?;
+                    soil.profile_host_end(soil::ProfileHostStage::Soil, start);
+                    projected
+                } else {
+                    false
+                };
+                debug_assert!(!deferred_drift || projected);
+                let [a, b] = &mut compiled.states;
+                let (input, output) = if i % 2 == 0 { (a, b) } else { (b, a) };
+                #[cfg(test)]
+                trace_soil_runtime("machine dispatched");
+                #[cfg(test)]
+                check_soil_submission(&self.engine, "machine dynamics");
+                let corrections_start = self
+                    .soil
+                    .as_ref()
+                    .and_then(|soil| soil.profile_host_start());
+                if projected {
+                    #[cfg(test)]
+                    if let Some(probe) = &mut self.dynamics_probe {
+                        probe.before_drift(&self.engine, solver, scene, input, output, sub_dt)?;
+                    }
+                    solver.set_gpu_dispatch_timestamps(
+                        self.soil
+                            .as_mut()
+                            .and_then(|s| s.machine_timestamp("soil-corrected-drift", Some(i))),
+                    );
+                    solver.drift_gpu(scene.model(), input, scene.control(), sub_dt, output)?;
+                    if deferred_drift {
+                        output.body_f.mark_device_dirty();
+                    }
+                    #[cfg(test)]
+                    if let Some(probe) = &mut self.dynamics_probe {
+                        probe.after_drift(&self.engine, solver, output, sub_dt)?;
+                    }
+                }
                 if let Some(loops) = &compiled.loops {
                     loops.restore(&self.engine, [input, output])?;
                 }
@@ -965,22 +1561,63 @@ impl RuntimeGpu {
                     distance.dispatch(&self.engine, i % 2, sub_dt, substeps, i)?;
                     solver.drift_gpu(scene.model(), input, scene.control(), sub_dt, output)?;
                 }
+                let momentum_timestamps = if compiled.momentum.is_some() {
+                    self.soil
+                        .as_mut()
+                        .and_then(|s| s.machine_timestamp("momentum", Some(i)))
+                } else {
+                    None
+                };
                 if let Some(reactions) = &compiled.reactions {
                     reactions.dispatch_before_halt(&self.engine, i % 2, sub_dt, i, |encoder| {
                         if let Some(momentum) = &compiled.momentum {
-                            momentum.encode(encoder, i % 2);
+                            momentum.encode_profiled(encoder, i % 2, momentum_timestamps.as_ref());
                         }
                     });
                 } else if let Some(momentum) = &compiled.momentum {
                     let mut encoder = device.create_command_encoder(&Default::default());
-                    momentum.encode(&mut encoder, i % 2);
+                    momentum.encode_profiled(&mut encoder, i % 2, momentum_timestamps.as_ref());
                     queue.submit([encoder.finish()]);
+                }
+                if let Some(soil) = &mut self.soil {
+                    soil.profile_host_end(soil::ProfileHostStage::Corrections, corrections_start);
+                    #[cfg(test)]
+                    check_soil_submission(&self.engine, "momentum transport");
+                    let start = soil.profile_host_start();
+                    soil.after_step(&mut compiled.states)?;
+                    soil.profile_host_end(soil::ProfileHostStage::Restore, start);
+                }
+                #[cfg(test)]
+                if self.fail_after_substep == Some(i) {
+                    self.fail_after_substep = None;
+                    return Err(Error::Solver("injected post-substep failure".into()));
                 }
             }
             Ok(())
         })();
         solver.substeps = configured;
-        let validation = wait(device, scope.pop())?;
+        if let Some(soil) = &mut self.soil {
+            soil.profile_submissions_finished();
+        }
+        #[cfg(test)]
+        trace_soil_runtime("substeps submitted; waiting for dispatch validation");
+        let completion = self
+            .soil
+            .as_ref()
+            .map(|soil| {
+                soil_completion::CompletionDeadline::new(
+                    self.engine.device_health().unwrap(),
+                    soil.completion_timeout,
+                )
+            })
+            .transpose()?;
+        let validation = if let Some(completion) = &completion {
+            completion.wait(device, scope.pop())?
+        } else {
+            wait(device, scope.pop())?
+        };
+        #[cfg(test)]
+        trace_soil_runtime("dispatch validation completed");
         result?;
         if let Some(error) = validation {
             return Err(Error::Gpu(format!(
@@ -1008,7 +1645,7 @@ impl RuntimeGpu {
                 8,
             );
             queue.submit([encoder.finish()]);
-            map_read(device, &compiled.break_readback)?;
+            map_read_with_completion(device, &compiled.break_readback, completion.as_ref())?;
             let mapped = molla_core::gpu_readback!(compiled.break_readback.slice(..));
             let header = bytemuck::pod_read_unaligned::<[u32; 3]>(&mapped);
             drop(mapped);
@@ -1033,6 +1670,9 @@ impl RuntimeGpu {
         }
         let output = &compiled.states[substeps % 2];
         let mut encoder = device.create_command_encoder(&Default::default());
+        if let Some(soil) = &self.soil {
+            soil.resolve_machine_profile(&mut encoder);
+        }
         let buffers = [
             solver.gpu_status_buffer().unwrap(),
             output
@@ -1128,6 +1768,23 @@ impl RuntimeGpu {
                 }
             }
         }
+        if solver.gpu_paired_velocity_delta_buffer().is_some() {
+            for (section, buffer) in [
+                (12, solver.gpu_paired_rates_buffer(output)?),
+                (13, solver.gpu_body_velocity_compensation_buffer(output)?),
+            ] {
+                let size = compiled.offsets[section + 1] - compiled.offsets[section];
+                if size != 0 {
+                    encoder.copy_buffer_to_buffer(
+                        buffer,
+                        0,
+                        &compiled.readback,
+                        compiled.offsets[section],
+                        size,
+                    );
+                }
+            }
+        }
         queue.submit([encoder.finish()]);
         let (tx, rx) = std::sync::mpsc::channel();
         compiled
@@ -1136,12 +1793,16 @@ impl RuntimeGpu {
             .map_async(wgpu::MapMode::Read, move |r| {
                 let _ = tx.send(r);
             });
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| Error::Gpu(e.to_string()))?;
-        rx.recv()
-            .map_err(|e| Error::Gpu(e.to_string()))?
-            .map_err(|e| Error::Gpu(e.to_string()))?;
+        let mapping = if let Some(completion) = &completion {
+            completion.poll(device)?;
+            completion.receive(&rx)?
+        } else {
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|e| Error::Gpu(e.to_string()))?;
+            rx.recv().map_err(|e| Error::Gpu(e.to_string()))?
+        };
+        mapping.map_err(|e| Error::Gpu(e.to_string()))?;
         let mapped = molla_core::gpu_readback!(compiled.readback.slice(..));
         let status = bytemuck::pod_read_unaligned::<u32>(&mapped[..4]);
         let mut next = scene.state().clone_host()?;
@@ -1170,6 +1831,11 @@ impl RuntimeGpu {
         decode::<_, GpuSpatialVector>(section(2), next.body_qd.host_mut()?, Into::into);
         decode::<_, f32>(section(3), next.joint_q.host_mut()?, Real::from);
         decode::<_, f32>(section(4), next.joint_qd.host_mut()?, Real::from);
+        let paired_decode = if solver.gpu_paired_velocity_delta_buffer().is_some() {
+            precision::decode_rates(&mut next, section(12), section(13))
+        } else {
+            Ok(())
+        };
         for (pose, bytes) in next
             .body_q
             .host_mut()?
@@ -1265,8 +1931,17 @@ impl RuntimeGpu {
         drop(mapped);
         compiled.readback.unmap();
         if status & !BREAK_STOP != 0 {
+            if let (Some(soil), Some(completion)) = (&self.soil, &completion)
+                && let Some(detail) = soil.fault_detail(&self.engine, completion)?
+            {
+                return Err(Error::Solver(format!(
+                    "GPU rigid runtime solver fault {}; {detail}",
+                    status & !BREAK_STOP
+                )));
+            }
             return Err(compiled.failure(&self.engine, status & !BREAK_STOP));
         }
+        paired_decode?;
         if invalid_mask {
             return Err(Error::Gpu("invalid GPU contact activation readout".into()));
         }
@@ -1326,7 +2001,7 @@ impl RuntimeGpu {
         let contacts = compiled
             .contacts
             .as_ref()
-            .map(|contacts| contacts.readings(&self.engine, completed, sub_dt))
+            .map(|contacts| contacts.readings(&self.engine, completed, sub_dt, completion.as_ref()))
             .transpose()?
             .unwrap_or_default();
         for (index, &awake) in selected.iter().enumerate() {
@@ -1355,6 +2030,7 @@ impl RuntimeGpu {
             }
         }
         scene.commit_step(next)?;
+        compiled.render_side = substeps % 2;
         if let (_, Some(precision)) = compiled.precision_parts() {
             precision.committed(scene.state(), substeps % 2)?;
         }
@@ -1376,7 +2052,7 @@ impl RuntimeGpu {
                 + u64::from(compiled.damping.is_some()) * 2;
         self.diagnostics.last_substeps = completed;
         self.diagnostics.last_state_readback_bytes =
-            compiled.offsets[8] + compiled.offsets[10] - compiled.offsets[9] + compiled.offsets[12]
+            compiled.offsets[8] + compiled.offsets[10] - compiled.offsets[9] + compiled.offsets[14]
                 - compiled.offsets[10]
                 + event_count * 112
                 + notification_bytes
@@ -1431,6 +2107,18 @@ fn decode<T, G: bytemuck::Pod>(bytes: &[u8], output: &mut [T], convert: impl Fn(
 }
 
 fn wait<T>(device: &wgpu::Device, future: impl std::future::Future<Output = T>) -> Result<T> {
+    wait_with_progress(future, || {
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map(|_| ())
+            .map_err(|e| Error::Gpu(e.to_string()))
+    })
+}
+
+fn wait_with_progress<T>(
+    future: impl std::future::Future<Output = T>,
+    mut progress: impl FnMut() -> Result<()>,
+) -> Result<T> {
     struct Wake(std::thread::Thread);
     impl std::task::Wake for Wake {
         fn wake(self: Arc<Self>) {
@@ -1444,9 +2132,38 @@ fn wait<T>(device: &wgpu::Device, future: impl std::future::Future<Output = T>) 
         if let std::task::Poll::Ready(value) = future.as_mut().poll(&mut context) {
             return Ok(value);
         }
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| Error::Gpu(e.to_string()))?;
-        std::thread::park();
+        progress()?;
+        if let std::task::Poll::Ready(value) = future.as_mut().poll(&mut context) {
+            return Ok(value);
+        }
+        std::thread::park_timeout(std::time::Duration::from_millis(1));
+    }
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn backend_poll_may_consume_the_completion_wake() {
+        let ready = AtomicBool::new(false);
+        let wake = std::sync::Mutex::new(None::<std::task::Waker>);
+        let future = std::future::poll_fn(|context| {
+            if ready.load(Ordering::Acquire) {
+                std::task::Poll::Ready(42)
+            } else {
+                *wake.lock().unwrap() = Some(context.waker().clone());
+                std::task::Poll::Pending
+            }
+        });
+        let result = wait_with_progress(future, || {
+            ready.store(true, Ordering::Release);
+            wake.lock().unwrap().take().unwrap().wake();
+            std::thread::park();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(result, 42);
     }
 }

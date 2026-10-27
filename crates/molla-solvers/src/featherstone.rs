@@ -166,6 +166,30 @@ impl FeatherstoneSolver {
     /// `state` / `control` device mirrors before stepping.
     #[cfg(feature = "gpu")]
     pub fn new_gpu(engine: &crate::compute::Engine, model: &Model) -> Result<Self> {
+        Self::new_gpu_with_rounding(engine, model, crate::kernels::FeatherstoneRounding::Storage)
+    }
+
+    #[cfg(feature = "gpu")]
+    pub fn new_gpu_with_rounding(
+        engine: &crate::compute::Engine,
+        model: &Model,
+        rounding: crate::kernels::FeatherstoneRounding,
+    ) -> Result<Self> {
+        Self::new_gpu_with_options(
+            engine,
+            model,
+            rounding,
+            crate::kernels::FeatherstoneExecution::Generic,
+        )
+    }
+
+    #[cfg(feature = "gpu")]
+    pub fn new_gpu_with_options(
+        engine: &crate::compute::Engine,
+        model: &Model,
+        rounding: crate::kernels::FeatherstoneRounding,
+        execution: crate::kernels::FeatherstoneExecution,
+    ) -> Result<Self> {
         let device = engine
             .device()
             .ok_or_else(|| Error::Gpu("engine has no GPU device".into()))?
@@ -175,8 +199,52 @@ impl FeatherstoneSolver {
             .ok_or_else(|| Error::Gpu("engine has no GPU queue".into()))?
             .clone();
         crate::kinematic_motion::validate_gpu_layout(model)?;
-        let kernel = crate::kernels::FeatherstoneKernel::new_cached(engine, model)?;
+        let kernel = crate::kernels::FeatherstoneKernel::new_cached_with_options(
+            engine, model, rounding, execution,
+        )?;
         Ok(Self::from_gpu_kernel(device, queue, model, kernel))
+    }
+
+    /// Construct experimental paired-rate dynamics on the caller's GPU engine.
+    #[cfg(feature = "gpu")]
+    pub fn new_gpu_with_paired_rates(
+        engine: &crate::compute::Engine,
+        model: &Model,
+        rounding: crate::kernels::FeatherstoneRounding,
+        execution: crate::kernels::FeatherstoneExecution,
+    ) -> Result<Self> {
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("engine has no GPU device".into()))?
+            .clone();
+        let queue = engine
+            .queue()
+            .ok_or_else(|| Error::Gpu("engine has no GPU queue".into()))?
+            .clone();
+        crate::kinematic_motion::validate_gpu_layout(model)?;
+        let kernel = crate::kernels::FeatherstoneKernel::new_cached_with_paired_rates(
+            engine, model, rounding, execution,
+        )?;
+        Ok(Self::from_gpu_kernel(device, queue, model, kernel))
+    }
+
+    /// Creates paired drift/refresh without ABA; use a prepared native predictor to step.
+    #[cfg(feature = "gpu")]
+    pub fn new_gpu_for_native_prediction(
+        engine: &crate::compute::Engine,
+        model: &Model,
+    ) -> Result<Self> {
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("native prediction requires GPU".into()))?
+            .clone();
+        let queue = engine.queue().unwrap().clone();
+        crate::kinematic_motion::validate_gpu_layout(model)?;
+        let kernel =
+            crate::kernels::FeatherstoneKernel::new_cached_for_external_prediction(engine, model)?;
+        let mut solver = Self::from_gpu_kernel(device, queue, model, kernel);
+        solver.rigorous_d_solve = true;
+        Ok(solver)
     }
 
     /// Construct articulated dynamics on the caller's matching device and queue.
@@ -359,6 +427,18 @@ impl FeatherstoneSolver {
     }
 
     #[cfg(feature = "gpu")]
+    pub(crate) fn validate_gpu_prediction_device(&self, device: &wgpu::Device) -> Result<()> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => {
+                crate::kernels::validate_soil_device(device, &gpu.device)
+            }
+            _ => Err(Error::Gpu(
+                "native prediction requires GPU Featherstone".into(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "gpu")]
     pub(crate) fn set_gpu_active_articulations(&mut self, active: &[bool]) -> Result<()> {
         match &mut self.backend {
             FeatherstoneBackend::Gpu(gpu) => {
@@ -432,6 +512,78 @@ impl FeatherstoneSolver {
         }
     }
 
+    /// Whether the GPU program uses retained high/low rates.
+    #[cfg(feature = "gpu")]
+    pub fn gpu_uses_paired_rates(&self) -> bool {
+        matches!(&self.backend, FeatherstoneBackend::Gpu(gpu) if gpu.kernel.uses_paired_rates())
+    }
+
+    /// Prepared GPU backend for eligible unrestricted drift.
+    #[cfg(feature = "gpu")]
+    pub fn gpu_unrestricted_drift_backend(&self) -> Option<&'static str> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => Some(gpu.kernel.unrestricted_drift_backend()),
+            FeatherstoneBackend::Cpu => None,
+        }
+    }
+
+    /// Prepare paired generalized/body velocities on an experimental paired-rate backend.
+    #[cfg(feature = "gpu")]
+    pub fn prepare_gpu_paired_rates(
+        &mut self,
+        states: &[&State],
+        max_owned_bytes: u64,
+    ) -> Result<()> {
+        match &mut self.backend {
+            FeatherstoneBackend::Gpu(gpu) => {
+                gpu.kernel
+                    .prepare_paired_rates(&gpu.device, &gpu.queue, states, max_owned_bytes)
+            }
+            _ => Err(Error::Gpu("paired rates require a GPU backend".into())),
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub fn gpu_paired_rates_buffer(&self, state: &State) -> Result<&wgpu::Buffer> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => gpu.kernel.paired_rates_buffer(state),
+            _ => Err(Error::Gpu("paired rates require a GPU backend".into())),
+        }
+    }
+
+    /// Seed retained generalized/body low parts after uploading a host rate edit.
+    #[cfg(feature = "gpu")]
+    pub fn seed_gpu_paired_rates(&self, state: &State) -> Result<()> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => gpu.kernel.seed_paired_rates(&gpu.queue, state),
+            _ => Err(Error::Gpu("paired rates require a GPU backend".into())),
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub fn gpu_paired_rate_owned_bytes(&self) -> Option<u64> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => Some(gpu.kernel.paired_rate_owned_bytes()),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub fn gpu_body_velocity_compensation_buffer(&self, state: &State) -> Result<&wgpu::Buffer> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => gpu.kernel.body_velocity_compensation_buffer(state),
+            _ => Err(Error::Gpu("paired rates require a GPU backend".into())),
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub fn gpu_paired_velocity_delta_buffer(&self) -> Option<&wgpu::Buffer> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => gpu.kernel.paired_velocity_delta_buffer(),
+            _ => None,
+        }
+    }
+
     /// Clear prepared rounding residues after host edits or external coordinate writes.
     #[cfg(feature = "gpu")]
     pub fn encode_reset_gpu_coordinate_compensation(
@@ -472,6 +624,23 @@ impl FeatherstoneSolver {
             _ => Err(Error::Gpu(
                 "position displacement requires a GPU backend".into(),
             )),
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub(crate) fn set_gpu_dispatch_timestamps(
+        &mut self,
+        timestamps: Option<(wgpu::QuerySet, [u32; 2])>,
+    ) {
+        if let FeatherstoneBackend::Gpu(gpu) = &mut self.backend {
+            gpu.kernel.set_dispatch_timestamps(timestamps);
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub(crate) fn set_gpu_dispatch_end_timestamp(&mut self, query: wgpu::QuerySet, index: u32) {
+        if let FeatherstoneBackend::Gpu(gpu) = &mut self.backend {
+            gpu.kernel.set_dispatch_end_timestamp(query, index);
         }
     }
 
@@ -655,6 +824,14 @@ impl FeatherstoneSolver {
         #[cfg(not(feature = "gpu"))]
         {
             false
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    pub fn gpu_execution(&self) -> Option<crate::kernels::FeatherstoneExecution> {
+        match &self.backend {
+            FeatherstoneBackend::Gpu(gpu) => Some(gpu.kernel.execution()),
+            _ => None,
         }
     }
 

@@ -12,7 +12,39 @@ workspace = true
 
 [features]
 default = []
+batched-soil-projection = ["gpu"]
+ordered-sticking-nodes = ["gpu"]
+lazy-paired-drift = ["gpu", "molla-kernels/lazy-paired-drift"]
+native-geometry-drift = ["gpu", "molla-kernels/native-geometry-drift"]
+native-lazy-geometry-drift = ["native-geometry-drift", "lazy-paired-drift", "molla-kernels/native-lazy-geometry-drift"]
 resource-counters = ["gpu", "wgpu/counters", "molla-core/gpu-metrics"]
+protected-newton = ["gpu", "dep:naga", "dep:spirv-tools"]
+wide-newton = ["protected-newton"]
+cached-newton = ["wide-newton"]
+parallel-newton = ["cached-newton"]
+volatile-newton = ["parallel-newton"]
+schur-newton = ["volatile-newton"]
+norm-tree-newton = ["schur-newton"]
+active-publication-newton = ["norm-tree-newton"]
+publication-products-newton = ["active-publication-newton"]
+retained-local-newton = ["publication-products-newton"]
+conditioned-projection-cache-newton = ["retained-local-newton"]
+shared-conditioned-core-newton = ["conditioned-projection-cache-newton"]
+stream-block-newton = ["shared-conditioned-core-newton"]
+stagnant-branch-newton = ["stream-block-newton"]
+grouped-sum-newton = ["stagnant-branch-newton"]
+grouped-eight-newton = ["grouped-sum-newton"]
+parallel-indices-newton = ["grouped-eight-newton"]
+soa-scratch-newton = ["parallel-indices-newton"]
+zero-term-newton-preparation = ["gpu"]
+zero-residual-newton-preparation = ["zero-term-newton-preparation"]
+axis-parallel-newton-preparation = ["zero-residual-newton-preparation"]
+row-parallel-newton-preparation = ["axis-parallel-newton-preparation"]
+strict-rounding-newton-preparation = ["axis-parallel-newton-preparation", "protected-newton"]
+parallel-candidate-index = ["gpu"]
+deferred-native-drift = ["gpu"]
+warm-newton = ["gpu"]
+adjacent-newton = ["warm-newton"]
 autograd = ["dep:molla-autograd"]
 gpu = [
     "dep:molla-compute",
@@ -26,6 +58,7 @@ gpu = [
 ]
 
 [dependencies]
+blake3 = "1.8"
 bytemuck = "1.18"
 glam = "0.30"
 molla-actuators = { path = "../molla-actuators", default-features = false }
@@ -47,9 +80,24 @@ wgpu = { version = "29", optional = true, default-features = false, features = [
     "std",
 ] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+naga = { version = "=29.0.4", features = ["wgsl-in", "spv-out"], optional = true }
+spirv-tools = { version = "=0.13.3", default-features = false, features = ["use-compiled-tools"], optional = true }
+
 [dev-dependencies]
+ash = "0.38"
+naga = { version = "29", features = ["wgsl-in", "spv-out"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
 molla-optim = { path = "../molla-optim" }
+
+[[example]]
+name = "soil_pipeline_statistics"
+required-features = ["protected-newton"]
+
+[[example]]
+name = "soil_tractor_resident"
+required-features = ["gpu"]
 
 [[example]]
 name = "check_primitives_shaders"
@@ -58,6 +106,10 @@ required-features = ["gpu"]
 [[example]]
 name = "prepare_primitives_gpu"
 required-features = ["gpu"]
+
+[[example]]
+name = "soil_tractor_benchmark"
+required-features = ["resource-counters"]
 
 [[bench]]
 name = "runtime_primitives"

@@ -49,6 +49,8 @@ mod featherstone;
 pub mod fem_rigid;
 #[cfg(feature = "gpu")]
 pub mod fem_rigid_gpu;
+#[cfg(feature = "gpu")]
+pub mod generalized_prediction_gpu;
 pub mod ik;
 pub mod impact_constraints;
 #[cfg(feature = "gpu")]
@@ -74,6 +76,8 @@ mod mixed_constraints;
 pub mod mpm;
 pub mod mpm_oracle;
 #[cfg(feature = "gpu")]
+pub mod native_prediction_gpu;
+#[cfg(feature = "gpu")]
 pub mod normal_contact_gpu;
 pub mod penalty_contact;
 pub mod pressure_tire;
@@ -90,6 +94,72 @@ pub mod rigid_world;
 pub mod rnea;
 pub mod semi_implicit;
 pub mod soft_rigid_contact;
+#[cfg(feature = "gpu")]
+pub mod soil_admm_geometry_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_admm_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_candidates_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_contact_geometry_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_contact_motion_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_contact_projection_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_floor_projection_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_friction_disk_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_friction_geometry_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_friction_projection_gpu;
+#[cfg(all(test, feature = "protected-newton", not(target_arch = "wasm32")))]
+mod soil_newton_delta_cache_tests;
+#[cfg(feature = "gpu")]
+mod soil_newton_failure;
+#[cfg(feature = "gpu")]
+pub mod soil_newton_geometry_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_newton_gpu;
+#[cfg(feature = "gpu")]
+pub(crate) mod soil_newton_history_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_newton_krylov_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_newton_operator_gpu;
+#[cfg(all(
+    any(test, feature = "parallel-newton"),
+    feature = "protected-newton",
+    not(target_arch = "wasm32")
+))]
+mod soil_newton_parallel_release;
+#[cfg(all(test, feature = "gpu"))]
+mod soil_newton_precise_tests;
+#[cfg(feature = "gpu")]
+pub mod soil_newton_prepare_gpu;
+#[cfg(all(feature = "protected-newton", not(target_arch = "wasm32")))]
+mod soil_newton_protected;
+#[cfg(feature = "gpu")]
+pub mod soil_newton_publish_gpu;
+#[cfg(all(feature = "protected-newton", not(target_arch = "wasm32")))]
+mod soil_newton_width;
+#[cfg(feature = "gpu")]
+pub mod soil_normal_projection_gpu;
+#[cfg(feature = "gpu")]
+mod soil_rate_encoding;
+#[cfg(all(test, feature = "gpu"))]
+mod soil_setup_trace;
+#[cfg(feature = "gpu")]
+pub mod soil_shared_wall_friction_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_shared_wall_geometry_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_tangential_projection_gpu;
+#[cfg(feature = "gpu")]
+pub mod soil_tractor;
+#[cfg(feature = "gpu")]
+pub mod soil_wall_friction_gpu;
 #[cfg(feature = "gpu")]
 pub mod sph;
 pub mod sph_diff;
@@ -109,8 +179,26 @@ pub use loop_forces::LoopReaction;
 pub use math::robust_loss::RobustLoss;
 #[cfg(feature = "gpu")]
 pub use mpm::{
-    MAX_MPM_MATERIALS, MpmConfig, MpmRheology, MpmSimulation, MpmTimeStep, MpmTireFeedbackParams,
-    MpmTireTerrainRaster,
+    MAX_MPM_MATERIALS, MPM_COUPLING_BOUNDARY_FAULT, MPM_COUPLING_CAPACITY_FAULT,
+    MpmActiveGridStats, MpmCommandBatch, MpmConfig, MpmMassCouplingInputs, MpmParticleRenderSource,
+    MpmParticleRenderView, MpmPrescribedSolid, MpmProfileStage, MpmRheology, MpmRigidDeviceBinding,
+    MpmSimulation, MpmSoilCanonicalSelection, MpmSoilCanonicalStore, MpmSoilCanonicalStoreRead,
+    MpmSoilCanonicalStoreReadCompletion, MpmSoilCanonicalStoreReadTask,
+    MpmSoilCanonicalStoreWritebackCompletion, MpmSoilCanonicalStoreWritebackTask,
+    MpmSoilCanonicalTileArchive, MpmSoilCheckpoint, MpmSoilCheckpointCompletion,
+    MpmSoilCheckpointReadback, MpmSoilCheckpointTicket, MpmSoilEnergy, MpmSoilFrame,
+    MpmSoilFrameCheckpoint, MpmSoilFrameSelection, MpmSoilFrameStore, MpmSoilFrameStoreRead,
+    MpmSoilFrameStoreReadCompletion, MpmSoilFrameStoreReadTask,
+    MpmSoilFrameStoreWritebackCompletion, MpmSoilFrameStoreWritebackTask, MpmSoilFrameTileArchive,
+    MpmSoilIdentityBuffers, MpmSoilIdentitySnapshot, MpmSoilMomenta, MpmSoilPinConfig,
+    MpmSoilQuiescence, MpmSoilQuiescenceSnapshot, MpmSoilReadbackStats, MpmSoilRegionEnvelope,
+    MpmSoilRetainedSupportParticle, MpmSoilRetainedSupportSnapshot, MpmSoilSelection,
+    MpmSoilStencilSupport, MpmSoilStore, MpmSoilStoreLimits, MpmSoilStoreStats,
+    MpmSoilStoreStorageStats, MpmSoilSupportClosureParticle, MpmSoilSupportClosureSnapshot,
+    MpmSoilSupportSnapshot, MpmSoilTileArchive, MpmSoilTransferPath, MpmSoilTransferStats,
+    MpmSoilWorld, MpmSoilWorldStatus, MpmSolidShape, MpmStageTiming, MpmStepProfile, MpmTimeStep,
+    MpmTireFeedbackParams, MpmTireTerrainRaster, PreparedMpmMassCoupling,
+    PreparedMpmRigidDeviceBridge, PreparedMpmStep,
 };
 pub use mpm_oracle::{
     MpmRigidBodySample, MpmRigidCellSample, ReducedMpmMaterial, ReducedMpmMaterialState,

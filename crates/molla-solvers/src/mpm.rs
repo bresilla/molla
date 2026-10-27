@@ -118,12 +118,169 @@
 use crate::compute::Engine;
 use crate::core::{Error, Result};
 use crate::kernels::{
-    TireFemContactTerrain, TireMpmContactCell, TireMpmFemTerrainOwner, TireMpmGpuInPlaceParams,
-    TireMpmGpuInput, TireMpmGpuKernel, TireMpmGpuOutput, TireMpmTerrainRasterParams,
+    PreparedTireMpmRaster, PreparedTireMpmTerrainReadback, TireFemContactTerrain,
+    TireMpmContactCell, TireMpmFemTerrainOwner, TireMpmGpuInPlaceParams, TireMpmGpuInput,
+    TireMpmGpuKernel, TireMpmGpuOutput, TireMpmResidentFeedback, TireMpmTerrainRasterParams,
     tire_mpm_reference_feedback,
 };
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
+
+#[path = "mpm_active_tiles.rs"]
+mod active_tiles;
+#[path = "mpm_native_atomics.rs"]
+mod native_atomics;
+
+#[path = "mpm_particle_order.rs"]
+mod particle_order;
+
+#[path = "mpm_deterministic_p2g.rs"]
+mod deterministic_p2g;
+
+#[path = "mpm_compensated_stiffness.rs"]
+mod compensated_stiffness;
+
+#[path = "mpm_compensated_wrench.rs"]
+mod compensated_wrench;
+
+#[path = "mpm_command_batch.rs"]
+mod command_batch;
+pub use command_batch::{MpmCommandBatch, PreparedMpmStep};
+
+#[path = "mpm_checkpoint.rs"]
+mod checkpoint;
+#[path = "mpm_frame_backup.rs"]
+mod frame_backup;
+#[path = "mpm_motion_guard.rs"]
+mod motion_guard;
+pub use checkpoint::{
+    MpmSoilActivity, MpmSoilActivityReport, MpmSoilCanonicalSelection, MpmSoilCanonicalStore,
+    MpmSoilCanonicalStoreRead, MpmSoilCanonicalStoreReadCompletion, MpmSoilCanonicalStoreReadTask,
+    MpmSoilCanonicalStoreWritebackCompletion, MpmSoilCanonicalStoreWritebackTask,
+    MpmSoilCanonicalTileArchive, MpmSoilCheckpoint, MpmSoilCheckpointCompletion,
+    MpmSoilCheckpointReadback, MpmSoilCheckpointTicket, MpmSoilDiskWorld, MpmSoilDiskWorldStatus,
+    MpmSoilEnergy, MpmSoilFrame, MpmSoilFrameCheckpoint, MpmSoilFrameSelection, MpmSoilFrameStore,
+    MpmSoilFrameStoreRead, MpmSoilFrameStoreReadCompletion, MpmSoilFrameStoreReadTask,
+    MpmSoilFrameStoreWritebackCompletion, MpmSoilFrameStoreWritebackTask, MpmSoilFrameTileArchive,
+    MpmSoilMomenta, MpmSoilPinConfig, MpmSoilReadbackStats, MpmSoilRegionEnvelope,
+    MpmSoilSelection, MpmSoilSettling, MpmSoilSettlingConfig, MpmSoilSettlingLimits,
+    MpmSoilSettlingProgress, MpmSoilSettlingStatus, MpmSoilStore, MpmSoilStoreLimits,
+    MpmSoilStoreRead, MpmSoilStoreReadCompletion, MpmSoilStoreReadLimits, MpmSoilStoreReadStats,
+    MpmSoilStoreReadTask, MpmSoilStoreStats, MpmSoilStoreStorageStats,
+    MpmSoilStoreWritebackCompletion, MpmSoilStoreWritebackTask, MpmSoilTileActivity,
+    MpmSoilTileArchive, MpmSoilTransferPath, MpmSoilTransferStats, MpmSoilWorld,
+    MpmSoilWorldStatus,
+};
+pub(crate) use frame_backup::MpmFrameBackup;
+pub use motion_guard::{MpmSoilQuiescence, MpmSoilQuiescenceSnapshot};
+pub use motion_guard::{MpmSoilRetainedSupportParticle, MpmSoilRetainedSupportSnapshot};
+pub use motion_guard::{MpmSoilStencilSupport, MpmSoilSupportSnapshot};
+pub use motion_guard::{MpmSoilSupportClosureParticle, MpmSoilSupportClosureSnapshot};
+
+#[cfg(test)]
+#[path = "mpm_fused_gather.rs"]
+mod fused_gather;
+#[path = "mpm_profile.rs"]
+mod profiling;
+#[path = "mpm_soil_identity.rs"]
+mod soil_identity;
+pub use profiling::{MpmProfileStage, MpmStageTiming, MpmStepProfile};
+pub use soil_identity::{MpmSoilIdentityBuffers, MpmSoilIdentitySnapshot};
+
+#[path = "mpm_prescribed_solids.rs"]
+mod prescribed_solids;
+pub use prescribed_solids::{MpmPrescribedSolid, MpmSolidShape};
+#[path = "mpm_rigid_device.rs"]
+mod rigid_device;
+pub use rigid_device::{MpmRigidDeviceBinding, PreparedMpmRigidDeviceBridge};
+
+#[path = "mpm_mass_coupling.rs"]
+mod mass_coupling;
+#[path = "mpm_particle_fault_bridge.rs"]
+mod particle_fault_bridge;
+pub use mass_coupling::{
+    MPM_COUPLING_BOUNDARY_FAULT, MPM_COUPLING_CAPACITY_FAULT, MpmMassCouplingInputs,
+    PreparedMpmMassCoupling,
+};
+pub use particle_fault_bridge::MPM_COUPLING_PARTICLE_FAULT;
+pub(crate) use particle_fault_bridge::MpmMachineFaultBridge;
+#[path = "mpm_unilateral_coupling.rs"]
+mod unilateral_coupling;
+pub use unilateral_coupling::{
+    MpmUnilateralConfig, MpmUnilateralInputs, PreparedMpmUnilateralCoupling,
+};
+
+#[cfg(test)]
+#[path = "mpm_replay_tests.rs"]
+mod replay_tests;
+
+#[cfg(test)]
+#[path = "mpm_numerical_fault_tests.rs"]
+mod numerical_fault_tests;
+
+#[cfg(test)]
+#[path = "mpm_native_replay.rs"]
+pub(crate) mod native_replay;
+
+#[cfg(test)]
+#[path = "mpm_native_stencil.rs"]
+mod native_stencil;
+
+#[cfg(test)]
+#[path = "mpm_native_compensated.rs"]
+mod native_compensated;
+
+#[cfg(test)]
+#[path = "mpm_native_compensated_active.rs"]
+mod native_compensated_active;
+
+#[cfg(test)]
+#[path = "mpm_local_transfer.rs"]
+mod local_transfer;
+
+#[cfg(test)]
+#[path = "mpm_scatter_wrench_replay.rs"]
+mod scatter_wrench_replay;
+
+#[cfg(test)]
+#[path = "mpm_relative_transfer.rs"]
+mod relative_transfer;
+
+#[cfg(test)]
+#[path = "mpm_wrench_oracle.rs"]
+mod wrench_oracle;
+
+#[cfg(test)]
+#[path = "mpm_bounded_reference.rs"]
+mod bounded_reference;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MpmActiveGridStats {
+    pub active_tiles: u32,
+    pub tile_capacity: u32,
+    pub overflow: bool,
+    pub numerical_fault: bool,
+    /// A swept-residency displacement bound was exceeded during gather.
+    pub motion_bound_exceeded: bool,
+    /// Gather count; a faulted batch may include a partially updated substep.
+    pub completed_substeps: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MpmGridStorage {
+    #[default]
+    Dense,
+    ActiveTiles,
+    Compact {
+        tile_capacity: u32,
+    },
+}
+
+impl MpmActiveGridStats {
+    pub fn faulted(&self) -> bool {
+        self.overflow || self.numerical_fault || self.motion_bound_exceeded
+    }
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -150,6 +307,8 @@ struct Uniforms {
     snow_theta_c: f32,
     snow_theta_s: f32,
     snow_hardening: f32,
+    grid_layout: [u32; 4],
+    grid_window_cells: [i32; 4],
 }
 
 const WORKGROUP_SIZE: u32 = 64;
@@ -232,13 +391,14 @@ pub enum MpmTimeStep {
 
 /// Material configuration. Defaults are tuned for dry sand
 /// (Klár 2016 §6).
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct MpmConfig {
     /// Cubic grid edge length (cells per side).
     pub grid_size: u32,
     /// World-space size of one grid cell.
     pub cell_size: f32,
-    /// Lower-left corner of the grid in world coords.
+    /// World-space lattice anchor. The active window is displaced by
+    /// [`MpmSimulation::grid_window_cells`] integer cells from this point.
     pub grid_origin: [f32; 3],
     /// Gravity along `+Y`. Set to `-9.81` for terrestrial sims.
     pub gravity_y: f32,
@@ -525,11 +685,24 @@ fn material_row(rheology: &MpmRheology) -> [[f32; 4]; 2] {
     }
 }
 
+#[path = "mpm_render_view.rs"]
+mod render_view;
+pub use render_view::{MpmParticleRenderSource, MpmParticleRenderView};
+
 /// Owns particle + grid GPU buffers and the compute pipelines for one
 /// MPM simulation. Re-buildable on config change (call [`Self::new`]).
 #[allow(dead_code)]
 pub struct MpmSimulation {
     cfg: MpmConfig,
+    grid_window_cells: [i32; 3],
+    native_float_atomics: bool,
+    #[cfg(test)]
+    compensated_active_transfer: Option<native_compensated_active::Transfer>,
+    device: wgpu::Device,
+    soil_owner: Arc<()>,
+    soil_identity: Option<soil_identity::SoilIdentity>,
+    step_epoch: Arc<()>,
+    profiler: Option<profiling::StepProfiler>,
 
     // Pipelines.
     pipe_reset: wgpu::ComputePipeline,
@@ -538,14 +711,31 @@ pub struct MpmSimulation {
     /// kernel. Defaults to active in `step_n_with`; `set_p2g_mode`
     /// toggles back to `pipe_p2g` for parity tests.
     pipe_p2g_two_pass: wgpu::ComputePipeline,
+    pipe_p2g_deferred: Option<wgpu::ComputePipeline>,
     pipe_rigid: wgpu::ComputePipeline,
     pipe_grid: wgpu::ComputePipeline,
     pipe_g2p: wgpu::ComputePipeline,
+    motion_guard: Option<motion_guard::MotionGuard>,
     pipe_plastic: wgpu::ComputePipeline,
+    #[cfg(test)]
+    pipe_fused_gather: Option<wgpu::ComputePipeline>,
+    #[cfg(test)]
+    use_fused_gather: bool,
+    #[cfg(test)]
+    bounded_reference: Option<bounded_reference::Reference>,
     pipe_implicit_apply: wgpu::ComputePipeline,
     pipe_implicit_swap: wgpu::ComputePipeline,
     pipe_rigid_force: wgpu::ComputePipeline,
+    #[cfg(test)]
+    pipe_ordered_native_shell: Option<wgpu::ComputePipeline>,
+    #[cfg(test)]
+    ordered_native_shell_forces: bool,
     pipe_rigid_wrench_reset: wgpu::ComputePipeline,
+    active_pipelines: [wgpu::ComputePipeline; 6],
+    active_tiles: active_tiles::ActiveTiles,
+    use_active_grid: bool,
+    active_grid_needs_reset: bool,
+    sparse_grid: bool,
 
     // Bind group layouts.
     layout_uniforms: wgpu::BindGroupLayout,
@@ -602,6 +792,9 @@ pub struct MpmSimulation {
     // Live counters.
     particle_count: u32,
     rigid_count: u32,
+    prescribed_solids: bool,
+    rigid_epoch: Arc<()>,
+    rigid_bridge: std::sync::Weak<()>,
 
     /// Stage 24d.3 — when `true`, `step_n_with` dispatches
     /// `p2g_two_pass` (workgroup-local accumulate + commit, atomic-
@@ -609,6 +802,14 @@ pub struct MpmSimulation {
     /// `p2g` (per-particle global atomic CAS).  Default `true`; the
     /// parity test toggles to compare grid mass / momentum byte-wise.
     use_two_pass_p2g: bool,
+    use_deferred_p2g_lookup: bool,
+    particle_order: Option<particle_order::ParticleOrder>,
+    use_particle_order: bool,
+    deterministic_p2g: Option<deterministic_p2g::Gather>,
+    use_deterministic_p2g: bool,
+    compensated_stiffness: Option<compensated_stiffness::Transfer>,
+    use_compensated_stiffness: bool,
+    compensated_wrench: Option<compensated_wrench::Reduction>,
 
     // Host-side mirrors for tests + viewer.
     host_pos: Vec<[f32; 4]>,
@@ -618,6 +819,15 @@ pub struct MpmSimulation {
     /// readback/terrain-export diagnostics.
     tire_compaction: Vec<[f32; 4]>,
     tire_compaction_buf: wgpu::Buffer,
+    tire_raster_cache: Option<TireRasterCache>,
+    tire_feedback_cache: Option<TireMpmResidentFeedback>,
+}
+
+struct TireRasterCache {
+    params: TireMpmTerrainRasterParams,
+    fallback_velocity: [f32; 3],
+    outputs: [wgpu::Buffer; 3],
+    prepared: PreparedTireMpmRaster,
 }
 
 impl MpmSimulation {
@@ -630,9 +840,75 @@ impl MpmSimulation {
     }
 
     pub fn new_with_device(device: &wgpu::Device, cfg: MpmConfig) -> Result<Self> {
+        Self::new_grid_storage(device, cfg, None, false)
+    }
+
+    /// Allocate grid fields and hashed world-tile lookup at a fixed tile capacity.
+    /// Query active-grid status after stepping to detect overflow and completed substeps.
+    pub fn new_sparse(engine: &Engine, cfg: MpmConfig, tile_capacity: u32) -> Result<Self> {
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("MPM needs a GPU engine".into()))?;
+        Self::new_grid_storage(device, cfg, Some(tile_capacity), false)
+    }
+
+    fn new_grid_storage(
+        device: &wgpu::Device,
+        cfg: MpmConfig,
+        tile_capacity: Option<u32>,
+        native_float_atomics: bool,
+    ) -> Result<Self> {
+        if native_float_atomics
+            && (!device
+                .features()
+                .contains(wgpu::Features::SHADER_FLOAT32_ATOMIC)
+                || !matches!(cfg.time_step, MpmTimeStep::Explicit))
+        {
+            return Err(Error::Solver(
+                "Native MPM requires SHADER_FLOAT32_ATOMIC and explicit configuration".into(),
+            ));
+        }
+        let grid_cells = cfg
+            .grid_size
+            .checked_pow(3)
+            .filter(|&n| n > 0)
+            .ok_or_else(|| Error::Solver("MPM grid dimensions overflow or are empty".into()))?;
+        let limits = device.limits();
+        let sparse_grid = tile_capacity.is_some();
+        let storage_cells = match tile_capacity {
+            Some(capacity) if capacity > 0 && capacity <= cfg.grid_size.div_ceil(4).pow(3) => {
+                capacity.checked_mul(64)
+            }
+            Some(_) => None,
+            None => Some(grid_cells),
+        }
+        .ok_or_else(|| Error::Solver("MPM tile pool capacity is invalid".into()))?;
+        if !cfg.cell_size.is_finite()
+            || cfg.cell_size <= 0.0
+            || cfg.grid_origin.iter().any(|v| !v.is_finite())
+            || u64::from(storage_cells) * 16 > limits.max_storage_buffer_binding_size
+            || u64::from(storage_cells) * 16 > limits.max_buffer_size
+            || u64::from(cfg.max_rigid.max(1)) * 64 > limits.max_storage_buffer_binding_size
+            || u64::from(cfg.max_rigid.max(1)) * 64 > limits.max_buffer_size
+            || (!sparse_grid
+                && grid_cells.div_ceil(WORKGROUP_SIZE)
+                    > limits.max_compute_workgroups_per_dimension)
+        {
+            return Err(Error::Solver(
+                "MPM grid exceeds device capacity or has invalid spacing/origin".into(),
+            ));
+        }
+        let shader_source = include_str!("../shaders/mpm.wgsl");
+        #[cfg(test)]
+        let shader_source = replay_tests::instrument_global_cas(shader_source);
+        let shader_source: std::borrow::Cow<'_, str> = if native_float_atomics {
+            native_atomics::shader_source().into()
+        } else {
+            shader_source.into()
+        };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::mpm"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/mpm.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
         let layout_uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -675,20 +951,28 @@ impl MpmSimulation {
             immediate_size: 0,
         });
 
-        let mk = |entry: &str| {
+        let mk_lookup = |entry: &str, deferred: bool| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(entry),
                 layout: Some(&pipeline_layout),
                 module: &shader,
                 entry_point: Some(entry),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[
+                        ("SPARSE_GRID", f64::from(sparse_grid)),
+                        ("DEFER_P2G_LOOKUP", f64::from(deferred)),
+                    ],
+                    ..Default::default()
+                },
                 cache: None,
             })
         };
+        let mk = |entry: &str| mk_lookup(entry, false);
 
         let pipe_reset = mk("reset_grid");
         let pipe_p2g = mk("p2g");
         let pipe_p2g_two_pass = mk("p2g_two_pass");
+        let pipe_p2g_deferred = sparse_grid.then(|| mk_lookup("p2g_two_pass", true));
         let pipe_rigid = mk("rigid_imprint");
         let pipe_grid = mk("grid_update");
         let pipe_g2p = mk("g2p");
@@ -697,10 +981,34 @@ impl MpmSimulation {
         let pipe_implicit_swap = mk("mpm_implicit_swap");
         let pipe_rigid_force = mk("mpm_rigid_force_integrate");
         let pipe_rigid_wrench_reset = mk("mpm_rigid_wrench_reset");
+        let active_pipelines = [
+            "reset_grid",
+            "rigid_imprint",
+            "grid_update",
+            "mpm_implicit_apply",
+            "mpm_implicit_swap",
+            "mpm_rigid_force_integrate",
+        ]
+        .map(|entry| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some(entry),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[
+                        ("ACTIVE_GRID", 1.0),
+                        ("SPARSE_GRID", f64::from(sparse_grid)),
+                    ],
+                    ..Default::default()
+                },
+                cache: None,
+            })
+        });
 
         // Allocate buffers.
         let n_particles = cfg.max_particles.max(1) as u64;
-        let grid_total = (cfg.grid_size as u64).pow(3);
+        let grid_total = u64::from(storage_cells);
         let n_rigid = cfg.max_rigid.max(1) as u64;
 
         let mk_buf = |label: &str, size_bytes: u64, usage: wgpu::BufferUsages| -> wgpu::Buffer {
@@ -739,21 +1047,38 @@ impl MpmSimulation {
         let g_momentum = mk_buf("mpm.g_momentum", grid_total * 12, storage);
         let g_velocity = mk_buf("mpm.g_velocity", grid_total * 16, storage);
         let g_rigid_mask = mk_buf("mpm.g_rigid_mask", grid_total * 4, storage);
-        let g_kdiag = mk_buf("mpm.g_kdiag", grid_total * 4, storage);
         let g_velocity_prev = mk_buf("mpm.g_velocity_prev", grid_total * 16, storage);
 
         let rigid_center = mk_buf("mpm.rigid_center", n_rigid * 16, storage);
-        let rigid_vel = mk_buf("mpm.rigid_vel", n_rigid * 16, storage);
+        let rigid_vel = mk_buf("mpm.rigid_vel", n_rigid * 64, storage);
         // 8 u32s per rigid body (force_xyz + 1 pad + torque_xyz + 1 pad).
         let rigid_wrench = mk_buf("mpm.rigid_wrench", n_rigid * 32, storage);
+        let active_tiles = active_tiles::ActiveTiles::new(
+            device,
+            &cfg,
+            &p_pos,
+            &rigid_center,
+            storage_cells,
+            tile_capacity,
+        )?;
+        let g_kdiag = active_tiles.list.clone();
 
         // Stage 24d.2: persistent uniform buffer + readback staging.
+        let uniform_usage = wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST;
+        #[cfg(test)]
+        let uniform_usage = if std::env::var_os("MOLLA_SOIL_REPLAY_SPLIT").is_some()
+            || std::env::var_os("MOLLA_NATIVE_FORCE_REPLAY").is_some()
+        {
+            uniform_usage | wgpu::BufferUsages::COPY_SRC
+        } else {
+            uniform_usage
+        };
         let uniform_buf = molla_core::gpu_create_buffer!(
             device,
             &wgpu::BufferDescriptor {
                 label: Some("molla::mpm uniforms (persistent)"),
                 size: std::mem::size_of::<Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                usage: uniform_usage,
                 mapped_at_creation: false,
             }
         );
@@ -826,17 +1151,43 @@ impl MpmSimulation {
 
         Ok(Self {
             cfg,
+            grid_window_cells: [0; 3],
+            device: device.clone(),
+            step_epoch: Arc::new(()),
+            soil_owner: Arc::new(()),
+            soil_identity: None,
+            native_float_atomics,
+            #[cfg(test)]
+            compensated_active_transfer: None,
+            profiler: None,
             pipe_reset,
             pipe_p2g,
             pipe_p2g_two_pass,
+            pipe_p2g_deferred,
             pipe_rigid,
             pipe_grid,
             pipe_g2p,
+            motion_guard: None,
             pipe_plastic,
+            #[cfg(test)]
+            pipe_fused_gather: None,
+            #[cfg(test)]
+            use_fused_gather: false,
+            #[cfg(test)]
+            bounded_reference: None,
             pipe_implicit_apply,
             pipe_implicit_swap,
             pipe_rigid_force,
+            #[cfg(test)]
+            pipe_ordered_native_shell: None,
+            #[cfg(test)]
+            ordered_native_shell_forces: false,
             pipe_rigid_wrench_reset,
+            active_pipelines,
+            active_tiles,
+            use_active_grid: sparse_grid,
+            active_grid_needs_reset: true,
+            sparse_grid,
             layout_uniforms,
             layout_particles,
             layout_grid,
@@ -870,11 +1221,24 @@ impl MpmSimulation {
             bg_rigid,
             particle_count: 0,
             rigid_count: 0,
-            use_two_pass_p2g: true,
+            prescribed_solids: false,
+            rigid_epoch: Arc::new(()),
+            rigid_bridge: std::sync::Weak::new(),
+            use_two_pass_p2g: !native_float_atomics,
+            use_deferred_p2g_lookup: false,
+            particle_order: None,
+            use_particle_order: false,
+            deterministic_p2g: None,
+            use_deterministic_p2g: false,
+            compensated_stiffness: None,
+            use_compensated_stiffness: false,
+            compensated_wrench: None,
             host_pos: vec![],
             host_vel: vec![],
             tire_compaction: vec![],
             tire_compaction_buf,
+            tire_raster_cache: None,
+            tire_feedback_cache: None,
         })
     }
 
@@ -885,6 +1249,201 @@ impl MpmSimulation {
     /// Live particle count.
     pub fn particle_count(&self) -> u32 {
         self.particle_count
+    }
+
+    /// Select active-tile dispatch; compact grid storage cannot use dense dispatch.
+    pub fn set_active_grid(&mut self, enabled: bool) -> Result<()> {
+        if enabled != self.use_active_grid && self.use_compensated_stiffness {
+            return Err(Error::Solver(
+                "Disable compensated stiffness before changing grid dispatch".into(),
+            ));
+        }
+        if enabled != self.use_active_grid && self.use_deterministic_p2g {
+            return Err(Error::Solver(
+                "Disable deterministic P2G before active grid".into(),
+            ));
+        }
+        if self.sparse_grid && !enabled {
+            return Err(Error::Solver(
+                "MPM compact storage requires active grid dispatch".into(),
+            ));
+        }
+        if self.use_active_grid != enabled {
+            self.invalidate_prepared_steps();
+            self.use_active_grid = enabled;
+            self.active_grid_needs_reset = true;
+        }
+        Ok(())
+    }
+
+    /// Bytes in physical grid arrays and tile metadata, excluding particle state.
+    pub fn grid_storage_bytes(&self) -> u64 {
+        [
+            &self.g_mass,
+            &self.g_momentum,
+            &self.g_velocity,
+            &self.g_velocity_prev,
+            &self.g_rigid_mask,
+            &self.g_kdiag,
+        ]
+        .iter()
+        .map(|buffer| buffer.size())
+        .sum()
+    }
+
+    pub fn grid_storage(&self) -> MpmGridStorage {
+        if self.sparse_grid {
+            MpmGridStorage::Compact {
+                tile_capacity: self.active_tiles.capacity,
+            }
+        } else if self.use_active_grid {
+            MpmGridStorage::ActiveTiles
+        } else {
+            MpmGridStorage::Dense
+        }
+    }
+
+    /// Grow compact grid capacity while retaining particle and material history.
+    /// Grid status starts a new epoch on the next nonempty step.
+    pub fn reserve_sparse_tiles(&mut self, capacity: u32) -> Result<()> {
+        if !self.sparse_grid || capacity == 0 || capacity > self.cfg.grid_size.div_ceil(4).pow(3) {
+            return Err(Error::Solver(
+                "MPM compact tile reservation is invalid".into(),
+            ));
+        }
+        if capacity <= self.active_tiles.capacity {
+            return Ok(());
+        }
+        if self.use_compensated_stiffness {
+            return Err(Error::Solver(
+                "Disable compensated stiffness before growing grid storage".into(),
+            ));
+        }
+        let cells = capacity
+            .checked_mul(64)
+            .ok_or_else(|| Error::Solver("MPM tile pool size overflow".into()))?;
+        let limits = self.device.limits();
+        if u64::from(cells) * 16 > limits.max_storage_buffer_binding_size
+            || u64::from(cells) * 16 > limits.max_buffer_size
+        {
+            return Err(Error::Solver(
+                "MPM tile pool exceeds device capacity".into(),
+            ));
+        }
+        let tiles = active_tiles::ActiveTiles::new(
+            &self.device,
+            &self.cfg,
+            &self.p_pos,
+            &self.rigid_center,
+            cells,
+            Some(capacity),
+        )?;
+        let [mass, momentum, velocity, mask, previous] = [
+            ("MPM compact mass", 4),
+            ("MPM compact momentum", 12),
+            ("MPM compact velocity", 16),
+            ("MPM compact rigid mask", 4),
+            ("MPM compact previous velocity", 16),
+        ]
+        .map(|(label, stride)| {
+            molla_core::gpu_create_buffer!(
+                self.device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: u64::from(cells) * stride,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
+        });
+        let stiffness = tiles.list.clone();
+        let bindings = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("MPM compact grid reservation"),
+            layout: &self.layout_grid,
+            entries: &[
+                buffer_entry(0, &mass),
+                buffer_entry(1, &momentum),
+                buffer_entry(2, &velocity),
+                buffer_entry(3, &mask),
+                buffer_entry(4, &stiffness),
+                buffer_entry(5, &previous),
+            ],
+        });
+        self.g_mass = mass;
+        self.g_momentum = momentum;
+        self.g_velocity = velocity;
+        self.g_rigid_mask = mask;
+        self.g_kdiag = stiffness;
+        self.g_velocity_prev = previous;
+        self.active_tiles = tiles;
+        self.invalidate_prepared_steps();
+        self.bg_grid = bindings;
+        self.active_grid_needs_reset = true;
+        Ok(())
+    }
+
+    /// Clear grid state and its fault latch before the next nonempty step.
+    pub fn reset_active_grid(&mut self) {
+        self.active_grid_needs_reset = true;
+    }
+
+    pub fn active_grid_enabled(&self) -> bool {
+        self.use_active_grid
+    }
+
+    /// Explicit blocking diagnostic of the last active-tile build.
+    pub fn read_active_grid_stats_with(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<MpmActiveGridStats> {
+        if !self.use_active_grid || self.active_grid_needs_reset {
+            return Err(Error::Solver(
+                "MPM active grid has not stepped in this mode".into(),
+            ));
+        }
+        let stats = self.active_tiles.stats(device, queue)?;
+        if stats.faulted() {
+            return Err(Error::Solver(format!(
+                "MPM grid fault after {} gathers; restore or reset required",
+                stats.completed_substeps
+            )));
+        }
+        Ok(stats)
+    }
+
+    /// Blocking fault/status query for dense or active grids; faults latch until reset.
+    pub fn read_active_grid_status_with(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<MpmActiveGridStats> {
+        if self.active_grid_needs_reset {
+            return Err(Error::Solver("MPM grid has not stepped since reset".into()));
+        }
+        self.active_tiles.stats(device, queue)
+    }
+
+    /// Blocking snapshot of world tile IDs in physical-slot order.
+    pub fn read_active_tile_ids_with(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<Vec<u32>> {
+        if !self.use_active_grid || self.active_grid_needs_reset {
+            return Err(Error::Solver(
+                "MPM active grid has not stepped in this mode".into(),
+            ));
+        }
+        let (status, ids) = self.active_tiles.read_metadata(device, queue, true)?;
+        if status.faulted() {
+            return Err(Error::Solver(
+                "MPM tile snapshot has a latched grid fault".into(),
+            ));
+        }
+        Ok(ids)
     }
 
     /// Replace the particle set with the given positions. Velocities
@@ -951,6 +1510,8 @@ impl MpmSimulation {
         );
 
         self.particle_count = n as u32;
+        self.invalidate_soil_identity();
+        self.invalidate_prepared_steps();
         self.host_pos = pos;
         self.host_vel = vel;
         self.tire_compaction = vec![[0.0; 4]; n];
@@ -965,7 +1526,7 @@ impl MpmSimulation {
         spheres: &[([f32; 3], f32, [f32; 3])],
     ) -> Result<()> {
         let n = spheres.len();
-        if n as u32 > self.cfg.max_rigid {
+        if n > self.cfg.max_rigid as usize {
             return Err(Error::Gpu(format!(
                 "set_rigid_spheres: n={} > max_rigid={}",
                 n, self.cfg.max_rigid
@@ -977,7 +1538,14 @@ impl MpmSimulation {
             .collect();
         let vels: Vec<[f32; 4]> = spheres
             .iter()
-            .map(|(_, _, v)| [v[0], v[1], v[2], 0.0])
+            .flat_map(|(_, _, v)| {
+                [
+                    [v[0], v[1], v[2], 0.0],
+                    [0.0; 4],
+                    [0.0, 0.0, 0.0, 1.0],
+                    [0.0; 4],
+                ]
+            })
             .collect();
         if !centers.is_empty() {
             molla_core::gpu_write_buffer!(
@@ -988,13 +1556,19 @@ impl MpmSimulation {
             );
             molla_core::gpu_write_buffer!(queue, &self.rigid_vel, 0, bytemuck::cast_slice(&vels));
         }
+        if self.rigid_count != n as u32 || self.prescribed_solids {
+            self.invalidate_prepared_steps();
+        }
         self.rigid_count = n as u32;
+        self.prescribed_solids = false;
+        self.rigid_epoch = Arc::new(());
         Ok(())
     }
 
     /// Update material constants without rebuilding the pipelines.
     /// Surfaced for the viewer's live-tuning sliders.
     pub fn set_material(&mut self, youngs: f32, friction_angle: f32) {
+        self.invalidate_prepared_steps();
         self.cfg.youngs = youngs;
         self.cfg.friction_angle = friction_angle;
         if let MpmRheology::Sand { friction_angle: f } = &mut self.cfg.rheology {
@@ -1040,11 +1614,14 @@ impl MpmSimulation {
             )));
         }
         self.material_rows = materials.to_vec();
+        self.invalidate_soil_identity();
+        self.invalidate_prepared_steps();
         self.particle_material_dirty = Some(particle_material);
         Ok(())
     }
 
     pub fn set_rheology(&mut self, rheology: MpmRheology) {
+        self.invalidate_prepared_steps();
         self.cfg.rheology = rheology;
         if let MpmRheology::Sand { friction_angle } = rheology {
             self.cfg.friction_angle = friction_angle;
@@ -1053,6 +1630,7 @@ impl MpmSimulation {
 
     /// Stage 24d.1 — replace the time-step selector live.
     pub fn set_time_step(&mut self, ts: MpmTimeStep) {
+        self.invalidate_prepared_steps();
         self.cfg.time_step = ts;
     }
 
@@ -1062,11 +1640,56 @@ impl MpmSimulation {
     /// global atomic CAS (kept available for the parity test only;
     /// not recommended for production).
     pub fn set_p2g_mode(&mut self, two_pass: bool) {
+        self.use_compensated_stiffness = false;
+        self.use_deterministic_p2g = false;
+        self.invalidate_prepared_steps();
         self.use_two_pass_p2g = two_pass;
+        if !two_pass {
+            self.use_deferred_p2g_lookup = false;
+        }
+    }
+
+    /// Select compact-grid lookup at workgroup commit; requires two-pass P2G and defaults off.
+    pub fn set_deferred_p2g_lookup(&mut self, enabled: bool) -> Result<()> {
+        if enabled != self.use_deferred_p2g_lookup && self.use_compensated_stiffness {
+            return Err(Error::Solver(
+                "Disable compensated stiffness before changing deferred lookup".into(),
+            ));
+        }
+        if enabled && self.use_deterministic_p2g {
+            return Err(Error::Solver(
+                "Deferred scatter is incompatible with deterministic P2G".into(),
+            ));
+        }
+        if enabled && (!self.sparse_grid || !self.use_two_pass_p2g) {
+            return Err(Error::Solver(
+                "Deferred P2G lookup requires compact storage and two-pass transfer".into(),
+            ));
+        }
+        self.use_deferred_p2g_lookup = enabled;
+        self.invalidate_prepared_steps();
+        Ok(())
+    }
+
+    pub fn uses_deferred_p2g_lookup(&self) -> bool {
+        self.use_deferred_p2g_lookup
+    }
+
+    fn p2g_pipeline(&self) -> &wgpu::ComputePipeline {
+        if !self.use_two_pass_p2g {
+            &self.pipe_p2g
+        } else if self.use_deferred_p2g_lookup {
+            self.pipe_p2g_deferred.as_ref().unwrap()
+        } else {
+            &self.pipe_p2g_two_pass
+        }
     }
 
     /// Stage 24d.3 — query the current p2g dispatch mode.
     pub fn uses_two_pass_p2g(&self) -> bool {
+        if self.use_deterministic_p2g {
+            return false;
+        }
         self.use_two_pass_p2g
     }
 
@@ -1203,38 +1826,80 @@ impl MpmSimulation {
         Ok(output)
     }
 
-    /// Compose tire contact feedback with the full MPM solver using the GPU
-    /// tire-feedback kernel in-place on this simulation's persistent particle
-    /// buffers. This avoids the previous GPU feedback readback/re-upload
-    /// bridge for the hot path.
+    /// Reserves retained contact storage outside stepping; queue must belong to device.
+    pub fn reserve_tire_feedback_with(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        kernel: &TireMpmGpuKernel,
+        contact_capacity: u32,
+    ) -> Result<()> {
+        kernel.validate_feedback_device(&self.device)?;
+        kernel.validate_feedback_device(device)?;
+        if let Some(cache) = &self.tire_feedback_cache {
+            cache.validate_context(device, queue, kernel)?;
+            if cache.contact_capacity() >= contact_capacity {
+                return Ok(());
+            }
+        }
+        self.tire_feedback_cache = Some(kernel.prepare_resident_in_place(
+            device,
+            queue,
+            &self.p_pos,
+            &self.p_vel,
+            &self.tire_compaction_buf,
+            self.cfg.max_particles.max(1),
+            contact_capacity,
+        )?);
+        Ok(())
+    }
+
+    pub fn tire_feedback_contact_capacity(&self) -> u32 {
+        self.tire_feedback_cache
+            .as_ref()
+            .map_or(0, TireMpmResidentFeedback::contact_capacity)
+    }
+
+    /// Applies GPU feedback in-place, retaining contact storage and bindings between submissions.
     pub fn apply_tire_contacts_gpu_resident_with(
         &mut self,
-        _device: &wgpu::Device,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         kernel: &TireMpmGpuKernel,
         contacts: &[TireMpmContactCell],
         params: MpmTireFeedbackParams,
     ) -> Result<()> {
         let params = params.validate()?;
+        let params = TireMpmGpuInPlaceParams {
+            particle_count: self.particle_count,
+            particle_mass: self.cfg.particle_mass,
+            dt: params.dt,
+            plastic_compaction_gain: params.plastic_compaction_gain,
+            max_compaction: params.max_compaction,
+            damping: params.damping,
+        };
+        TireMpmResidentFeedback::validate_inputs(contacts, &params)?;
+        kernel.validate_feedback_device(&self.device)?;
+        kernel.validate_feedback_device(device)?;
+        if let Some(cache) = &self.tire_feedback_cache {
+            cache.validate_context(device, queue, kernel)?;
+        }
         if self.particle_count == 0 {
             return Ok(());
         }
-        kernel.dispatch_in_place(
-            _device,
-            queue,
-            &self.p_pos,
-            &self.p_vel,
-            &self.tire_compaction_buf,
-            contacts,
-            &TireMpmGpuInPlaceParams {
-                particle_count: self.particle_count,
-                particle_mass: self.cfg.particle_mass,
-                dt: params.dt,
-                plastic_compaction_gain: params.plastic_compaction_gain,
-                max_compaction: params.max_compaction,
-                damping: params.damping,
-            },
-        )
+        if self.tire_feedback_cache.is_none()
+            || contacts.len() > self.tire_feedback_contact_capacity() as usize
+        {
+            let capacity = (contacts.len() as u32)
+                .max(32)
+                .checked_next_power_of_two()
+                .ok_or_else(|| Error::Solver("MPM contact capacity overflow".into()))?;
+            self.reserve_tire_feedback_with(device, queue, kernel, capacity)?;
+        }
+        self.tire_feedback_cache
+            .as_mut()
+            .unwrap()
+            .dispatch(device, queue, kernel, contacts, &params)
     }
 
     /// Compose tire contact feedback with the full MPM solver using the GPU
@@ -1315,6 +1980,138 @@ impl MpmSimulation {
             .fem_contact_terrain())
     }
 
+    /// Prepare a terrain-only CPU bridge with optional GPU-reduced compaction statistics.
+    /// Reprepare after particle-count or source-buffer changes; no particles are downloaded.
+    pub fn prepare_tire_terrain_readback_with(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        raster: MpmTireTerrainRaster,
+        outputs: [&wgpu::Buffer; 3],
+    ) -> Result<PreparedTireMpmTerrainReadback> {
+        PreparedTireMpmTerrainReadback::new(
+            device,
+            queue,
+            outputs,
+            &self.tire_compaction_buf,
+            TireMpmTerrainRasterParams {
+                particle_count: self.particle_count,
+                origin: raster.origin,
+                spacing: raster.spacing,
+                nx: raster.nx,
+                nz: raster.nz,
+                rest_height: raster.rest_height,
+            },
+            1.0e-5,
+        )
+    }
+
+    pub fn prepare_geometric_surface(
+        &self,
+        engine: &Engine,
+        config: crate::kernels::SoilSurfaceConfig,
+        max_owned_bytes: u64,
+    ) -> Result<crate::kernels::PreparedSoilSurface> {
+        engine.check_device()?;
+        let device = engine
+            .device()
+            .filter(|d| d.as_ref() == &self.device)
+            .ok_or_else(|| Error::Solver("MPM surface device mismatch".into()))?;
+        crate::kernels::PreparedSoilSurface::new(
+            device,
+            engine.queue().unwrap(),
+            &self.p_pos,
+            self.particle_count,
+            config,
+            max_owned_bytes,
+        )
+    }
+
+    fn check_geometric_surface(
+        &self,
+        engine: &Engine,
+        surface: &crate::kernels::PreparedSoilSurface,
+    ) -> Result<()> {
+        engine.check_device()?;
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("GPU device required".into()))?;
+        if !surface.matches(
+            device,
+            engine.queue().unwrap(),
+            &self.p_pos,
+            self.particle_count,
+        ) {
+            return Err(Error::Solver(
+                "MPM surface source/count/device changed; reprepare".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Queue a bounded surface observation; reset its generation explicitly after reseeding.
+    pub fn try_request_geometric_surface(
+        &self,
+        engine: &Engine,
+        surface: &mut crate::kernels::PreparedSoilSurface,
+        revision: u64,
+    ) -> Result<bool> {
+        self.check_geometric_surface(engine, surface)?;
+        surface.try_request_snapshot(revision)
+    }
+
+    /// Nonblocking observation poll with current source and device validation.
+    pub fn poll_geometric_surface(
+        &self,
+        engine: &Engine,
+        surface: &mut crate::kernels::PreparedSoilSurface,
+    ) -> Result<Option<crate::kernels::SoilSurfaceObservation>> {
+        self.check_geometric_surface(engine, surface)?;
+        surface.poll_snapshot()
+    }
+
+    /// Export and observe the current point-height envelope, without particle readback.
+    pub fn read_geometric_surface(
+        &self,
+        engine: &Engine,
+        surface: &mut crate::kernels::PreparedSoilSurface,
+        timeout: std::time::Duration,
+    ) -> Result<crate::kernels::SoilSurfaceSnapshot> {
+        if timeout.is_zero() || std::time::Instant::now().checked_add(timeout).is_none() {
+            return Err(Error::Solver(
+                "MPM surface invalid readback deadline".into(),
+            ));
+        }
+        self.check_geometric_surface(engine, surface)?;
+        if surface.snapshot_pending() {
+            return Err(Error::Solver(
+                "MPM surface asynchronous snapshot pending".into(),
+            ));
+        }
+        let device = engine.device().unwrap();
+        let queue = engine.queue().unwrap();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        surface.encode(&mut encoder);
+        queue.submit([encoder.finish()]);
+        surface.read_blocking(timeout)
+    }
+
+    /// Prepare bounded asynchronous diagnostics from the retained compaction buffer.
+    pub fn prepare_tire_compaction_readback(
+        &self,
+        engine: &Engine,
+        slots: usize,
+    ) -> Result<crate::kernels::PreparedTireMpmCompactionReadback> {
+        crate::kernels::PreparedTireMpmCompactionReadback::new(
+            engine,
+            &self.device,
+            &self.tire_compaction_buf,
+            self.particle_count,
+            1.0e-5,
+            slots,
+        )
+    }
+
     /// Rasterize live MPM tire compaction into caller-owned GPU
     /// height/sinkage/surface-velocity buffers without reading particles back
     /// to the CPU.
@@ -1335,28 +2132,57 @@ impl MpmSimulation {
         sinkage: &wgpu::Buffer,
         surface_velocity_map: &wgpu::Buffer,
     ) -> Result<()> {
-        if self.particle_count == 0 {
-            return Ok(());
+        let params = TireMpmTerrainRasterParams {
+            particle_count: self.particle_count,
+            origin: raster.origin,
+            spacing: raster.spacing,
+            nx: raster.nx,
+            nz: raster.nz,
+            rest_height: raster.rest_height,
+        };
+        let outputs = [heights, sinkage, surface_velocity_map];
+        let reuse = self.tire_raster_cache.as_ref().is_some_and(|cache| {
+            cache.params == params
+                && cache.fallback_velocity == raster.surface_velocity
+                && cache
+                    .outputs
+                    .iter()
+                    .zip(outputs)
+                    .all(|(cached, output)| cached == output)
+        });
+        if !reuse {
+            let prepared = kernel.prepare_raster_to_buffers(
+                device,
+                &self.p_pos,
+                &self.p_vel,
+                &self.tire_compaction_buf,
+                heights,
+                sinkage,
+                surface_velocity_map,
+                &params,
+                raster.surface_velocity,
+            )?;
+            self.tire_raster_cache = Some(TireRasterCache {
+                params,
+                fallback_velocity: raster.surface_velocity,
+                outputs: [
+                    heights.clone(),
+                    sinkage.clone(),
+                    surface_velocity_map.clone(),
+                ],
+                prepared,
+            });
         }
-        kernel.dispatch_raster_to_buffers(
-            device,
-            queue,
-            &self.p_pos,
-            &self.p_vel,
-            &self.tire_compaction_buf,
-            heights,
-            sinkage,
-            surface_velocity_map,
-            &TireMpmTerrainRasterParams {
-                particle_count: self.particle_count,
-                origin: raster.origin,
-                spacing: raster.spacing,
-                nx: raster.nx,
-                nz: raster.nz,
-                rest_height: raster.rest_height,
-            },
-            raster.surface_velocity,
-        )
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("MPM prepared terrain export"),
+        });
+        self.tire_raster_cache
+            .as_ref()
+            .expect("prepared raster")
+            .prepared
+            .encode(&mut encoder);
+        queue.submit([encoder.finish()]);
+        Ok(())
     }
 
     fn write_tire_feedback_output(
@@ -1421,11 +2247,8 @@ impl MpmSimulation {
     /// `step()` `n` times when `n` is large because each `submit` has
     /// fixed wgpu / driver overhead independent of payload size.
     ///
-    /// The uniform buffer is written once at the head of the call —
-    /// values that vary between substeps would require either a
-    /// per-substep `write_buffer` (re-allowed since WGPU 0.20) or
-    /// dynamic uniform offsets.  v1 holds `dt`/material constants
-    /// constant across the batch, matching the viewer's usage.
+    /// Timestep and material constants are fixed across this submitted batch.
+    /// Caller-owned encoders use [`Self::prepare_step`] and [`Self::begin_command_batch`].
     pub fn step_n(&mut self, engine: &Engine, dt: f32, substeps: usize) -> Result<()> {
         let device = engine
             .device()
@@ -1445,11 +2268,91 @@ impl MpmSimulation {
         dt: f32,
         substeps: usize,
     ) -> Result<()> {
+        self.step_n_impl(_device, queue, dt, substeps, false)
+    }
+
+    fn step_n_impl(
+        &mut self,
+        _device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        dt: f32,
+        substeps: usize,
+        profiled: bool,
+    ) -> Result<()> {
+        self.validate_prescribed_step(dt)?;
         if self.particle_count == 0 || substeps == 0 {
             return Ok(());
         }
-        // Build uniforms — pull friction angle from MpmRheology::Sand
-        // when set, else fall back to the legacy field.
+        if self.use_particle_order
+            && self
+                .particle_order
+                .as_ref()
+                .is_none_or(|o| o.capacity < self.particle_count)
+        {
+            return Err(Error::Solver(
+                "MPM particle count exceeds prepared ordering capacity".into(),
+            ));
+        }
+        if profiled {
+            self.begin_step_profile(queue, dt, substeps)?;
+        }
+        let profiled = profiled || self.profile_window_batch(dt, substeps);
+        let uniforms = self.step_uniforms(dt);
+        if let Some(guard) = &self.motion_guard {
+            guard.upload(queue);
+        }
+        molla_core::gpu_write_buffer!(queue, &self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        let table = self.step_material_table();
+        molla_core::gpu_write_buffer!(queue, &self.material_table, 0, bytemuck::cast_slice(&table));
+        if let Some(ids) = self.particle_material_dirty.take() {
+            molla_core::gpu_write_buffer!(queue, &self.p_material, 0, bytemuck::cast_slice(&ids));
+        }
+
+        let jacobi_iters = match self.cfg.time_step {
+            MpmTimeStep::Explicit => 0,
+            MpmTimeStep::Implicit { jacobi_iters } => jacobi_iters,
+        };
+
+        if self.use_particle_order {
+            self.particle_order.as_ref().unwrap().upload(
+                queue,
+                &self.cfg,
+                self.particle_count,
+                self.grid_window_cells,
+            );
+        }
+        if self.use_active_grid {
+            self.active_tiles.upload(
+                queue,
+                &self.cfg,
+                self.particle_count,
+                self.rigid_count,
+                self.grid_window_cells,
+            )?;
+        }
+        #[cfg(test)]
+        if std::env::var_os("MOLLA_SOIL_REPLAY_SPLIT").is_some() {
+            assert_eq!(substeps, 1);
+            assert_eq!(jacobi_iters, 0);
+            assert!(!self.use_active_grid && !self.use_particle_order && !profiled);
+            replay_tests::split_step(self, _device, queue, dt);
+            return Ok(());
+        }
+        let mut encoder = _device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::mpm encoder (step_n)"),
+        });
+        self.encode_step_work(&mut encoder, substeps, jacobi_iters, profiled);
+        if profiled {
+            self.profiler
+                .as_mut()
+                .unwrap()
+                .finish_batch(&mut encoder, substeps);
+        }
+        queue.submit([encoder.finish()]);
+        Ok(())
+    }
+
+    fn step_uniforms(&self, dt: f32) -> Uniforms {
         let (rheology_id, friction_angle, snow_tc, snow_ts, snow_h) = match self.cfg.rheology {
             MpmRheology::Sand { friction_angle } => (0u32, friction_angle, 0.0, 0.0, 0.0),
             MpmRheology::Snow {
@@ -1466,7 +2369,7 @@ impl MpmSimulation {
         let sin_phi = phi.sin();
         let dp_alpha = (2.0_f32 / 3.0).sqrt() * (2.0 * sin_phi) / (3.0 - sin_phi);
 
-        let uniforms = Uniforms {
+        Uniforms {
             particle_count: self.particle_count,
             rigid_count: self.rigid_count,
             grid_size: self.cfg.grid_size,
@@ -1485,13 +2388,22 @@ impl MpmSimulation {
             snow_theta_c: snow_tc,
             snow_theta_s: snow_ts,
             snow_hardening: snow_h,
-        };
-        // Stage 24d.2: persistent uniform buffer — one upload per call.
-        molla_core::gpu_write_buffer!(queue, &self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+            grid_layout: [
+                self.active_tiles.map_capacity,
+                self.active_tiles.capacity,
+                u32::from(self.use_particle_order),
+                self.cfg.max_particles.max(1),
+            ],
+            grid_window_cells: [
+                self.grid_window_cells[0],
+                self.grid_window_cells[1],
+                self.grid_window_cells[2],
+                0,
+            ],
+        }
+    }
 
-        // Stage 24d.4 — material table upload. Row 0 mirrors
-        // `cfg.rheology` unless `set_materials` installed a
-        // multi-material set (256 bytes/step — negligible).
+    fn step_material_table(&self) -> [[f32; 4]; 2 * MAX_MPM_MATERIALS] {
         let mut table = [[0.0_f32; 4]; 2 * MAX_MPM_MATERIALS];
         if self.material_rows.is_empty() {
             let row = material_row(&self.cfg.rheology);
@@ -1504,25 +2416,54 @@ impl MpmSimulation {
                 table[2 * i + 1] = row[1];
             }
         }
-        molla_core::gpu_write_buffer!(queue, &self.material_table, 0, bytemuck::cast_slice(&table));
-        if let Some(ids) = self.particle_material_dirty.take() {
-            molla_core::gpu_write_buffer!(queue, &self.p_material, 0, bytemuck::cast_slice(&ids));
-        }
+        table
+    }
 
+    fn encode_step_work(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        substeps: usize,
+        jacobi_iters: u32,
+        profiled: bool,
+    ) {
+        if self.particle_count == 0 || substeps == 0 {
+            return;
+        }
+        self.encode_quiescence_reset(encoder);
+        #[cfg(test)]
+        if self.active_grid_needs_reset {
+            if let Some(transfer) = &self.compensated_active_transfer {
+                transfer.clear(encoder);
+            }
+        }
+        if self.use_active_grid {
+            self.encode_active_steps(encoder, substeps, jacobi_iters, profiled);
+            return;
+        }
+        if self.active_grid_needs_reset {
+            encoder.clear_buffer(
+                &self.active_tiles.list,
+                self.active_tiles.metadata_offset,
+                Some(16),
+            );
+            self.active_grid_needs_reset = false;
+        }
         let grid_total = self.cfg.grid_size.pow(3);
         let groups_grid = grid_total.div_ceil(WORKGROUP_SIZE);
         let groups_part = self.particle_count.div_ceil(WORKGROUP_SIZE);
-        let groups_rigid = self.rigid_count.max(1).div_ceil(WORKGROUP_SIZE);
 
-        let jacobi_iters = match self.cfg.time_step {
-            MpmTimeStep::Explicit => 0,
-            MpmTimeStep::Implicit { jacobi_iters } => jacobi_iters,
+        let batches = if self.use_particle_order { substeps } else { 1 };
+        #[cfg(test)]
+        let batches = if self.bounded_reference.is_some() {
+            substeps
+        } else {
+            batches
         };
-
-        let mut encoder = _device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("molla::mpm encoder (step_n)"),
-        });
-        {
+        let steps_per_batch = substeps / batches;
+        for batch in 0..batches {
+            self.encode_particle_order(encoder, profiled, batch);
+            #[cfg(test)]
+            self.encode_bounded_reference(encoder);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("molla::mpm step_n"),
                 timestamp_writes: None,
@@ -1532,69 +2473,232 @@ impl MpmSimulation {
             pass.set_bind_group(2, &self.bg_grid, &[]);
             pass.set_bind_group(3, &self.bg_rigid, &[]);
 
-            for _ in 0..substeps {
+            for step in batch * steps_per_batch..(batch + 1) * steps_per_batch {
                 // 1. reset grid
+                self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::GridReset, step);
                 pass.set_pipeline(&self.pipe_reset);
                 pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
+                molla_core::gpu_metrics::record_dispatch();
+                self.profile_end_pass(profiled, &mut pass);
 
-                // 1b. Clear two-way rigid-coupling wrench buffer so the
-                // rigid_imprint and rigid_force_integrate kernels can
-                // accumulate into it.
+                // Clear the rigid-coupling wrench accumulators.
                 if self.rigid_count > 0 {
-                    pass.set_pipeline(&self.pipe_rigid_wrench_reset);
-                    pass.dispatch_workgroups(groups_rigid, 1, 1);
+                    self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::RigidReset, step);
+                    self.encode_rigid_wrench_reset(&mut pass);
+                    self.profile_end_pass(profiled, &mut pass);
                 }
 
-                // 2. p2g — Stage 24d.3 default is the two-pass
-                // workgroup-local accumulator; legacy single-pass
-                // path stays available for the parity test via
-                // `set_p2g_mode(false)`.
-                if self.use_two_pass_p2g {
-                    pass.set_pipeline(&self.pipe_p2g_two_pass);
-                } else {
-                    pass.set_pipeline(&self.pipe_p2g);
-                }
-                pass.dispatch_workgroups(groups_part.max(1), 1, 1);
+                // Scatter particle mass, momentum and stiffness.
+                self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::ParticleToGrid, step);
+                self.encode_p2g(&mut pass);
+                self.profile_end_pass(profiled, &mut pass);
 
-                // 3. rigid imprint (also writes the impulse-based
-                // two-way wrench from the cells the sphere overlaps).
+                // Imprint rigid motion and accumulate contact impulses.
                 if self.rigid_count > 0 {
-                    pass.set_pipeline(&self.pipe_rigid);
-                    pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
+                    self.profile_begin_pass(
+                        profiled,
+                        &mut pass,
+                        MpmProfileStage::RigidImprint,
+                        step,
+                    );
+                    self.encode_rigid_imprint(&mut pass, false);
+                    self.profile_end_pass(profiled, &mut pass);
                 }
 
                 // 4. grid update
+                self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::GridUpdate, step);
                 pass.set_pipeline(&self.pipe_grid);
                 pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
+                molla_core::gpu_metrics::record_dispatch();
+                self.profile_end_pass(profiled, &mut pass);
 
                 // 5. (optional) Implicit Jacobi sweeps.
+                if jacobi_iters > 0 {
+                    self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::Implicit, step);
+                }
                 for _ in 0..jacobi_iters {
                     pass.set_pipeline(&self.pipe_implicit_apply);
                     pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
+                    molla_core::gpu_metrics::record_dispatch();
                     // Ping-pong: copy g_velocity_prev → g_velocity.
                     pass.set_pipeline(&self.pipe_implicit_swap);
                     pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
+                    molla_core::gpu_metrics::record_dispatch();
+                }
+                if jacobi_iters > 0 {
+                    self.profile_end_pass(profiled, &mut pass);
                 }
 
-                // 6. Shell-cell aggregation for the cell-thick
-                // velocity-mismatch contact contribution. Adds on top
-                // of the impulse term written by `rigid_imprint`.
-                if self.rigid_count > 0 {
-                    pass.set_pipeline(&self.pipe_rigid_force);
-                    pass.dispatch_workgroups(groups_grid.max(1), 1, 1);
+                // Accumulate shell-cell contact forces.
+                if self.rigid_count > 0 && !self.prescribed_solids {
+                    self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::RigidForce, step);
+                    self.encode_rigid_shell(&mut pass, false);
+                    self.profile_end_pass(profiled, &mut pass);
                 }
 
-                // 7. g2p
-                pass.set_pipeline(&self.pipe_g2p);
-                pass.dispatch_workgroups(groups_part.max(1), 1, 1);
-
-                // 8. plasticity
-                pass.set_pipeline(&self.pipe_plastic);
-                pass.dispatch_workgroups(groups_part.max(1), 1, 1);
+                #[cfg(test)]
+                if self.use_fused_gather {
+                    self.encode_gather_projection(&mut pass, groups_part.max(1), profiled, step);
+                    continue;
+                }
+                let [gather_stage, commit_stage] = self.particle_publication_stages();
+                self.profile_begin_pass(profiled, &mut pass, gather_stage, step);
+                self.encode_gather(&mut pass, groups_part.max(1));
+                self.profile_end_pass(profiled, &mut pass);
+                self.profile_begin_pass(profiled, &mut pass, commit_stage, step);
+                self.encode_plasticity(&mut pass, groups_part.max(1));
+                self.profile_end_pass(profiled, &mut pass);
             }
         }
-        queue.submit(std::iter::once(encoder.finish()));
-        Ok(())
+    }
+
+    fn bind_step(&self, pass: &mut wgpu::ComputePass<'_>) {
+        pass.set_bind_group(0, &self.bg_uniforms, &[]);
+        pass.set_bind_group(1, &self.bg_particles, &[]);
+        pass.set_bind_group(2, &self.bg_grid, &[]);
+        pass.set_bind_group(3, &self.bg_rigid, &[]);
+    }
+
+    fn initialize_active_grid(&mut self, encoder: &mut wgpu::CommandEncoder, profiled: bool) {
+        if self.active_grid_needs_reset {
+            self.profile_begin_encoder(profiled, encoder, MpmProfileStage::Initialization, None);
+            if self.sparse_grid {
+                for buffer in [
+                    &self.g_mass,
+                    &self.g_momentum,
+                    &self.g_velocity,
+                    &self.g_velocity_prev,
+                    &self.g_rigid_mask,
+                ] {
+                    encoder.clear_buffer(buffer, 0, None);
+                }
+            } else {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("MPM active grid mode initialization"),
+                    timestamp_writes: None,
+                });
+                self.bind_step(&mut pass);
+                pass.set_pipeline(&self.pipe_reset);
+                pass.dispatch_workgroups(self.cfg.grid_size.pow(3).div_ceil(WORKGROUP_SIZE), 1, 1);
+                molla_core::gpu_metrics::record_dispatch();
+            }
+            encoder.clear_buffer(&self.active_tiles.list, 0, None);
+            encoder.clear_buffer(&self.active_tiles.indirect, 0, None);
+            self.active_grid_needs_reset = false;
+            self.profile_end_encoder(profiled, encoder);
+        }
+    }
+
+    fn encode_active_steps(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        substeps: usize,
+        jacobi_iters: u32,
+        profiled: bool,
+    ) {
+        self.initialize_active_grid(encoder, profiled);
+        for step in 0..substeps {
+            self.encode_particle_order(encoder, profiled, step);
+            #[cfg(test)]
+            self.encode_bounded_reference(encoder);
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("MPM retire previous active grid"),
+                    timestamp_writes: None,
+                });
+                self.bind_step(&mut pass);
+                self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::GridReset, step);
+                pass.set_pipeline(&self.active_pipelines[0]);
+                pass.dispatch_workgroups_indirect(&self.active_tiles.indirect, 0);
+                molla_core::gpu_metrics::record_dispatch();
+                self.profile_end_pass(profiled, &mut pass);
+            }
+            self.profile_begin_encoder(profiled, encoder, MpmProfileStage::ActiveTiles, Some(step));
+            self.active_tiles
+                .encode_build(encoder, self.particle_count, self.rigid_count);
+            self.profile_end_encoder(profiled, encoder);
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("MPM active grid step"),
+                timestamp_writes: None,
+            });
+            self.bind_step(&mut pass);
+            if self.rigid_count > 0 {
+                self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::RigidReset, step);
+                self.encode_rigid_wrench_reset(&mut pass);
+                self.profile_end_pass(profiled, &mut pass);
+            }
+            self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::ParticleToGrid, step);
+            self.encode_p2g(&mut pass);
+            self.profile_end_pass(profiled, &mut pass);
+            if self.rigid_count > 0 {
+                self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::RigidImprint, step);
+                self.encode_rigid_imprint(&mut pass, true);
+                self.profile_end_pass(profiled, &mut pass);
+            }
+            self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::GridUpdate, step);
+            pass.set_pipeline(&self.active_pipelines[2]);
+            pass.dispatch_workgroups_indirect(&self.active_tiles.indirect, 0);
+            molla_core::gpu_metrics::record_dispatch();
+            self.profile_end_pass(profiled, &mut pass);
+            if jacobi_iters > 0 {
+                self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::Implicit, step);
+            }
+            for _ in 0..jacobi_iters {
+                pass.set_pipeline(&self.active_pipelines[3]);
+                pass.dispatch_workgroups_indirect(&self.active_tiles.indirect, 0);
+                molla_core::gpu_metrics::record_dispatch();
+                pass.set_pipeline(&self.active_pipelines[4]);
+                pass.dispatch_workgroups_indirect(&self.active_tiles.indirect, 0);
+                molla_core::gpu_metrics::record_dispatch();
+            }
+            if jacobi_iters > 0 {
+                self.profile_end_pass(profiled, &mut pass);
+            }
+            if self.rigid_count > 0 && !self.prescribed_solids {
+                self.profile_begin_pass(profiled, &mut pass, MpmProfileStage::RigidForce, step);
+                self.encode_rigid_shell(&mut pass, true);
+                self.profile_end_pass(profiled, &mut pass);
+            }
+            #[cfg(test)]
+            if self.use_fused_gather {
+                self.encode_gather_projection(
+                    &mut pass,
+                    self.particle_count.div_ceil(WORKGROUP_SIZE),
+                    profiled,
+                    step,
+                );
+                continue;
+            }
+            let [gather_stage, commit_stage] = self.particle_publication_stages();
+            self.profile_begin_pass(profiled, &mut pass, gather_stage, step);
+            self.encode_gather(&mut pass, self.particle_count.div_ceil(WORKGROUP_SIZE));
+            self.profile_end_pass(profiled, &mut pass);
+            self.profile_begin_pass(profiled, &mut pass, commit_stage, step);
+            self.encode_plasticity(&mut pass, self.particle_count.div_ceil(WORKGROUP_SIZE));
+            self.profile_end_pass(profiled, &mut pass);
+        }
+    }
+
+    fn encode_p2g(&self, pass: &mut wgpu::ComputePass<'_>) {
+        if self.use_compensated_stiffness {
+            self.compensated_stiffness
+                .as_ref()
+                .unwrap()
+                .encode(pass, self);
+            return;
+        }
+        #[cfg(test)]
+        if let Some(transfer) = &self.compensated_active_transfer {
+            transfer.encode(pass, self);
+            return;
+        }
+        if self.use_deterministic_p2g {
+            self.deterministic_p2g.as_ref().unwrap().encode(pass, self);
+            return;
+        }
+        pass.set_pipeline(self.p2g_pipeline());
+        pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        molla_core::gpu_metrics::record_dispatch();
     }
 
     /// Read particle positions back to host. Synchronous; intended for
@@ -1693,11 +2797,15 @@ impl MpmSimulation {
         Ok(out)
     }
 
-    /// Stage 24d.1 — read back per-rigid-body wrench (force, torque)
-    /// aggregated by `mpm_rigid_force_integrate`. Returns
-    /// `Vec<(force_xyz, torque_xyz)>` of length `rigid_count`. Intended
-    /// for two-way coupling: feed this into the rigid-body solver as
-    /// an external wrench next step.
+    pub(crate) fn rigid_wrench_buffer(&self) -> &wgpu::Buffer {
+        &self.rigid_wrench
+    }
+
+    pub(crate) fn rigid_center_buffer(&self) -> &wgpu::Buffer {
+        &self.rigid_center
+    }
+
+    /// Read the last substep's world force and COM torque for each rigid body.
     pub fn read_rigid_wrenches(&mut self, engine: &Engine) -> Result<Vec<([f32; 3], [f32; 3])>> {
         let device = engine
             .device()
@@ -1717,6 +2825,19 @@ impl MpmSimulation {
     /// for production use; intended for `tests/mpm_perf.rs`'s
     /// `mpm_p2g_parity_legacy_vs_two_pass` only.
     pub fn read_grid_mass_momentum(&mut self, engine: &Engine) -> Result<(Vec<f32>, Vec<f32>)> {
+        if self.sparse_grid {
+            return Err(Error::Solver(
+                "MPM compact grid: use read_grid_storage_mass_momentum for physical slots".into(),
+            ));
+        }
+        self.read_grid_storage_mass_momentum(engine)
+    }
+
+    /// Read physical grid slots; compact slot order is not a world-cell index.
+    pub fn read_grid_storage_mass_momentum(
+        &mut self,
+        engine: &Engine,
+    ) -> Result<(Vec<f32>, Vec<f32>)> {
         let device = engine
             .device()
             .ok_or_else(|| Error::Gpu("read_grid_mass_momentum: no device".into()))?
@@ -1725,7 +2846,7 @@ impl MpmSimulation {
             .queue()
             .ok_or_else(|| Error::Gpu("read_grid_mass_momentum: no queue".into()))?
             .clone();
-        let grid_total = self.cfg.grid_size.pow(3) as u64;
+        let grid_total = self.g_mass.size() / 4;
         let mass_bytes = grid_total * 4;
         let mom_bytes = grid_total * 12;
         let stage_mass = molla_core::gpu_create_buffer!(

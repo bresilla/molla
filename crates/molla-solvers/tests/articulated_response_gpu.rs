@@ -120,6 +120,17 @@ fn gpu_mass_and_jacobian_cover_floating_locked_and_reversed_joints() {
                 .unwrap();
             let gpu_mass = mass.read_back(&engine, &mass_buffer).unwrap();
             compare(&expected_mass, &gpu_mass, 3e-5, "mass");
+            for i in 0..model.joint_dof_total {
+                for j in 0..i {
+                    let a = gpu_mass[i * model.joint_dof_total + j];
+                    let b = gpu_mass[j * model.joint_dof_total + i];
+                    assert_eq!(a, b, "asymmetric mass at ({i},{j}): {a} != {b}");
+                    assert_eq!(
+                        expected_mass[i * model.joint_dof_total + j],
+                        expected_mass[j * model.joint_dof_total + i]
+                    );
+                }
+            }
             let jacobian = JacobianKernel::new(&engine, &model).unwrap();
             let width = 6 * model.joint_dof_total;
             let jacobian_buffer = jacobian.create_output_buffer(device, width * model.body_count);

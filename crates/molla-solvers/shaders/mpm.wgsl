@@ -116,6 +116,8 @@ struct Uniforms {
     snow_theta_c: f32,
     snow_theta_s: f32,     // critical stretch (Stomakhin: 7.5e-3)
     snow_hardening: f32,   // hardening exponent (Stomakhin: 10)
+    grid_layout: vec4<u32>,
+    grid_window_cells: vec4<i32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -127,7 +129,7 @@ struct Uniforms {
 @group(1) @binding(3) var<storage, read_write> p_F:      array<mat3x3<f32>>;
 @group(1) @binding(4) var<storage, read_write> p_volume: array<f32>;
 @group(1) @binding(5) var<storage, read_write> p_mass:   array<f32>;
-@group(1) @binding(6) var<storage, read_write> p_jp:     array<f32>; // log(det Fp), tracks hardening
+@group(1) @binding(6) var<storage, read_write> p_jp:     array<f32>; // Sand flow or snow log(det Fp).
 
 // Stage 24d.4 — per-particle materials (INSPECTION.md F1). `p_material`
 // maps each particle to a row of `materials`; row 0 mirrors the global
@@ -143,10 +145,10 @@ struct MpmMaterialRow {
 @group(1) @binding(7) var<storage, read_write> p_material: array<u32>;
 @group(1) @binding(8) var<storage, read_write> materials: array<MpmMaterialRow>;
 
-// Grid storage. mass = atomic<u32> (bitcast f32). momentum xyz = 3
-// atomic<u32> (bitcast f32). Layout: [mass, mx, my, mz] per cell.
-@group(2) @binding(0) var<storage, read_write> g_mass:      array<atomic<u32>>;
-@group(2) @binding(1) var<storage, read_write> g_momentum:  array<atomic<u32>>; // 3 entries per cell
+// Grid mass and three momentum components use four-byte atomic storage.
+alias GridAtomicScalar = u32;
+@group(2) @binding(0) var<storage, read_write> g_mass:      array<atomic<GridAtomicScalar>>;
+@group(2) @binding(1) var<storage, read_write> g_momentum:  array<atomic<GridAtomicScalar>>; // 3 entries per cell
 @group(2) @binding(2) var<storage, read_write> g_velocity:  array<vec4<f32>>;   // (vx, vy, vz, mass) post grid_update
 // Rigid imprint mask — non-zero where rigid bodies have stamped a
 // velocity, blocking further updates from p2g/grid_update.
@@ -159,23 +161,120 @@ struct MpmMaterialRow {
 // velocity so each sweep reads from `g_velocity` (current) and writes
 // to `g_velocity_prev` then ping-pongs back.
 @group(2) @binding(5) var<storage, read_write> g_velocity_prev: array<vec4<f32>>;
+override ACTIVE_GRID: bool = false;
+override SPARSE_GRID: bool = false;
+override DEFER_P2G_LOOKUP: bool = false;
 
-// Rigid bodies (sphere primitives only in v1): center + radius +
-// linear velocity. Used by `rigid_imprint`. Stage 24d.1 adds an
-// output `rigid_wrench` buffer: per-rigid (force_xyz, torque_xyz, _).
-// We aggregate per-cell stress impulses into this buffer in
-// `mpm_rigid_force_integrate` for two-way coupling.
+fn p2g_particle_id(index: u32) -> u32 {
+    if u.grid_layout.z != 0u && index < u.particle_count {
+        return p_material[u.grid_layout.w + index];
+    }
+    return index;
+}
+
+fn grid_metadata() -> u32 {
+    return arrayLength(&g_mass);
+}
+
+fn grid_tile_ids() -> u32 {
+    return grid_metadata() + 4u + select(u.grid_layout.x, 2u * u.grid_layout.x, SPARSE_GRID);
+}
+
+fn tile_hash(id: u32) -> u32 {
+    var value = (id ^ (id >> 16u)) * 0x7feb352du;
+    value = (value ^ (value >> 15u)) * 0x846ca68bu;
+    return value ^ (value >> 16u);
+}
+
+fn grid_storage_index(world: u32) -> u32 {
+    if !SPARSE_GRID { return world; }
+    let n = u.grid_size;
+    let width = (n + 3u) / 4u;
+    let cell = vec3<u32>(world % n, (world / n) % n, world / (n * n));
+    let tile = cell / vec3<u32>(4u);
+    let id = tile.x + width * (tile.y + width * tile.z);
+    let entries = u.grid_layout.x;
+    let base = grid_metadata() + 4u;
+    var bucket = tile_hash(id) & (entries - 1u);
+    for (var probe = 0u; probe < entries; probe++) {
+        let key = atomicLoad(&g_kdiag[base + bucket]);
+        if key == 0u { return 0xffffffffu; }
+        if key == id + 1u {
+            let slot = atomicLoad(&g_kdiag[base + entries + bucket]);
+            if slot == 0u || slot > u.grid_layout.y { return 0xffffffffu; }
+            let local = cell % vec3<u32>(4u);
+            return (slot - 1u) * 64u + local.x + 4u * (local.y + 4u * local.z);
+        }
+        bucket = (bucket + 1u) & (entries - 1u);
+    }
+    return 0xffffffffu;
+}
+
+fn grid_valid() -> bool {
+    return atomicLoad(&g_kdiag[grid_metadata() + 2u]) == 0u;
+}
+
+fn finite_scalar(value: f32) -> bool {
+    return (bitcast<u32>(value) & 0x7f800000u) != 0x7f800000u;
+}
+
+fn finite_vector(value: vec3<f32>) -> bool {
+    return all((bitcast<vec3<u32>>(value) & vec3<u32>(0x7f800000u)) != vec3<u32>(0x7f800000u));
+}
+
+fn finite_matrix(value: mat3x3<f32>) -> bool {
+    return finite_vector(value[0]) && finite_vector(value[1]) && finite_vector(value[2]);
+}
+
+fn numerical_fault() {
+    atomicOr(&g_kdiag[grid_metadata() + 2u], 2u);
+}
+
+fn active_tile_slot(gid: vec3<u32>) -> u32 {
+    return gid.x / 64u + gid.y * atomicLoad(&g_kdiag[grid_metadata() + 1u]);
+}
+
+fn dispatched_grid_index(world: u32, gid: vec3<u32>) -> u32 {
+    return select(world, active_tile_slot(gid) * 64u + gid.x % 64u, SPARSE_GRID);
+}
+
+fn grid_cell_id(gid: vec3<u32>) -> u32 {
+    if !ACTIVE_GRID { return gid.x; }
+    let slot = active_tile_slot(gid);
+    if slot >= atomicLoad(&g_kdiag[grid_metadata()]) { return u.grid_total; }
+    let width = (u.grid_size + 3u) / 4u;
+    let tile = atomicLoad(&g_kdiag[grid_tile_ids() + slot]);
+    let local = gid.x % 64u;
+    let cell = vec3<u32>(tile % width, (tile / width) % width, tile / (width * width)) * 4u
+        + vec3<u32>(local % 4u, (local / 4u) % 4u, local / 16u);
+    if any(cell >= vec3<u32>(u.grid_size)) { return u.grid_total; }
+    return cell.x + u.grid_size * (cell.y + u.grid_size * cell.z);
+}
+
+// Rigid bounds, four motion/shape rows, and world-space force/torque rows.
 @group(3) @binding(0) var<storage, read> rigid_center: array<vec4<f32>>; // (cx, cy, cz, radius)
-@group(3) @binding(1) var<storage, read> rigid_vel:    array<vec4<f32>>; // (vx, vy, vz, _)
+@group(3) @binding(1) var<storage, read> rigid_vel: array<vec4<f32>>; // velocity, spin, XYZW orientation, shape
 // (force_x, force_y, force_z, _, torque_x, torque_y, torque_z, _) per
 // rigid body, packed as two vec4 entries. Atomic<u32> bitcast adds.
-@group(3) @binding(2) var<storage, read_write> rigid_wrench: array<atomic<u32>>;
+@group(3) @binding(2) var<storage, read_write> rigid_wrench: array<atomic<GridAtomicScalar>>;
 
 // ── Helpers ───────────────────────────────────────────────────────
 
 fn cell_idx(ix: i32, iy: i32, iz: i32) -> i32 {
-    let n = i32(u.grid_size);
-    return ix + n * (iy + n * iz);
+    let n = u.grid_size;
+    return i32(grid_storage_index(u32(ix) + n * (u32(iy) + n * u32(iz))));
+}
+
+fn p2g_tag(ix: i32, iy: i32, iz: i32) -> u32 {
+    if DEFER_P2G_LOOKUP && SPARSE_GRID {
+        return u32(ix) + u.grid_size * (u32(iy) + u.grid_size * u32(iz));
+    }
+    return u32(cell_idx(ix, iy, iz));
+}
+
+fn p2g_storage_index(tag: u32) -> u32 {
+    if DEFER_P2G_LOOKUP && SPARSE_GRID { return grid_storage_index(tag); }
+    return tag;
 }
 
 fn in_bounds(ix: i32, iy: i32, iz: i32) -> bool {
@@ -194,10 +293,7 @@ fn quad_weights(fx: f32) -> vec3<f32> {
     );
 }
 
-// f32 atomic add via CAS loop on u32 bitcast. WGSL has no
-// atomic<f32>; this is the standard workaround used by Houdini's
-// vellum and Taichi's MPM. Naga rejects pointer-to-storage as a
-// function argument so we have one helper per buffer.
+// Portable float accumulation uses CAS on integer storage.
 fn atomic_add_mass(idx: u32, val: f32) {
     var old_bits = atomicLoad(&g_mass[idx]);
     loop {
@@ -374,13 +470,21 @@ fn svd3_jacobi(m_in: mat3x3<f32>) -> Svd3 {
 // ── Kernel: reset_grid ────────────────────────────────────────────
 @compute @workgroup_size(WORKGROUP_SIZE, 1, 1)
 fn reset_grid(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if (idx >= u.grid_total) { return; }
-    atomicStore(&g_mass[idx], 0u);
+    let world = grid_cell_id(gid);
+    if (world >= u.grid_total) { return; }
+    let idx = select(world, active_tile_slot(gid) * 64u + gid.x % 64u, SPARSE_GRID);
+    if ACTIVE_GRID && gid.x % 64u == 0u {
+        var entry = atomicLoad(&g_kdiag[grid_tile_ids() + active_tile_slot(gid)]);
+        if SPARSE_GRID {
+            entry = atomicLoad(&g_kdiag[grid_tile_ids() + u.grid_layout.y + active_tile_slot(gid)]);
+        }
+        atomicStore(&g_kdiag[grid_metadata() + 4u + entry], 0u);
+    }
+    atomicStore(&g_mass[idx], bitcast<GridAtomicScalar>(0u));
     let base = idx * 3u;
-    atomicStore(&g_momentum[base + 0u], 0u);
-    atomicStore(&g_momentum[base + 1u], 0u);
-    atomicStore(&g_momentum[base + 2u], 0u);
+    atomicStore(&g_momentum[base + 0u], bitcast<GridAtomicScalar>(0u));
+    atomicStore(&g_momentum[base + 1u], bitcast<GridAtomicScalar>(0u));
+    atomicStore(&g_momentum[base + 2u], bitcast<GridAtomicScalar>(0u));
     g_velocity[idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     g_velocity_prev[idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     g_rigid_mask[idx] = 0u;
@@ -390,8 +494,8 @@ fn reset_grid(@builtin(global_invocation_id) gid: vec3<u32>) {
 // ── Kernel: p2g (particle → grid scatter) ─────────────────────────
 @compute @workgroup_size(WORKGROUP_SIZE, 1, 1)
 fn p2g(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let pid = gid.x;
-    if (pid >= u.particle_count) { return; }
+    let pid = p2g_particle_id(gid.x);
+    if (pid >= u.particle_count || !grid_valid()) { return; }
 
     let pos = p_pos[pid].xyz;
     let vel = p_vel[pid].xyz;
@@ -408,7 +512,7 @@ fn p2g(@builtin(global_invocation_id) gid: vec3<u32>) {
     // from Stomakhin §4.2.
     let xp = (pos - u.grid_origin) * u.inv_cell_size;
     let base_xyz = vec3<f32>(floor(xp.x - 0.5), floor(xp.y - 0.5), floor(xp.z - 0.5));
-    let base = vec3<i32>(i32(base_xyz.x), i32(base_xyz.y), i32(base_xyz.z));
+    let base = vec3<i32>(i32(base_xyz.x), i32(base_xyz.y), i32(base_xyz.z)) - u.grid_window_cells.xyz;
     let fx = xp - base_xyz; // fx in [0.5, 1.5)
 
     let wx = quad_weights(fx.x);
@@ -503,19 +607,7 @@ fn p2g(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let iz = base.z + i32(k);
                 if (!in_bounds(ix, iy, iz)) { continue; }
                 let cidx = u32(cell_idx(ix, iy, iz));
-                // Node position in world coords — the INTEGER lattice the
-                // quadratic weights assume (`base = floor(xp - 0.5)`,
-                // `fx = xp - base`). A +0.5 "cell centre" offset here
-                // shifts every APIC moment arm by dx/2, so the first
-                // moment Σ w·(xn−xp) becomes 0.5·dx instead of 0 and a
-                // uniformly-falling particle manufactures C ≈ 2·v/dx of
-                // spurious affine velocity — the F1b explosion.
-                let node_pos = u.grid_origin + vec3<f32>(
-                    f32(ix),
-                    f32(iy),
-                    f32(iz),
-                ) * dx;
-                let xn_xp = node_pos - pos;
+                let xn_xp = (vec3<f32>(f32(i), f32(j), f32(k)) - fx) * dx;
 
                 // mass deposit
                 atomic_add_mass(cidx, w * mass);
@@ -655,11 +747,11 @@ fn p2g_two_pass(
     atomicStore(&wg_kdiag[lid.x], 0u);
     workgroupBarrier();
 
-    let pid = gid.x;
+    let pid = p2g_particle_id(gid.x);
     // Note: we still execute Pass 2 even if pid >= particle_count, so
     // we mustn't `return` early — divergent threads still need to run
     // the commit phase below. Gate the per-particle work instead.
-    let pid_active = pid < u.particle_count;
+    let pid_active = pid < u.particle_count && grid_valid();
 
     // ── Pass 1: per-particle scatter (B-spline 27-cell stencil) ───
     // Mirror of the legacy `p2g` body. Differences are limited to the
@@ -677,7 +769,7 @@ fn p2g_two_pass(
 
         let xp = (pos - u.grid_origin) * u.inv_cell_size;
         let base_xyz = vec3<f32>(floor(xp.x - 0.5), floor(xp.y - 0.5), floor(xp.z - 0.5));
-        let base = vec3<i32>(i32(base_xyz.x), i32(base_xyz.y), i32(base_xyz.z));
+        let base = vec3<i32>(i32(base_xyz.x), i32(base_xyz.y), i32(base_xyz.z)) - u.grid_window_cells.xyz;
         let fx = xp - base_xyz;
 
         let wx = quad_weights(fx.x);
@@ -741,13 +833,8 @@ fn p2g_two_pass(
                     let iy = base.y + i32(j);
                     let iz = base.z + i32(k);
                     if (!in_bounds(ix, iy, iz)) { continue; }
-                    let cidx = u32(cell_idx(ix, iy, iz));
-                    let node_pos = u.grid_origin + vec3<f32>(
-                        f32(ix),
-                        f32(iy),
-                        f32(iz),
-                    ) * dx;
-                    let xn_xp = node_pos - pos;
+                    let cidx = p2g_tag(ix, iy, iz);
+                    let xn_xp = (vec3<f32>(f32(i), f32(j), f32(k)) - fx) * dx;
 
                     let aff = C * xn_xp;
                     let stress_force = stress * xn_xp * (4.0 * inv_dx2);
@@ -793,12 +880,13 @@ fn p2g_two_pass(
                         // Hash collision — fall back to global atomic
                         // for this single cell. Correctness preserved;
                         // we just lose the local-dedup win for it.
-                        atomic_add_mass(cidx, dm);
-                        let mb = cidx * 3u;
+                        let physical = p2g_storage_index(cidx);
+                        atomic_add_mass(physical, dm);
+                        let mb = physical * 3u;
                         atomic_add_mom(mb + 0u, mom.x);
                         atomic_add_mom(mb + 1u, mom.y);
                         atomic_add_mom(mb + 2u, mom.z);
-                        atomic_add_kdiag(cidx, dk);
+                        atomic_add_kdiag(physical, dk);
                     }
                 }
             }
@@ -813,8 +901,9 @@ fn p2g_two_pass(
     // we set out to deliver.
     workgroupBarrier();
     let slot = lid.x;
-    let cidx = atomicLoad(&wg_tag[slot]);
-    if (cidx == EMPTY_TAG) { return; }
+    let tag = atomicLoad(&wg_tag[slot]);
+    if (tag == EMPTY_TAG) { return; }
+    let cidx = p2g_storage_index(tag);
     let dm = bitcast<f32>(atomicLoad(&wg_mass[slot]));
     if (dm == 0.0) {
         // Mass-only filter would skip cells whose particles cancelled
@@ -835,49 +924,51 @@ fn p2g_two_pass(
     atomic_add_kdiag(cidx, bitcast<f32>(atomicLoad(&wg_kdiag[slot])));
 }
 
+fn prescribed_solid_contains(r: u32, arm: vec3<f32>) -> bool {
+    let shape = rigid_vel[4u * r + 3u];
+    let q = rigid_vel[4u * r + 2u];
+    let inverse = -q.xyz;
+    let t = 2.0 * cross(inverse, arm);
+    let local = arm + q.w * t + cross(inverse, t);
+    if (shape.w == 1.0) { return length(arm) < shape.x; }
+    if (shape.w == 2.0) { return all(abs(local) < shape.xyz); }
+    return length(local.xz) < shape.x && abs(local.y) < shape.y;
+}
+
 // ── Kernel: rigid_imprint ─────────────────────────────────────────
-// For each grid cell, check overlap with each rigid sphere (small N
-// in v1; brute force is fine). If overlapped, write the rigid's
-// velocity directly into momentum (mass = 1, mom = v) and tag the
-// cell so grid_update doesn't apply gravity / friction to it.
-//
-// Stage 24d.1 — also accumulates the two-way reaction wrench while
-// we still have the pre-stamp sand momentum in hand: the sand had
-// been carrying `(m_old, mom_old)` from p2g; we replace it with
-// `(stamp_mass, stamp_mass * v_rigid)`. The momentum delivered to
-// the sand by the rigid body over this substep is
-// `(stamp_mass * v_rigid - mom_old)`. By Newton 3 the rigid body
-// feels the equal-and-opposite impulse, contributing
-// `-(stamp_mass * v_rigid - mom_old) / dt` to its force balance.
-// The torque arm is `node_pos - rigid_center`.
-//
-// Caveat: the `stamp_mass = 1e6` heavy-cell trick massively over-
-// states the impulse (the actual sand mass in a cell is < 1 kg).
-// We therefore aggregate using `m_old` rather than `stamp_mass`,
-// which is the physically meaningful value.
+// Apply the first overlapping body's velocity and accumulate its reaction.
+// Prescribed solids retain physical cell mass; legacy spheres stamp heavy cells.
 @compute @workgroup_size(WORKGROUP_SIZE, 1, 1)
 fn rigid_imprint(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let cidx = gid.x;
-    if (cidx >= u.grid_total) { return; }
+    let world = grid_cell_id(gid);
+    if (world >= u.grid_total) { return; }
+    let cidx = dispatched_grid_index(world, gid);
     if (u.rigid_count == 0u) { return; }
     let n = u.grid_size;
-    let ix = cidx % n;
-    let iy = (cidx / n) % n;
-    let iz = cidx / (n * n);
+    let ix = world % n;
+    let iy = (world / n) % n;
+    let iz = world / (n * n);
     let node_pos = u.grid_origin + vec3<f32>(
-        f32(ix),
-        f32(iy),
-        f32(iz),
+        f32(i32(ix) + u.grid_window_cells.x),
+        f32(i32(iy) + u.grid_window_cells.y),
+        f32(i32(iz) + u.grid_window_cells.z),
     ) * u.cell_size;
     for (var r: u32 = 0u; r < u.rigid_count; r = r + 1u) {
         let cr = rigid_center[r];
-        let v  = rigid_vel[r].xyz;
+        let shape = rigid_vel[4u * r + 3u];
+        var v = rigid_vel[4u * r].xyz;
         let center = cr.xyz;
         let radius = cr.w;
         let d = distance(node_pos, center);
-        if (d < radius) {
+        var inside = d < radius;
+        if (shape.w != 0.0) {
+            inside = prescribed_solid_contains(r, node_pos - center);
+            v += cross(rigid_vel[4u * r + 1u].xyz, node_pos - center);
+        }
+        if (inside) {
             // Pre-stamp values (what the sand alone would do).
             let m_old = bitcast<f32>(atomicLoad(&g_mass[cidx]));
+            if (shape.w != 0.0 && m_old <= 1.0e-9) { return; }
             let mb = cidx * 3u;
             let mom_old = vec3<f32>(
                 bitcast<f32>(atomicLoad(&g_momentum[mb + 0u])),
@@ -885,20 +976,21 @@ fn rigid_imprint(@builtin(global_invocation_id) gid: vec3<u32>) {
                 bitcast<f32>(atomicLoad(&g_momentum[mb + 2u])),
             );
             // Stamp the heavy-cell velocity for one-way contact.
-            let stamp_mass: f32 = 1.0e6;
+            let stamp_mass = select(m_old, 1.0e6, shape.w == 0.0);
             let mom_new = stamp_mass * v;
-            atomicStore(&g_mass[cidx], bitcast<u32>(stamp_mass));
-            atomicStore(&g_momentum[mb + 0u], bitcast<u32>(mom_new.x));
-            atomicStore(&g_momentum[mb + 1u], bitcast<u32>(mom_new.y));
-            atomicStore(&g_momentum[mb + 2u], bitcast<u32>(mom_new.z));
+            atomicStore(&g_mass[cidx], bitcast<GridAtomicScalar>(stamp_mass));
+            atomicStore(&g_momentum[mb + 0u], bitcast<GridAtomicScalar>(mom_new.x));
+            atomicStore(&g_momentum[mb + 1u], bitcast<GridAtomicScalar>(mom_new.y));
+            atomicStore(&g_momentum[mb + 2u], bitcast<GridAtomicScalar>(mom_new.z));
             g_rigid_mask[cidx] = 1u;
             // Two-way reaction. Use the physical sand mass m_old, not
             // the heavy stamp_mass, so the wrench has sand-scale units.
             // Impulse delivered to sand = m_old * v - mom_old; force on
             // rigid = -(impulse)/dt.
             if (m_old > 1.0e-9) {
-                let impulse_to_sand = m_old * v - mom_old;
-                let inv_dt = 1.0 / max(u.dt, 1.0e-6);
+                var impulse_to_sand = m_old * v - mom_old;
+                if (shape.w != 0.0) { impulse_to_sand.y -= m_old * u.gravity_y * u.dt; }
+                let inv_dt = 1.0 / select(u.dt, max(u.dt, 1.0e-6), shape.w == 0.0);
                 let force_on_rigid = -impulse_to_sand * inv_dt;
                 let arm = node_pos - center;
                 let torque_on_rigid = cross(arm, force_on_rigid);
@@ -920,8 +1012,9 @@ fn rigid_imprint(@builtin(global_invocation_id) gid: vec3<u32>) {
 // to grid bounds with friction. Output goes into g_velocity for g2p.
 @compute @workgroup_size(WORKGROUP_SIZE, 1, 1)
 fn grid_update(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let cidx = gid.x;
-    if (cidx >= u.grid_total) { return; }
+    let world = grid_cell_id(gid);
+    if (world >= u.grid_total) { return; }
+    let cidx = dispatched_grid_index(world, gid);
     let m_bits = atomicLoad(&g_mass[cidx]);
     let m = bitcast<f32>(m_bits);
     // Mass-tolerance gate: cells with negligible mass produce a
@@ -950,9 +1043,9 @@ fn grid_update(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Boundary friction / sticking. Outer 2 layers clamp normal vel
     // and apply Coulomb friction on the tangent.
     let n = i32(u.grid_size);
-    let ix = i32(cidx) % n;
-    let iy = (i32(cidx) / n) % n;
-    let iz = i32(cidx) / (n * n);
+    let ix = i32(world % u.grid_size);
+    let iy = i32((world / u.grid_size) % u.grid_size);
+    let iz = i32(world / (u.grid_size * u.grid_size));
     let pad: i32 = 2;
     if (ix < pad)        { vel.x = max(vel.x, 0.0); vel.y = vel.y * u.boundary_friction; vel.z = vel.z * u.boundary_friction; }
     if (ix >= n - pad)   { vel.x = min(vel.x, 0.0); vel.y = vel.y * u.boundary_friction; vel.z = vel.z * u.boundary_friction; }
@@ -996,8 +1089,9 @@ fn grid_update(@builtin(global_invocation_id) gid: vec3<u32>) {
 // stable for any positive α.
 @compute @workgroup_size(WORKGROUP_SIZE, 1, 1)
 fn mpm_implicit_apply(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let cidx = gid.x;
-    if (cidx >= u.grid_total) { return; }
+    let world = grid_cell_id(gid);
+    if (world >= u.grid_total) { return; }
+    let cidx = dispatched_grid_index(world, gid);
     let m = bitcast<f32>(atomicLoad(&g_mass[cidx]));
     if (m <= 1.0e-9 || !(m == m)) {
         g_velocity_prev[cidx] = g_velocity[cidx];
@@ -1011,9 +1105,9 @@ fn mpm_implicit_apply(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // 6-neighbour average for the velocity Laplacian proxy.
     let n = i32(u.grid_size);
-    let ix = i32(cidx) % n;
-    let iy = (i32(cidx) / n) % n;
-    let iz = i32(cidx) / (n * n);
+    let ix = i32(world % u.grid_size);
+    let iy = i32((world / u.grid_size) % u.grid_size);
+    let iz = i32(world / (u.grid_size * u.grid_size));
     var v_avg = vec3<f32>(0.0, 0.0, 0.0);
     var count: f32 = 0.0;
     let offsets: array<vec3<i32>, 6> = array<vec3<i32>, 6>(
@@ -1031,6 +1125,7 @@ fn mpm_implicit_apply(@builtin(global_invocation_id) gid: vec3<u32>) {
         let nz = iz + off.z;
         if (!in_bounds(nx, ny, nz)) { continue; }
         let nidx = u32(cell_idx(nx, ny, nz));
+        if nidx == 0xffffffffu { continue; }
         let nm = bitcast<f32>(atomicLoad(&g_mass[nidx]));
         if (nm <= 1.0e-9 || !(nm == nm)) { continue; }
         v_avg = v_avg + g_velocity[nidx].xyz;
@@ -1063,8 +1158,9 @@ fn mpm_implicit_apply(@builtin(global_invocation_id) gid: vec3<u32>) {
 // Jacobi sweeps via this copy kernel (write back into `g_velocity`).
 @compute @workgroup_size(WORKGROUP_SIZE, 1, 1)
 fn mpm_implicit_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let cidx = gid.x;
-    if (cidx >= u.grid_total) { return; }
+    let world = grid_cell_id(gid);
+    if (world >= u.grid_total) { return; }
+    let cidx = dispatched_grid_index(world, gid);
     g_velocity[cidx] = g_velocity_prev[cidx];
 }
 
@@ -1080,8 +1176,9 @@ fn mpm_implicit_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
 // the sum of (r × impulse) ÷ dt.
 @compute @workgroup_size(WORKGROUP_SIZE, 1, 1)
 fn mpm_rigid_force_integrate(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let cidx = gid.x;
-    if (cidx >= u.grid_total) { return; }
+    let world = grid_cell_id(gid);
+    if (world >= u.grid_total) { return; }
+    let cidx = dispatched_grid_index(world, gid);
     if (u.rigid_count == 0u) { return; }
     let m = bitcast<f32>(atomicLoad(&g_mass[cidx]));
     if (m <= 1.0e-9 || !(m == m)) { return; }
@@ -1089,16 +1186,17 @@ fn mpm_rigid_force_integrate(@builtin(global_invocation_id) gid: vec3<u32>) {
     // stamped velocity isn't a stress impulse.
     if (g_rigid_mask[cidx] != 0u) { return; }
     let n = i32(u.grid_size);
-    let ix = i32(cidx) % n;
-    let iy = (i32(cidx) / n) % n;
-    let iz = i32(cidx) / (n * n);
+    let ix = i32(world % u.grid_size);
+    let iy = i32((world / u.grid_size) % u.grid_size);
+    let iz = i32(world / (u.grid_size * u.grid_size));
     let node_pos = u.grid_origin + vec3<f32>(
-        f32(ix),
-        f32(iy),
-        f32(iz),
+        f32(ix + u.grid_window_cells.x),
+        f32(iy + u.grid_window_cells.y),
+        f32(iz + u.grid_window_cells.z),
     ) * u.cell_size;
     let v_grid = g_velocity[cidx].xyz;
     for (var r: u32 = 0u; r < u.rigid_count; r = r + 1u) {
+        if (rigid_vel[4u * r + 3u].w != 0.0) { continue; }
         let cr = rigid_center[r];
         let center = cr.xyz;
         let radius = cr.w;
@@ -1111,7 +1209,7 @@ fn mpm_rigid_force_integrate(@builtin(global_invocation_id) gid: vec3<u32>) {
             let t = (d - radius) / u.cell_size;
             w = max(0.0, 1.0 - t);
         }
-        let v_rigid = rigid_vel[r].xyz;
+        let v_rigid = rigid_vel[4u * r].xyz;
         let dv = v_rigid - v_grid;
         // Reaction impulse on the rigid body: -m * w * dv (Newton 3).
         // Force = impulse / dt.
@@ -1136,7 +1234,7 @@ fn mpm_rigid_wrench_reset(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (r >= u.rigid_count) { return; }
     let base = r * 8u;
     for (var k: u32 = 0u; k < 8u; k = k + 1u) {
-        atomicStore(&rigid_wrench[base + k], 0u);
+        atomicStore(&rigid_wrench[base + k], bitcast<GridAtomicScalar>(0u));
     }
 }
 
@@ -1144,11 +1242,20 @@ fn mpm_rigid_wrench_reset(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(WORKGROUP_SIZE, 1, 1)
 fn g2p(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pid = gid.x;
-    if (pid >= u.particle_count) { return; }
+    if (pid >= u.particle_count || !grid_valid()) { return; }
+    if pid == 0u { atomicAdd(&g_kdiag[grid_metadata() + 3u], 1u); }
     let pos = p_pos[pid].xyz;
+    if !finite_vector(pos) || !finite_vector(p_vel[pid].xyz) || !finite_matrix(p_C[pid]) || !finite_matrix(p_F[pid]) || !finite_scalar(p_jp[pid]) {
+        numerical_fault();
+        return;
+    }
     let xp = (pos - u.grid_origin) * u.inv_cell_size;
+    if !finite_vector(xp) {
+        numerical_fault();
+        return;
+    }
     let base_xyz = vec3<f32>(floor(xp.x - 0.5), floor(xp.y - 0.5), floor(xp.z - 0.5));
-    let base = vec3<i32>(i32(base_xyz.x), i32(base_xyz.y), i32(base_xyz.z));
+    let base = vec3<i32>(i32(base_xyz.x), i32(base_xyz.y), i32(base_xyz.z)) - u.grid_window_cells.xyz;
     let fx = xp - base_xyz;
     let wx = quad_weights(fx.x);
     let wy = quad_weights(fx.y);
@@ -1173,12 +1280,7 @@ fn g2p(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let cidx = u32(cell_idx(ix, iy, iz));
                 let gv = g_velocity[cidx].xyz;
                 v_new = v_new + w * gv;
-                let node_pos = u.grid_origin + vec3<f32>(
-                    f32(ix),
-                    f32(iy),
-                    f32(iz),
-                ) * dx;
-                let xn_xp = node_pos - pos;
+                let xn_xp = (vec3<f32>(f32(i), f32(j), f32(k)) - fx) * dx;
                 // C += 4 * w * v_node * (xn - xp)ᵀ / dx²
                 let scale = 4.0 * w * inv_dx * inv_dx;
                 C_new[0][0] = C_new[0][0] + scale * gv.x * xn_xp.x;
@@ -1212,6 +1314,10 @@ fn g2p(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Integrate position.
     var new_pos = pos + u.dt * v_new;
+    if !finite_vector(new_pos) || !finite_vector(v_new) || !finite_matrix(C_new) {
+        numerical_fault();
+        return;
+    }
     // Soft position clamp. If the particle is escaping the active
     // grid region (within 2 cells of the boundary on the floor and
     // walls, far side of grid), bring it back and zero the offending
@@ -1219,8 +1325,8 @@ fn g2p(@builtin(global_invocation_id) gid: vec3<u32>) {
     // is a safety net only — the velocity-clamp in `grid_update`
     // does the real work for stable contact.
     let pad: f32 = 2.0;
-    let lo = u.grid_origin + vec3<f32>(pad * u.cell_size);
-    let hi = u.grid_origin + vec3<f32>(f32(u.grid_size) - pad - 1.0) * u.cell_size;
+    let lo = u.grid_origin + vec3<f32>(u.grid_window_cells.xyz + vec3<i32>(i32(pad))) * u.cell_size;
+    let hi = u.grid_origin + vec3<f32>(u.grid_window_cells.xyz + vec3<i32>(i32(u.grid_size) - i32(pad) - 1)) * u.cell_size;
     let clamped_pos = clamp(new_pos, lo, hi);
     if (new_pos.x < lo.x || new_pos.x > hi.x) { v_new.x = 0.0; }
     if (new_pos.y < lo.y || new_pos.y > hi.y) { v_new.y = 0.0; }
@@ -1236,35 +1342,14 @@ fn g2p(@builtin(global_invocation_id) gid: vec3<u32>) {
     );
     let F_new = (identity + u.dt * C_new) * F_old;
 
-    // NaN safety: if the gather produced non-finite output (typically
-    // because a single rogue grid cell spat out Inf), reset to zero
-    // velocity / identity affine matrix. Lossy but bounded.
-    if (!(v_new.x == v_new.x) || !(v_new.y == v_new.y) || !(v_new.z == v_new.z)) {
-        v_new = vec3<f32>(0.0, 0.0, 0.0);
-        new_pos = pos;
+    if !finite_matrix(F_new) {
+        numerical_fault();
+        return;
     }
     p_pos[pid] = vec4<f32>(new_pos, 0.0);
     p_vel[pid] = vec4<f32>(v_new, 0.0);
-    let c00 = C_new[0][0];
-    if (c00 == c00) {
-        p_C[pid] = C_new;
-    } else {
-        p_C[pid] = mat3x3<f32>(
-            vec3<f32>(0.0, 0.0, 0.0),
-            vec3<f32>(0.0, 0.0, 0.0),
-            vec3<f32>(0.0, 0.0, 0.0),
-        );
-    }
-    let f00 = F_new[0][0];
-    if (f00 == f00) {
-        p_F[pid] = F_new;
-    } else {
-        p_F[pid] = mat3x3<f32>(
-            vec3<f32>(1.0, 0.0, 0.0),
-            vec3<f32>(0.0, 1.0, 0.0),
-            vec3<f32>(0.0, 0.0, 1.0),
-        );
-    }
+    p_C[pid] = C_new;
+    p_F[pid] = F_new;
 }
 
 // ── Kernel: plasticity (Drucker-Prager sand / snow / viscous) ──────
@@ -1281,12 +1366,20 @@ fn g2p(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(WORKGROUP_SIZE, 1, 1)
 fn plasticity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pid = gid.x;
-    if (pid >= u.particle_count) { return; }
+    if (pid >= u.particle_count || !grid_valid()) { return; }
     let mrow = materials[p_material[pid]];
     let rheo = u32(mrow.p0.x + 0.5);
     let F = p_F[pid];
+    if !finite_matrix(F) || !finite_scalar(p_jp[pid]) {
+        numerical_fault();
+        return;
+    }
     let svd = svd3_jacobi(F);
     let s = svd.s;
+    if !finite_vector(s) || !finite_matrix(svd.u) || !finite_matrix(svd.v) {
+        numerical_fault();
+        return;
+    }
 
     var new_s = s;
     var dq: f32 = 0.0;
@@ -1310,7 +1403,12 @@ fn plasticity(@builtin(global_invocation_id) gid: vec3<u32>) {
         // jp tracks log(det Fp) (negative under compaction); p2g
         // reads exp(-snow_hardening * jp) so compacted snow stiffens.
         jp_replace = true;
-        jp_new = clamp(p_jp[pid] + dlog, -5.0, 5.0);
+        jp_new = p_jp[pid] + dlog;
+        if !finite_scalar(jp_new) {
+            numerical_fault();
+            return;
+        }
+        jp_new = clamp(jp_new, -5.0, 5.0);
     } else if (rheo == 2u) {
         // ── Viscous/fluid-like damping ───────────────────────────
         // No Drucker-Prager cone and no snow clamp; keep the updated
@@ -1354,27 +1452,23 @@ fn plasticity(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Reconstruct F_e (clamped to a sane range; an inverted /
-    // pancaked particle gets reset to identity so the next p2g
-    // doesn't see Inf stress).
+    if !finite_vector(new_s) || !finite_scalar(dq) || !finite_scalar(p_jp[pid] + dq) {
+        numerical_fault();
+        return;
+    }
     let s_safe = vec3<f32>(
         clamp(new_s.x, 0.05, 20.0),
         clamp(new_s.y, 0.05, 20.0),
         clamp(new_s.z, 0.05, 20.0),
     );
-    var F_new = svd.u * mat3x3<f32>(
+    let F_new = svd.u * mat3x3<f32>(
         vec3<f32>(s_safe.x, 0.0, 0.0),
         vec3<f32>(0.0, s_safe.y, 0.0),
         vec3<f32>(0.0, 0.0, s_safe.z),
     ) * transpose(svd.v);
-    // NaN sentinel: any non-finite element resets F to identity.
-    let f00 = F_new[0][0];
-    if (!(f00 == f00) || !(F_new[1][1] == F_new[1][1]) || !(F_new[2][2] == F_new[2][2])) {
-        F_new = mat3x3<f32>(
-            vec3<f32>(1.0, 0.0, 0.0),
-            vec3<f32>(0.0, 1.0, 0.0),
-            vec3<f32>(0.0, 0.0, 1.0),
-        );
+    if !finite_matrix(F_new) {
+        numerical_fault();
+        return;
     }
     p_F[pid] = F_new;
     if (jp_replace) {

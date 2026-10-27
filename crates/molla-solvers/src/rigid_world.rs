@@ -36,7 +36,13 @@ pub use breakage::JointBreakEvent;
 #[path = "rigid_world_gpu.rs"]
 mod gpu;
 #[cfg(feature = "gpu")]
-pub use gpu::{GpuContactCapacity, GpuRuntimeDiagnostics};
+pub use gpu::{
+    GpuBodyRenderView, GpuContactCapacity, GpuRuntimeDiagnostics, MpmSoilBodyContactMotion,
+    MpmSoilBodyImpulse, MpmSoilBodyWrench, MpmSoilContactMotionFrame, MpmSoilFrameLoadObservation,
+    MpmSoilFrameLoads, MpmSoilFrameProfile, MpmSoilMachineTiming, MpmSoilMotionInfo,
+    MpmSoilNewtonWork, MpmSoilReactionInfo, MpmSoilRuntimeStats, MpmSoilSurfaceFrame,
+    MpmSoilTransferInfo, MpmSoilWrenchFrame,
+};
 
 #[cfg(test)]
 #[path = "rigid_bounds_tests.rs"]

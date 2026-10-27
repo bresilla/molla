@@ -1,5 +1,497 @@
 # Live primitive API examples
 
+## Coupled direct reaction reduction
+
+`RigidWorld::set_mpm_soil_compensated_reactions(enabled, max_bytes)` and
+`SoilTractor::set_soil_compensated_reactions` select the existing compensated
+reaction reduction after soil attachment. Preparation is cold: first enablement
+may allocate and compile. It does not advance a frame or discard committed state.
+The separate logical storage budget is `32 * max(max_rigid, 1)` bytes, not part
+of `MpmSoilRuntimeStats::retained_bytes` or the motion-guard budget.
+
+`mpm_soil_reaction_info()` reports selection and retained bytes without readback.
+Repeated selection is allocation/transfer-free. Disabling retains storage;
+budgets below the retained allocation reject even when disabling. Detach and use
+the standalone simulation's release API to free that storage.
+
+This option applies only to portable direct coupling. Native atomics and projected
+coupling reject enablement; disable it before enabling projected coupling. The
+default is unchanged. Compensation reduces accumulation error but does not promise
+general determinism or a solver speedup. The portable one-particle direct fixture
+has exact matched-control fault/retry evidence, not full tractor acceptance.
+
+## Coupled soil motion bounds
+
+`RigidWorld::set_mpm_soil_motion_bound` and `SoilTractor::set_soil_motion_bound`
+take optional finite nonnegative per-axis metres per soil substep and a separate
+proposal-storage budget: `16 + 128 * max(max_particles, 1)` bytes. Bounds round
+conservatively to f32; subnormal effective bounds become zero. `None` disables
+but retains storage. `mpm_soil_motion_info` reports effective bounds and logical
+retained bytes without a GPU readback.
+
+Changing bounds invalidates prepared coupling. `prepare_mpm_soil_coupling` (or
+`SoilTractor::prepare_soil_coupling`) explicitly rebuilds it outside stepping,
+without advancing time. Otherwise the next step prepares it. Preparation is cold
+work and may allocate/compile; it is not a zero-latency operation.
+
+The tractor benchmark accepts `--soil-motion-bound off` (default), or isotropic
+`METRES:BYTES`, for example `1:6400016` at 50k particles. The Make equivalent is
+`SOIL_TRACTOR_BENCH_MOTION_BOUND=1:6400016`. Requested and effective live bounds
+and storage are recorded and checked before stepping. A permissive bound tests
+integration/overhead; it does not certify a residency envelope or collision coverage.
+
+Motion failures reject the coupled frame. Error-only metadata reports overflow,
+numerical and motion-bound flags under the frame's completion deadline. The raw
+G2P counter includes entered failed gathers, not only committed substeps.
+
+The current 50k tractor control/guarded/repeat comparison has exact recorded machine
+states and final particle checkpoints, but all measured frames miss 60 Hz. Full
+performance, long-horizon, rendered-asset and physical-calibration acceptance remain
+open; the earlier small cross-world retry-equivalence failure remains unresolved.
+
+## Framed soil tile archives
+
+`MpmSoilFrameCheckpoint::partition_tiles` returns `MpmSoilFrameTileArchive`,
+retaining the f64 world offset, exact world-tile keys, global particle/material
+IDs and all local particle/history streams. `select` deduplicates requested tiles
+and returns a global-ID-sorted `MpmSoilFrameSelection`. Its `soil()` is explicitly
+local-coordinate state; `world_origin()` must accompany it. The copying
+`to_frame_checkpoint()` helper reconstructs an owned frame, not device IDs.
+
+`writeback` accepts updated framed state in the selected slot order and requires
+the same frame, physical configuration, mass, reference volume and material
+identity. Moved particles merge into destination tiles. Stale/foreign selections
+and invalid changes reject before mutation. `recentered` returns a new archive
+and epoch after a lossless translation; previous selections cannot write to it.
+
+The checked versioned `to_bytes`/`from_bytes` envelope includes frame, layout,
+IDs and history. Durability is caller-owned. These distinct types do not convert
+implicitly to the existing unframed GPU/world/store APIs. Whole-archive host
+copying, one shared coordinate frame and no automatic residency remain explicit
+limits; this is not canonical per-tile local storage or live-machine rebasing.
+`make test-soil-fast PHASE=S07 RELEASE=1` and `make test-soil-tiles RELEASE=1`
+cover CPU lifecycle and evolved GPU capture/reload/resume respectively.
+
+The detached `MpmSoilFrame::restore_selection` explicitly restores a framed
+selection's physical/history streams and global IDs in one GPU submission, then
+publishes its world offset. Different grid origins are accepted after existing
+physical/device/capacity validation. First use allocates retained ID buffers;
+subsequent restores reuse them but still create temporary upload buffers.
+`checkpoint_tiles_with` requires installed IDs and performs a blocking physical
+capture followed by host partitioning. It is not a hot-step or durable-store API.
+
+`recenter_with` preserves those IDs, their buffers and mapping epoch while
+invalidating prepared physical work. Consumers must refresh the world origin;
+an ID epoch describes the mapping, not coordinate freshness. Plain `restore_with`
+still invalidates identity, and subsequent identified capture rejects rather than
+inventing IDs. These operations do not grant world-residency ownership or rebase
+machines, renderers or persistent stores.
+
+`MpmSoilFrameStore` provides explicit blocking durable storage in an existing
+private local-filesystem directory. Full save/load retain the shared frame;
+bounded `read_tiles` and same-frame `writeback` preserve unloaded tiles and merge
+moved particles. Unchanged saves write no new bytes. Full saves can replace the
+frame and invalidate earlier read generations. Framed and unframed committed
+stores reject cross-opening rather than silently dropping offsets.
+
+`MpmSoilFrameStoreRead::selection_snapshot` copies selected payload/IDs for
+`MpmSoilFrame::restore_selection`; retain the original read as the writeback token.
+Publication errors poison the handle: reopen to inspect HEAD, since the last
+reported generation may predate a completed rename. The store uses the existing
+lock, blob/manifest synchronization and atomic-publication protocol.
+
+`begin_read` consumes the exclusive framed store into a bounded worker read;
+`begin_writeback` consumes the store, current read and updated framed checkpoint
+into same-frame partial publication. Their typed task `poll` methods do not wait
+for filesystem I/O and return completions once, moving payload buffers rather
+than copying them. Read completions return the owner and selected result; write
+completions return the owner, original read, original update and outcome, including
+startup/validation failures. Poll disconnection is terminal. A caught worker panic
+poisons the returned owner. Frame/provenance and request bounds are checked before
+spawning; payload validation and I/O execute on the worker. Thread creation and
+metadata checks are still caller work, not a hard latency guarantee.
+
+Dropping a task neither joins nor cancels its worker. The exclusive lock remains
+held until work finishes; dropped writes can publish without observed completion.
+After a changed write, the returned read is stale. Obtain a new read before reuse.
+Full save/load and snapshot/capture APIs remain blocking. Filesystem guarantees
+remain conditional on the documented local filesystem contract, not universal
+power-loss certification. Persistent verification must set `MOLLA_STORE_TEST_ROOT`
+to an owned disk-backed directory; the host's default `/tmp` is tmpfs.
+
+`MpmSoilDiskWorld::new_framed` consumes a committed framed store and an empty
+compatible solver. `world_origin()` exposes the fixed shared offset; the ordinary
+`new` constructor remains unframed and returns None. Region requests and GPU pin
+domains use world tile keys. Solver/grid coordinates, `captured_state` positions
+and swept envelope AABBs stay local to this offset. Do not add the offset into
+f32 particle positions or pass absolute world AABBs as local swept bounds.
+
+The owner preserves frame metadata through asynchronous capture/write/load and
+device publication, retaining stable IDs, step freezing, failure recovery and
+capacity checks. Activity groups and host/swept pins use exact world tile keys.
+GPU pin preparation supports tile-aligned frames with the existing zero-origin
+power-of-two layout: its [-2^30, 2^30] domain constraint applies after translation
+to local tile coordinates. Fractional frames can use host pins; GPU preparation
+rejects instead of rounding them. Every active particle is still pinned. There
+is no runtime frame change, physical sleep or demonstrated bounded traversal;
+machine/renderer rebasing and canonical per-tile coordinates remain separate work.
+
+## Canonical per-tile soil archives
+
+`MpmSoilFrameCheckpoint::partition_canonical_tiles` creates a
+`MpmSoilCanonicalTileArchive` with f64 position offsets relative to each tile's
+exact world anchor. Other particle/history words, material slots, position padding
+and global IDs remain unchanged. This is storage precision, not a different
+physical solver. Tiny offsets that disappear in absolute world arithmetic stay
+separate. Non-exact anchors/residuals reject, including some decimal layouts and
+extremely small boundary residuals; no precision fallback or coarsening occurs.
+
+`select(tiles, max_particles, world_origin, grid_origin)` assembles only bounded
+requested tiles in global-ID order. Both origins are explicit; converting any
+coordinate to f32 must be exact. `MpmSoilCanonicalSelection::framed_selection()`
+can be passed to the existing detached `MpmSoilFrame::restore_selection`. Keep
+the canonical selection token for `writeback`; it enforces same-frame/config
+updates and unchanged mass/reference volume/material identity. Movement merges
+destination tiles without rewriting unrelated records. A successful write stales
+every older token. Archive selections are snapshots, not live residency leases.
+
+The checked `MOLLCTIL` v1 codec is distinct from both existing raw/framed codecs.
+It stores 181 bytes per particle and 28 bytes per occupied tile, plus metadata;
+negative-zero flags preserve exact position roundtrips. `from_bytes` takes an
+explicit particle bound. Existing raw/framed stores do not consume this format;
+the canonical store below does. All operations here run on host archives, not GPU hot
+steps. Choosing a new grid origin does not prove physical boundary/halo correctness
+or authorize moving machine/renderer state independently.
+
+`MpmSoilCanonicalStore` adds blocking incremental save/load, bounded `read_tiles`,
+same-selection `writeback` and explicit collection using the existing exclusive
+publication protocol. Read results retain canonical payloads without assembling
+absolute or solver-frame positions. `read.select(world_origin, grid_origin)`
+assembles the entire bounded read into a `MpmSoilCanonicalSelection`. Keep both
+tokens: `store.writeback(&read, &selection, &updated, limits)` requires current
+store/generation provenance and the read's own selection. A different frame may
+be chosen on a later read without rebasing unrelated stored tiles.
+
+I/O byte bounds reserve `1052 * tiles + 181 * particles`; write limits apply to
+the source/destination union, not just the initially selected set. Invalid or
+oversized requests leave HEAD unchanged. Publication errors poison the handle,
+requiring drop/reopen to determine what committed. Changed generations stale old
+reads; unchanged saves write zero bytes. Unchanged cached blobs are not reread for
+integrity, while full load/collection validates every referenced payload. The
+manifest remains field-sized. These direct blocking APIs are not a production
+hot-step route.
+
+`begin_read(tiles, limits, world_origin, grid_origin)` moves both I/O and frame
+assembly to one worker. Poll its `MpmSoilCanonicalStoreReadTask` until a completion
+arrives; it returns the exclusive owner and `Result<Option<(read, selection)>>`.
+None means the store was uncommitted. Assembly errors such as lossy f32 conversion
+return a healthy owner for a new request. Frame finiteness and manifest bounds are
+checked before spawning without payload reads.
+
+`begin_writeback(read, selection, updated, limits)` consumes all inputs. Its task
+completion returns the owner and original inputs even on error. Caller preflight
+checks provenance/frame/count/bounds; particle scans, validation, destination I/O
+and publication run on the worker. Polls do not assemble or copy payloads and
+consume completion once. Disconnection is terminal; publication errors and caught
+worker panics require reopening. Dropping tasks does not join/cancel work or
+release locks early, and a dropped write may still publish. Thread creation and
+metadata work have no hard latency guarantee. Full save/load and detached capture
+remain blocking.
+
+`MpmSoilDiskWorld::new_canonical` integrates those workers with the live owner's
+capture/write/load/device-publication lifecycle. Supply an explicit world origin;
+the simulation supplies the grid origin. Construction reads metadata without loading particle blobs. Canonical
+I/O budgets include the affected source/destination union. Existing identity,
+pinning, activity and fault/recovery contracts apply; all active particles remain
+pinned. Fractional frames support host pins but may reject GPU pin preparation.
+Physical sleep and bounded traversal remain unimplemented.
+
+For canonical owners, `begin_recenter(grid_origin)` translates the local grid and
+particles exactly and compensates the world offset without rewriting durable
+tiles. Poll `poll_region_update` until it returns true. Other updates and stepping
+remain frozen meanwhile. Preflight assembles the selected archive token on the
+caller; polling validates the captured current state and performs a full physical
+upload. These are explicit boundary costs, not an accepted hot per-step path.
+Rounding and unsupported GPU pin offsets reject before publication; invalid
+capture/device failures fault the owner. Device loss is not rollback. Identity
+buffers/epoch, world residency, swept limits and activity duration are retained.
+External coordinate consumers must refresh after success. This does not move
+physical grid boundaries, rebase machines/renderers, or establish equivalence of
+later independent trajectories. Raw/shared-frame disk owners reject this method.
+
+Fixed-order P2G is an explicit runtime option, not just a unit-test path. For
+non-native active/compact solvers, configure before transferring the solver into
+the live owner:
+
+```rust,ignore
+soil.set_active_grid(true)?;
+soil.prepare_parallel_particle_tile_ordering(engine.queue().unwrap(), capacity)?;
+soil.set_particle_tile_ordering(true)?;
+soil.prepare_deterministic_p2g_with_budget(scratch_budget)?;
+soil.set_deterministic_p2g(true)?;
+```
+
+The scratch budget covers 64 bytes per maximum particle, not ordering or driver
+memory. Native explicit solvers support dense, active and compact dispatch.
+Disabling gather retains scratch; `release_deterministic_p2g()` releases it only
+when disabled. Ordering replacement requires disabling gather and invalidates its
+prepared bindings. `set_p2g_mode` selects ordinary scatter and disables gather.
+The fixed-order gather prunes tile ranges outside each node's stencil while
+preserving accumulation order. The recorded saved-50k transfer comparison improves
+median GPU time by 4.22% with exact paired/repeated grid output; it does not include
+machine solving or establish full-frame performance.
+Defaults remain unchanged; fixed-order soil accumulation alone does not certify
+whole-machine reaction repeatability. Run `make test-soil-fixed-order-runtime
+RELEASE=1 RUN_WITH=nixVulkan` for the public non-test-library integration checks.
+
+The recorded 129-particle, eight-step paired rebase comparison stays below the
+1e-6 physical threshold in all tested modes, but ordinary atomic P2G fails exact
+self-repeat. Fixed-order P2G passes both checks in the three supported active/
+sparse modes. Index ordering alone is insufficient. This short component result
+does not establish long-traverse or 50k machine trajectory acceptance.
+
+## Opt-in shared particle gather
+
+After preparing and enabling particle ordering, select shared immutable chunks:
+
+```rust,ignore
+soil.prepare_deterministic_p2g_shared_chunks(scratch_budget, false)?;
+soil.set_deterministic_p2g(true)?;
+assert!(soil.deterministic_p2g_shared_chunks_enabled());
+```
+
+The second argument selects compensated stiffness, which is supported only for
+non-native active/compact solvers. Native gather requires `false`. The shared path
+requires 16 KiB workgroup storage and the same 64-byte/maximum-particle retained
+scratch budget. It does not add a device buffer or dispatch. Preparation alone does
+not enable gather; ordinary gather preparation switches back to direct loads.
+Existing enable, mode-change, prepared-record and disable-before-release contracts
+apply. Unsupported policies or insufficient budgets return errors without fallback.
+
+`make test-soil-shared-gather RUN_WITH=nixVulkan` runs exact small-layout checks and
+147 public paired-history cases with bounded GPU setup. CPU contracts use
+`make test-soil-shared-gather-fast RELEASE=1`. The fixed-state native 50k component
+retains exact outputs and measured median transfer time 0.597504 / 0.510464 ms
+(14.57% lower). This advances zero simulated time, is not tractor/frame acceptance,
+and does not establish tractor/frame acceptance. The tractor's `shared-chunk:BYTES`
+selector uses this API. Defaults remain unchanged.
+Evidence: `benchmarks/soil/2026-10-13-gather-shared-runtime-admission/`.
+
+## Opt-in compensated rigid reactions
+
+Non-native MPM can retain a compensated reduction for legacy sphere and prescribed
+solid reactions. Preparation does not enable it:
+
+```rust
+let bytes = 32 * u64::from(soil.config().max_rigid.max(1));
+soil.prepare_compensated_rigid_wrench(bytes)?;
+soil.set_compensated_rigid_wrench(true)?;
+```
+
+The budget covers the reaction residual buffer, not particle/grid storage. The
+reducer survives dense/active dispatch changes and compact-pool growth without
+repreparation; transfer policies have their own disable/reprepare requirements.
+Prepared step records become stale when configuration changes. Disable before
+`release_compensated_rigid_wrench()`. Restore checkpoints before attaching bodies.
+Native-atomic MPM is explicitly unsupported; there is no silent fallback.
+
+Run `make test-soil-compensated-wrench RUN_WITH=nixVulkan` for the bounded unit and
+public GPU gates, or `make test-soil-compensated-wrench-fast RELEASE=1` for the CPU
+source contract. GPU binaries compile before each 90-second setup-inclusive cap.
+
+Public lifecycle checks preserve exact paired particle checkpoints across grid
+growth, dispatch changes, explicit/implicit stepping and cancelled submissions.
+This does not close the separate 50k cross-transfer force comparison: its recorded
+maximum remains 3.051758e-5 versus the 2e-5 bound. Defaults remain unchanged, and no
+4 ms/frame or physical calibration acceptance is implied.
+
+## Stagnant-contact branch option
+
+`grouped-eight-newton` enables experimental method 29. It retains method 28's
+addition tree with three reduction stages instead of four and the same device,
+precision and work-limit requirements. Component gains do not establish full-frame
+performance or physical calibration; defaults remain unchanged.
+
+`grouped-sum-newton` enables experimental method 28, grouping compensated
+reduction stages while retaining the same addition tree. It requires the protected
+256-lane Vulkan route and rejects unsupported devices before solver allocation.
+Defaults remain unchanged; captured component gains are not full-frame acceptance.
+
+`stagnant-branch-newton` enables experimental method 27 on the protected
+256-lane Newton route and includes `stream-block-newton`. After a previous floor
+release, the first zero-smoothing stagnant step can trigger another floor-release
+search before a Newton direction. Follow-up settling considers only the
+highest-residual unvisited contact and requires decreasing global residual.
+Every applied change consumes the existing outer-step and release budgets;
+physical/publication checks and default features remain unchanged.
+
+The captured frame-22 failure passes at 64 iterations with this policy; eight
+saved successful inputs retain exact baseline state and public outputs. These
+are component results, not full-scene performance, trajectory or calibration
+acceptance. Reproduction and runtime acceptance status are recorded in
+`benchmarks/soil/2026-10-12-branch-transitions/SUMMARY.md`.
+
+## Actual-tractor performance and numerical-agreement report
+
+Run `make report-soil-frontier BASELINE=<reference-data-dir>
+INPUT=<candidate-data-dir> SOIL_FRONTIER_OUTPUT=<new-dir>` to compare completed
+33-frame, 50k-particle RTX 4080 diagnostic artifacts. Both inputs must include
+their raw manifest, result, frame CSV, MPM profiles, machine trajectory and final
+particle positions. For additional observations, use the `soil_benchmark frontier`
+CLI with repeated `--input` arguments. `make test-soil-frontier` runs its CPU
+contracts and is included in `make test-soil-fast PHASE=S00`.
+
+`frontier.json` recomputes timing statistics and numerical discrepancies, checks
+declared fixture compatibility, and fingerprints the inputs. Source-provenance
+audits are separate. Exit zero means the report is valid, **not** that performance
+or physical accuracy passed. The supported diagnostics exclude rendering/export
+and complete soil wall time; their accepted frontier therefore stays empty.
+Observed nondominance is not a paired speedup, calibrated accuracy or a complete
+quality/resolution sweep. Existing output directories are rejected.
+
+## Fixed-order tractor transfer
+
+`bench-soil-tractor` accepts `SOIL_TRACTOR_BENCH_TRANSFER=atomic` (default),
+`fixed-order:BYTES`, `shared-chunk:BYTES` or `grid-reuse:BYTES`. Fixed-order transfer requires the native-prediction Newton
+configuration and works with dense, active and compact soil storage. For the
+50k fixture, `fixed-order:3200000` provides the exact gather stress-cache budget;
+particle ordering and driver storage are excluded and reported separately.
+The executable option is `--soil-transfer fixed-order:3200000`.
+
+`shared-chunk:3200000` selects the same contributor order with workgroup-local
+immutable particle chunks. Its stress-cache budget is unchanged; the device must
+provide 16 KiB workgroup storage. Use `SoilTractorTransfer::SharedChunk` through the
+public constructor. The live transfer query includes `shared_chunks`; benchmark
+manifests distinguish the selections and reject requested/live mismatches.
+Ordinary `fixed-order` remains the comparison control, not an alias for shared chunks.
+
+`grid-reuse:14075712` retains exact-input transfer outputs for the default 50k,
+grid64 fixture. The budget includes particle keys, dense logical node outputs,
+tile flags and a header, even when physical grid storage is sparse. Ordering and
+driver storage remain separate. `SoilTractorTransfer::GridReuse` exposes the same
+option; `validate_with_grid` checks its full budget before soil allocation.
+`MpmSoilTransferInfo::grid_reuse` reports the actual prepared cache. The viewer
+accepts `SOIL_LIVE_TRANSFER=grid-reuse`; atomic remains the default. This is not
+physical sleeping, eviction or a claim of real-time performance.
+
+The same-source 50k control/shared/repeat runs each complete 33 frames with exact
+recorded machine states and full final particle checkpoints. Mean P2G time is
+15.05 / 10.08 / 9.99 ms per frame, but total wall medians remain 357.54 / 346.71 /
+343.14 ms and every measured frame misses 60 Hz. Contact Newton still costs about
+212–214 ms per frame. This is bounded integration evidence, not real-time or
+uncontended overall-speed acceptance. Source and artifacts:
+`benchmarks/soil/2026-10-13-shared-gather-tractor/`.
+
+The opt-in gather uses workgroup integer stencil-support masks and visits bits in
+the same tile/particle accumulation order. Mask storage is workgroup-local; the
+retained scratch budget and dispatch count are unchanged. Paired saved50k transfer
+measurements improve GPU median by 43.71%; actual tractor runs preserve all recorded
+machine/final particle-state bits. Full-frame performance and a separate non-native
+scatter stiffness gate remain failed; this does not promote the atomic default or
+establish physical accuracy. Evidence: `benchmarks/soil/2026-10-12-gather-masks-runtime/`.
+
+Ordering and gather are prepared before attachment. The manifest records requested
+and live transfer identities, sort selection and retained bytes. Unsupported
+combinations, insufficient budgets and live-selection mismatches are errors;
+there is no fallback to atomic transfer. This option is a repeatability diagnostic,
+not whole-machine accuracy, performance or calibration acceptance.
+`make test-soil-tractor-fixed-order RUN_WITH=nixVulkan` checks the public constructor
+and short independent-owner replay under a 90-second setup-inclusive GPU cap.
+The initial integrated test reached that cap without phase-localizing the stall;
+runtime integration is not yet GPU-verified. The timeout is retained in
+`benchmarks/soil/2026-10-12-tractor-fixed-order-runtime/`.
+
+### Final particle history
+
+`SOIL_TRACTOR_BENCH_FINAL_STATE=1` (`--final-soil-state 1`) opts into one final,
+blocking `final-soil-state.bin` capture after all measured frames. Default is off.
+The existing lossless `MOLLSOIL` format stores particle position, velocity, APIC C,
+elastic F, reference volume, mass, plastic volume history, material IDs/table and
+compaction/impulse diagnostics. The result records frame identity, BLAKE3 digest,
+encoded size and separate observation counters/timing. At 50k particles the GPU
+staging/readback is 8,000,016 bytes; it is not included in hot-frame counters.
+
+`SoilTractor::read_soil_checkpoint(max_particles)` and
+`RigidWorld::read_mpm_soil_checkpoint(max_particles)` reject uncommitted, faulted,
+stale-model and over-limit state before allocating or reading back. Observations
+retain the published frame after successful rollback. These are particle archives,
+not whole-world restart saves: machine state, grid scratch, Newton warm histories,
+global soil identities and scheduling state are excluded. Capturing matching final
+particle histories does not prove calibrated accuracy or long-horizon equivalence.
+
+## Active-contact publication option
+
+`active-publication-newton` enables method 21 on the protected 256-lane Newton
+route and includes `norm-tree-newton`. Two serial publication scans visit the
+ascending active-contact list; full-capacity validation and output clearing remain.
+Ordinary WGSL and default features are unchanged.
+
+Run `make test-soil-newton-active-publication-runtime RUN_WITH=nixVulkan` for
+source/metadata checks and bounded capture/native-feedback GPU checks.
+For the full diagnostic fixture use
+`benchmarks/soil/2026-10-11-newton-active-publication-runtime/actual.sh` with
+`/bin/bash`; it uses Make, a fresh output directory and a 180-second cap.
+The captured solver speedup is not a full-frame speed or calibration claim.
+
+The test-only equal-input shadow diagnostic is run by
+`/bin/bash benchmarks/soil/2026-10-11-newton-publication-shadow/run.sh`.
+It compares methods 20/21 on every contact solve through 14 live frames, retains
+first-difference metadata, and never feeds shadow outputs into the world.
+Its extra solver/storage/dispatches/readbacks exclude performance acceptance.
+
+## Experimental response preparation
+
+For experimental Newton response preparation, enable the solver crate feature
+`axis-parallel-newton-preparation`. It solves the three contact response columns
+on separate GPU lanes, retaining contact-wide convergence, compensated arithmetic
+and the original error/refinement limits. The benchmark records the selection as
+`soil_newton_preparation_backend`; defaults remain unchanged. Exact component
+checks and faster preparation do not establish whole-frame real-time acceptance.
+
+`strict-rounding-newton-preparation` adds experimental non-contracting SPIR-V
+arithmetic and volatile lane-private rounding to axis-parallel preparation.
+It requires a native Vulkan engine with `PASSTHROUGH_SHADERS`; unsupported
+devices fail construction rather than silently selecting another backend.
+The benchmark requests that feature for Newton runs and labels this route
+`compensated-axis-parallel-strict-volatile-rounding`. Arithmetic operations,
+refinement limits and tolerances are unchanged. Bare volatile rounding is
+test-only and is not a runtime option. Defaults remain unchanged.
+
+## Resident tractor rendering
+
+`soil_tractor_resident.rs` renders the actual 50k-particle tractor/tine workload
+on the physics device using live particle positions and committed GPU body
+transforms. Run `make render-soil-tractor-resident RUN_WITH=nixVulkan
+SOIL_RESIDENT_OUTPUT=<new-dir>`; it precompiles before the 180-second execution cap.
+The output contains endpoint PPM images and a JSON timing report for 33 frames.
+It uses analytic fixture geometry, not imported assets or the Bevy frontend.
+Render-pass timing excludes physics, copies and submission overhead; existing
+physics transfers remain. Reports explicitly retain uncalibrated status and
+`acceptance: false` rather than treating cheap rendering as real-time physics.
+
+## Soil-bed preparation
+
+`soil_settling.rs` runs a fixed 512-particle gravitational bed through the bounded
+full-population settling driver. Run `make settle-soil SOIL_SETTLING_DIR=<new-dir>`;
+the target compiles first, freezes source/executable provenance, then applies a
+30-second execution cap. `SOIL_BENCH_SECONDS` may lower that cap to 1–30 seconds.
+
+The example saves its policy, every activity observation, initial/final checkpoints
+and final archive. Exit 0 means the configured endpoint activity criteria held;
+exit 2 means nonconvergence or error. A missing final result means incomplete work,
+not a settled bed. The checked-in one-second case reaches StepLimit and remains
+unsettled. Do not treat this small preparation case as force equilibrium, physical
+calibration, particle sleeping or the tractor/implement real-time acceptance gate.
+
+Continue a completed segment with
+`make settle-soil SOIL_SETTLING_DIR=<new-dir> SOIL_SETTLING_RESUME=<parent-results-dir>`.
+The loader checks bounded inputs, parent hashes, policy/configuration, particle
+identity and archive/checkpoint agreement before GPU initialization. Parent
+evidence is copied into the new output; v2 metadata records cumulative physical
+steps/time. The quiet window restarts conservatively for each segment. The saved
+one- and two-second gravitational-bed segments both remain nonconverged; resuming
+does not authorize changing activity thresholds or claiming calibration.
+
 ## Analysis and physical response
 
 `mass_matrix` and legacy `inverse_dynamics` omit finite equality Ball/D6 motion

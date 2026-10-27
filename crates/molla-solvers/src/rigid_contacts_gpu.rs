@@ -814,8 +814,9 @@ impl RuntimeContacts {
         engine: &Engine,
         substeps: usize,
         dt: Real,
+        completion: Option<&super::soil_completion::CompletionDeadline<'_>>,
     ) -> Result<Vec<ContactForce>> {
-        super::map_read(engine.device().unwrap(), &self.readback)?;
+        super::map_read_with_completion(engine.device().unwrap(), &self.readback, completion)?;
         let mapped = molla_core::gpu_readback!(self.readback.slice(..));
         let result = self.decode(&mapped[..self.readback_bytes(substeps) as usize], dt);
         drop(mapped);

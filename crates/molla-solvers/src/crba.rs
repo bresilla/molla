@@ -233,8 +233,10 @@ fn matrix<const FILTER_LOCKED: bool>(
         let dof_k = local_dof_offset[k];
         for a in 0..dof_width[k] {
             let f = composite[k].mul_sv(s_cols_per_joint[k][a]);
-            for b in 0..dof_width[k] {
-                m_out[(dof_k + a) * n + (dof_k + b)] = spatial_dot(s_cols_per_joint[k][b], f);
+            for b in 0..=a {
+                let value = spatial_dot(s_cols_per_joint[k][b], f);
+                m_out[(dof_k + a) * n + (dof_k + b)] = value;
+                m_out[(dof_k + b) * n + (dof_k + a)] = value;
             }
             let mut cur = parent_joint_local[k];
             while let Some(pj) = cur {

@@ -6,6 +6,45 @@ use molla_sim::runtime::{BodyHandle, JointHandle, RigidScene, SceneStamp};
 use molla_sim::{JointType, State};
 use std::collections::BTreeMap;
 
+#[path = "rigid_rate_precision_gpu.rs"]
+mod rates;
+
+pub(super) fn decode_rates(state: &mut State, pairs: &[u8], body_low: &[u8]) -> Result<()> {
+    if pairs.len() != state.joint_qd.len() * 8 || body_low.len() != state.body_qd.len() * 32 {
+        return Err(Error::Gpu("invalid runtime paired readback sizes".into()));
+    }
+    let rates: Vec<Real> = pairs
+        .chunks_exact(8)
+        .map(|bytes| {
+            let parts = bytemuck::pod_read_unaligned::<[f32; 2]>(bytes);
+            parts[0] as Real + parts[1] as Real
+        })
+        .collect();
+    let velocities: Vec<_> = state
+        .body_qd
+        .host()?
+        .iter()
+        .zip(body_low.chunks_exact(32))
+        .map(|(v, bytes)| {
+            let low = bytemuck::pod_read_unaligned::<[f32; 8]>(bytes);
+            molla_math::SpatialVector::new(
+                v.linear + Vec3::new(low[0] as Real, low[1] as Real, low[2] as Real),
+                v.angular + Vec3::new(low[4] as Real, low[5] as Real, low[6] as Real),
+            )
+        })
+        .collect();
+    if rates.iter().any(|v| !v.is_finite())
+        || velocities
+            .iter()
+            .any(|v| !v.linear.is_finite() || !v.angular.is_finite())
+    {
+        return Err(Error::Solver("nonfinite runtime paired readback".into()));
+    }
+    state.joint_qd.host_mut()?.copy_from_slice(&rates);
+    state.body_qd.host_mut()?.copy_from_slice(&velocities);
+    Ok(())
+}
+
 struct Transfers {
     coordinates: Vec<[u32; 4]>,
     positions: Vec<[u32; 4]>,
@@ -47,6 +86,7 @@ pub(super) struct Layout {
         std::ops::Range<usize>,
     )>,
     frames: Vec<(Option<BodyHandle>, Transform, Transform, Vec3, u32)>,
+    dofs: Vec<std::ops::Range<usize>>,
 }
 
 impl Layout {
@@ -61,6 +101,8 @@ impl Layout {
             }
         }
         let offsets = model.joint_coord_offset.host()?;
+        let rate_offsets = model.joint_dof_offset.host()?;
+        let mut dofs = vec![0..0; model.body_count];
         let kinds = model.joint_type.host()?;
         let mut joints = vec![(None, 0, 0..0); model.body_count];
         let mut frames = vec![
@@ -79,6 +121,7 @@ impl Layout {
         let axes = model.joint_axis.host()?;
         let reversed = model.joint_reversed.host()?;
         for (joint, &child) in model.joint_child.host()?.iter().enumerate() {
+            dofs[child as usize] = rate_offsets[joint] as usize..rate_offsets[joint + 1] as usize;
             joints[child as usize] = (
                 owners[joint].clone(),
                 kinds[joint],
@@ -100,6 +143,7 @@ impl Layout {
             bodies,
             joints,
             frames,
+            dofs,
         })
     }
 
@@ -333,6 +377,7 @@ pub(super) struct RuntimePrecision {
     published_poses: Vec<Transform>,
     last_side: usize,
     prepared: bool,
+    rates: Option<rates::RuntimeRates>,
 }
 
 impl RuntimePrecision {
@@ -350,6 +395,19 @@ impl RuntimePrecision {
         let mut compensated = states.each_ref().to_vec();
         compensated.extend(projected);
         solver.prepare_gpu_coordinate_compensation(&compensated)?;
+        let rates = if solver.gpu_uses_paired_rates() {
+            let per_state = (model.joint_dof_total as u64 * 8)
+                .checked_add(model.body_count as u64 * 32)
+                .ok_or_else(|| Error::Gpu("runtime rate size overflow".into()))?;
+            let bytes = per_state
+                .checked_mul(compensated.len() as u64)
+                .and_then(|n| n.checked_add(model.joint_dof_total as u64 * 8))
+                .ok_or_else(|| Error::Gpu("runtime rate size overflow".into()))?;
+            solver.prepare_gpu_paired_rates(&compensated, bytes)?;
+            Some(rates::RuntimeRates::new(engine, states, solver)?)
+        } else {
+            None
+        };
         let storage = |label, size| {
             molla_core::gpu_create_buffer!(
                 engine.device().unwrap(),
@@ -376,6 +434,7 @@ impl RuntimePrecision {
             published_poses: Vec::new(),
             last_side: 0,
             prepared: false,
+            rates,
         }))
     }
 
@@ -386,6 +445,11 @@ impl RuntimePrecision {
         states: &[State; 2],
         source: &State,
     ) -> Result<()> {
+        let rate_transfers = self
+            .rates
+            .as_ref()
+            .map(|rates| rates.plan(&self.layout, source))
+            .transpose()?;
         let mut encoder = engine
             .device()
             .unwrap()
@@ -483,6 +547,14 @@ impl RuntimePrecision {
                 encoder.copy_buffer_to_buffer(from, 0, to, 0, to.size());
             }
         }
+        if let Some(rates) = &mut self.rates {
+            rates.prepare_frame(
+                engine,
+                &mut encoder,
+                rate_transfers.flatten(),
+                self.last_side,
+            )?;
+        }
         engine.queue().unwrap().submit([encoder.finish()]);
         self.prepared = true;
         Ok(())
@@ -510,6 +582,9 @@ impl RuntimePrecision {
                     encoder.copy_buffer_to_buffer(from, 0, to, 0, from.size());
                 }
             }
+            if let Some(rates) = &self.rates {
+                rates.rollback(&mut encoder);
+            }
             engine.queue().unwrap().submit([encoder.finish()]);
         }
         self.last_side = 0;
@@ -518,6 +593,9 @@ impl RuntimePrecision {
     }
 
     pub(super) fn committed(&mut self, source: &State, side: usize) -> Result<()> {
+        if let Some(rates) = &mut self.rates {
+            rates.committed(source)?;
+        }
         self.published_q = source.joint_q.host()?.to_vec();
         self.published_poses = source.body_q.host()?.to_vec();
         self.last_side = side;
@@ -571,6 +649,18 @@ impl RuntimePrecision {
             &previous.published_q,
             old_buffers.is_some(),
         )?;
+        let rate_transfers = self
+            .rates
+            .as_ref()
+            .map(|rates| {
+                rates.inherit_plan(
+                    &self.layout,
+                    &previous.layout,
+                    source,
+                    previous.rates.as_ref(),
+                )
+            })
+            .transpose()?;
         let mut encoder = engine
             .device()
             .unwrap()
@@ -590,6 +680,15 @@ impl RuntimePrecision {
                 let to = solver.gpu_position_compensation_buffer(state)?;
                 encoder.copy_buffer_to_buffer(positions, 0, to, 0, to.size());
             }
+        }
+        if let Some(rates) = &self.rates {
+            rates.inherit(
+                engine,
+                &mut encoder,
+                rate_transfers.as_ref().unwrap(),
+                previous.rates.as_ref(),
+                previous.last_side,
+            );
         }
         engine.queue().unwrap().submit([encoder.finish()]);
         self.committed(source, 0)
@@ -612,6 +711,18 @@ impl RuntimePrecision {
             &previous.published_q,
             &previous.published_poses,
         )?;
+        let rate_transfers = self
+            .rates
+            .as_ref()
+            .map(|rates| {
+                rates.inherit_plan(
+                    &self.layout,
+                    &previous.layout,
+                    source,
+                    previous.rates.as_ref(),
+                )
+            })
+            .transpose()?;
         let old = &old_states[previous.last_side];
         let buffers = Some([
             old_solver.gpu_coordinate_compensation_buffer(old)?,
@@ -641,6 +752,15 @@ impl RuntimePrecision {
                 solver.gpu_position_compensation_buffer(&states[1])?,
             ],
         );
+        if let Some(rates) = &self.rates {
+            rates.inherit(
+                engine,
+                &mut encoder,
+                rate_transfers.as_ref().unwrap(),
+                previous.rates.as_ref(),
+                previous.last_side,
+            );
+        }
         engine.queue().unwrap().submit([encoder.finish()]);
         self.committed(source, 0)
     }
@@ -661,6 +781,7 @@ impl RuntimePrecision {
         }
         if source.joint_q.host()? != previous.published_q
             || source.body_q.host()? != previous.published_poses
+            || self.rates.is_some()
         {
             return self.inherit_rebuild(
                 engine, source, solver, states, previous, old_solver, old_states,
