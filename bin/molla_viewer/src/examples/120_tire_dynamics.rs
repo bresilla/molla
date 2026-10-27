@@ -324,7 +324,9 @@ fn tire_rig_replay_expected_behavior(scenario_id: &str) -> &'static str {
         "low_speed_robustness" => {
             "Low-speed checks should keep slip, relaxation, and brush forces finite through launch, reversal, and near-zero rolling speed."
         }
-        _ => "Internal tire-rig snapshot; use force, patch, heat, and pass/fail data to falsify the model.",
+        _ => {
+            "Internal tire-rig snapshot; use force, patch, heat, and pass/fail data to falsify the model."
+        }
     }
 }
 
@@ -1114,6 +1116,8 @@ struct TireDynamicsState {
     tires: Vec<molla_vehicle::TetraTireFem>,
     /// Viewer runs the tetra node update on the new WGSL kernel by default.
     use_gpu: bool,
+    compare_cpu: bool,
+    resident_cavity: bool,
     kernel: Option<molla::kernels::TireFemGpuKernel>,
     /// Stage (g) — per-tire persistent GPU buffers. `None` until the
     /// first GPU step builds them; reused thereafter.
@@ -1128,6 +1132,8 @@ struct TireDynamicsState {
     /// the same long-lived runtime object as the reusable vehicle tire path.
     use_resident_vehicle_owner: bool,
     resident_vehicle_fem: Option<molla::kernels::TireResidentVehicleFemAtlasOwner>,
+    prepared_chassis: Option<molla::kernels::PreparedTireVehicleFemStep>,
+    prepared_readback: Option<molla::kernels::PreparedTireVehicleFemReadback>,
     vehicle_kernel: Option<molla::kernels::TireVehicleYawGpuKernel>,
     brush_kernel: Option<molla::kernels::TireBrushGpuKernel>,
     last_brush_wheels: usize,
@@ -1175,36 +1181,70 @@ struct TireDynamicsResidentVehicleTelemetry {
 }
 
 fn tire_dynamics_resident_vehicle_telemetry(
-    vehicle_kernel: &molla::kernels::TireVehicleYawGpuKernel,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    owner: &molla::kernels::TireResidentVehicleFemAtlasOwner,
-) -> Result<TireDynamicsResidentVehicleTelemetry, String> {
-    let planar = vehicle_kernel
-        .readback_planar_resident_state(device, queue, &owner.vehicle.planar)
-        .map_err(|err| err.to_string())?;
-    let vertical = vehicle_kernel
-        .readback_vertical_resident_state(device, queue, &owner.vehicle.vertical)
-        .map_err(|err| err.to_string())?;
-    let spin = vehicle_kernel
-        .readback_wheel_spin_resident(device, queue, &owner.vehicle.brush.spin)
-        .map_err(|err| err.to_string())?;
-    let suspension = vehicle_kernel
-        .readback_suspension_resident(device, queue, &owner.vehicle.brush.suspension)
-        .map_err(|err| err.to_string())?;
-    Ok(TireDynamicsResidentVehicleTelemetry {
-        valid: planar.finite && vertical.finite && spin.finite && suspension.finite,
-        x_m: planar.position_xz[0],
-        z_m: planar.position_xz[1],
-        y_m: vertical.y,
-        yaw_rad: planar.yaw,
-        vx_m_s: planar.velocity_xz[0],
-        vz_m_s: planar.velocity_xz[1],
-        vy_m_s: vertical.vy,
-        yaw_rate_rad_s: planar.yaw_rate,
-        wheel_spin_finite: spin.finite,
-        suspension_finite: suspension.finite,
-    })
+    frame: &molla::kernels::TireVehicleFemFrame,
+) -> TireDynamicsResidentVehicleTelemetry {
+    let planar = frame.planar_rows();
+    let vertical = frame.vertical_row();
+    let spin_finite = frame.spin_rows().iter().all(|r| r[3] > 0.5);
+    let suspension_finite = frame.suspension_rows().iter().all(|r| r[3] > 0.5);
+    TireDynamicsResidentVehicleTelemetry {
+        valid: planar[1][3] > 0.5 && vertical[3] > 0.5 && spin_finite && suspension_finite,
+        x_m: planar[0][0],
+        z_m: planar[0][1],
+        y_m: vertical[0],
+        yaw_rad: planar[1][0],
+        vx_m_s: planar[0][2],
+        vz_m_s: planar[0][3],
+        vy_m_s: vertical[1],
+        yaw_rate_rad_s: planar[1][1],
+        wheel_spin_finite: spin_finite,
+        suspension_finite,
+    }
+}
+
+fn tire_dynamics_validate_frame(
+    tires: &[molla_vehicle::TetraTireFem],
+    frame: &molla::kernels::TireVehicleFemFrame,
+) -> Result<(), &'static str> {
+    if !tire_dynamics_resident_vehicle_telemetry(frame).valid
+        || frame.hub_rows().len() != 2 * tires.len()
+        || frame.spin_rows().len() != tires.len()
+        || frame.suspension_rows().len() != tires.len()
+    {
+        return Err("invalid resident vehicle frame");
+    }
+    for rows in [
+        frame.hub_rows(),
+        frame.planar_rows(),
+        frame.spin_rows(),
+        frame.suspension_rows(),
+        std::slice::from_ref(&frame.vertical_row()),
+    ] {
+        if !rows.iter().flatten().all(|v| v.is_finite()) {
+            return Err("nonfinite resident vehicle frame");
+        }
+    }
+    for (i, tire) in tires.iter().enumerate() {
+        let nodes = tire.cavity_surface().node_count;
+        for rows in [frame.positions(i), frame.velocities(i)] {
+            if !rows.is_some_and(|rows| {
+                rows.len() == nodes && rows.iter().flatten().all(|v| v.is_finite())
+            }) {
+                return Err("invalid resident tire frame");
+            }
+        }
+    }
+    if frame.positions(tires.len()).is_some() {
+        return Err("resident tire frame count mismatch");
+    }
+    Ok(())
+}
+
+impl TireDynamicsState {
+    fn clear_prepared(&mut self) {
+        self.prepared_chassis = None;
+        self.prepared_readback = None;
+    }
 }
 
 impl Default for TireDynamicsState {
@@ -1212,12 +1252,16 @@ impl Default for TireDynamicsState {
         Self {
             tires: Vec::new(),
             use_gpu: true,
+            compare_cpu: false,
+            resident_cavity: false,
             kernel: None,
             persistent_meshes: Vec::new(),
             use_resident_atlas: true,
             resident_atlas: None,
             use_resident_vehicle_owner: true,
             resident_vehicle_fem: None,
+            prepared_chassis: None,
+            prepared_readback: None,
             vehicle_kernel: None,
             brush_kernel: None,
             last_brush_wheels: 0,
@@ -1245,6 +1289,16 @@ impl Default for TireDynamicsState {
     }
 }
 
+fn tire_dynamics_cpu_reference(
+    state: &TireDynamicsState,
+    tire_idx: usize,
+) -> Option<molla_vehicle::TetraTireFem> {
+    if !state.use_gpu || !state.compare_cpu || tire_idx != 4 {
+        return None;
+    }
+    state.tires.get(tire_idx).cloned()
+}
+
 fn update_tire_dynamics_example(
     time: Res<Time>,
     sim: Res<Sim>,
@@ -1270,6 +1324,7 @@ fn update_tire_dynamics_example(
         state.resident_atlas = None;
         state.resident_vehicle_fem = None;
         state.elapsed = 0.0;
+        state.clear_prepared();
     }
     if run.paused {
         return;
@@ -1315,7 +1370,7 @@ fn update_tire_dynamics_example(
             state.persistent_meshes = (0..state.tires.len()).map(|_| None).collect();
         }
         if state.use_resident_atlas && state.use_resident_vehicle_owner {
-            let cpu_reference = state.tires.get(4).cloned();
+            let cpu_reference = tire_dynamics_cpu_reference(&state, 4);
             if state.vehicle_kernel.is_none() {
                 state.vehicle_kernel = Some(molla::kernels::TireVehicleYawGpuKernel::new(device));
             }
@@ -1328,6 +1383,7 @@ fn update_tire_dynamics_example(
                 .map(|owner| owner.tire_count() != state.tires.len())
                 .unwrap_or(true);
             if needs_rebuild {
+                state.clear_prepared();
                 let inputs = state
                     .tires
                     .iter()
@@ -1371,7 +1427,13 @@ fn update_tire_dynamics_example(
                 let params = state
                     .tires
                     .iter()
-                    .map(|tire| tire_fem_gpu_params(tire, gpu_dt))
+                    .map(|tire| {
+                        if state.resident_cavity {
+                            tire_fem_gpu_params_with_load(tire, gpu_dt, 0.)
+                        } else {
+                            tire_fem_gpu_params(tire, gpu_dt)
+                        }
+                    })
                     .collect::<Vec<_>>();
                 let hub_params = state
                     .tires
@@ -1379,6 +1441,8 @@ fn update_tire_dynamics_example(
                     .map(|tire| tire_fem_hub_params(tire, gpu_dt))
                     .collect::<Vec<_>>();
                 if let Some(mut owner) = state.resident_vehicle_fem.take() {
+                    let mut prepared_chassis = state.prepared_chassis.take();
+                    let mut prepared_readback = state.prepared_readback.take();
                     let pressures = state.pressures_pa;
                     for (i, pressure) in pressures.iter().copied().enumerate() {
                         if let Some(row) = owner.vehicle.brush.brush_input.wheel_controls.get_mut(i)
@@ -1390,19 +1454,85 @@ fn update_tire_dynamics_example(
                         (state.vehicle_kernel.as_ref(), state.brush_kernel.as_ref())
                     {
                         let mut last_brush_wheels = 0;
-                        for _ in 0..gpu_substeps {
-                            match kernel.step_resident_vehicle_fem_atlas_owner(
-                                vehicle_kernel,
-                                brush_kernel,
-                                device,
-                                queue,
-                                &mut owner,
+                        let prepare_result = (|| -> molla::core::Result<()> {
+                            if prepared_chassis.is_none() {
+                                prepared_readback = None;
+                                prepared_chassis =
+                                    Some(molla::kernels::PreparedTireVehicleFemStep::new(
+                                        &sim.engine,
+                                        &kernel,
+                                        vehicle_kernel,
+                                        brush_kernel,
+                                        &owner,
+                                        None,
+                                        gpu_dt as f32,
+                                        &params,
+                                        &hub_params,
+                                        TIRE_DYNAMICS_BRUSH_FORCE_SCALE,
+                                        64 * 1024,
+                                    )?);
+                                if state.resident_cavity {
+                                    let surfaces = state
+                                        .tires
+                                        .iter()
+                                        .map(|t| t.cavity_surface())
+                                        .collect::<Vec<_>>();
+                                    prepared_chassis.as_mut().unwrap().prepare_cavities(
+                                        &sim.engine,
+                                        &owner,
+                                        &surfaces,
+                                        1024 * 1024,
+                                    )?;
+                                }
+                            }
+                            prepared_chassis.as_mut().unwrap().update_configuration(
+                                &sim.engine,
+                                &owner,
                                 &params,
-                                gpu_dt as f32,
-                                None,
                                 &hub_params,
                                 TIRE_DYNAMICS_BRUSH_FORCE_SCALE,
+                            )?;
+                            if prepared_readback.is_none() {
+                                prepared_readback =
+                                    Some(molla::kernels::PreparedTireVehicleFemReadback::new(
+                                        &sim.engine,
+                                        prepared_chassis.as_ref().unwrap(),
+                                        &owner,
+                                        1024 * 1024,
+                                    )?);
+                            }
+                            Ok(())
+                        })();
+                        if let Err(err) = prepare_result {
+                            gpu_ok = false;
+                            gpu_error = Some(err.to_string());
+                        }
+                        if gpu_ok && state.resident_cavity {
+                            match prepared_chassis.as_mut().unwrap().step_cavity_frame(
+                                &sim.engine,
+                                &mut owner,
+                                gpu_substeps,
                             ) {
+                                Ok(brush) => last_brush_wheels = brush.wheel_count,
+                                Err(err) => {
+                                    gpu_ok = false;
+                                    gpu_error = Some(err.to_string());
+                                }
+                            }
+                        }
+                        for _ in 0..if state.resident_cavity {
+                            0
+                        } else {
+                            gpu_substeps
+                        } {
+                            if !gpu_ok {
+                                break;
+                            }
+                            match prepared_chassis
+                                .as_ref()
+                                .unwrap()
+                                .step(&sim.engine, &mut owner)
+                            {
                                 Ok(brush) => {
                                     last_brush_wheels = brush.wheel_count;
                                 }
@@ -1414,42 +1544,20 @@ fn update_tire_dynamics_example(
                             }
                         }
                         if gpu_ok {
-                            let outputs = match kernel.readback_resident_atlas_batch(
-                                device,
-                                queue,
-                                owner.fem(),
+                            match prepared_readback.as_mut().unwrap().read_blocking(
+                                &sim.engine,
+                                prepared_chassis.as_ref().unwrap(),
+                                &owner,
                             ) {
-                                Ok(outputs) => outputs,
-                                Err(err) => {
-                                    gpu_ok = false;
-                                    gpu_error = Some(err.to_string());
-                                    Vec::new()
-                                }
-                            };
-                            let hub_rows = if gpu_ok {
-                                match kernel.readback_resident_atlas_hub_rows(
-                                    device,
-                                    queue,
-                                    owner.fem(),
-                                ) {
-                                    Ok(rows) => rows,
-                                    Err(err) => {
+                                Ok(frame) => {
+                                    if let Err(err) =
+                                        tire_dynamics_validate_frame(&state.tires, frame)
+                                    {
                                         gpu_ok = false;
-                                        gpu_error = Some(err.to_string());
-                                        Vec::new()
-                                    }
-                                }
-                            } else {
-                                Vec::new()
-                            };
-                            if gpu_ok {
-                                match tire_dynamics_resident_vehicle_telemetry(
-                                    vehicle_kernel,
-                                    device,
-                                    queue,
-                                    &owner,
-                                ) {
-                                    Ok(telemetry) => {
+                                        gpu_error = Some(err.to_owned());
+                                    } else {
+                                        let telemetry =
+                                            tire_dynamics_resident_vehicle_telemetry(frame);
                                         state.last_resident_vehicle_valid = telemetry.valid;
                                         state.last_resident_vehicle_x_m = telemetry.x_m;
                                         state.last_resident_vehicle_z_m = telemetry.z_m;
@@ -1464,32 +1572,37 @@ fn update_tire_dynamics_example(
                                             telemetry.wheel_spin_finite;
                                         state.last_resident_suspension_finite =
                                             telemetry.suspension_finite;
-                                    }
-                                    Err(err) => {
-                                        gpu_ok = false;
-                                        gpu_error = Some(err);
+                                        for tire_idx in 0..state.tires.len() {
+                                            let hub_after = resident_atlas_hub_state(
+                                                frame.hub_rows(),
+                                                tire_idx,
+                                            );
+                                            if let Err(err) = state.tires[tire_idx]
+                                                .apply_gpu_node_state(
+                                                    frame.positions(tire_idx).unwrap(),
+                                                    frame.velocities(tire_idx).unwrap(),
+                                                    hub_after,
+                                                )
+                                            {
+                                                gpu_ok = false;
+                                                gpu_error = Some(err.to_string());
+                                                break;
+                                            }
+                                        }
+                                        if let Some(mut cpu_reference) = cpu_reference {
+                                            cpu_reference.step(dt);
+                                            if let Some(animated) = state.tires.get(4) {
+                                                gpu_delta = Some(tire_fem_cpu_gpu_delta(
+                                                    animated,
+                                                    &cpu_reference,
+                                                ));
+                                            }
+                                        }
                                     }
                                 }
-                            }
-                            if gpu_ok {
-                                for (tire_idx, out) in outputs.iter().enumerate() {
-                                    let hub_after = resident_atlas_hub_state(&hub_rows, tire_idx);
-                                    if let Err(err) = state.tires[tire_idx].apply_gpu_node_state(
-                                        &out.positions,
-                                        &out.velocities,
-                                        hub_after,
-                                    ) {
-                                        gpu_ok = false;
-                                        gpu_error = Some(err.to_string());
-                                        break;
-                                    }
-                                }
-                                if let Some(mut cpu_reference) = cpu_reference {
-                                    cpu_reference.step(dt);
-                                    if let Some(animated) = state.tires.get(4) {
-                                        gpu_delta =
-                                            Some(tire_fem_cpu_gpu_delta(animated, &cpu_reference));
-                                    }
+                                Err(err) => {
+                                    gpu_ok = false;
+                                    gpu_error = Some(err.to_string());
                                 }
                             }
                         }
@@ -1498,6 +1611,8 @@ fn update_tire_dynamics_example(
                         gpu_ok = false;
                         gpu_error = Some("resident vehicle/brush kernels unavailable".to_owned());
                     }
+                    state.prepared_chassis = if gpu_ok { prepared_chassis } else { None };
+                    state.prepared_readback = if gpu_ok { prepared_readback } else { None };
                     state.resident_vehicle_fem = Some(owner);
                 } else {
                     gpu_ok = false;
@@ -1505,8 +1620,9 @@ fn update_tire_dynamics_example(
                 }
             }
         } else if state.use_resident_atlas {
-            let cpu_reference = state.tires.get(4).cloned();
+            let cpu_reference = tire_dynamics_cpu_reference(&state, 4);
             state.resident_vehicle_fem = None;
+            state.clear_prepared();
             let needs_rebuild = state
                 .resident_atlas
                 .as_ref()
@@ -1560,15 +1676,15 @@ fn update_tire_dynamics_example(
                         }
                     }
                     if gpu_ok {
-                        let outputs = match kernel.readback_resident_atlas_batch(device, queue, batch)
-                        {
-                            Ok(outputs) => outputs,
-                            Err(err) => {
-                                gpu_ok = false;
-                                gpu_error = Some(err.to_string());
-                                Vec::new()
-                            }
-                        };
+                        let outputs =
+                            match kernel.readback_resident_atlas_batch(device, queue, batch) {
+                                Ok(outputs) => outputs,
+                                Err(err) => {
+                                    gpu_ok = false;
+                                    gpu_error = Some(err.to_string());
+                                    Vec::new()
+                                }
+                            };
                         let hub_rows = if gpu_ok {
                             match kernel.readback_resident_atlas_hub_rows(device, queue, batch) {
                                 Ok(rows) => rows,
@@ -1609,11 +1725,7 @@ fn update_tire_dynamics_example(
             // Index-based loop so we can borrow `tires[i]` and
             // `persistent_meshes[i]` separately each iteration.
             for tire_idx in 0..state.tires.len() {
-                let cpu_reference = if tire_idx == 4 {
-                    Some(state.tires[tire_idx].clone())
-                } else {
-                    None
-                };
+                let cpu_reference = tire_dynamics_cpu_reference(&state, tire_idx);
                 // Stage (g) — build the persistent buffers once per tire.
                 if state.persistent_meshes[tire_idx].is_none() {
                     let tire = &state.tires[tire_idx];
@@ -1709,6 +1821,8 @@ fn update_tire_dynamics_example(
             state.resident_atlas = None;
             state.resident_vehicle_fem = None;
             state.last_brush_wheels = 0;
+            state.last_resident_vehicle_valid = false;
+            state.clear_prepared();
             for tire in state.tires.iter_mut() {
                 tire.step(dt);
             }
@@ -1792,8 +1906,15 @@ fn tire_fem_gpu_params(
     tire: &molla_vehicle::TetraTireFem,
     gpu_dt: f64,
 ) -> molla::kernels::TireFemGpuParams {
-    let snap_cavity = tire.gpu_snapshot().cavity_radial_force_per_bead;
-    let _belt_proxy = tire.belt_proxy_mu() as f32;
+    let snap_cavity = tire.cavity_radial_force_per_bead_n() as f32;
+    tire_fem_gpu_params_with_load(tire, gpu_dt, snap_cavity)
+}
+
+fn tire_fem_gpu_params_with_load(
+    tire: &molla_vehicle::TetraTireFem,
+    gpu_dt: f64,
+    cavity_load: f32,
+) -> molla::kernels::TireFemGpuParams {
     let hub = tire.hub();
     molla::kernels::TireFemGpuParams {
         dt: gpu_dt as f32,
@@ -1807,7 +1928,7 @@ fn tire_fem_gpu_params(
         pressure_area_per_tread_node: 0.0,
         hub: [hub[0] as f32, hub[1] as f32, hub[2] as f32],
         gravity_y: -9.81,
-        cavity_radial_force_per_bead: snap_cavity,
+        cavity_radial_force_per_bead: cavity_load,
         belt_proxy_mu: 0.0, // Stage (c) — Holzapfel belt covers it.
         xpbd_volume_compliance: 5.0e-10,
         xpbd_bead_compliance: 5.0e-5,
@@ -1874,7 +1995,10 @@ fn tire_dynamics_suspension_input(
                 ]
             })
             .collect(),
-        suspension_params: tires.iter().map(|_| [30_000.0, 2_000.0, 0.0, 0.0]).collect(),
+        suspension_params: tires
+            .iter()
+            .map(|_| [30_000.0, 2_000.0, 0.0, 0.0])
+            .collect(),
         chassis_y: TIRE_DYNAMICS_VEHICLE_CHASSIS_Y,
         chassis_vy: 0.0,
     }
@@ -1952,10 +2076,7 @@ fn tire_dynamics_vertical_input(gpu_dt: f64) -> molla::kernels::TireVehicleVerti
 
 fn resident_atlas_hub_state(hub_rows: &[[f32; 4]], tire_idx: usize) -> [f32; 8] {
     let hub = hub_rows.get(tire_idx * 2).copied().unwrap_or([0.0; 4]);
-    let vel = hub_rows
-        .get(tire_idx * 2 + 1)
-        .copied()
-        .unwrap_or([0.0; 4]);
+    let vel = hub_rows.get(tire_idx * 2 + 1).copied().unwrap_or([0.0; 4]);
     [
         hub[0], hub[1], hub[2], hub[3], vel[0], vel[1], vel[2], vel[3],
     ]
@@ -1985,11 +2106,7 @@ fn tire_fem_cpu_gpu_delta(
     )
 }
 
-fn draw_tire_dynamics_gizmos(
-    sim: Res<Sim>,
-    state: Res<TireDynamicsState>,
-    mut gizmos: Gizmos,
-) {
+fn draw_tire_dynamics_gizmos(sim: Res<Sim>, state: Res<TireDynamicsState>, mut gizmos: Gizmos) {
     if sim.scene != Scene::TireDynamics {
         return;
     }
@@ -2064,11 +2181,7 @@ fn draw_tire_dynamics_gizmos(
     let tick_color = Color::srgb(0.4, 0.4, 0.45);
     for &kpa in &[100.0_f32, 200.0, 300.0] {
         let y = 1.5 + (kpa / 400.0).clamp(0.0, 1.5);
-        gizmos.line(
-            Vec3::new(-3.0, y, 0.0),
-            Vec3::new(4.0, y, 0.0),
-            tick_color,
-        );
+        gizmos.line(Vec3::new(-3.0, y, 0.0), Vec3::new(4.0, y, 0.0), tick_color);
     }
 }
 
@@ -2080,11 +2193,18 @@ fn tire_dynamics_pane(ui: &mut egui::Ui, state: &mut TireDynamicsState) {
         state.last_gpu_error = None;
         state.resident_atlas = None;
         state.resident_vehicle_fem = None;
+        state.clear_prepared();
         for slot in state.persistent_meshes.iter_mut() {
             *slot = None;
         }
     }
     if state.use_gpu {
+        if ui
+            .checkbox(&mut state.compare_cpu, "Compare CPU reference (extra work)")
+            .changed()
+        {
+            state.last_gpu_delta_valid = false;
+        }
         let was_resident = state.use_resident_atlas;
         let _ = ui.checkbox(
             &mut state.use_resident_atlas,
@@ -2094,6 +2214,7 @@ fn tire_dynamics_pane(ui: &mut egui::Ui, state: &mut TireDynamicsState) {
             state.last_gpu_error = None;
             state.resident_atlas = None;
             state.resident_vehicle_fem = None;
+            state.clear_prepared();
             for slot in state.persistent_meshes.iter_mut() {
                 *slot = None;
             }
@@ -2108,8 +2229,25 @@ fn tire_dynamics_pane(ui: &mut egui::Ui, state: &mut TireDynamicsState) {
                 state.last_gpu_error = None;
                 state.resident_atlas = None;
                 state.resident_vehicle_fem = None;
+                state.clear_prepared();
                 for slot in state.persistent_meshes.iter_mut() {
                     *slot = None;
+                }
+            }
+            if state.use_resident_vehicle_owner {
+                if ui
+                    .checkbox(
+                        &mut state.resident_cavity,
+                        "Resident cavity loads (experimental)",
+                    )
+                    .changed()
+                {
+                    state.resident_vehicle_fem = None;
+                    state.clear_prepared();
+                    state.last_gpu_error = None;
+                }
+                if state.resident_cavity {
+                    ui.small("Experimental: trajectory parity gate failed. Blocking display readback remains.");
                 }
             }
         }
@@ -2182,7 +2320,11 @@ fn tire_dynamics_pane(ui: &mut egui::Ui, state: &mut TireDynamicsState) {
         let d = tire.diagnostics();
         ui.separator();
         ui.label("Animated tire FEM diagnostics");
-        readout(ui, "Pressure", &format!("{:.0} kPa", d.pressure_pa / 1000.0));
+        readout(
+            ui,
+            "Pressure",
+            &format!("{:.0} kPa", d.pressure_pa / 1000.0),
+        );
         readout(
             ui,
             "Cavity V",
@@ -2220,7 +2362,9 @@ fn tire_dynamics_pane(ui: &mut egui::Ui, state: &mut TireDynamicsState) {
         );
         ui.small("Yellow=pressure, cyan=cavity volume ratio, magenta=XPBD correction/residual.");
     }
-    if state.last_gpu_delta_valid {
+    if !state.compare_cpu {
+        readout(ui, "CPU comparison", "disabled (opt-in)");
+    } else if state.last_gpu_delta_valid {
         readout(
             ui,
             "GPU Δ node",

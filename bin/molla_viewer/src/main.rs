@@ -834,6 +834,18 @@ const TIRE_DYNAMICS_CONTROLS: &[TireViewerControlMetadata] = &[
         kind: TireViewerControlKind::VisualizationOnly,
         note: "Shows mesh, pressure, cavity, XPBD, and CPU/GPU delta readouts.",
     },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_dynamics.compare_cpu",
+        name: "Compare CPU reference (extra work)",
+        kind: TireViewerControlKind::DebugToggle,
+        note: "Opt-in animated-tire CPU clone and reference step; disabled by default.",
+    },
+    TireViewerControlMetadata {
+        telemetry_key: "tire_dynamics.resident_cavity",
+        name: "Resident cavity loads (experimental)",
+        kind: TireViewerControlKind::DebugToggle,
+        note: "Once-per-frame GPU cavity loads with admission checks; blocking display readback remains and the real-tire trajectory parity gate failed.",
+    },
 ];
 
 const TIRE_TRACTION_CONTROLS: &[TireViewerControlMetadata] = &[
@@ -8246,6 +8258,9 @@ include!("examples/102_phase_field_fracture.rs");
 include!("examples/115_mpm_beam_twist.rs");
 
 #[cfg(test)]
+mod tire_dynamics_gpu_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
@@ -9960,20 +9975,87 @@ mod tests {
                 && source.contains("TireVehicleYawGpuKernel")
                 && source.contains("TireBrushGpuKernel")
                 && source.contains("create_resident_vehicle_fem_atlas_owner")
-                && source.contains("step_resident_vehicle_fem_atlas_owner")
+                && source.contains(".step(&sim.engine, &mut owner)")
+                && source.contains("PreparedTireVehicleFemStep")
+                && source.contains("update_configuration")
+                && source.contains("state.clear_prepared()")
                 && source.contains("create_resident_atlas_batch")
                 && source.contains("step_resident_atlas_batch")
                 && source.contains("step_resident_atlas_hubs")
                 && source.contains("Use resident GPU atlas batch")
                 && source.contains("Use resident vehicle+FEM owner")
-                && source.contains("readback_planar_resident_state")
-                && source.contains("readback_vertical_resident_state")
-                && source.contains("readback_wheel_spin_resident")
-                && source.contains("readback_suspension_resident")
+                && source.contains("PreparedTireVehicleFemReadback")
+                && source.contains("frame.planar_rows()")
+                && source.contains("frame.vertical_row()")
+                && source.contains("frame.spin_rows()")
+                && source.contains("frame.suspension_rows()")
                 && source.contains("Resident chassis state")
                 && source.contains("Resident y/spin/susp"),
             "scene 120 should default to combined resident vehicle+FEM ownership while keeping atlas/persistent fallback toggles"
         );
+    }
+
+    #[test]
+    fn tire_dynamics_cpu_comparison_is_opt_in() {
+        let mut state = TireDynamicsState::default();
+        assert!(!state.compare_cpu);
+        let tire = molla_vehicle::TetraTireFem::new(0., 80_000., tire_carcass_params(80_000.));
+        state.tires = vec![tire; 5];
+        for idx in 0..5 {
+            assert!(tire_dynamics_cpu_reference(&state, idx).is_none());
+        }
+        state.compare_cpu = true;
+        assert!(tire_dynamics_cpu_reference(&state, 0).is_none());
+        let mut reference = tire_dynamics_cpu_reference(&state, 4).unwrap();
+        reference.set_pressure(200_000.);
+        assert_eq!(state.tires[4].pressure(), 80_000.);
+        assert_eq!(reference.pressure(), 200_000.);
+        state.use_gpu = false;
+        assert!(tire_dynamics_cpu_reference(&state, 4).is_none());
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert_eq!(
+            source
+                .matches("let cpu_reference = tire_dynamics_cpu_reference")
+                .count(),
+            3
+        );
+        let params = source
+            .split("fn tire_fem_gpu_params(")
+            .nth(1)
+            .unwrap()
+            .split("fn tire_fem_hub_params(")
+            .next()
+            .unwrap();
+        assert!(!params.contains("gpu_snapshot"));
+        assert!(params.contains("tire.cavity_radial_force_per_bead_n() as f32"));
+    }
+
+    #[test]
+    fn tire_dynamics_resident_cavity_is_opt_in() {
+        assert!(!TireDynamicsState::default().resident_cavity);
+        assert!(
+            tire_viewer_control_metadata(Scene::TireDynamics)
+                .iter()
+                .any(|c| {
+                    c.name == "Resident cavity loads (experimental)"
+                        && c.kind == TireViewerControlKind::DebugToggle
+                })
+        );
+        let tire = molla_vehicle::TetraTireFem::new(0., 80_000., tire_carcass_params(80_000.));
+        let held = tire_fem_gpu_params(&tire, 1. / 2880.);
+        let resident = tire_fem_gpu_params_with_load(&tire, 1. / 2880., 0.);
+        assert_eq!(resident.cavity_radial_force_per_bead, 0.);
+        assert_eq!(
+            held.cavity_radial_force_per_bead,
+            tire.cavity_radial_force_per_bead_n() as f32
+        );
+        assert_eq!(held.pressure_pa, resident.pressure_pa);
+        assert_eq!(held.dt, resident.dt);
+        assert_eq!(held.hub, resident.hub);
+        let source = include_str!("examples/120_tire_dynamics.rs");
+        assert!(source.contains(".prepare_cavities("));
+        assert!(source.contains(".step_cavity_frame("));
+        assert!(source.contains("tire_dynamics_validate_frame(&state.tires, frame)"));
     }
 
     #[test]

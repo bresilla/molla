@@ -1,5 +1,6 @@
 [package]
 name = "molla_viewer"
+default-run = "molla_viewer"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
@@ -25,11 +26,19 @@ profile = ["bevy/trace_tracy"]
 # Print every diagnostic to stdout each second. No Tracy, no memory
 # growth — just text-mode perf data on stderr.
 log_diag = []
+soil-live = ["dep:molla-solvers", "molla-solvers/volatile-newton"]
+soil-live-soa = ["soil-live", "molla-solvers/soa-scratch-newton"]
+soil-live-row-preparation = ["soil-live", "molla-solvers/row-parallel-newton-preparation"]
+soil-live-batched-projection = ["soil-live", "molla-solvers/batched-soil-projection"]
+soil-live-deferred-drift = ["soil-live", "molla-solvers/deferred-native-drift"]
+soil-live-native-lazy-drift = ["soil-live", "molla-solvers/native-lazy-geometry-drift"]
 
 [dependencies]
 # Physics kernels use wgpu 29 independently of the Bevy renderer.
 molla = { path = "../../crates/molla" }
 molla-vehicle = { path = "../../crates/molla-vehicle" }
+molla-solvers = { path = "../../crates/molla-solvers", optional = true, features = ["gpu"] }
+serde_json = "1.0"
 pollster = "0.4"
 wgpu = { version = "29", default-features = false, features = [
     "wgsl",
@@ -100,3 +109,12 @@ bevy_glacial = { git = "https://github.com/bresilla/bevy_glacial", branch = "mai
 [[bin]]
 name = "molla_viewer"
 path = "src/main.rs"
+
+[[bin]]
+name = "soil_tractor_viewer"
+path = "src/bin/soil_tractor_viewer.rs"
+required-features = ["soil-live"]
+
+[dev-dependencies]
+serde_json = "1.0"
+blake3 = "1.8"

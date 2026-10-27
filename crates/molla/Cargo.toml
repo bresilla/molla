@@ -12,6 +12,9 @@ workspace = true
 
 [features]
 default = ["gpu"]
+batched-soil-projection = ["gpu", "molla-solvers/batched-soil-projection"]
+ordered-sticking-nodes = ["gpu", "molla-solvers/ordered-sticking-nodes"]
+row-parallel-newton-preparation = ["gpu", "molla-solvers/row-parallel-newton-preparation"]
 # Enable the wgpu GPU backend. The CPU paths and math/storage layers compile
 # without it, which is useful for pure-CPU CI runners and for users that only
 # want the data model.

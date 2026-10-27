@@ -37,6 +37,38 @@ const TB_TIRE_RADIUS: f64 = 0.32;
 const TB_INNER_RADIUS: f64 = 0.12;
 const TB_TIRE_WIDTH: f64 = 0.185;
 const TB_SEGMENTS: usize = 24;
+const TB_FEM_FEEDBACK_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+fn tb_fem_terrain_feedback(
+    prepared: &mut Option<molla::kernels::PreparedTireFemTerrainFeedback>,
+    retained: bool,
+    engine: &molla::compute::Engine,
+    kernel: &molla::kernels::TireFemContactFeedbackKernel,
+    input: &molla::kernels::TireFemContactFeedbackInput,
+    terrain: &molla::kernels::TireFemContactFeedbackGpuTerrain<'_>,
+) -> molla::core::Result<molla::kernels::TireFemContactFeedbackOutput> {
+    if !retained {
+        *prepared = None;
+        engine.check_device()?;
+        let device = engine.device().ok_or_else(|| molla::core::Error::Gpu("GPU device required".into()))?;
+        let queue = engine.queue().ok_or_else(|| molla::core::Error::Gpu("GPU queue required".into()))?;
+        let output = kernel.dispatch_resident_with_gpu_terrain(device, queue, input, terrain)?;
+        return kernel.readback_resident_feedback_output(device, queue, &output);
+    }
+    if prepared.as_ref().is_none_or(|p| {
+        !p.matches(engine, kernel, input.positions.len(), input.tread_ids.len(), terrain)
+    }) {
+        *prepared = Some(molla::kernels::PreparedTireFemTerrainFeedback::new(
+            engine,
+            kernel,
+            input.positions.len(),
+            input.tread_ids.len(),
+            terrain,
+            TB_FEM_FEEDBACK_MAX_BYTES,
+        )?);
+    }
+    prepared.as_mut().unwrap().run_blocking(input, terrain)
+}
 // Defaults tuned so the FEM tire shows a *visible* deflection out of
 // the gate. ~5 kN load on a 150-kPa tire gives roughly 25–35 mm hub
 // drop on the default mesh resolution.
@@ -171,11 +203,10 @@ fn tb_vehicle_heightfield_from_bekker(
 }
 
 fn tb_vehicle_heightfield_from_mpm(
-    owner: &molla::kernels::TireMpmFemTerrainOwner,
+    terrain: &molla::kernels::TireFemContactTerrain,
     friction: f64,
     water_film_m: f64,
 ) -> molla_vehicle::HeightfieldTerrain {
-    let terrain = owner.fem_contact_terrain();
     let heights = terrain.heights.iter().map(|&h| h as f64).collect::<Vec<_>>();
     let mut heightfield = molla_vehicle::HeightfieldTerrain::new(
         [terrain.origin[0] as f64, terrain.origin[1] as f64],
@@ -573,6 +604,8 @@ struct TireRealisticState {
     sweep_phase: f32,
     reset_requested: bool,
     replay_panel: TireRigReplayPanelState,
+    compare_soil_backends: bool,
+    soil_summary_diagnostics: bool,
     enable_bekker_terrain: bool,
     use_gpu_bekker: bool,
     bekker_owner: Option<molla::kernels::TireBekkerFemTerrainOwner>,
@@ -587,7 +620,13 @@ struct TireRealisticState {
     use_gpu_mpm: bool,
     mpm_sim: Option<molla::compute::MpmSimulation>,
     mpm_kernel: Option<molla::kernels::TireMpmGpuKernel>,
-    mpm_owner: Option<molla::kernels::TireMpmFemTerrainOwner>,
+    mpm_terrain_mirror: Option<molla::kernels::TireFemContactTerrain>,
+    mpm_terrain_readback: Option<molla::kernels::PreparedTireMpmTerrainReadback>,
+    mpm_compaction_readback: Option<molla::kernels::PreparedTireMpmCompactionReadback>,
+    mpm_terrain_revision: u64,
+    last_mpm_observation: Option<(u64, u64)>,
+    last_mpm_observation_error: Option<String>,
+    mpm_observation_backpressure: u64,
     mpm_height_buf: Option<wgpu::Buffer>,
     mpm_sinkage_buf: Option<wgpu::Buffer>,
     mpm_surface_velocity_buf: Option<wgpu::Buffer>,
@@ -616,6 +655,8 @@ struct TireRealisticState {
     last_transient_backend: &'static str,
     last_transient_error: Option<String>,
     fem_feedback_kernel: Option<molla::kernels::TireFemContactFeedbackKernel>,
+    fem_feedback_prepared: Option<molla::kernels::PreparedTireFemTerrainFeedback>,
+    retain_fem_feedback_buffers: bool,
     fem_feedback_bristles: Vec<[f32; 4]>,
     last_fem_feedback_backend: &'static str,
     last_fem_feedback_error: Option<String>,
@@ -675,7 +716,9 @@ impl Default for TireRealisticState {
             sweep_phase: 0.0,
             reset_requested: false,
             replay_panel: Default::default(),
-            enable_bekker_terrain: true,
+            compare_soil_backends: false,
+            soil_summary_diagnostics: false,
+            enable_bekker_terrain: false,
             use_gpu_bekker: true,
             bekker_owner: None,
             bekker_kernel: None,
@@ -689,7 +732,13 @@ impl Default for TireRealisticState {
             use_gpu_mpm: true,
             mpm_sim: None,
             mpm_kernel: None,
-            mpm_owner: None,
+            mpm_terrain_mirror: None,
+            mpm_terrain_readback: None,
+            mpm_compaction_readback: None,
+            mpm_terrain_revision: 0,
+            last_mpm_observation: None,
+            last_mpm_observation_error: None,
+            mpm_observation_backpressure: 0,
             mpm_height_buf: None,
             mpm_sinkage_buf: None,
             mpm_surface_velocity_buf: None,
@@ -718,6 +767,8 @@ impl Default for TireRealisticState {
             last_transient_backend: "not started",
             last_transient_error: None,
             fem_feedback_kernel: None,
+            fem_feedback_prepared: None,
+            retain_fem_feedback_buffers: false,
             fem_feedback_bristles: Vec::new(),
             last_fem_feedback_backend: "not started",
             last_fem_feedback_error: None,
@@ -733,6 +784,45 @@ impl Default for TireRealisticState {
             last_replay_thermal_backend: "not started",
             last_replay_thermal_count: 0,
             last_replay_thermal_error: None,
+        }
+    }
+}
+
+impl TireRealisticState {
+    fn clear_mpm_observations(&mut self) {
+        self.mpm_compaction_readback = None;
+        self.last_mpm_observation = None;
+        self.last_mpm_observation_error = None;
+        self.mpm_observation_backpressure = 0;
+    }
+
+    fn observe_mpm_compaction(&mut self, engine: &molla::compute::Engine, mpm: &molla::compute::MpmSimulation) {
+        self.mpm_terrain_revision = self.mpm_terrain_revision.saturating_add(1);
+        if !self.soil_summary_diagnostics {
+            self.clear_mpm_observations();
+            return;
+        }
+        let result = (|| -> molla::core::Result<_> {
+            if self.mpm_compaction_readback.as_ref().is_none_or(|r| r.particle_count() != mpm.particle_count()) {
+                self.clear_mpm_observations();
+                self.mpm_compaction_readback = Some(mpm.prepare_tire_compaction_readback(engine, 3)?);
+            }
+            let reader = self.mpm_compaction_readback.as_mut().expect("MPM observation ring");
+            let latest = reader.poll_latest()?.filter(|sample| reader.is_current(sample));
+            let _queued = reader.try_request(self.mpm_terrain_revision)?;
+            Ok((latest, reader.stats().backpressure))
+        })();
+        match result {
+            Ok((latest, backpressure)) => {
+                self.last_mpm_observation_error = None;
+                self.mpm_observation_backpressure = backpressure;
+                if let Some(sample) = latest {
+                    self.last_mpm_observation = Some((sample.generation(), sample.revision()));
+                    self.last_mpm_compaction_m = sample.summary().maximum;
+                    self.last_mpm_active_particles = sample.summary().active_particles as usize;
+                }
+            }
+            Err(error) => self.last_mpm_observation_error = Some(error.to_string()),
         }
     }
 }
@@ -758,6 +848,199 @@ fn tb_tire_params(pressure_pa: f32, vertical_load_n: f32) -> molla_vehicle::Tetr
     }
 }
 
+fn tb_exclusive_soil_backends(enabled: [bool; 3]) -> [bool; 3] {
+    [
+        enabled[0],
+        !enabled[0] && enabled[1],
+        !enabled[0] && !enabled[1] && enabled[2],
+    ]
+}
+
+fn tb_soil_summary(
+    enabled: bool,
+    values: impl Iterator<Item = f32>,
+    threshold: f32,
+) -> Option<(f32, usize, f32)> {
+    if !enabled {
+        return None;
+    }
+    let (mut maximum, mut active, mut sum, mut count) = (0.0_f32, 0, 0.0, 0);
+    for value in values {
+        maximum = maximum.max(value);
+        active += usize::from(value > threshold);
+        sum += value;
+        count += 1;
+    }
+    let mean = if active > 0 { sum / count as f32 } else { 0.0 };
+    Some((maximum, active, mean))
+}
+
+#[cfg(test)]
+mod tire_testbench_soil_selection_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a real GPU adapter"]
+    fn soil_retained_fem_bridge_uses_real_mesh_and_rebuilds() {
+        let engine = molla::compute::Engine::new_gpu().unwrap();
+        let device = engine.device().unwrap();
+        let queue = engine.queue().unwrap();
+        let mut kernel = molla::kernels::TireFemContactFeedbackKernel::new(device);
+        let params = tb_tire_params(TB_PRESSURE_DEFAULT, TB_VERTICAL_LOAD_DEFAULT);
+        let mut tire = molla_vehicle::TetraTireFem::new(0.0, params.pressure_pa, params);
+        let mut prepared = None;
+        let mut bristles = vec![];
+        for generation in 0..3 {
+            let maps = [36, 36, 144].map(|size| device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("viewer FEM bridge terrain fixture"),
+                size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            let terrain = molla::kernels::TireFemContactFeedbackGpuTerrain {
+                origin: [-1.0, -1.0], spacing: 1.0, nx: 3, nz: 3,
+                heights: &maps[0], friction: 0.7,
+                friction_map: None, water_film_map: None,
+                sinkage_map: Some(&maps[1]), surface_velocity_map: Some(&maps[2]),
+                soil_rolling_resistance_scale: 1.0, surface_velocity: [0.0; 3],
+            };
+            if generation == 1 {
+                kernel = molla::kernels::TireFemContactFeedbackKernel::new(device);
+            }
+            if generation == 2 {
+                prepared = None;
+                tire = molla_vehicle::TetraTireFem::new(0.0, params.pressure_pa, params);
+                bristles.clear();
+            }
+            for step in 0..4 {
+                let snapshot = tire.gpu_snapshot();
+                bristles.resize(snapshot.tread_ids.len(), [0.0; 4]);
+                let heights: Vec<u8> = [0.005_f32 * step as f32; 9]
+                    .into_iter().flat_map(f32::to_le_bytes).collect();
+                queue.write_buffer(&maps[0], 0, &heights);
+                let input = molla::kernels::TireFemContactFeedbackInput {
+                    positions: snapshot.positions,
+                    velocities: snapshot.velocities,
+                    masses: snapshot.masses,
+                    tread_ids: snapshot.tread_ids,
+                    bristles: bristles.clone(), terrain: None,
+                    params: molla::kernels::TireFemContactFeedbackParams {
+                        dt: 1.0 / 240.0, omega: 3.0, contact_band: 0.055,
+                        normal_load_per_tread: 50.0,
+                        ..Default::default()
+                    },
+                };
+                let old = kernel.dispatch_resident_with_gpu_terrain(device, queue, &input, &terrain).unwrap();
+                let old = kernel.readback_resident_feedback_output(device, queue, &old).unwrap();
+                let retained = step != 2;
+                let result = tb_fem_terrain_feedback(&mut prepared, retained, &engine, &kernel, &input, &terrain).unwrap();
+                assert_eq!(result.velocities, old.velocities);
+                assert_eq!(result.bristles, old.bristles);
+                assert_eq!(result.forces, old.forces);
+                assert!(result.forces.iter().flatten().any(|v| v.abs() > 0.01));
+                let hub = tire.hub();
+                tire.apply_gpu_node_state(&input.positions, &result.velocities,
+                    [hub[0] as f32, hub[1] as f32, hub[2] as f32, 0.0, 0.0, 0.0, 0.0, 0.0]).unwrap();
+                assert_eq!(tire.gpu_snapshot().velocities, result.velocities);
+                bristles = result.bristles;
+                if retained {
+                    assert!(prepared.as_ref().unwrap().matches(&engine, &kernel,
+                        input.positions.len(), input.tread_ids.len(), &terrain));
+                } else {
+                    assert!(prepared.is_none());
+                }
+                println!("viewer FEM bridge generation={generation} step={step} nodes={} treads={} exact=true", input.positions.len(), input.tread_ids.len());
+            }
+        }
+    }
+
+    #[test]
+    fn soil_mpm_observation_reset_clears_labels_without_changing_terrain_revision() {
+        let mut state = TireRealisticState::default();
+        state.mpm_terrain_revision = 43;
+        state.last_mpm_observation = Some((1, 42));
+        state.last_mpm_observation_error = Some("old telemetry failure".into());
+        state.mpm_observation_backpressure = 3;
+        state.clear_mpm_observations();
+        assert_eq!(state.mpm_terrain_revision, 43);
+        assert!(state.last_mpm_observation.is_none());
+        assert!(state.last_mpm_observation_error.is_none());
+        assert_eq!(state.mpm_observation_backpressure, 0);
+    }
+
+    #[test]
+    fn soil_comparison_exit_preserves_contact_backend_priority() {
+        let defaults = TireRealisticState::default();
+        assert!(!defaults.retain_fem_feedback_buffers);
+        assert!(!defaults.compare_soil_backends);
+        assert!(!defaults.soil_summary_diagnostics);
+        assert_eq!([
+            defaults.enable_mpm_terrain, defaults.enable_bekker_terrain, defaults.enable_dem_terrain,
+        ], [true, false, false]);
+        for mask in 0..8 {
+            let enabled = [mask & 1 != 0, mask & 2 != 0, mask & 4 != 0];
+            let selected = tb_exclusive_soil_backends(enabled);
+            assert_eq!(
+                selected.iter().filter(|&&on| on).count(),
+                usize::from(mask != 0)
+            );
+            assert_eq!(
+                enabled.iter().position(|&on| on),
+                selected.iter().position(|&on| on)
+            );
+            assert_eq!(tb_exclusive_soil_backends(selected), selected);
+        }
+    }
+
+    #[test]
+    fn soil_disabled_summary_does_not_visit_samples_or_change_physics() {
+        let unused = std::iter::from_fn(|| -> Option<f32> {
+            panic!("disabled summary must not read samples")
+        });
+        assert_eq!(tb_soil_summary(false, unused, 1e-4), None);
+        assert_eq!(tb_soil_summary(true, [].into_iter(), 1e-4), Some((0.0, 0, 0.0)));
+        assert_eq!(tb_soil_summary(true, [0.0, 0.1, 0.2, 0.1].into_iter(), 0.1), Some((0.2, 1, 0.1)));
+        let mut observed = tb_new_bekker_owner();
+        let mut unobserved = observed.clone();
+        for step in 0..8 {
+            let contacts = [molla::kernels::TireBekkerContactCell {
+                xz_pressure: [step as f32 * 0.04, 0.0, 20_000.0 + step as f32 * 4_000.0, 15_000.0],
+            }];
+            observed.apply_contacts_cpu(&contacts).unwrap();
+            unobserved.apply_contacts_cpu(&contacts).unwrap();
+            let _ = tb_soil_summary(true, observed.sinkage().iter().copied(), 1e-4);
+            assert_eq!(tb_soil_summary(false, unobserved.sinkage().iter().copied(), 1e-4), None);
+            assert_eq!(observed.heights(), unobserved.heights());
+            assert_eq!(observed.sinkage(), unobserved.sinkage());
+        }
+    }
+
+    #[test]
+    fn soil_mpm_terrain_mirror_preserves_cpu_contact_queries() {
+        use molla_vehicle::Terrain;
+        let params = molla::kernels::TireMpmTerrainRasterParams {
+            particle_count: 0, origin: [-1.0, -2.0], spacing: 0.5, nx: 2, nz: 2, rest_height: 0.0,
+        };
+        let rows = molla::kernels::TireMpmTerrainRasterGpuOutput {
+            heights: vec![0.0, 0.125, 0.25, 0.375], sinkage: vec![0.0; 4],
+            surface_velocity_map: vec![[0.0; 4]; 4],
+        };
+        let terrain = rows.into_fem_contact_terrain(params, 0.6, 1.4, [0.0; 3]).unwrap();
+        let mirror = tb_vehicle_heightfield_from_mpm(&terrain, 0.8, 0.002);
+        assert_eq!(mirror.height(-1.0, -2.0), 0.0);
+        assert_eq!(mirror.height(-0.5, -1.5), 0.375);
+        assert_eq!(mirror.height(-0.75, -1.75), 0.1875);
+        let reference = molla_vehicle::HeightfieldTerrain::new(
+            [-1.0, -2.0], 0.5, 2, 2, vec![0.0, 0.125, 0.25, 0.375], 0.8,
+        ).with_water_film_map(vec![0.002; 4]);
+        for (x, z) in [(-1.0, -2.0), (-0.75, -1.75), (-0.5, -1.5), (4.0, -5.0)] {
+            assert_eq!(mirror.normal(x, z), reference.normal(x, z));
+            assert_eq!(mirror.friction_at(x, z), 0.8);
+            assert_eq!(mirror.water_film_depth(x, z), 0.002);
+        }
+    }
+}
+
 fn update_tire_realistic_example(
     _time: Res<Time>,
     sim: Res<Sim>,
@@ -768,6 +1051,7 @@ fn update_tire_realistic_example(
         return;
     }
     if state.reset_requested {
+        state.fem_feedback_prepared = None;
         state.tire = None;
         state.thermal = molla_vehicle::TireThermalLayers::default();
         state.wear = molla_vehicle::TireWearState::default();
@@ -777,7 +1061,10 @@ fn update_tire_realistic_example(
         state.bekker_owner = None;
         state.bekker_resident_terrain = None;
         state.mpm_sim = None;
-        state.mpm_owner = None;
+        state.mpm_terrain_mirror = None;
+        state.mpm_terrain_readback = None;
+        state.clear_mpm_observations();
+        state.mpm_terrain_revision = 0;
         state.mpm_height_buf = None;
         state.mpm_sinkage_buf = None;
         state.mpm_surface_velocity_buf = None;
@@ -894,7 +1181,7 @@ fn update_tire_realistic_example(
     // or pressure sliders).
     let base_material_for_step = state.material.material();
     let mpm_step_terrain = state
-        .mpm_owner
+        .mpm_terrain_mirror
         .as_ref()
         .filter(|_| state.enable_mpm_terrain)
         .map(|owner| {
@@ -1053,7 +1340,7 @@ fn update_tire_realistic_example(
     };
     let contact = if let Some(tire) = state.tire.as_ref() {
         if let Some(terrain) = state
-            .mpm_owner
+            .mpm_terrain_mirror
             .as_ref()
             .filter(|_| state.enable_mpm_terrain)
             .map(|owner| {
@@ -1135,10 +1422,10 @@ fn update_tire_realistic_example(
     state.last_fem_feedback_mean_bristle_m = 0.0;
     if state.use_gpu_transient_fem_feedback {
         let feedback_terrain_base = state
-            .mpm_owner
+            .mpm_terrain_mirror
             .as_ref()
             .filter(|_| state.enable_mpm_terrain)
-            .map(|owner| owner.fem_contact_terrain())
+            .cloned()
             .or_else(|| {
                 state
                     .bekker_owner
@@ -1235,6 +1522,7 @@ fn update_tire_realistic_example(
                         },
                         params: feedback_params,
                     };
+                    let state = &mut *state;
                     if let Some(kernel) = state.fem_feedback_kernel.as_ref() {
                         let feedback_result =
                             if let (true, Some(heights), Some(sinkage), Some(surface_velocity)) = (
@@ -1259,20 +1547,10 @@ fn update_tire_realistic_example(
                                             .soil_rolling_resistance_scale,
                                         surface_velocity: feedback_terrain.surface_velocity,
                                     };
-                                kernel
-                                    .dispatch_resident_with_gpu_terrain(
-                                        device,
-                                        queue,
-                                        &feedback_input,
-                                        &gpu_terrain,
-                                    )
-                                    .and_then(|resident| {
-                                        kernel.readback_resident_feedback_output(
-                                            device,
-                                            queue,
-                                            &resident,
-                                        )
-                                    })
+                                tb_fem_terrain_feedback(
+                                    &mut state.fem_feedback_prepared, state.retain_fem_feedback_buffers, &sim.engine, kernel,
+                                    &feedback_input, &gpu_terrain,
+                                )
                             } else if let (true, Some(bekker)) =
                                 (use_resident_bekker_terrain, state.bekker_resident_terrain.as_ref())
                             {
@@ -1292,20 +1570,10 @@ fn update_tire_realistic_example(
                                             .soil_rolling_resistance_scale,
                                         surface_velocity: bekker.surface_velocity,
                                     };
-                                kernel
-                                    .dispatch_resident_with_gpu_terrain(
-                                        device,
-                                        queue,
-                                        &feedback_input,
-                                        &gpu_terrain,
-                                    )
-                                    .and_then(|resident| {
-                                        kernel.readback_resident_feedback_output(
-                                            device,
-                                            queue,
-                                            &resident,
-                                        )
-                                    })
+                                tb_fem_terrain_feedback(
+                                    &mut state.fem_feedback_prepared, state.retain_fem_feedback_buffers, &sim.engine, kernel,
+                                    &feedback_input, &gpu_terrain,
+                                )
                             } else if let (true, Some(dem)) =
                                 (use_resident_dem_terrain, state.dem_resident_owner.as_ref())
                             {
@@ -1315,18 +1583,9 @@ fn update_tire_realistic_example(
                                     feedback_terrain.soil_rolling_resistance_scale,
                                 )
                                 .and_then(|gpu_terrain| {
-                                    kernel.dispatch_resident_with_gpu_terrain(
-                                        device,
-                                        queue,
-                                        &feedback_input,
-                                        &gpu_terrain,
-                                    )
-                                })
-                                .and_then(|resident| {
-                                    kernel.readback_resident_feedback_output(
-                                        device,
-                                        queue,
-                                        &resident,
+                                    tb_fem_terrain_feedback(
+                                        &mut state.fem_feedback_prepared, state.retain_fem_feedback_buffers, &sim.engine, kernel,
+                                        &feedback_input, &gpu_terrain,
                                     )
                                 })
                             } else {
@@ -1364,11 +1623,14 @@ fn update_tire_realistic_example(
                                     );
                                 }
                                 state.last_fem_feedback_backend = if use_resident_mpm_terrain {
-                                    "GPU resident FEM feedback + resident MPM terrain velocity"
+                                    if state.retain_fem_feedback_buffers { "GPU MPM terrain / retained CPU-tire feedback bridge" }
+                                    else { "GPU MPM terrain / legacy CPU-tire feedback bridge" }
                                 } else if use_resident_bekker_terrain {
-                                    "GPU resident FEM feedback + resident Bekker terrain"
+                                    if state.retain_fem_feedback_buffers { "GPU Bekker terrain / retained CPU-tire feedback bridge" }
+                                    else { "GPU Bekker terrain / legacy CPU-tire feedback bridge" }
                                 } else if use_resident_dem_terrain {
-                                    "GPU resident FEM feedback + resident DEM terrain"
+                                    if state.retain_fem_feedback_buffers { "GPU DEM terrain / retained CPU-tire feedback bridge" }
+                                    else { "GPU DEM terrain / legacy CPU-tire feedback bridge" }
                                 } else if use_dem_terrain {
                                     "GPU FEM feedback + TireDemFemTerrainOwner terrain"
                                 } else {
@@ -1403,6 +1665,8 @@ fn update_tire_realistic_example(
                 if state.mpm_sim.is_none() {
                     match tb_new_mpm_sim(&sim.engine, queue) {
                         Ok(mpm) => {
+                            state.clear_mpm_observations();
+                            state.mpm_terrain_revision = 0;
                             state.mpm_sim = Some(mpm);
                         }
                         Err(err) => {
@@ -1443,71 +1707,80 @@ fn update_tire_realistic_example(
                     if let Err(err) = gpu_result {
                         state.last_mpm_error = Some(format!("{err}"));
                     } else {
-                        let _ = mpm.step_n_with(device, queue, dt.min(1.0 / 120.0), 1);
-                        let cell_count = (raster.nx as usize * raster.nz as usize).max(1);
-                        let f32_bytes = (cell_count * core::mem::size_of::<f32>()) as u64;
-                        let usage = wgpu::BufferUsages::STORAGE
-                            | wgpu::BufferUsages::COPY_SRC
-                            | wgpu::BufferUsages::COPY_DST;
-                        let need_buffers = state.mpm_height_buf.is_none()
-                            || state.mpm_sinkage_buf.is_none()
-                            || state.mpm_surface_velocity_buf.is_none();
-                        if need_buffers {
-                            state.mpm_height_buf = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                                label: Some("tire realistic mpm terrain heights"),
-                                size: f32_bytes.max(4),
-                                usage,
-                                mapped_at_creation: false,
-                            }));
-                            state.mpm_sinkage_buf = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                                label: Some("tire realistic mpm terrain sinkage"),
-                                size: f32_bytes.max(4),
-                                usage,
-                                mapped_at_creation: false,
-                            }));
-                            state.mpm_surface_velocity_buf = Some(device.create_buffer(
-                                &wgpu::BufferDescriptor {
-                                    label: Some("tire realistic mpm terrain surface velocity"),
-                                    size: (cell_count * core::mem::size_of::<[f32; 4]>()) as u64,
+                        let snapshot_result = (|| -> molla::core::Result<_> {
+                            mpm.step_n_with(device, queue, dt.min(1.0 / 120.0), 1)?;
+                            let cell_count = (raster.nx as usize * raster.nz as usize).max(1);
+                            let f32_bytes = (cell_count * core::mem::size_of::<f32>()) as u64;
+                            let usage = wgpu::BufferUsages::STORAGE
+                                | wgpu::BufferUsages::COPY_SRC
+                                | wgpu::BufferUsages::COPY_DST;
+                            let need_buffers = state.mpm_height_buf.as_ref().is_none_or(|b| b.size() != f32_bytes)
+                                || state.mpm_sinkage_buf.as_ref().is_none_or(|b| b.size() != f32_bytes)
+                                || state.mpm_surface_velocity_buf.as_ref().is_none_or(|b| b.size() != f32_bytes * 4);
+                            if need_buffers {
+                                state.mpm_terrain_readback = None;
+                                state.mpm_height_buf = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                                    label: Some("tire realistic mpm terrain heights"),
+                                    size: f32_bytes.max(4),
                                     usage,
                                     mapped_at_creation: false,
-                                },
-                            ));
-                        }
-                        if let (Some(heights), Some(sinkage), Some(surface_velocity)) = (
-                            state.mpm_height_buf.as_ref(),
-                            state.mpm_sinkage_buf.as_ref(),
-                            state.mpm_surface_velocity_buf.as_ref(),
-                        )
-                        {
-                            let _ = mpm.raster_tire_fem_terrain_gpu_resident_with(
-                                device,
-                                queue,
-                                &kernel,
-                                raster,
-                                heights,
-                                sinkage,
-                                surface_velocity,
-                            );
-                        }
-                        match mpm.tire_fem_terrain_owner_with(device, queue, raster) {
-                            Ok(owner) => {
-                                let compaction = owner.compaction();
-                                state.last_mpm_compaction_m = compaction
-                                    .iter()
-                                    .map(|c| c[0])
-                                    .fold(0.0_f32, f32::max);
-                                state.last_mpm_active_particles =
-                                    compaction.iter().filter(|c| c[0] > 1.0e-5).count();
-                                state.mpm_owner = Some(owner);
+                                }));
+                                state.mpm_sinkage_buf = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                                    label: Some("tire realistic mpm terrain sinkage"),
+                                    size: f32_bytes.max(4),
+                                    usage,
+                                    mapped_at_creation: false,
+                                }));
+                                state.mpm_surface_velocity_buf = Some(device.create_buffer(
+                                    &wgpu::BufferDescriptor {
+                                        label: Some("tire realistic mpm terrain surface velocity"),
+                                        size: (cell_count * core::mem::size_of::<[f32; 4]>()) as u64,
+                                        usage,
+                                        mapped_at_creation: false,
+                                    },
+                                ));
+                            }
+                            let heights = state.mpm_height_buf.as_ref().expect("MPM height buffer").clone();
+                            let sinkage = state.mpm_sinkage_buf.as_ref().expect("MPM sinkage buffer").clone();
+                            let surface_velocity = state.mpm_surface_velocity_buf.as_ref().expect("MPM velocity buffer").clone();
+                            mpm.raster_tire_fem_terrain_gpu_resident_with(
+                                device, queue, &kernel, raster, &heights, &sinkage, &surface_velocity,
+                            )?;
+                            let params = molla::kernels::TireMpmTerrainRasterParams {
+                                particle_count: mpm.particle_count(), origin: raster.origin,
+                                spacing: raster.spacing, nx: raster.nx, nz: raster.nz, rest_height: raster.rest_height,
+                            };
+                            if state.mpm_terrain_readback.as_ref().is_none_or(|r| r.params() != params) {
+                                state.mpm_terrain_readback = Some(mpm.prepare_tire_terrain_readback_with(
+                                    device, queue, raster, [&heights, &sinkage, &surface_velocity],
+                                )?);
+                            }
+                            let snapshot = state.mpm_terrain_readback.as_mut().expect("MPM terrain readback")
+                                .read_blocking(false)?;
+                            let terrain = snapshot.terrain.into_fem_contact_terrain(
+                                params, raster.friction, raster.soil_rolling_resistance_scale, raster.surface_velocity,
+                            )?;
+                            Ok(terrain)
+                        })();
+                        match snapshot_result {
+                            Ok(terrain) => {
+                                state.mpm_terrain_mirror = Some(terrain);
+                                state.observe_mpm_compaction(&sim.engine, &mpm);
                                 state.last_mpm_backend = if use_gpu_mpm {
-                                    "GPU MPM resident + terrain buffers"
+                                    "GPU MPM + blocking terrain-only CPU bridge"
                                 } else {
-                                    "CPU MPM feedback + GPU terrain export"
+                                    "CPU MPM feedback + blocking terrain bridge"
                                 };
                             }
                             Err(err) => {
                                 state.last_mpm_error = Some(format!("{err}"));
+                                state.last_mpm_backend = "MPM step/export failed";
+                                state.clear_mpm_observations();
+                                state.mpm_terrain_mirror = None;
+                                state.mpm_terrain_readback = None;
+                                state.mpm_height_buf = None;
+                                state.mpm_sinkage_buf = None;
+                                state.mpm_surface_velocity_buf = None;
                             }
                         }
                     }
@@ -1524,18 +1797,17 @@ fn update_tire_realistic_example(
 
     if state.enable_bekker_terrain {
         let contact_cells = tb_bekker_contacts_from_tire_contact(&contact, hub_pos);
-        let map_len = state
-            .bekker_owner
-            .as_ref()
-            .map(|owner| owner.heights().len())
-            .unwrap_or(0);
         let water_film_m = state.water_film_mm.max(0.0) / 1000.0;
-        if let Some(owner) = state.bekker_owner.as_mut() {
-            let _ = owner.set_friction_map(Some(vec![material.mu_static as f32; map_len]));
-            let _ = owner.set_water_film_map(Some(vec![water_film_m; map_len]));
-            owner.set_surface_velocity([-hub_vel[0] as f32, 0.0, -hub_vel[2] as f32]);
-        }
         state.last_bekker_error = None;
+        if let Some(owner) = state.bekker_owner.as_mut() {
+            let material_result = owner
+                .set_uniform_friction_map(material.mu_static as f32)
+                .and_then(|_| owner.set_uniform_water_film_map(water_film_m));
+            owner.set_surface_velocity([-hub_vel[0] as f32, 0.0, -hub_vel[2] as f32]);
+            if let Err(err) = material_result {
+                state.last_bekker_error = Some(format!("{err}"));
+            }
+        }
         let mut used_gpu = false;
         if state.use_gpu_bekker {
             let gpu = match (sim.engine.device(), sim.engine.queue()) {
@@ -1582,26 +1854,13 @@ fn update_tire_realistic_example(
                     state.last_bekker_backend = "CPU Bekker owner fallback";
                 }
             }
-        let (rut_depth, rut_cells, rut_mean) = if let Some(owner) = state.bekker_owner.as_ref() {
-            let sinkage = owner.sinkage();
-            let rut_depth = sinkage.iter().copied().fold(0.0_f32, f32::max);
-            let rut_cells = sinkage.iter().filter(|&&s| s > 1.0e-4).count();
-            let rut_mean = if rut_cells > 0 {
-                sinkage.iter().copied().sum::<f32>() / sinkage.len().max(1) as f32
-            } else {
-                0.0
-            };
-            // Exercise the GPU-FEM terrain bridge in the live viewer path:
-            // this exported terrain is what FEM contact reduction/feedback
-            // kernels consume for sinkage/rut rolling loss.
-            let _ = owner.fem_contact_terrain();
-            (rut_depth, rut_cells, rut_mean)
-        } else {
-            (0.0, 0, 0.0)
-        };
-        state.last_rut_depth_m = rut_depth;
-        state.last_rut_cells = rut_cells;
-        state.last_rut_mean_m = rut_mean;
+        if let Some((rut_depth, rut_cells, rut_mean)) = state.bekker_owner.as_ref().and_then(|owner| {
+            tb_soil_summary(state.soil_summary_diagnostics, owner.sinkage().iter().copied(), 1.0e-4)
+        }) {
+            state.last_rut_depth_m = rut_depth;
+            state.last_rut_cells = rut_cells;
+            state.last_rut_mean_m = rut_mean;
+        }
     }
 
     if state.enable_dem_terrain {
@@ -2456,18 +2715,59 @@ fn tire_realistic_pane(
     ui.label("Water film");
     let _ = ui.add(egui::Slider::new(&mut state.water_film_mm, 0.0..=6.0).suffix(" mm"));
     ui.separator();
-    ui.checkbox(
-        &mut state.enable_bekker_terrain,
-        "Live Bekker rut terrain",
-    );
+    if ui
+        .checkbox(
+            &mut state.compare_soil_backends,
+            "Compare multiple soil backends",
+        )
+        .changed()
+        && !state.compare_soil_backends
+    {
+        let enabled = tb_exclusive_soil_backends([
+            state.enable_mpm_terrain,
+            state.enable_bekker_terrain,
+            state.enable_dem_terrain,
+        ]);
+        state.enable_mpm_terrain = enabled[0];
+        state.enable_bekker_terrain = enabled[1];
+        state.enable_dem_terrain = enabled[2];
+    }
+    if state.compare_soil_backends {
+        ui.label("Comparison steps every selected backend; FEM uses MPM, then Bekker, then DEM.");
+        ui.checkbox(&mut state.enable_mpm_terrain, "Live MPM offroad bridge");
+        ui.checkbox(&mut state.enable_bekker_terrain, "Live Bekker rut terrain");
+        ui.checkbox(&mut state.enable_dem_terrain, "Live DEM→FEM terrain bridge");
+    } else {
+        ui.horizontal(|ui| {
+            for (label, selected) in [
+                ("MPM", [true, false, false]),
+                ("Bekker", [false, true, false]),
+                ("DEM", [false, false, true]),
+                ("No soil", [false, false, false]),
+            ] {
+                let current = [
+                    state.enable_mpm_terrain,
+                    state.enable_bekker_terrain,
+                    state.enable_dem_terrain,
+                ];
+                if ui.selectable_label(current == selected, label).clicked() {
+                    state.enable_mpm_terrain = selected[0];
+                    state.enable_bekker_terrain = selected[1];
+                    state.enable_dem_terrain = selected[2];
+                }
+            }
+        });
+    }
     ui.checkbox(&mut state.use_gpu_bekker, "Use GPU Bekker writeback");
-    ui.checkbox(&mut state.enable_mpm_terrain, "Live MPM offroad bridge");
     ui.checkbox(&mut state.use_gpu_mpm, "Use GPU MPM resident feedback");
-    ui.checkbox(&mut state.enable_dem_terrain, "Live DEM→FEM terrain bridge");
     ui.checkbox(&mut state.use_gpu_dem, "Use GPU DEM sparse-LBVH step");
     ui.checkbox(
         &mut state.use_gpu_transient_fem_feedback,
         "Use GPU transient → FEM contact feedback",
+    );
+    ui.checkbox(
+        &mut state.retain_fem_feedback_buffers,
+        "Retain terrain feedback buffers (experimental timing)",
     );
     ui.checkbox(&mut state.use_gpu_thermal, "Use GPU thermal/wear batch");
     ui.separator();
@@ -2578,12 +2878,17 @@ fn tire_realistic_pane(
     if let Some(err) = &state.last_bekker_error {
         ui.colored_label(egui::Color32::from_rgb(255, 120, 80), err);
     }
-    ui.label(format!(
-        "Rut depth max/mean: {:.1}/{:.1} mm  active cells {}",
-        state.last_rut_depth_m * 1000.0,
-        state.last_rut_mean_m * 1000.0,
-        state.last_rut_cells
-    ));
+    ui.checkbox(&mut state.soil_summary_diagnostics, "Collect MPM/Bekker soil summaries");
+    if state.soil_summary_diagnostics {
+        ui.label(format!(
+            "Last Bekker sample — rut max/mean: {:.1}/{:.1} mm  active cells {}",
+            state.last_rut_depth_m * 1000.0,
+            state.last_rut_mean_m * 1000.0,
+            state.last_rut_cells
+        ));
+    } else {
+        ui.small("MPM/Bekker summaries disabled; physical terrain snapshots remain enabled.");
+    }
     ui.small(
         "The rut map is owned by TireBekkerFemTerrainOwner: contact-cell pressure/shear writes \
          Bekker height/sinkage, then exports TireFemContactTerrain for GPU FEM sinkage/rolling-loss sampling.",
@@ -2592,15 +2897,24 @@ fn tire_realistic_pane(
     if let Some(err) = &state.last_mpm_error {
         ui.colored_label(egui::Color32::from_rgb(255, 120, 80), err);
     }
-    ui.label(format!(
-        "MPM compaction max: {:.1} mm  active particles {}",
-        state.last_mpm_compaction_m * 1000.0,
-        state.last_mpm_active_particles
-    ));
+    if state.soil_summary_diagnostics {
+        if let Some((generation, revision)) = state.last_mpm_observation {
+            ui.label(format!(
+                "MPM sample g{generation}/r{revision}, {} terrain revisions old — max {:.1} mm, active {}, skipped {}",
+                state.mpm_terrain_revision.saturating_sub(revision), state.last_mpm_compaction_m * 1000.0,
+                state.last_mpm_active_particles, state.mpm_observation_backpressure,
+            ));
+        } else {
+            ui.label("MPM optional compaction sample pending");
+        }
+        if let Some(error) = &state.last_mpm_observation_error {
+            ui.colored_label(egui::Color32::from_rgb(255, 180, 80), format!("MPM telemetry: {error}"));
+        }
+    }
     ui.small(
         "The MPM bridge owns a persistent MpmSimulation: tire contact cells write directly into \
-         live MPM particle/compaction buffers, then rasterize GPU height/sinkage buffers and export \
-         TireFemContactTerrain for the next FEM contact step.",
+         live MPM particle/compaction buffers, then rasterize GPU terrain buffers. CPU contact queries \
+         use one blocking terrain-only snapshot; optional statistics use a three-slot asynchronous 16-byte readback ring.",
     );
     ui.label(format!("DEM terrain backend: {}", state.last_dem_backend));
     if let Some(err) = &state.last_dem_error {

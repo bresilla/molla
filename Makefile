@@ -140,6 +140,17 @@ r: run
 test:
 	@$(CARGO) test $(APP_TARGET)
 
+.PHONY: test-soil-particle-render
+.PHONY: render-soil-tractor-resident
+render-soil-tractor-resident:
+	@test -n '$(SOIL_RESIDENT_OUTPUT)' -a ! -e '$(SOIL_RESIDENT_OUTPUT)' || { echo 'Set a fresh SOIL_RESIDENT_OUTPUT directory'; exit 2; }
+	@$(CARGO) build --release -p molla-solvers --features gpu,resource-counters,norm-tree-newton --example soil_tractor_resident
+	@timeout --kill-after=5s 180s $(RUN_WITH) $(CARGO) run --release -p molla-solvers --features gpu,resource-counters,norm-tree-newton --example soil_tractor_resident -- '$(SOIL_RESIDENT_OUTPUT)'
+
+test-soil-particle-render:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --test mpm_render_gpu --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --test mpm_render_gpu -- --ignored --nocapture --test-threads=1
+
 t: test
 
 test-primitives:
@@ -170,6 +181,1203 @@ test-primitives-impact-identity:
 #   make test-gpu P=molla-fem T=fem_ns_gpu RELEASE=1 A='--skip gpu_ns_perf...'
 test-gpu:
 	@$(RUN_WITH) $(CARGO) test $(REL) -p $(P) --features $(GPU_FEATURES) --test $(T) -- --ignored $(A)
+
+.PHONY: test-soil-fast test-soil-gpu bench-soil check-soil-results test-soil-wrench-replay test-soil-sparse-map test-soil-particle-order
+.PHONY: test-soil-sort test-soil-feedback test-soil-command-batch
+SOIL_BATCH_FILTER ?= mpm::command_batch::tests
+.PHONY: test-soil-gather
+.PHONY: test-soil-fixed-order-runtime
+test-soil-fixed-order-runtime:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --test mpm_fixed_order_runtime -- --ignored --nocapture --test-threads=1
+.PHONY: test-soil-checkpoint
+.PHONY: test-soil-tiles
+.PHONY: test-soil-checkpoint-async
+.PHONY: test-soil-identity
+.PHONY: test-soil-world test-soil-disk-world test-soil-window test-soil-window-integer test-soil-motion-guard
+.PHONY: test-soil-transfer
+.PHONY: test-soil-pins
+.PHONY: test-soil-regions
+.PHONY: test-soil-quiescence
+.PHONY: test-soil-settling
+.PHONY: test-soil-numerical-fault
+.PHONY: settle-soil
+.PHONY: test-soil-fusion
+SOIL_FUSION_FILTER ?= mpm::fused_gather::tests
+SOIL_FUSION_ARGS ?= --skip benchmark
+test-soil-fusion:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_FUSION_FILTER) -- --ignored --nocapture --test-threads=1 $(SOIL_FUSION_ARGS)
+
+.PHONY: test-soil-store test-soil-store-gpu test-soil-solids test-soil-rigid-device
+
+SOIL_RIGID_DEVICE_FILTER ?= mpm::rigid_device::tests
+.PHONY: test-soil-runtime test-soil-frame-backup test-soil-completion
+SOIL_RUNTIME_FILTER ?= rigid_world::gpu::soil::tests
+.PHONY: test-soil-contact-projection
+.PHONY: test-soil-normal-projection
+.PHONY: test-soil-floor-projection
+.PHONY: test-soil-contact-geometry
+.PHONY: test-soil-candidates
+SOIL_CANDIDATES_FILTER ?= soil_candidates_gpu::tests
+test-soil-candidates:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_CANDIDATES_FILTER) -- --ignored --nocapture --test-threads=1
+
+SOIL_GEOMETRY_FILTER ?= soil_contact_geometry_gpu::tests
+test-soil-contact-geometry:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_GEOMETRY_FILTER) -- --ignored --nocapture --test-threads=1
+
+SOIL_FLOOR_FILTER ?= soil_floor_projection_gpu::tests
+test-soil-floor-projection:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_FLOOR_FILTER) -- --ignored --nocapture --test-threads=1
+
+SOIL_NORMAL_FILTER ?= soil_normal_projection_gpu::tests
+.PHONY: test-soil-friction-disk
+.PHONY: test-soil-wall-friction
+SOIL_WALL_FRICTION_FILTER ?= soil_wall_friction_gpu::tests
+.PHONY: test-soil-shared-wall-friction
+SOIL_SHARED_WALL_FILTER ?= soil_shared_wall_friction_gpu::tests
+.PHONY: test-soil-shared-wall-geometry
+SOIL_SHARED_WALL_GEOMETRY_FILTER ?= soil_shared_wall_geometry_gpu::tests
+test-soil-shared-wall-geometry:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_SHARED_WALL_GEOMETRY_FILTER) -- --ignored --nocapture --test-threads=1
+
+test-soil-shared-wall-friction:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_SHARED_WALL_FILTER) -- --ignored --nocapture --test-threads=1
+
+test-soil-wall-friction:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_WALL_FRICTION_FILTER) -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-tangential-projection
+.PHONY: test-soil-friction-projection
+.PHONY: test-soil-friction-geometry
+test-soil-friction-geometry:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib soil_friction_geometry_gpu::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-friction-projection:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib soil_friction_projection_gpu::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-tangential-projection:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib soil_tangential_projection_gpu::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-friction-disk:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib soil_friction_disk_gpu::tests -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-contact-motion
+test-soil-contact-motion:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib soil_contact_motion_gpu::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-normal-projection:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_NORMAL_FILTER) -- --ignored --nocapture --test-threads=1
+
+SOIL_PROJECTION_FILTER ?= soil_contact_projection_gpu::tests
+test-soil-contact-projection:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_PROJECTION_FILTER) -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-mass-coupling test-soil-ordered-coupling test-soil-projection-commands test-soil-canonical-sticking test-soil-native-submissions test-soil-profile-budget
+test-soil-profile-budget:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib profile_query_budget
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib profile_query_pages_cover_nested_windows_and_reuse -- --ignored --nocapture --test-threads=1
+
+test-soil-native-submissions:
+	@test -n "$$MOLLA_NATIVE_WORLD_CAPTURE" -a ! -e "$$MOLLA_NATIVE_WORLD_CAPTURE" || { echo 'Set MOLLA_NATIVE_WORLD_CAPTURE to a fresh output directory'; exit 2; }
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,native-lazy-geometry-drift,soa-scratch-newton,row-parallel-newton-preparation,parallel-candidate-index,deferred-native-drift,batched-soil-projection --lib native_world_composed_submissions_exact --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,native-lazy-geometry-drift,soa-scratch-newton,row-parallel-newton-preparation,parallel-candidate-index,deferred-native-drift,batched-soil-projection --lib native_world_composed_submissions_exact -- --ignored --nocapture --test-threads=1
+
+test-soil-canonical-sticking:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,batched-soil-projection,ordered-sticking-nodes --lib canonical_node_order_source_and_limits
+	@set -e; for name in canonical_node_order_gpu projected_commands_order_and_parity projected_commands_late_fault_rollback all_fixed_grid_faces_project_machine_and_particles_with_external_impulse active_mass_coupling_fixed_faces active_mass_coupling_lifecycle; do \
+	  timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,batched-soil-projection,ordered-sticking-nodes --lib $$name -- --ignored --nocapture --test-threads=1; \
+	done
+
+test-soil-projection-commands:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,batched-soil-projection --lib --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,batched-soil-projection --lib projected_commands_order_and_parity -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,batched-soil-projection --lib projected_commands_late_fault_rollback -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,batched-soil-projection --lib rigid_world::gpu::soil::projected_tests::projected_tractor_runtime_conserves_impulse_and_rolls_back -- --ignored --exact --nocapture --test-threads=1
+
+.PHONY: debug-soil-construction
+SOIL_CONSTRUCTION_TEST_BINARY ?=
+SOIL_CONSTRUCTION_DEBUG_DIR ?=
+debug-soil-construction:
+	@test -n '$(SOIL_CONSTRUCTION_TEST_BINARY)' -a -x '$(SOIL_CONSTRUCTION_TEST_BINARY)' || { echo 'Set SOIL_CONSTRUCTION_TEST_BINARY to a precompiled kernel test executable'; exit 2; }
+	@test -n '$(SOIL_CONSTRUCTION_DEBUG_DIR)' -a ! -e '$(SOIL_CONSTRUCTION_DEBUG_DIR)' || { echo 'Set SOIL_CONSTRUCTION_DEBUG_DIR to a new directory'; exit 2; }
+	@mkdir -p '$(SOIL_CONSTRUCTION_DEBUG_DIR)'
+	@sha256sum '$(SOIL_CONSTRUCTION_TEST_BINARY)' > '$(SOIL_CONSTRUCTION_DEBUG_DIR)/executable-sha256.txt'
+	@$(RUN_WITH) timeout --foreground --kill-after=5s 45s gdb -nx -q -batch -ex 'set pagination off' -ex 'set confirm off' -ex 'set debuginfod enabled off' -ex 'set logging file $(SOIL_CONSTRUCTION_DEBUG_DIR)/backtrace.log' -ex 'set logging enabled on' -ex run -ex 'thread apply all bt 20' -ex 'info sharedlibrary' -ex quit --args '$(SOIL_CONSTRUCTION_TEST_BINARY)' featherstone::construction_tests::six_joint_phase_pipeline_construction --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-pipeline-cache test-soil-pipeline-cache-engine test-soil-pipeline-cache-machine
+.PHONY: test-soil-joint-types test-soil-joint-types-runtime
+.PHONY: test-soil-joint-types-paired
+test-soil-joint-types-paired:
+	@test '$(SOIL_PAIRED_TYPES_ARM)' = reference -o '$(SOIL_PAIRED_TYPES_ARM)' = candidate || { echo 'Set SOIL_PAIRED_TYPES_ARM=reference or candidate'; exit 2; }
+	@test -n '$(SOIL_PAIRED_TYPES_OUTPUT)' -a ! -e '$(SOIL_PAIRED_TYPES_OUTPUT)' || { echo 'Set a fresh SOIL_PAIRED_TYPES_OUTPUT file'; exit 2; }
+	@$(CARGO) test --release -p molla-kernels --features gpu,resource-counters --lib paired_joint_type_profile_retains_low_rates_and_guards --no-run
+	@SOIL_PAIRED_TYPES_ARM='$(SOIL_PAIRED_TYPES_ARM)' SOIL_PAIRED_TYPES_OUTPUT='$(SOIL_PAIRED_TYPES_OUTPUT)' timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-kernels --features gpu,resource-counters --lib paired_joint_type_profile_retains_low_rates_and_guards -- --ignored --nocapture --test-threads=1
+
+test-soil-joint-types:
+	@$(CARGO) test --release -p molla-kernels --features gpu,resource-counters --lib featherstone::joint_types:: --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-kernels --features gpu,resource-counters --lib featherstone::joint_types:: -- --include-ignored --nocapture --test-threads=1
+
+test-soil-joint-types-runtime:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib joint_types_friction_tractor_runtime_conserves_impulse_and_rolls_back --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib joint_types_friction_tractor_runtime_conserves_impulse_and_rolls_back -- --ignored --nocapture --test-threads=1
+
+test-soil-pipeline-cache:
+	@$(MAKE) test-soil-pipeline-cache-engine
+	@$(MAKE) test-soil-pipeline-cache-machine
+
+test-soil-pipeline-cache-engine:
+	@$(CARGO) test --release -p molla-compute --features gpu --lib pipeline_cache:: --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-compute --features gpu --lib pipeline_cache:: -- --include-ignored --nocapture --test-threads=1
+
+test-soil-pipeline-cache-machine:
+	@$(CARGO) test --release -p molla-kernels --features gpu,resource-counters --lib featherstone::pipeline_cache_tests:: --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-kernels --features gpu,resource-counters --lib featherstone::pipeline_cache_tests:: -- --ignored --nocapture --test-threads=1
+
+test-soil-mass-coupling:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::mass_coupling::tests -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-active-mass-coupling
+.PHONY: test-soil-active-unilateral
+.PHONY: test-soil-active-kinematics
+.PHONY: test-soil-runtime-grid-budget
+.PHONY: test-soil-active-runtime
+.PHONY: test-soil-active-runtime-joint-types
+.PHONY: test-soil-compact-tractor-runtime
+.PHONY: test-soil-tractor-grid-selection
+test-soil-tractor-grid-selection:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib tractor_grid_storage -- --nocapture --test-threads=1
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --example soil_tractor_benchmark -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib tractor_grid_storage_factory -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-tractor-grid-support
+test-soil-tractor-grid-support:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib tractor_grid_initial_support --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib tractor_grid_initial_support -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-preparation-fixed-width
+.PHONY: test-soil-preparation-certificate-mask
+test-soil-preparation-certificate-mask:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation -- --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation_certificate_mask -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-preparation-captured-certificates
+.PHONY: test-soil-preparation-axes
+test-soil-preparation-axes:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation -- --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation_axis_parallel -- --ignored --nocapture --test-threads=1
+
+test-soil-preparation-captured-certificates:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation -- --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation_captured_certificates -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation_cached_faults -- --ignored --nocapture --test-threads=1
+
+test-soil-preparation-fixed-width:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation -- --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation_fixed_width -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-preparation-private-response
+test-soil-preparation-private-response:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation -- --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation_private_response -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-preparation-zero-terms
+test-soil-preparation-zero-terms:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation -- --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation_zero_terms -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-preparation-sparse-residual
+test-soil-preparation-sparse-residual:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation -- --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib newton_preparation_sparse_residual -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-sparse-residual-runtime
+test-soil-sparse-residual-runtime:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton,zero-residual-newton-preparation --lib newton_preparation -- --nocapture --test-threads=1
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton,zero-residual-newton-preparation --example soil_tractor_benchmark -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton,zero-residual-newton-preparation --lib newton_preparation_sparse_residual -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton,zero-residual-newton-preparation --lib newton_preparation_gpu_faults -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton,zero-residual-newton-preparation --lib active_unilateral_newton_feedback -- --ignored --nocapture --test-threads=1
+
+test-soil-compact-tractor-runtime:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib compact_joint_types_friction_tractor_runtime --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib compact_joint_types_friction_tractor_runtime -- --ignored --nocapture --test-threads=1
+
+test-soil-active-runtime-joint-types:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_runtime_joint_types_attachment_transactions --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_runtime_joint_types_attachment_transactions -- --ignored --nocapture --test-threads=1
+
+test-soil-active-runtime:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_runtime_ --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_runtime_direct_machine_fault_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_runtime_attachment_transactions -- --ignored --nocapture --test-threads=1
+
+test-soil-runtime-grid-budget:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib projected_runtime_grid_capacity_budgets --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib projected_runtime_grid_capacity_budgets -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_mass_coupling_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_unilateral_coupling_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_unilateral_paired_feedback -- --ignored --nocapture --test-threads=1
+
+test-soil-active-kinematics:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib kinematics_only --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib kinematics_only -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib device_bridge_rejects_stale_handles_foreign_state_and_host_override -- --ignored --nocapture --test-threads=1
+
+test-soil-active-unilateral:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_unilateral --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_unilateral_coupling_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_unilateral_paired_feedback -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_unilateral_newton_feedback -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-indexed-candidates
+test-soil-indexed-candidates:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib indexed_candidates_preserve_world_order_and_publication --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib indexed_candidates_preserve_world_order_and_publication -- --ignored --nocapture --test-threads=1
+
+test-soil-active-mass-coupling:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_mass_coupling --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib active_mass_coupling -- --ignored --nocapture --test-threads=1
+
+test-soil-ordered-coupling:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib mpm::mass_coupling::tests::ordered --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib mpm::mass_coupling::tests::ordered -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib projected_grid_drives_all_particles_and_reports_one_reaction -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib late_particle_fault_blocks_machine_publication_and_frame_rollback_recovers -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib mpm::frame_backup::tests -- --ignored --nocapture --test-threads=1
+.PHONY: test-soil-tractor test-soil-tractor-gpu test-soil-tractor-replay test-soil-p2g-parity test-soil-native-atomics
+SOIL_TRACTOR_FILTER ?= soil_tractor::tests
+.PHONY: test-soil-admm-tractor
+SOIL_ADMM_PREPARATION ?= cooperative
+SOIL_ADMM_ARM ?= native
+SOIL_ADMM_OUTPUT ?=
+SOIL_ADMM_FEATURE_ARGS = --features gpu,resource-counters,protected-newton $(if $(filter cooperative,$(SOIL_ADMM_PREPARATION)),--features row-parallel-newton-preparation)
+SOIL_ADMM_PREPARATION_LABEL = $(if $(filter cooperative,$(SOIL_ADMM_PREPARATION)),compensated-row-parallel-cooperative-factor,compensated-dense-terms)
+test-soil-admm-tractor:
+	@case '$(SOIL_ADMM_PREPARATION)' in dense|cooperative) ;; *) echo 'SOIL_ADMM_PREPARATION must be dense or cooperative' >&2; exit 1;; esac
+	@case '$(SOIL_ADMM_ARM)' in native|featherstone) ;; *) echo 'SOIL_ADMM_ARM must be native or featherstone' >&2; exit 1;; esac
+	@test -n '$(SOIL_ADMM_OUTPUT)' && test ! -e '$(SOIL_ADMM_OUTPUT)' || { echo 'SOIL_ADMM_OUTPUT must name a new directory' >&2; exit 1; }
+	@$(CARGO) test --release -p molla-solvers $(SOIL_ADMM_FEATURE_ARGS) --lib admm_actual_tractor_50k_arm --no-run
+	@mkdir -p "$$(dirname '$(SOIL_ADMM_OUTPUT)')"
+	@MOLLA_ADMM50K_ARM='$(SOIL_ADMM_ARM)' MOLLA_ADMM50K_PREPARATION='$(SOIL_ADMM_PREPARATION_LABEL)' MOLLA_ADMM50K_OUTPUT='$(abspath $(SOIL_ADMM_OUTPUT))' timeout --kill-after=5s 180s $(RUN_WITH) $(CARGO) test --release -p molla-solvers $(SOIL_ADMM_FEATURE_ARGS) --lib admm_actual_tractor_50k_arm -- --ignored --nocapture --test-threads=1
+
+test-soil-tractor:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib soil_tractor::tests -- --nocapture --test-threads=1
+
+test-soil-tractor-gpu:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_TRACTOR_FILTER) -- --ignored --nocapture --test-threads=1
+
+test-soil-tractor-replay:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::replay_tests::captured_tractor_boundary_replay -- --ignored --nocapture --test-threads=1
+
+test-soil-p2g-parity:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::replay_tests::p2g_shared_accumulation_matches_global_scatter -- --ignored --nocapture --test-threads=1
+
+test-soil-native-atomics:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::replay_tests::native_float_atomic_capability_probe -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-native-mpm
+.PHONY: test-soil-native-active
+.PHONY: test-soil-native-ordered-shell
+.PHONY: test-soil-native-precontact-compensation
+.PHONY: test-soil-shared-gather test-soil-shared-gather-fast
+test-soil-shared-gather-fast:
+	@$(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib gather_chunk_source_contract -- --nocapture
+	@$(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib gather_replay_uniform_versions -- --nocapture
+
+test-soil-shared-gather:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib gather_chunk_exact_grid_and_evolution --no-run
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --test mpm_shared_gather_runtime --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib gather_chunk_exact_grid_and_evolution -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --test mpm_shared_gather_runtime -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-compensated-wrench test-soil-compensated-wrench-fast
+test-soil-compensated-wrench-fast:
+	@$(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib retained_wrench_source_contract -- --nocapture
+
+test-soil-compensated-wrench:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib retained_wrench --no-run
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --test mpm_compensated_wrench_runtime --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib retained_wrench -- --include-ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --test mpm_compensated_wrench_runtime -- --ignored --nocapture --test-threads=1
+
+.PHONY: bench-soil-native-precontact
+bench-soil-native-precontact:
+	@test -n "$(SOIL_PRECONTACT_OUTPUT)" && test ! -e "$(SOIL_PRECONTACT_OUTPUT)"
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_precontact_whole_step_cost --no-run
+	@SOIL_PRECONTACT_OUTPUT='$(SOIL_PRECONTACT_OUTPUT)' timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_precontact_whole_step_cost -- --ignored --nocapture --test-threads=1
+
+test-soil-native-precontact-compensation:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_precontact_compensation_source_contract -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_precontact_compensated_active_parity -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_precontact_compensation_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+
+test-soil-native-ordered-shell:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_active_ordered_shell_parity --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_active_ordered_shell_parity -- --ignored --nocapture --test-threads=1
+
+.PHONY: diagnose-soil-native-force
+.PHONY: diagnose-soil-native-force-substitution
+diagnose-soil-native-force-substitution:
+	@test -n "$(SOIL_NATIVE_FORCE_OUTPUT)" && test ! -e "$(SOIL_NATIVE_FORCE_OUTPUT)" && test -f "$(SOIL_NATIVE_FORCE_INPUT)/failure.json"
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_force_terms_preserve_scalar_expressions -- --nocapture
+	@MOLLA_NATIVE_FORCE_REPLAY='$(SOIL_NATIVE_FORCE_OUTPUT)' MOLLA_NATIVE_FORCE_INPUT='$(SOIL_NATIVE_FORCE_INPUT)' timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_rigid_grid_substitution_diagnostic -- --ignored --nocapture --test-threads=1
+
+diagnose-soil-native-force:
+	@test -n "$(SOIL_NATIVE_FORCE_OUTPUT)" && test ! -e "$(SOIL_NATIVE_FORCE_OUTPUT)"
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_force_terms_preserve_scalar_expressions -- --nocapture
+	@MOLLA_NATIVE_FORCE_REPLAY='$(SOIL_NATIVE_FORCE_OUTPUT)' timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_rigid_identical_grid_diagnostic -- --ignored --nocapture --test-threads=1
+
+test-soil-native-active:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_active --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_active -- --ignored --skip diagnostic --skip ordered_shell --nocapture --test-threads=1
+
+test-soil-native-mpm:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::replay_tests::native_explicit -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-frame-profile
+test-soil-frame-profile:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::replay_tests::frame_profile_window -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-machine-rounding
+SOIL_MACHINE_ROUNDING_FILTER ?= featherstone::rounding_tests::local_position_rounding
+test-soil-machine-rounding:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-kernels --features gpu --lib $(SOIL_MACHINE_ROUNDING_FILTER) -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-rounding-capture check-soil-rounding-capture
+SOIL_ROUNDING_CAPTURE_REPORT ?= $(SOIL_ROUNDING_CAPTURE)/audit.json
+test-soil-rounding-capture:
+	@perl scripts/check-soil-rounding-capture.pl --self-test
+
+check-soil-rounding-capture:
+	@test -n "$(SOIL_ROUNDING_CAPTURE)" -a -n "$(SOIL_ROUNDING_CAPTURE_LOG)" || { echo "Set SOIL_ROUNDING_CAPTURE and SOIL_ROUNDING_CAPTURE_LOG" >&2; exit 2; }
+	@perl scripts/check-soil-rounding-capture.pl "$(SOIL_ROUNDING_CAPTURE)" "$(SOIL_ROUNDING_CAPTURE_LOG)" > "$(SOIL_ROUNDING_CAPTURE_REPORT)"
+
+test-soil-runtime:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_RUNTIME_FILTER) -- --ignored --nocapture --test-threads=1
+
+test-soil-completion:
+	@$(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib rigid_world::gpu::soil_completion::tests -- --nocapture --test-threads=1
+
+test-soil-frame-backup:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::frame_backup::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-rigid-device:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_RIGID_DEVICE_FILTER) -- --ignored --nocapture --test-threads=1
+
+test-soil-solids:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::prescribed_solids::tests -- --ignored --nocapture --test-threads=1
+test-soil-store:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::tiles::store:: -- --nocapture --test-threads=1
+
+.PHONY: test-soil-store-preflight
+test-soil-store-preflight:
+	@$(MAKE) test-soil-store
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters $(REL) --lib --no-run'
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib -- --ignored --nocapture --test-threads=1 canonical_store_gpu framed_store_gpu live_gpu_boundary_save_reload_and_resume_preserve_history_and_freshness quiescence_gpu_world_identity_and_pending_boundaries
+
+.PHONY: test-soil-store-transition
+test-soil-store-transition:
+	@$(MAKE) test-soil-store
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters $(REL) --lib -- disk_selection_admission canonical_backend_dispatch --nocapture'
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters $(REL) --lib --no-run'
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib -- --ignored --nocapture --test-threads=1 disk_capacity_rejects disk_gpu_pins_join active_swept_pin_capacity_failure live_disk_capture_write_load disk_write_failure load_failure_after_durable_write canonical_live_budget_retry canonical_live_unloaded_corruption framed_disk_capacity_retry
+
+.PHONY: test-soil-store-index
+test-soil-store-index:
+	@$(MAKE) test-soil-store
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters $(REL) --lib -- disk_selection_admission canonical_backend_dispatch --nocapture'
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters $(REL) --lib --no-run'
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib -- --ignored --nocapture --test-threads=1 disk_capacity_rejects disk_gpu_pins_join active_swept_pin_capacity_failure live_disk_capture_write_load disk_write_failure load_failure_after_durable_write canonical_live_budget_retry canonical_live_unloaded_corruption framed_disk_capacity_retry canonical_store_gpu framed_store_gpu live_gpu_boundary_save_reload_and_resume_preserve_history_and_freshness
+
+.PHONY: test-soil-store-stream
+test-soil-store-stream:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::tiles::store::stream_tests -- --nocapture --test-threads=1
+
+.PHONY: test-soil-store-index-pages
+test-soil-store-index-pages:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::tiles::store::index:: -- --nocapture --test-threads=1
+
+.PHONY: test-soil-store-incremental
+test-soil-store-incremental:
+	@$(MAKE) test-soil-store
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters $(REL) --lib --no-run'
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib -- --ignored --nocapture --test-threads=1 incremental_disk_capture_write_load_and_reopen incremental_canonical_live_overlap_transfer_and_reopen incremental_framed_disk_live_overlap_steps_and_reopen
+
+test-soil-store-gpu:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::tiles::store::canonical_store::tests::canonical_store_gpu -- --ignored --nocapture --test-threads=1
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::tiles::store::tests::live_gpu_boundary -- --ignored --nocapture --test-threads=1
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::tiles::store::framed_store::tests::framed_store_gpu -- --ignored --nocapture --test-threads=1
+
+test-soil-pins:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::world::pins::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-regions:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::world::regions::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-settling:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::world::settling::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-numerical-fault:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::numerical_fault_tests -- --ignored --nocapture --test-threads=1
+
+SOIL_SETTLING_DIR ?= benchmarks/soil/settling-$(shell date +%Y%m%d-%H%M%S)
+SOIL_SETTLING_RESUME ?=
+settle-soil:
+	@[[ '$(SOIL_BENCH_SECONDS)' =~ ^[1-9][0-9]*$$ && '$(SOIL_BENCH_SECONDS)' -le 30 ]] || { echo 'Quick execution deadline must be 1 through 30 seconds'; exit 2; }
+	@test ! -e '$(SOIL_SETTLING_DIR)' || { echo 'Refusing to reuse settling output'; exit 2; }
+	@$(MAKE) build APP_TARGET='-p molla-solvers --features gpu,resource-counters --example soil_settling --release'
+	@mkdir -p '$(SOIL_SETTLING_DIR)'
+	@git rev-parse HEAD > '$(SOIL_SETTLING_DIR)/revision.txt'
+	@git status --short > '$(SOIL_SETTLING_DIR)/worktree.txt'
+	@{ printf '%s\0' Makefile Cargo.toml Cargo.lock; find crates -type f \( -name '*.rs' -o -name '*.wgsl' -o -name Cargo.toml \) -print0; } | sort -z | xargs -0 sha256sum > '$(SOIL_SETTLING_DIR)/source-sha256.txt'
+	@tar -czf '$(SOIL_SETTLING_DIR)/source.tar.gz' --null -T <({ printf '%s\0' Makefile Cargo.toml Cargo.lock; find crates -type f \( -name '*.rs' -o -name '*.wgsl' -o -name Cargo.toml \) -print0; } | sort -z)
+	@cp target/release/examples/soil_settling '$(SOIL_SETTLING_DIR)/soil_settling'
+	@sha256sum '$(SOIL_SETTLING_DIR)/soil_settling' > '$(SOIL_SETTLING_DIR)/executable-sha256.txt'
+	@$(NVIDIA_SMI) --query-gpu=timestamp,name,driver_version,utilization.gpu,temperature.gpu --format=csv > '$(SOIL_SETTLING_DIR)/hardware-before.csv'
+	@set -o pipefail; timeout --kill-after=5s $(SOIL_BENCH_SECONDS)s $(RUN_WITH) '$(SOIL_SETTLING_DIR)/soil_settling' --output '$(SOIL_SETTLING_DIR)/results' $(if $(strip $(SOIL_SETTLING_RESUME)),--resume-run '$(SOIL_SETTLING_RESUME)') 2>&1 | tee '$(SOIL_SETTLING_DIR)/run.log'; result=$$?; echo $$result > '$(SOIL_SETTLING_DIR)/run.exit'; \
+	  $(NVIDIA_SMI) --query-gpu=timestamp,name,utilization.gpu,temperature.gpu --format=csv > '$(SOIL_SETTLING_DIR)/hardware-after.csv' || exit 2; \
+	  sha256sum --check '$(SOIL_SETTLING_DIR)/source-sha256.txt' > '$(SOIL_SETTLING_DIR)/source-check.log'; source=$$?; echo $$source > '$(SOIL_SETTLING_DIR)/source.exit'; \
+	  if [ $$source -ne 0 ]; then exit $$source; fi; exit $$result
+
+SOIL_TRANSFER_FILTER ?= mpm::checkpoint::world::transfer::tests
+SOIL_TRANSFER_ARGS ?= --skip benchmark
+test-soil-transfer:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_TRANSFER_FILTER) -- --ignored --nocapture --test-threads=1 $(SOIL_TRANSFER_ARGS)
+
+test-soil-world:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::world::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-disk-world:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::world::disk::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-window:
+	@$(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --test mpm_grid_window_runtime --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --test mpm_grid_window_runtime grid_window_public_repeat_physical -- --ignored --nocapture --test-threads=1
+
+test-soil-window-integer:
+	@$(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --test mpm_integer_window_runtime --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --test mpm_integer_window_runtime integer_window_public_ -- --ignored --nocapture --test-threads=1
+
+test-soil-motion-guard:
+	@$(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib motion_guard_ --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib motion_guard_ -- --ignored --nocapture --test-threads=1
+
+test-soil-quiescence:
+	@$(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib quiescence_ --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib quiescence_gpu_ -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-quiescence-async
+test-soil-quiescence-async:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters $(REL) --lib -- --nocapture quiescence_async_ quiescence_layout_ quiescence_support_ quiescence_retained_support_ quiescence_region_support_'
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters $(REL) --lib quiescence_gpu_ --no-run'
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib -- --ignored --nocapture --test-threads=1 quiescence_gpu_async quiescence_gpu_streaks quiescence_gpu_support quiescence_gpu_retained_support quiescence_gpu_region_support quiescence_gpu_world_identity_and_pending_boundaries
+
+.PHONY: test-soil-support-async
+test-soil-support-async:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters $(REL) --lib -- --nocapture quiescence_support_ quiescence_retained_support_ quiescence_region_support_'
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters $(REL) --lib quiescence_gpu_ --no-run'
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib -- --ignored --nocapture --test-threads=1 quiescence_gpu_support quiescence_gpu_retained_support quiescence_gpu_region_support quiescence_gpu_world_identity_and_pending_boundaries
+
+test-soil-identity:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::soil_identity::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-checkpoint-async:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::asynchronous::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-tiles:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::tiles::tests -- --ignored --nocapture --test-threads=1
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::tiles::canonical::tests -- --ignored --nocapture --test-threads=1
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::tiles::framed::tests -- --ignored --nocapture --test-threads=1
+
+test-soil-checkpoint:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::tests -- --ignored --nocapture --test-threads=1
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::recenter::tests -- --ignored --nocapture --test-threads=1
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::checkpoint::frame:: -- --ignored --nocapture --test-threads=1
+
+SOIL_GATHER_FILTER ?= mpm::deterministic_p2g::tests
+SOIL_GATHER_ARGS ?= --skip benchmark
+.PHONY: test-soil-dense-gather
+.PHONY: test-soil-ordered-tractor
+SOIL_ORDERED_NEWTON_FEATURE ?= publication-products-newton
+test-soil-ordered-tractor:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,$(SOIL_ORDERED_NEWTON_FEATURE) --lib ordered_tractor_full_trajectory_capture --no-run
+	@timeout --kill-after=5s 180s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,$(SOIL_ORDERED_NEWTON_FEATURE) --lib ordered_tractor_full_trajectory_capture -- --ignored --nocapture --test-threads=1
+
+test-soil-dense-gather:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib dense_gather_dispatch_and_shader_contract -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib dense_gather_native_lifecycle_and_schedules -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib dense_gather_native_two_dimensional_dispatch -- --ignored --nocapture --test-threads=1
+
+test-soil-gather:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_GATHER_FILTER) -- --ignored --nocapture --test-threads=1 $(SOIL_GATHER_ARGS)
+
+test-soil-command-batch:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib $(SOIL_BATCH_FILTER) -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-fem-feedback test-soil-fem-viewer
+SOIL_FEM_FEEDBACK_ARGS ?= --skip benchmark
+test-soil-fem-feedback:
+	@$(MAKE) test-gpu P=molla-kernels T=soil_fem_feedback_gpu GPU_FEATURES='gpu,resource-counters' A='$(SOIL_FEM_FEEDBACK_ARGS) --nocapture --test-threads=1'
+
+test-soil-fem-viewer:
+	@$(RUN_WITH) $(CARGO) test -p molla_viewer --bin molla_viewer soil_retained_fem_bridge -- --ignored --nocapture --test-threads=1
+
+test-soil-feedback:
+	@$(MAKE) test-soil-fem-feedback
+	@$(MAKE) test-soil-fem-viewer
+	@$(MAKE) test-gpu P=molla-kernels T=soil_mpm_feedback_gpu GPU_FEATURES='gpu,resource-counters' A='--nocapture --test-threads=1'
+	@$(MAKE) test-gpu P=molla-solvers T=mpm_gpu GPU_FEATURES='gpu,resource-counters' A='mpm_retained_feedback --nocapture --test-threads=1'
+
+test-soil-sort:
+	@$(MAKE) test-gpu P=molla-compute-primitives T=radix_sort_gpu GPU_FEATURES='gpu,resource-counters' A='--skip benchmark --nocapture --test-threads=1'
+
+test-soil-particle-order:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu,resource-counters --lib mpm::particle_order::tests -- --ignored --skip ordering_matched_inputs_and_trajectory_repeats --nocapture --test-threads=1
+
+.PHONY: test-soil-order-replay
+test-soil-order-replay:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib ordering_matched_inputs_and_trajectory_repeats --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib ordering_matched_inputs_and_trajectory_repeats -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-local-transfer
+test-soil-local-transfer:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib local_transfer_ --no-run
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib local_transfer_source_contract -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib local_transfer_uniform_grid_affine_moment -- --ignored --nocapture --test-threads=1
+
+.PHONY: report-soil-frontier test-soil-frontier
+report-soil-frontier:
+	@test -n '$(BASELINE)' -a -n '$(INPUT)' -a -n '$(SOIL_FRONTIER_OUTPUT)' || { echo 'BASELINE and INPUT must name data directories; SOIL_FRONTIER_OUTPUT must be fresh'; exit 2; }
+	@$(CARGO) run --release -p molla-solvers --example soil_benchmark -- frontier --reference '$(BASELINE)' --input '$(INPUT)' --output '$(SOIL_FRONTIER_OUTPUT)'
+test-soil-frontier:
+	@$(CARGO) test --release -p molla-solvers --example soil_benchmark frontier::tests -- --nocapture
+
+check-soil-results:
+	@test -n '$(INPUT)' || { echo 'INPUT must name a soil result directory'; exit 2; }
+	@$(CARGO) run --release -p molla-solvers --example soil_benchmark -- check --input '$(INPUT)' --output '$(if $(SOIL_CHECK_OUTPUT),$(SOIL_CHECK_OUTPUT),$(INPUT))' $(if $(BASELINE),--baseline '$(BASELINE)',) $(if $(INSTRUMENTATION_BASELINE),--instrumentation-baseline '$(INSTRUMENTATION_BASELINE)',)
+
+test-soil-sparse-map:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu --lib mpm::active_tiles::tests::sparse_hash_collisions_retirement_and_overflow -- --exact --ignored --nocapture --test-threads=1
+
+test-soil-wrench-replay:
+	@$(RUN_WITH) $(CARGO) test $(REL) -p molla-solvers --features gpu --lib mpm::replay_tests::mpm_identical_grid_wrench_replay -- --exact --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-newton-root
+test-soil-newton-protected:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton --lib newton_ --no-run
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton --lib newton_ -- --nocapture
+	@MOLLA_NEWTON_TEST_CONDITIONED=1 timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton --lib resident_newton_fischer_pairs_ -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton --lib newton_native_mpm_publication_and_feedback -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-newton-protected
+.PHONY: test-soil-contact-profile
+.PHONY: test-soil-newton-history
+.PHONY: test-soil-newton-adjacent
+.PHONY: test-soil-newton-wide
+.PHONY: test-soil-newton-delta-cache
+test-soil-newton-delta-cache:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,wide-newton --lib newton_delta_cache_ -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,wide-newton --lib newton_delta_cache_ -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-newton-cached
+.PHONY: test-soil-newton-parallel-release
+test-soil-newton-parallel-release:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,cached-newton --lib newton_parallel_release_ -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,cached-newton --lib newton_parallel_release_ -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-newton-parallel-core
+test-soil-newton-parallel-core:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,cached-newton --lib newton_parallel_core_gpu_edges --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,cached-newton --lib newton_parallel_core_gpu_edges -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-newton-parallel-runtime
+.PHONY: test-soil-newton-volatile
+test-soil-newton-volatile:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,parallel-newton --lib newton_volatile_ -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,parallel-newton --lib newton_volatile_pairs_gpu -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-parallel-runtime:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,parallel-newton --lib newton_ -- --nocapture
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,parallel-newton --example soil_tractor_benchmark
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,parallel-newton --lib newton_failure_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,parallel-newton --lib newton_native_mpm_publication_and_feedback -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-newton-tiled-core
+test-soil-newton-tiled-core:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,volatile-newton --lib newton_tiled_core_source_contract -- --nocapture
+	@MOLLA_NEWTON_TILED_EDGES=1 timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,volatile-newton --lib newton_parallel_core_gpu_edges -- --ignored --nocapture --test-threads=1
+
+.PHONY: inspect-soil-newton-pipeline
+.PHONY: test-soil-newton-initialization
+.PHONY: test-soil-newton-row-products
+.PHONY: test-soil-newton-norm-tree
+.PHONY: test-soil-newton-active-publication
+.PHONY: test-soil-newton-zero-publication
+.PHONY: test-soil-newton-publication-products
+.PHONY: test-soil-newton-retained-direct
+.PHONY: test-soil-newton-direct-quality
+.PHONY: test-soil-newton-retained-direct-quality
+test-soil-newton-retained-direct-quality:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_retained_direct_quality -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_retained_direct_quality_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-direct-quality:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_direct_quality -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_direct_quality_gpu_ratios -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-retained-direct:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_retained_direct -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_retained_direct_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-newton-publication-validation
+test-soil-newton-publication-validation:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_publication_validation -- --nocapture
+	@MOLLA_NEWTON_NORM_COMPARE=publication-validation timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_publication_validation -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-newton-publication-adaptive
+test-soil-newton-publication-adaptive:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_publication_adaptive -- --nocapture
+	@MOLLA_NEWTON_NORM_COMPARE=publication-adaptive timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_publication_adaptive_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-publication-products:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,active-publication-newton --lib newton_publication_products_preserve_order_and_scratch_bounds -- --nocapture
+	@MOLLA_NEWTON_NORM_COMPARE=publication-products timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,active-publication-newton --lib newton_publication_products_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-zero-publication:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,active-publication-newton --lib newton_zero_publication_preserves_validation_and_first_axis -- --nocapture
+	@MOLLA_NEWTON_NORM_COMPARE=publication-zero timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,active-publication-newton --lib newton_zero_publication_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-active-publication:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,norm-tree-newton --lib newton_active_publication_gpu_lifecycle --no-run
+	@MOLLA_NEWTON_NORM_COMPARE=publication-active timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,norm-tree-newton --lib newton_active_publication_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-norm-tree:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,schur-newton --lib newton_norm_tree_gpu_edges --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,schur-newton --lib newton_norm_tree_gpu_edges -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-row-products:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,schur-newton --lib newton_row_products_gpu_edges --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,schur-newton --lib newton_row_products_gpu_edges -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-initialization:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,schur-newton --lib newton_loop_local_initialization_gpu_diagnostic --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,schur-newton --lib newton_loop_local_initialization_gpu_diagnostic -- --ignored --nocapture --test-threads=1
+
+inspect-soil-newton-pipeline:
+	@$(CARGO) build --release -p molla-solvers --features gpu,resource-counters,volatile-newton --example soil_pipeline_statistics
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) run --release -p molla-solvers --features gpu,resource-counters,volatile-newton --example soil_pipeline_statistics -- $(if $(SOIL_NEWTON_SPV),$(SOIL_NEWTON_SPV),--list)
+
+.PHONY: test-soil-newton-volatile-runtime
+.PHONY: test-soil-newton-schur-runtime
+.PHONY: test-soil-newton-norm-runtime
+.PHONY: test-soil-newton-active-publication-runtime
+.PHONY: test-soil-newton-publication-products-runtime
+.PHONY: test-soil-newton-retained-local-runtime
+test-soil-newton-retained-local-runtime:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_ -- --nocapture
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib retained_conditioned_core -- --nocapture
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --example soil_tractor_benchmark
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib retained_conditioned_core_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_failure_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,retained-local-newton --lib newton_native_mpm_publication_and_feedback -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-publication-products-runtime:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,publication-products-newton --lib newton_ -- --nocapture
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,publication-products-newton --example soil_tractor_benchmark
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,publication-products-newton --lib newton_failure_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,publication-products-newton --lib newton_native_mpm_publication_and_feedback -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-newton-publication-shadow
+.PHONY: test-soil-newton-publication-products-shadow
+test-soil-newton-publication-products-shadow:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,publication-products-newton --lib newton_ -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,publication-products-newton --lib newton_shadow_comparator_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-dem-refit test-soil-dem-refit-gpu
+test-soil-dem-refit:
+	@$(CARGO) test --release -p molla-kernels --features gpu,resource-counters --lib --test soil_dem_topology_gpu --test soil_residency_gpu --no-run
+	@$(CARGO) test --release -p molla-kernels --features gpu,resource-counters --lib dem_ordered_refit_source_contract -- --nocapture
+	@$(CARGO) test --release -p molla-kernels --features gpu,resource-counters --lib dem_grouped_refit_source_and_tree_partition -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(MAKE) test-soil-dem-refit-gpu
+
+test-soil-dem-refit-gpu:
+	@set -e; output=$$(mktemp -d "$${SOIL_DEM_REFIT_OUTPUT_PARENT:-$${TMPDIR:-/tmp}}/molla-dem-refit.XXXXXX"); \
+		echo "DEM exact-check evidence: $$output"; \
+		MOLLA_DEM_GROUPED_OUTPUT="$$output/tree" $(CARGO) test --release -p molla-kernels --features gpu,resource-counters --lib dem_grouped_refit_gpu_tree_and_trajectory -- --ignored --nocapture --test-threads=1; \
+		MOLLA_DEM_ORDERED_OUTPUT="$$output/trajectory" $(CARGO) test --release -p molla-kernels --features gpu,resource-counters --lib dem_ordered_refit_exact_trajectory_and_overflow -- --ignored --nocapture --test-threads=1
+	@$(CARGO) test --release -p molla-kernels --features gpu,resource-counters --test soil_dem_topology_gpu -- --ignored --nocapture --test-threads=1
+	@$(CARGO) test --release -p molla-kernels --features gpu,resource-counters --test soil_residency_gpu -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-native-fast-compensation
+test-soil-native-fast-compensation:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib compensated_source_keeps_native_scatter_and_explicit_scope -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib native_fast_residual_matches_independent_f64_reference -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-publication-shadow:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,active-publication-newton --lib newton_ -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,active-publication-newton --lib newton_shadow_comparator_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-active-publication-runtime:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,active-publication-newton --lib newton_ -- --nocapture
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,active-publication-newton --example soil_tractor_benchmark
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,active-publication-newton --lib newton_failure_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,active-publication-newton --lib newton_native_mpm_publication_and_feedback -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-norm-runtime:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,norm-tree-newton --lib newton_ -- --nocapture
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,norm-tree-newton --example soil_tractor_benchmark
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,norm-tree-newton --lib newton_norm_tree_gpu_edges -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,norm-tree-newton --lib newton_failure_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,norm-tree-newton --lib newton_native_mpm_publication_and_feedback -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-schur-runtime:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,schur-newton --lib newton_ -- --nocapture
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,schur-newton --example soil_tractor_benchmark
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,schur-newton --lib newton_schur_inverse_gpu_edges -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,schur-newton --lib newton_failure_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,schur-newton --lib newton_native_mpm_publication_and_feedback -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-newton-schur-inverse-edges
+test-soil-newton-schur-inverse-edges:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,volatile-newton --lib newton_schur_inverse --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,volatile-newton --lib newton_schur_inverse_gpu_edges -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-volatile-runtime:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,volatile-newton --lib newton_ -- --nocapture
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,volatile-newton --example soil_tractor_benchmark
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,volatile-newton --lib newton_parallel_core_gpu_edges -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,volatile-newton --lib newton_failure_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,volatile-newton --lib newton_native_mpm_publication_and_feedback -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-cached:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,cached-newton --lib newton_ -- --nocapture
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,cached-newton --example soil_tractor_benchmark
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,cached-newton --lib newton_failure_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,cached-newton --lib newton_native_mpm_publication_and_feedback -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-wide:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,wide-newton --lib newton_ -- --nocapture
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,wide-newton --example soil_tractor_benchmark
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,wide-newton --lib newton_failure_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,wide-newton --lib newton_native_mpm_publication_and_feedback -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-adjacent:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton,adjacent-newton --lib newton_ -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton,adjacent-newton --lib newton_history_gpu_ -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-history:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton,warm-newton --lib newton_ -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton,warm-newton --lib newton_history_gpu_keys_faults_and_reset -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton,warm-newton --lib newton_failure_gpu_lifecycle -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton,warm-newton --lib newton_native_mpm_publication_and_feedback -- --ignored --nocapture --test-threads=1
+
+test-soil-contact-profile:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton --lib newton_contact_profile_contract -- --nocapture
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton --lib newton_native_mpm_profile_equivalence -- --ignored --nocapture --test-threads=1
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton --lib frame_profile_window -- --ignored --nocapture --test-threads=1
+
+test-soil-newton-publication:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton --lib newton_publication --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters,protected-newton --lib newton_publication -- --ignored --nocapture --test-threads=1 --skip captured_input --skip capture_timing --skip trace_oracle
+
+.PHONY: test-soil-newton-publication
+test-soil-newton-root:
+	@$(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib fischer_pairs_gpu_root_product --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features gpu,resource-counters --lib fischer_pairs_gpu_root_product -- --ignored --nocapture --test-threads=1
+
+test-soil-fast:
+	@case "$(PHASE)" in \
+	  S00) $(MAKE) test APP_TARGET='-p molla-solvers --test soil_benchmark_contract -- --nocapture' && $(MAKE) test-soil-frontier ;; \
+	  S01) $(MAKE) test APP_TARGET='-p molla-kernels --features gpu --test soil_material_gpu -- --nocapture' && $(MAKE) test APP_TARGET='-p molla_viewer --bin molla_viewer tire_testbench_soil_selection_tests -- --nocapture' ;; \
+	  S02) $(MAKE) test APP_TARGET='-p molla-kernels --features gpu --lib soil_mpm_raster::tests -- --nocapture' ;; \
+	  S03) $(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --test soil_mpm_observation_gpu --release -- --nocapture' && $(MAKE) test APP_TARGET='-p molla_viewer --bin molla_viewer tire_testbench_soil_selection_tests -- --nocapture' ;; \
+	  S06) $(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters --lib mpm::fused_gather::tests --release -- --nocapture' ;; \
+	  S07) $(MAKE) test APP_TARGET='-p molla-vehicle $(REL) --lib soil_state:: -- --nocapture' && $(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters $(REL) --lib mpm::checkpoint:: -- --nocapture' && $(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters $(REL) --lib mpm::soil_identity::tests -- --nocapture' ;; \
+	  *) echo 'Implemented fast lanes: PHASE=S00 through S03, S06, S07 (focused increments, not full-plan acceptance)'; exit 2 ;; \
+	esac
+
+test-soil-gpu: $(if $(filter S03,$(PHASE)),test-soil-frame-loads-gpu test-soil-geometry-program-cache-gpu)
+	@case "$(PHASE)" in \
+	  S01) $(MAKE) test-gpu P=molla-kernels T=soil_material_gpu GPU_FEATURES='gpu,resource-counters' A='--nocapture --test-threads=1' ;; \
+	  S02) $(MAKE) test-gpu P=molla-kernels T=soil_raster_gpu A='--skip raster_benchmark --nocapture --test-threads=1' ;; \
+	  S03) $(MAKE) test-soil-particle-render && $(MAKE) test-soil-command-batch && $(MAKE) test-soil-feedback && $(MAKE) test-gpu P=molla-kernels T=soil_residency_gpu GPU_FEATURES='gpu,resource-counters' A='--skip benchmark --nocapture --test-threads=1' && $(MAKE) test-gpu P=molla-kernels T=soil_mpm_snapshot_gpu GPU_FEATURES='gpu,resource-counters' A='--nocapture --test-threads=1' && $(MAKE) test-gpu P=molla-kernels T=soil_mpm_observation_gpu GPU_FEATURES='gpu,resource-counters' A='--nocapture --test-threads=1' && $(MAKE) test-gpu P=molla-solvers T=mpm_gpu GPU_FEATURES='gpu,resource-counters' A='mpm_terrain_only_bridge --skip benchmark --nocapture --test-threads=1' ;; \
+	  S04) $(MAKE) test-soil-dem-refit ;; \
+	  S05) $(MAKE) test-gpu P=molla-solvers T=mpm_active_tiles_gpu GPU_FEATURES='gpu,resource-counters' A='--skip benchmark --skip mpm_profile --skip mpm_transfer --nocapture --test-threads=1' && $(MAKE) test-gpu P=molla-solvers T=mpm_sparse_grid_gpu GPU_FEATURES='gpu,resource-counters' A='--nocapture --test-threads=1' && $(MAKE) test-soil-sparse-map && $(MAKE) test-soil-particle-order && $(MAKE) test-soil-native-active ;; \
+	  S06) $(MAKE) test-gpu P=molla-solvers T=mpm_active_tiles_gpu GPU_FEATURES='gpu,resource-counters' A='mpm_profile --skip benchmark --nocapture --test-threads=1' && $(MAKE) test-gpu P=molla-solvers T=mpm_active_tiles_gpu GPU_FEATURES='gpu,resource-counters' A='mpm_transfer --nocapture --test-threads=1' && $(MAKE) test-soil-sort && $(MAKE) test-soil-gather && $(MAKE) test-soil-fusion ;; \
+	  S07) $(MAKE) test-soil-checkpoint && $(MAKE) test-soil-tiles && $(MAKE) test-soil-checkpoint-async && $(MAKE) test-soil-identity && $(MAKE) test-soil-world && $(MAKE) test-soil-disk-world && $(MAKE) test-soil-window && $(MAKE) test-soil-window-integer && $(MAKE) test-soil-transfer && $(MAKE) test-soil-pins && $(MAKE) test-soil-regions && $(MAKE) test-soil-motion-guard && $(MAKE) test-soil-quiescence && $(MAKE) test-soil-settling && $(MAKE) test-soil-numerical-fault && $(MAKE) test-soil-store-gpu && $(MAKE) test-soil-store-incremental ;; \
+	  *) echo 'Implemented GPU lanes: PHASE=S01 through S07 (focused increments, not full-plan acceptance)'; exit 2 ;; \
+	esac
+
+SOIL_RUN_DIR ?= benchmarks/soil/$(shell date -u +%Y%m%dT%H%M%S)
+SOIL_BENCH_SECONDS ?= 30
+SOIL_TRACTOR_BENCH_SECONDS ?= 300
+SOIL_TRACTOR_BENCH_TIMELINE ?= 1
+SOIL_TRACTOR_BENCH_FRAMES ?= 30
+SOIL_TRACTOR_BENCH_WARMUP ?= 3
+SOIL_TRACTOR_BENCH_PROFILE ?= 0
+SOIL_TRACTOR_BENCH_PREPARATION_PROFILE ?= 0
+SOIL_TRACTOR_BENCH_LOADS ?= 0
+SOIL_TRACTOR_BENCH_CONTACT_MOTION ?= 0
+SOIL_TRACTOR_BENCH_COUPLING_NODES ?= 0
+SOIL_TRACTOR_BENCH_UNILATERAL_NODES ?= 0
+SOIL_TRACTOR_BENCH_UNILATERAL_MARGIN ?= 0.05
+SOIL_TRACTOR_BENCH_UNILATERAL_ITERATIONS ?= 64
+SOIL_TRACTOR_BENCH_FRICTION_MU ?=
+SOIL_TRACTOR_BENCH_FRICTION_WALLS ?=
+SOIL_TRACTOR_FRICTION_ARGS = $(if $(strip $(SOIL_TRACTOR_BENCH_FRICTION_MU)),--friction-mu '$(SOIL_TRACTOR_BENCH_FRICTION_MU)') $(if $(strip $(SOIL_TRACTOR_BENCH_FRICTION_WALLS)),--friction-walls '$(SOIL_TRACTOR_BENCH_FRICTION_WALLS)') --newton-soil '$(SOIL_TRACTOR_BENCH_NEWTON)'
+SOIL_TRACTOR_UNILATERAL_ARGS = $(if $(filter-out 0,$(SOIL_TRACTOR_BENCH_UNILATERAL_NODES)),--unilateral-nodes '$(SOIL_TRACTOR_BENCH_UNILATERAL_NODES)' --unilateral-margin '$(SOIL_TRACTOR_BENCH_UNILATERAL_MARGIN)' --unilateral-iterations '$(SOIL_TRACTOR_BENCH_UNILATERAL_ITERATIONS)')
+SOIL_TRACTOR_BENCH_ROUNDING ?= storage
+SOIL_TRACTOR_BENCH_BOUNDARY_SCAN ?= full
+SOIL_TRACTOR_BENCH_CAPTURE_EVERY ?= 0
+SOIL_TRACTOR_BENCH_EXECUTION ?= generic
+SOIL_TRACTOR_BENCH_GRID ?= dense
+SOIL_TRACTOR_BENCH_TRANSFER ?= atomic
+SOIL_TRACTOR_BENCH_FINAL_STATE ?= 0
+SOIL_TRACTOR_BENCH_MOTION_BOUND ?= off
+SOIL_TRACTOR_BENCH_MOTION_FUSION ?= 0
+SOIL_TRACTOR_FIXED_ORDER_FEATURES ?= gpu,resource-counters,native-lazy-geometry-drift,parallel-indices-newton,strict-rounding-newton-preparation,parallel-candidate-index,deferred-native-drift
+.PHONY: test-soil-tractor-fixed-order
+test-soil-tractor-fixed-order:
+	@$(CARGO) test --release -p molla-solvers --features $(SOIL_TRACTOR_FIXED_ORDER_FEATURES) --test soil_tractor_fixed_order --no-run
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test --release -p molla-solvers --features $(SOIL_TRACTOR_FIXED_ORDER_FEATURES) --test soil_tractor_fixed_order tractor_fixed_order_public_constructor_and_repeatability -- --ignored --nocapture --test-threads=1
+SOIL_TRACTOR_BENCH_PAIRED_RATES ?= 0
+SOIL_TRACTOR_BENCH_NATIVE_PREDICTION ?= 0
+SOIL_TRACTOR_BENCH_NEWTON ?= 0
+SOIL_REPLAY_RUN ?=
+SOIL_REPLAY_OUTPUT ?=
+SOIL_REPLAY_FRAME ?= final
+.PHONY: render-soil-tractor test-soil-replay
+SOIL_LIVE_OUTPUT ?=
+SOIL_LIVE_FRAMES ?= 3
+SOIL_LIVE_PARTICLES ?= 0
+SOIL_LIVE_HEADLESS ?= 0
+SOIL_LIVE_PROFILE ?= volatile
+SOIL_LIVE_TRANSFER ?= atomic
+SOIL_LIVE_PREDICTION ?= featherstone
+SOIL_LIVE_PREPARATION ?= default
+SOIL_LIVE_SUBMISSIONS ?= separate
+SOIL_LIVE_STAGE_PROFILE ?= 0
+SOIL_LIVE_DRIFT ?= full
+SOIL_LIVE_GEOMETRY ?= eager
+SOIL_LIVE_COMMA := ,
+SOIL_LIVE_FEATURES = $(if $(filter soa,$(SOIL_LIVE_PROFILE)),soil-live-soa,soil-live)$(if $(filter cooperative,$(SOIL_LIVE_PREPARATION)),$(SOIL_LIVE_COMMA)soil-live-row-preparation)$(if $(filter composed,$(SOIL_LIVE_SUBMISSIONS)),$(SOIL_LIVE_COMMA)soil-live-batched-projection)$(if $(filter deferred,$(SOIL_LIVE_DRIFT)),$(SOIL_LIVE_COMMA)soil-live-deferred-drift)$(if $(filter native-lazy,$(SOIL_LIVE_GEOMETRY)),$(SOIL_LIVE_COMMA)soil-live-native-lazy-drift)
+.PHONY: view-soil-tractor test-soil-live-viewer capture-soil-tractor-live
+.PHONY: test-soil-surface test-soil-surface-gpu
+.PHONY: test-soil-terrain-queries test-soil-terrain-queries-gpu
+.PHONY: test-soil-brush-terrain test-soil-brush-terrain-gpu
+.PHONY: test-soil-prepared-chassis test-soil-prepared-chassis-gpu
+.PHONY: test-soil-prepared-fem test-soil-prepared-fem-gpu
+test-soil-prepared-fem:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --lib prepared_vehicle_fem_byte_contract -- --nocapture'
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --test tire_fem_gpu --no-run'
+
+test-soil-prepared-fem-gpu: test-soil-prepared-fem
+	@$(RUN_WITH) timeout --kill-after=5s 90s $(CARGO) test -p molla-kernels --features gpu,resource-counters --release --test tire_fem_gpu tire_fem_resident_vehicle_fem_atlas_owner_steps_gpu -- --ignored --nocapture --test-threads=1
+
+test-soil-prepared-chassis:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --lib prepared_chassis_step_budget_and_uniform_contract -- --nocapture'
+	@$(MAKE) test-soil-brush-terrain
+
+test-soil-prepared-chassis-gpu: test-soil-prepared-chassis
+	@$(RUN_WITH) timeout --kill-after=5s 90s $(CARGO) test -p molla-kernels --features gpu,resource-counters --release --test tire_vehicle_gpu resident_terrain_ -- --ignored --nocapture --test-threads=1
+
+test-soil-brush-terrain:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --lib prepared_brush_terrain_buffer_contract -- --nocapture'
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --test tire_vehicle_gpu --no-run'
+
+test-soil-brush-terrain-gpu: test-soil-brush-terrain
+	@$(RUN_WITH) timeout --kill-after=5s 90s $(CARGO) test -p molla-kernels --features gpu,resource-counters --release --test tire_vehicle_gpu resident_terrain_ -- --ignored --nocapture --test-threads=1
+
+test-soil-terrain-queries:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --lib soil_terrain_query_layout_and_source -- --nocapture'
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --test soil_terrain_queries_gpu --no-run'
+
+test-soil-terrain-queries-gpu: test-soil-terrain-queries
+	@$(RUN_WITH) timeout --kill-after=5s 90s $(CARGO) test -p molla-kernels --features gpu,resource-counters --release --test soil_terrain_queries_gpu -- --ignored --nocapture --test-threads=1
+
+test-soil-surface:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --lib soil_surface -- --nocapture'
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --test soil_surface_gpu --no-run'
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters --release --test mpm_surface_gpu --no-run'
+
+test-soil-surface-gpu: test-soil-surface
+	@$(RUN_WITH) timeout --kill-after=5s 90s $(CARGO) test -p molla-kernels --features gpu,resource-counters --release --test soil_surface_gpu -- --ignored --nocapture --test-threads=1
+	@$(RUN_WITH) timeout --kill-after=5s 90s $(CARGO) test -p molla-solvers --features gpu,resource-counters --release --test mpm_surface_gpu -- --ignored --nocapture --test-threads=1
+
+.PHONY: check-soil-live-profile
+check-soil-live-profile:
+	@case '$(SOIL_LIVE_PROFILE)' in volatile|soa) ;; *) echo 'SOIL_LIVE_PROFILE must be volatile or soa'; exit 2 ;; esac
+	@case '$(SOIL_LIVE_TRANSFER)' in atomic|fixed-order|grid-reuse) ;; *) echo 'SOIL_LIVE_TRANSFER must be atomic, fixed-order or grid-reuse'; exit 2 ;; esac
+	@case '$(SOIL_LIVE_PREDICTION)' in featherstone|native) ;; *) echo 'SOIL_LIVE_PREDICTION must be featherstone or native'; exit 2 ;; esac
+	@case '$(SOIL_LIVE_PREPARATION)' in default|cooperative) ;; *) echo 'SOIL_LIVE_PREPARATION must be default or cooperative'; exit 2 ;; esac
+	@case '$(SOIL_LIVE_SUBMISSIONS)' in separate|composed) ;; *) echo 'SOIL_LIVE_SUBMISSIONS must be separate or composed'; exit 2 ;; esac
+	@case '$(SOIL_LIVE_STAGE_PROFILE)' in 0|1) ;; *) echo 'SOIL_LIVE_STAGE_PROFILE must be 0 or 1'; exit 2 ;; esac
+	@case '$(SOIL_LIVE_DRIFT)' in full|deferred) ;; *) echo 'SOIL_LIVE_DRIFT must be full or deferred'; exit 2 ;; esac
+	@case '$(SOIL_LIVE_GEOMETRY)' in eager|native-lazy) ;; *) echo 'SOIL_LIVE_GEOMETRY must be eager or native-lazy'; exit 2 ;; esac
+	@test '$(SOIL_LIVE_DRIFT)' != deferred -o '$(SOIL_LIVE_PREDICTION)' = native || { echo 'Deferred drift requires SOIL_LIVE_PREDICTION=native'; exit 2; }
+
+test-soil-live-viewer: check-soil-live-profile
+	@$(MAKE) test APP_TARGET='-p molla_viewer --features $(SOIL_LIVE_FEATURES) --bin soil_tractor_viewer --release -- --nocapture'
+
+.PHONY: test-soil-frame-loads-gpu
+.PHONY: test-soil-machine-profile test-soil-machine-profile-gpu
+test-soil-machine-profile:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters --release --lib rigid_world::gpu::soil::profile::tests -- --nocapture'
+
+test-soil-machine-profile-gpu:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters --release --lib --no-run'
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test -p molla-solvers --features gpu,resource-counters --release --lib rigid_world::gpu::soil::profile::tests::machine_profile_retains_slots_and_reuses_without_allocations -- --exact --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-geometry-program-cache-gpu
+test-soil-geometry-program-cache-gpu:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters --release --lib geometry_program_cache_lifecycle --no-run'
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test -p molla-solvers --features gpu,resource-counters --release --lib geometry_program_cache_lifecycle -- --ignored --nocapture --test-threads=1
+
+test-soil-frame-loads-gpu:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters --release --lib rigid_world::gpu::soil::loads:: --no-run'
+	@timeout --kill-after=5s 90s $(RUN_WITH) $(CARGO) test -p molla-solvers --features gpu,resource-counters --release --lib rigid_world::gpu::soil::loads:: -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-soil-live-idle-surface-gpu
+test-soil-live-idle-surface-gpu: check-soil-live-profile
+	@$(MAKE) test APP_TARGET='-p molla_viewer --features $(SOIL_LIVE_FEATURES) --bin soil_tractor_viewer --release --no-run'
+	@timeout --kill-after=5s 180s $(RUN_WITH) $(CARGO) test -p molla_viewer --features $(SOIL_LIVE_FEATURES) --bin soil_tractor_viewer --release live::tests::idle_surface_worker_gpu -- --ignored --exact --nocapture --test-threads=1
+
+view-soil-tractor: check-soil-live-profile
+	@test '$(SOIL_LIVE_STAGE_PROFILE)' = 0 || { echo 'Stage profiling requires capture-soil-tractor-live'; exit 2; }
+	@[[ '$(SOIL_LIVE_PARTICLES)' == 0 || '$(SOIL_LIVE_PARTICLES)' == 1 ]] || { echo 'SOIL_LIVE_PARTICLES must be 0 or 1'; exit 2; }
+	@$(MAKE) run APP_TARGET='-p molla_viewer --features $(SOIL_LIVE_FEATURES) --bin soil_tractor_viewer --release -- --expect-profile $(SOIL_LIVE_PROFILE) --expect-preparation $(SOIL_LIVE_PREPARATION) --expect-submissions $(SOIL_LIVE_SUBMISSIONS) --expect-geometry $(SOIL_LIVE_GEOMETRY) --expect-drift $(SOIL_LIVE_DRIFT) --soil-transfer $(SOIL_LIVE_TRANSFER) --machine-prediction $(SOIL_LIVE_PREDICTION) $(if $(filter 1,$(SOIL_LIVE_PARTICLES)),--particles)'
+
+capture-soil-tractor-live: check-soil-live-profile
+	@[[ '$(SOIL_LIVE_PARTICLES)' == 0 || '$(SOIL_LIVE_PARTICLES)' == 1 ]] || { echo 'SOIL_LIVE_PARTICLES must be 0 or 1'; exit 2; }
+	@[[ '$(SOIL_LIVE_HEADLESS)' == 0 || '$(SOIL_LIVE_HEADLESS)' == 1 ]] || { echo 'SOIL_LIVE_HEADLESS must be 0 or 1'; exit 2; }
+	@test -n '$(SOIL_LIVE_OUTPUT)' -a ! -e '$(SOIL_LIVE_OUTPUT)' || { echo 'Set a fresh SOIL_LIVE_OUTPUT directory'; exit 2; }
+	@[[ '$(SOIL_LIVE_FRAMES)' =~ ^[1-9][0-9]*$$ && '$(SOIL_LIVE_FRAMES)' -le 330 ]] || { echo 'Live capture frames must be 1..330'; exit 2; }
+	@$(MAKE) build APP_TARGET='-p molla_viewer --features $(SOIL_LIVE_FEATURES) --bin soil_tractor_viewer --release'
+	@mkdir -p '$(SOIL_LIVE_OUTPUT)'
+	@git rev-parse HEAD > '$(SOIL_LIVE_OUTPUT)/revision.txt'
+	@git status --short > '$(SOIL_LIVE_OUTPUT)/worktree.txt'
+	@{ printf '%s\0' Makefile Cargo.toml Cargo.lock scripts/stop-soil-telemetry.sh; find crates bin/molla_viewer -type f \( -name '*.rs' -o -name '*.wgsl' -o -name 'Cargo.toml' \) -print0; } | sort -z | xargs -0 sha256sum > '$(SOIL_LIVE_OUTPUT)/source-sha256.txt'
+	@tar -czf '$(SOIL_LIVE_OUTPUT)/source.tar.gz' --null -T <({ printf '%s\0' Makefile Cargo.toml Cargo.lock scripts/stop-soil-telemetry.sh; find crates bin/molla_viewer -type f \( -name '*.rs' -o -name '*.wgsl' -o -name 'Cargo.toml' \) -print0; } | sort -z)
+	@sha256sum target/release/soil_tractor_viewer > '$(SOIL_LIVE_OUTPUT)/executable-sha256.txt'
+	@set -o pipefail; \
+	  $(NVIDIA_SMI) --query-gpu=timestamp,utilization.gpu,memory.used,temperature.gpu,power.draw --format=csv -lms 500 > '$(SOIL_LIVE_OUTPUT)/hardware-timeline.csv' 2>&1 & monitor=$$!; \
+	  trap 'bash scripts/stop-soil-telemetry.sh "$(SOIL_LIVE_OUTPUT)/hardware-timeline.csv"; kill "$$monitor" 2>/dev/null || true; wait "$$monitor" 2>/dev/null || true' EXIT; \
+	  timeout --kill-after=5s 180s $(RUN_WITH) target/release/soil_tractor_viewer --expect-profile '$(SOIL_LIVE_PROFILE)' --expect-preparation '$(SOIL_LIVE_PREPARATION)' --expect-submissions '$(SOIL_LIVE_SUBMISSIONS)' --expect-geometry '$(SOIL_LIVE_GEOMETRY)' --expect-drift '$(SOIL_LIVE_DRIFT)' --soil-transfer '$(SOIL_LIVE_TRANSFER)' --machine-prediction '$(SOIL_LIVE_PREDICTION)' --capture-dir '$(SOIL_LIVE_OUTPUT)/capture' --frames '$(SOIL_LIVE_FRAMES)' $(if $(filter 1,$(SOIL_LIVE_PARTICLES)),--particles) $(if $(filter 1,$(SOIL_LIVE_HEADLESS)),--headless) $(if $(filter 1,$(SOIL_LIVE_STAGE_PROFILE)),--profile-stages) > '$(SOIL_LIVE_OUTPUT)/run.log' 2>&1; result=$$?; \
+	  echo $$result > '$(SOIL_LIVE_OUTPUT)/run.exit'; \
+	  sha256sum -c '$(SOIL_LIVE_OUTPUT)/source-sha256.txt' > '$(SOIL_LIVE_OUTPUT)/source-check.log'; source_result=$$?; echo $$source_result > '$(SOIL_LIVE_OUTPUT)/source-check.exit'; \
+	  if [[ $$result == 0 ]]; then result=$$source_result; fi; exit $$result
+	@test -s '$(SOIL_LIVE_OUTPUT)/capture/committed-frame.png'
+	@grep -q '"event":"capture_complete"' '$(SOIL_LIVE_OUTPUT)/capture/frames.jsonl'
+
+test-soil-replay:
+	@$(MAKE) test APP_TARGET='-p molla_viewer --example soil_tractor_replay --release -- --nocapture'
+
+render-soil-tractor:
+	@test -n '$(SOIL_REPLAY_RUN)' -a -n '$(SOIL_REPLAY_OUTPUT)' || { echo 'Set SOIL_REPLAY_RUN and a new SOIL_REPLAY_OUTPUT directory'; exit 2; }
+	@test ! -e '$(SOIL_REPLAY_OUTPUT)' || { echo 'Refusing to overwrite replay output'; exit 2; }
+	@$(MAKE) build APP_TARGET='-p molla_viewer --example soil_tractor_replay --release'
+	@timeout --kill-after=5s 120s $(RUN_WITH) target/release/examples/soil_tractor_replay '$(SOIL_REPLAY_RUN)' '$(SOIL_REPLAY_OUTPUT)' '$(SOIL_REPLAY_FRAME)'
+	@test -s '$(SOIL_REPLAY_OUTPUT)/snapshot.png'
+
+.PHONY: bench-soil-tractor
+.PHONY: test-soil-machine-lazy-anchors
+test-soil-machine-lazy-anchors:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib lazy_body_anchors_source_contract -- --nocapture'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu --release --lib lazy_body_anchors_match_exact_state_and_f64_kinematics -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-machine-lazy-anchors-cost
+test-soil-machine-lazy-anchors-cost:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib lazy_body_anchors --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu --release --lib lazy_body_anchors_paired_tractor_drift_cost -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-lazy-drift-runtime
+test-soil-lazy-drift-runtime:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features lazy-paired-drift --release --lib lazy_body_anchors -- --nocapture'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features lazy-paired-drift --release --lib paired_lazy_drift_public_runtime_preserves_rates_and_guards -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-paired-native-sum
+test-soil-paired-native-sum:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib paired_native_sum --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu --release --lib paired_native_sum_matches_exact_state_and_f64_kinematics -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-paired-native-sum-cost
+test-soil-paired-native-sum-cost:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib paired_native_sum_tractor_drift_cost --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu --release --lib paired_native_sum_tractor_drift_cost -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-paired-native-position-cost
+test-soil-paired-native-position-cost:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib paired_native_position_sum_tractor_drift_cost --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu --release --lib paired_native_position_sum_tractor_drift_cost -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-paired-native-geometry-cost
+test-soil-paired-native-geometry-cost:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib paired_native_geometry_sum_tractor_drift_cost --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu --release --lib paired_native_geometry_sum_tractor_drift_cost -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-native-geometry-oracle
+test-soil-native-geometry-oracle:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib paired_native_geometry_matches_exact_state_and_f64_kinematics --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu --release --lib paired_native_geometry_matches_exact_state_and_f64_kinematics -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-native-geometry-runtime
+test-soil-native-geometry-runtime:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features native-geometry-drift --release --lib native_geometry -- --nocapture'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features native-geometry-drift --release --lib paired_native_geometry_rejects_missing_device_feature -- --ignored --nocapture --test-threads=1'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features native-geometry-drift --release --lib paired_native_geometry_public_runtime_preserves_rates_and_guards -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-native-geometry-acceleration
+test-soil-native-geometry-acceleration:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib paired_native_geometry_tractor_acceleration_cost --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu --release --lib paired_native_geometry_tractor_acceleration_cost -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-rigorous-native-geometry-acceleration
+test-soil-rigorous-native-geometry-acceleration:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib paired_rigorous_native_geometry_tractor_acceleration_cost --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu --release --lib paired_rigorous_native_geometry_tractor_acceleration_cost -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-switched-native-geometry-acceleration
+test-soil-switched-native-geometry-acceleration:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib paired_switched_native_geometry_tractor_acceleration_cost --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu --release --lib paired_switched_native_geometry_tractor_acceleration_cost -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-acceleration-oracle
+test-soil-acceleration-oracle:
+	@test -n "$$MOLLA_ACCELERATION_ORACLE_CAPTURE" || { echo 'Set absolute frozen capture directory'; exit 2; }
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib acceleration_mass_oracle_solve_contract -- --nocapture'
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib acceleration_capture_obeys_f64_mass_response -- --ignored --nocapture'
+
+.PHONY: test-soil-acceleration-balance
+test-soil-acceleration-balance:
+	@test -n "$$MOLLA_ACCELERATION_ORACLE_CAPTURE" || { echo 'Set absolute frozen capture directory'; exit 2; }
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib acceleration_balance_oracle_contract -- --nocapture'
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib acceleration_capture_obeys_absolute_f64_balance -- --ignored --nocapture'
+
+.PHONY: test-soil-acceleration-operator
+test-soil-acceleration-operator:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib paired_zero_bias_native_geometry_acceleration_operator --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu --release --lib paired_zero_bias_native_geometry_acceleration_operator -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-acceleration-operator-oracle
+test-soil-acceleration-operator-oracle:
+	@test -n "$$MOLLA_ACCELERATION_ORACLE_CAPTURE" || { echo 'Set absolute frozen capture directory'; exit 2; }
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu --release --lib acceleration_capture_obeys_f64_full_operator -- --ignored --nocapture'
+
+.PHONY: test-soil-mass-predictor
+test-soil-mass-predictor:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --lib retained_mass_predictor_gpu_contract --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --lib retained_mass_predictor_gpu_contract -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-bias-chain
+test-soil-bias-chain:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --lib retained_bias_mass_chain_gpu_contract --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --lib retained_bias_mass_chain_gpu_contract -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-precise-operator-chain
+test-soil-precise-operator-chain:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --lib retained_precise_operator_chain_gpu_contract --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-kernels --features gpu,resource-counters --release --lib retained_precise_operator_chain_gpu_contract -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-generalized-prediction
+test-soil-generalized-prediction:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters --release --lib generalized_prediction_gpu_physical_contract --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-solvers --features gpu,resource-counters --release --lib generalized_prediction_gpu_physical_contract -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-native-trajectory-replay
+test-soil-native-trajectory-replay:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters --release --lib native_prediction_actual_trajectory_replay --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-solvers --features gpu,resource-counters --release --lib native_prediction_actual_trajectory_replay -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-native-prediction-drift
+test-soil-native-prediction-drift:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters,native-geometry-drift --release --lib native_prediction_drift_gpu_contract --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-solvers --features gpu,resource-counters,native-geometry-drift --release --lib native_prediction_drift_gpu_contract -- --ignored --nocapture --test-threads=1'
+
+.PHONY: test-soil-native-world
+test-soil-native-world:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --features gpu,resource-counters,native-geometry-drift,retained-local-newton,zero-residual-newton-preparation --release --lib native_prediction_world_shares_mass_and_rolls_back --no-run'
+	@$(MAKE) test CARGO='timeout --kill-after=5s 90s $(RUN_WITH) cargo' APP_TARGET='-p molla-solvers --features gpu,resource-counters,native-geometry-drift,retained-local-newton,zero-residual-newton-preparation --release --lib native_prediction_world_shares_mass_and_rolls_back -- --ignored --nocapture --test-threads=1'
+
+SOIL_TRACTOR_BENCH_FEATURES ?= resource-counters
+bench-soil-tractor:
+	@test ! -e '$(SOIL_RUN_DIR)' || { echo 'Refusing to reuse an existing benchmark result directory'; exit 2; }
+	@test '$(SOIL_TRACTOR_BENCH_TIMELINE)' = 0 -o '$(SOIL_TRACTOR_BENCH_TIMELINE)' = 1 || { echo 'SOIL_TRACTOR_BENCH_TIMELINE must be 0 or 1'; exit 2; }
+	@[[ '$(SOIL_TRACTOR_BENCH_SECONDS)' =~ ^[1-9][0-9]*$$ && '$(SOIL_TRACTOR_BENCH_SECONDS)' -le 600 ]] || { echo 'Tractor diagnostic deadline must be 1 through 600 seconds'; exit 2; }
+	@$(MAKE) build APP_TARGET='-p molla-solvers --features $(SOIL_TRACTOR_BENCH_FEATURES) --example soil_tractor_benchmark --release'
+	@mkdir -p '$(SOIL_RUN_DIR)'
+	@git rev-parse HEAD > '$(SOIL_RUN_DIR)/revision.txt'
+	@git status --short > '$(SOIL_RUN_DIR)/worktree.txt'
+	@{ printf '%s\0' Makefile Cargo.toml Cargo.lock scripts/stop-soil-telemetry.sh; find crates -type f \( -name '*.rs' -o -name '*.wgsl' -o -name 'Cargo.toml' \) -print0; } | sort -z | xargs -0 sha256sum > '$(SOIL_RUN_DIR)/source-sha256.txt'
+	@tar -czf '$(SOIL_RUN_DIR)/source.tar.gz' --null -T <({ printf '%s\0' Makefile Cargo.toml Cargo.lock scripts/stop-soil-telemetry.sh; find crates -type f \( -name '*.rs' -o -name '*.wgsl' -o -name 'Cargo.toml' \) -print0; } | sort -z)
+	@sha256sum target/release/examples/soil_tractor_benchmark > '$(SOIL_RUN_DIR)/executable-sha256.txt'
+	@$(NVIDIA_SMI) --query-gpu=name,driver_version,utilization.gpu,memory.used,temperature.gpu,power.draw --format=csv > '$(SOIL_RUN_DIR)/hardware-before.csv'
+	@set -o pipefail; \
+	  monitor=; printf '%s\n' 'timeline=$(SOIL_TRACTOR_BENCH_TIMELINE)' > '$(SOIL_RUN_DIR)/telemetry-mode.txt'; \
+	  if [[ '$(SOIL_TRACTOR_BENCH_TIMELINE)' == 1 ]]; then $(NVIDIA_SMI) --query-gpu=timestamp,utilization.gpu,memory.used,temperature.gpu,power.draw --format=csv -lms 500 > '$(SOIL_RUN_DIR)/hardware-timeline.csv' 2>&1 & monitor=$$!; fi; \
+	  trap 'if [[ -n "$$monitor" ]]; then bash scripts/stop-soil-telemetry.sh "$(SOIL_RUN_DIR)/hardware-timeline.csv"; kill "$$monitor" 2>/dev/null || true; wait "$$monitor" 2>/dev/null || true; fi' EXIT; \
+	  timeout --kill-after=5s $(SOIL_TRACTOR_BENCH_SECONDS)s $(RUN_WITH) target/release/examples/soil_tractor_benchmark --output '$(SOIL_RUN_DIR)/data' --frames '$(SOIL_TRACTOR_BENCH_FRAMES)' --warmup '$(SOIL_TRACTOR_BENCH_WARMUP)' --profile-mpm '$(SOIL_TRACTOR_BENCH_PROFILE)' --profile-preparation '$(SOIL_TRACTOR_BENCH_PREPARATION_PROFILE)' --frame-loads '$(SOIL_TRACTOR_BENCH_LOADS)' --contact-motion '$(SOIL_TRACTOR_BENCH_CONTACT_MOTION)' --mass-coupling-nodes '$(SOIL_TRACTOR_BENCH_COUPLING_NODES)' --machine-rounding '$(SOIL_TRACTOR_BENCH_ROUNDING)' --machine-execution '$(SOIL_TRACTOR_BENCH_EXECUTION)' --paired-machine-rates '$(SOIL_TRACTOR_BENCH_PAIRED_RATES)' --native-machine-prediction '$(SOIL_TRACTOR_BENCH_NATIVE_PREDICTION)' --boundary-scan '$(SOIL_TRACTOR_BENCH_BOUNDARY_SCAN)' --capture-every '$(SOIL_TRACTOR_BENCH_CAPTURE_EVERY)' --soil-grid '$(SOIL_TRACTOR_BENCH_GRID)' --soil-transfer '$(SOIL_TRACTOR_BENCH_TRANSFER)' --final-soil-state '$(SOIL_TRACTOR_BENCH_FINAL_STATE)' --soil-motion-bound '$(SOIL_TRACTOR_BENCH_MOTION_BOUND)' --soil-motion-fusion '$(SOIL_TRACTOR_BENCH_MOTION_FUSION)' $(SOIL_TRACTOR_UNILATERAL_ARGS) $(SOIL_TRACTOR_FRICTION_ARGS) 2>&1 | tee '$(SOIL_RUN_DIR)/run.log'; result=$$?; \
+	  echo $$result > '$(SOIL_RUN_DIR)/run.exit'; \
+	  sha256sum -c '$(SOIL_RUN_DIR)/source-sha256.txt' > '$(SOIL_RUN_DIR)/source-check.log'; source_result=$$?; echo $$source_result > '$(SOIL_RUN_DIR)/source-check.exit'; \
+	  $(NVIDIA_SMI) --query-gpu=name,driver_version,utilization.gpu,memory.used,temperature.gpu,power.draw --format=csv > '$(SOIL_RUN_DIR)/hardware-after.csv'; \
+	  if [[ $$result == 0 ]]; then result=$$source_result; fi; exit $$result
+SOIL_BENCH_PACKAGE = $(if $(filter radix,$(CASE)),molla-compute-primitives,$(if $(filter mpm-bridge active-domain mpm-profile,$(CASE)),molla-solvers,molla-kernels))
+SOIL_BENCH_TEST = $(if $(filter radix,$(CASE)),radix_sort_gpu,$(if $(filter active-domain mpm-profile,$(CASE)),mpm_active_tiles_gpu,$(if $(filter mpm-bridge,$(CASE)),mpm_gpu,$(if $(filter dem,$(CASE)),soil_residency_gpu,soil_raster_gpu))))
+SOIL_BENCH_FILTER = $(if $(filter radix,$(CASE)),parallel_retained_sort_paired_benchmark,$(if $(filter mpm-profile,$(CASE)),mpm_profile_stage_benchmark,$(if $(filter active-domain,$(CASE)),mpm_active_domain_benchmark,$(if $(filter mpm-bridge,$(CASE)),mpm_terrain_only_bridge_benchmark,$(if $(filter dem,$(CASE)),soil_dem_resident_benchmark,raster_benchmark)))))
+SOIL_BENCH_FEATURES = $(if $(filter radix active-domain mpm-profile,$(CASE)),gpu$(comma)resource-counters,gpu)
+comma := ,
+SOIL_BENCH_LOG = $(CASE)
+SOIL_SMOKE_BACKEND ?= mpm
+SOIL_SMOKE_COUNTERS ?= 1
+SOIL_SMOKE_FEATURES = $(if $(filter 1,$(SOIL_SMOKE_COUNTERS)),resource-counters,gpu)
+ifeq ($(CASE)/$(MODE),smoke/baseline)
+bench-soil:
+	@case '$(SOIL_SMOKE_BACKEND)' in mpm|dem) ;; *) echo 'SOIL_SMOKE_BACKEND must be mpm or dem'; exit 2 ;; esac
+	@case '$(SOIL_SMOKE_COUNTERS)' in 0|1) ;; *) echo 'SOIL_SMOKE_COUNTERS must be 0 or 1'; exit 2 ;; esac
+	@[[ '$(SOIL_BENCH_SECONDS)' =~ ^[1-9][0-9]*$$ && '$(SOIL_BENCH_SECONDS)' -le 30 ]] || { echo 'Quick execution deadline must be 1 through 30 seconds'; exit 2; }
+	@test ! -e '$(SOIL_RUN_DIR)' || { echo 'Refusing to reuse an existing benchmark result directory'; exit 2; }
+	@$(MAKE) build APP_TARGET='-p molla-solvers --features $(SOIL_SMOKE_FEATURES) --example soil_benchmark --release'
+	@mkdir -p '$(SOIL_RUN_DIR)'
+	@git rev-parse HEAD > '$(SOIL_RUN_DIR)/revision.txt'
+	@git status --short > '$(SOIL_RUN_DIR)/worktree.txt'
+	@{ printf '%s\0' Makefile Cargo.toml Cargo.lock scripts/stop-soil-telemetry.sh; find crates -type f \( -name '*.rs' -o -name '*.wgsl' -o -name Cargo.toml \) -print0; } | sort -z | xargs -0 sha256sum > '$(SOIL_RUN_DIR)/source-sha256.txt'
+	@tar -czf '$(SOIL_RUN_DIR)/source.tar.gz' --null -T <({ printf '%s\0' Makefile Cargo.toml Cargo.lock scripts/stop-soil-telemetry.sh; find crates -type f \( -name '*.rs' -o -name '*.wgsl' -o -name Cargo.toml \) -print0; } | sort -z)
+	@sha256sum target/release/examples/soil_benchmark > '$(SOIL_RUN_DIR)/executable-sha256.txt'
+	@cp target/release/examples/soil_benchmark '$(SOIL_RUN_DIR)/soil_benchmark'
+	@$(NVIDIA_SMI) --query-gpu=name,driver_version,utilization.gpu,memory.used,temperature.gpu,power.draw --format=csv > '$(SOIL_RUN_DIR)/hardware-before.csv'
+	@set -o pipefail; \
+	  $(NVIDIA_SMI) --query-gpu=timestamp,utilization.gpu,memory.used,temperature.gpu,power.draw --format=csv -lms 500 > '$(SOIL_RUN_DIR)/hardware-timeline.csv' 2>&1 & monitor=$$!; \
+	  trap 'bash scripts/stop-soil-telemetry.sh "$(SOIL_RUN_DIR)/hardware-timeline.csv"; kill "$$monitor" 2>/dev/null || true; wait "$$monitor" 2>/dev/null || true' EXIT; \
+	  timeout --kill-after=5s $(SOIL_BENCH_SECONDS)s $(RUN_WITH) $(CARGO) run --release -p molla-solvers --features $(SOIL_SMOKE_FEATURES) --example soil_benchmark -- smoke --backend '$(SOIL_SMOKE_BACKEND)' 2>&1 | tee '$(SOIL_RUN_DIR)/smoke.log'; result=$$?; echo $$result > '$(SOIL_RUN_DIR)/smoke.exit'; \
+	  sha256sum -c '$(SOIL_RUN_DIR)/source-sha256.txt' > '$(SOIL_RUN_DIR)/source-check.log'; echo $$? > '$(SOIL_RUN_DIR)/source-check.exit'; \
+	  $(NVIDIA_SMI) --query-gpu=name,driver_version,utilization.gpu,memory.used,temperature.gpu,power.draw --format=csv > '$(SOIL_RUN_DIR)/hardware-after.csv'; \
+	  $(MAKE) check-soil-results INPUT='$(SOIL_RUN_DIR)' > '$(SOIL_RUN_DIR)/checker.log' 2>&1; checked=$$?; echo $$checked > '$(SOIL_RUN_DIR)/checker.exit'; \
+	  if [[ $$result == 0 ]]; then result=$$checked; fi; exit $$result
+else
+bench-soil:
+	@case "$(CASE)/$(MODE)" in raster/compare|dem/compare|mpm-bridge/compare|active-domain/compare|radix/compare|mpm-profile/diagnostic) ;; *) echo 'Baseline: CASE=smoke MODE=baseline; comparisons: CASE=raster, dem, mpm-bridge, active-domain or radix MODE=compare; profiling: CASE=mpm-profile MODE=diagnostic'; exit 2 ;; esac
+	@[[ '$(SOIL_BENCH_SECONDS)' =~ ^[1-9][0-9]*$$ && '$(SOIL_BENCH_SECONDS)' -le 30 ]] || { echo 'Quick execution deadline must be 1 through 30 seconds'; exit 2; }
+	@test ! -e '$(SOIL_RUN_DIR)' || { echo 'Refusing to reuse an existing benchmark result directory'; exit 2; }
+	@$(MAKE) test APP_TARGET='-p $(SOIL_BENCH_PACKAGE) --features $(SOIL_BENCH_FEATURES) --test $(SOIL_BENCH_TEST) --release --no-run'
+	@if [[ '$(CASE)' == active-domain ]]; then $(MAKE) build APP_TARGET='-p molla-solvers --example soil_benchmark --release'; fi
+	@mkdir -p '$(SOIL_RUN_DIR)'
+	@git rev-parse HEAD > '$(SOIL_RUN_DIR)/revision.txt'
+	@sha256sum Makefile Cargo.lock crates/molla-kernels/Cargo.toml crates/molla-kernels/src/soil_{particle,mpm,dem}_raster.rs crates/molla-kernels/src/soil_dem_resident.rs crates/molla-kernels/src/tire_{mpm,dem}.rs crates/molla-kernels/shaders/soil_{raster_bins,mpm_raster,dem_raster}.wgsl crates/molla-kernels/shaders/tire_dem.wgsl crates/molla-kernels/tests/soil_{raster,residency,dem_topology}_gpu.rs crates/molla-compute-primitives/src/radix_sort.rs crates/molla-compute-primitives/shaders/radix_sort.wgsl > '$(SOIL_RUN_DIR)/source-sha256.txt'
+	@sha256sum crates/molla-kernels/src/soil_mpm_snapshot.rs crates/molla-kernels/shaders/soil_mpm_summary.wgsl crates/molla-kernels/tests/soil_mpm_snapshot_gpu.rs crates/molla-solvers/Cargo.toml crates/molla-solvers/src/mpm.rs crates/molla-solvers/shaders/mpm.wgsl crates/molla-solvers/tests/mpm_gpu.rs bin/molla_viewer/src/examples/122_tire_realistic.rs >> '$(SOIL_RUN_DIR)/source-sha256.txt'
+	@sha256sum crates/molla-solvers/src/mpm_active_tiles.rs crates/molla-solvers/shaders/mpm_active_tiles.wgsl crates/molla-solvers/tests/mpm_active_tiles_gpu.rs >> '$(SOIL_RUN_DIR)/source-sha256.txt'
+	@sha256sum crates/molla-solvers/tests/mpm_sparse_grid_gpu.rs crates/molla-solvers/src/mpm_replay_tests.rs >> '$(SOIL_RUN_DIR)/source-sha256.txt'
+	@sha256sum crates/molla-solvers/src/mpm_tile_map_tests.rs >> '$(SOIL_RUN_DIR)/source-sha256.txt'
+	@sha256sum crates/molla-solvers/src/mpm_profile.rs >> '$(SOIL_RUN_DIR)/source-sha256.txt'
+	@sha256sum crates/molla-solvers/src/mpm_particle_order.rs crates/molla-solvers/src/mpm_particle_order_tests.rs crates/molla-solvers/shaders/mpm_particle_order.wgsl >> '$(SOIL_RUN_DIR)/source-sha256.txt'
+	@sha256sum crates/molla-compute-primitives/Cargo.toml crates/molla-compute-primitives/shaders/radix_sort_parallel.wgsl crates/molla-compute-primitives/tests/radix_sort_gpu.rs >> '$(SOIL_RUN_DIR)/source-sha256.txt'
+	@sha256sum crates/molla-kernels/src/soil_gpu_identity.rs crates/molla-kernels/src/soil_mpm_summary.rs crates/molla-kernels/src/soil_mpm_observation.rs crates/molla-kernels/tests/soil_mpm_observation_gpu.rs >> '$(SOIL_RUN_DIR)/source-sha256.txt'
+	@sha256sum crates/molla-solvers/examples/soil_benchmark.rs crates/molla-solvers/examples/soil_support/results.rs crates/molla-solvers/tests/soil_benchmark_contract.rs >> '$(SOIL_RUN_DIR)/source-sha256.txt'
+	@$(NVIDIA_SMI) --query-gpu=name,driver_version,utilization.gpu,memory.used,temperature.gpu,power.draw --format=csv > '$(SOIL_RUN_DIR)/hardware-before.csv'
+	@set -o pipefail; timeout --kill-after=5s $(SOIL_BENCH_SECONDS)s $(MAKE) test-gpu P=$(SOIL_BENCH_PACKAGE) T=$(SOIL_BENCH_TEST) GPU_FEATURES='$(SOIL_BENCH_FEATURES)' RELEASE=1 A='$(SOIL_BENCH_FILTER) --nocapture --test-threads=1' 2>&1 | tee '$(SOIL_RUN_DIR)/$(SOIL_BENCH_LOG).log'; result=$$?; echo $$result > '$(SOIL_RUN_DIR)/$(SOIL_BENCH_LOG).exit'; $(NVIDIA_SMI) --query-gpu=name,driver_version,utilization.gpu,memory.used,temperature.gpu,power.draw --format=csv > '$(SOIL_RUN_DIR)/hardware-after.csv'; \
+	  if [[ '$(CASE)' == active-domain ]]; then \
+	    $(MAKE) check-soil-results INPUT='$(SOIL_RUN_DIR)' > '$(SOIL_RUN_DIR)/checker.log' 2>&1; checked=$$?; echo $$checked > '$(SOIL_RUN_DIR)/checker.exit'; \
+	    if [[ $$result == 0 ]]; then result=$$checked; fi; \
+	  fi; exit $$result
+endif
 
 test-primitives-baseline:
 	@$(MAKE) test APP_TARGET='-p molla-solvers $(foreach lane,$(PRIMITIVE_CPU_BASELINES),--test $(lane))'

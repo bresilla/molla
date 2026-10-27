@@ -38,8 +38,32 @@ pub mod tile_mcgp;
 pub mod tile_stream_compaction;
 
 #[cfg(feature = "gpu")]
-pub use molla_compute::{AdapterInfo, Backend, DeviceHealth, DeviceLoss, Engine};
+pub use molla_compute::{
+    AdapterInfo, Backend, DeviceHealth, DeviceLoss, Engine, PipelineCacheSnapshot,
+};
 #[cfg(feature = "gpu")]
 pub use mpm::{
-    MpmConfig, MpmRheology, MpmSimulation, MpmTimeStep, MpmTireFeedbackParams, MpmTireTerrainRaster,
+    MpmActiveGridStats, MpmCommandBatch, MpmConfig, MpmGridStorage, MpmMassCouplingInputs,
+    MpmParticleRenderSource, MpmParticleRenderView, MpmPrescribedSolid, MpmProfileStage,
+    MpmRheology, MpmRigidDeviceBinding, MpmSimulation, MpmSoilActivity, MpmSoilActivityReport,
+    MpmSoilCanonicalSelection, MpmSoilCanonicalStore, MpmSoilCanonicalStoreRead,
+    MpmSoilCanonicalStoreReadCompletion, MpmSoilCanonicalStoreReadTask,
+    MpmSoilCanonicalStoreWritebackCompletion, MpmSoilCanonicalStoreWritebackTask,
+    MpmSoilCanonicalTileArchive, MpmSoilCheckpoint, MpmSoilCheckpointCompletion,
+    MpmSoilCheckpointReadback, MpmSoilCheckpointTicket, MpmSoilDiskWorld, MpmSoilDiskWorldStatus,
+    MpmSoilEnergy, MpmSoilFrame, MpmSoilFrameCheckpoint, MpmSoilFrameSelection, MpmSoilFrameStore,
+    MpmSoilFrameStoreRead, MpmSoilFrameStoreReadCompletion, MpmSoilFrameStoreReadTask,
+    MpmSoilFrameStoreWritebackCompletion, MpmSoilFrameStoreWritebackTask, MpmSoilFrameTileArchive,
+    MpmSoilIdentityBuffers, MpmSoilIdentitySnapshot, MpmSoilMomenta, MpmSoilPinConfig,
+    MpmSoilQuiescence, MpmSoilQuiescenceSnapshot, MpmSoilReadbackStats, MpmSoilRegionEnvelope,
+    MpmSoilRetainedSupportParticle, MpmSoilRetainedSupportSnapshot, MpmSoilSelection,
+    MpmSoilSettling, MpmSoilSettlingConfig, MpmSoilSettlingLimits, MpmSoilSettlingProgress,
+    MpmSoilSettlingStatus, MpmSoilStencilSupport, MpmSoilStore, MpmSoilStoreLimits,
+    MpmSoilStoreRead, MpmSoilStoreReadCompletion, MpmSoilStoreReadLimits, MpmSoilStoreReadStats,
+    MpmSoilStoreReadTask, MpmSoilStoreStats, MpmSoilStoreWritebackCompletion,
+    MpmSoilStoreWritebackTask, MpmSoilSupportClosureParticle, MpmSoilSupportClosureSnapshot,
+    MpmSoilSupportSnapshot, MpmSoilTileArchive, MpmSoilTransferPath, MpmSoilTransferStats,
+    MpmSoilWorld, MpmSoilWorldStatus, MpmSolidShape, MpmStageTiming, MpmStepProfile, MpmTimeStep,
+    MpmTireFeedbackParams, MpmTireTerrainRaster, PreparedMpmMassCoupling,
+    PreparedMpmRigidDeviceBridge, PreparedMpmStep,
 };

@@ -36,6 +36,11 @@ pub use ik::{IkConfig, IkObjective, IkResult, IkSolver, ik_solver_health};
 pub use jacobian::jacobian;
 pub use molla_solvers::Solver;
 pub use molla_solvers::{rigid_world, track_forces};
+#[cfg(feature = "gpu")]
+pub use molla_solvers::{
+    soil_candidates_gpu, soil_contact_geometry_gpu, soil_contact_projection_gpu,
+    soil_floor_projection_gpu, soil_normal_projection_gpu, soil_tractor,
+};
 // Stage F1-F5 — the GPU WCSPH solver lives in `molla-solvers`; re-export
 // it through the umbrella crate so the viewer (which only depends on
 // `molla`) can drive a real SPH scene.

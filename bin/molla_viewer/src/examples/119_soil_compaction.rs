@@ -107,6 +107,29 @@ impl Default for SoilCompactionState {
 const COMPACTION_DT: f64 = 5.0e-4;
 const COMPACTION_SUBSTEPS: u32 = 16;
 
+fn soil_compaction_step_batch(gpu: bool) -> (u32, u32) {
+    if gpu {
+        (1, COMPACTION_SUBSTEPS)
+    } else {
+        (COMPACTION_SUBSTEPS, 1)
+    }
+}
+
+#[cfg(test)]
+mod soil_compaction_batch_tests {
+    use super::*;
+
+    #[test]
+    fn soil_compaction_batch_preserves_substeps_and_physical_time() {
+        for gpu in [false, true] {
+            let (calls, substeps) = soil_compaction_step_batch(gpu);
+            assert_eq!(calls * substeps, COMPACTION_SUBSTEPS);
+            assert_eq!(f64::from(calls * substeps) * COMPACTION_DT, 0.008);
+        }
+        assert_eq!(soil_compaction_step_batch(true), (1, 16));
+    }
+}
+
 fn soil_compaction_surface_under_wheel(
     bed: &molla_vehicle::GranularBed,
     x: f64,
@@ -307,6 +330,7 @@ fn soil_compaction_sparse_lbvh_step_resident_gpu(
     roller_dir: f64,
     roller_speed: f64,
     dt: f64,
+    substeps: u32,
 ) -> Result<(usize, usize, u32, f32, u32, f32, f32, usize, u64), String> {
     let positions = bed
         .grains()
@@ -373,7 +397,7 @@ fn soil_compaction_sparse_lbvh_step_resident_gpu(
         .as_mut()
         .ok_or_else(|| "resident DEM owner missing".to_owned())?;
     let report = owner
-        .step_sparse_lbvh_gpu_mirrored(device, queue, kernel, &contacts, params, 8)
+        .step_sparse_lbvh_gpu_mirrored_n(device, queue, kernel, &contacts, params, 8, substeps)
         .map_err(|e| format!("{e}"))?;
     let reseed_count = owner.reseed_count();
     let new_positions = owner
@@ -509,7 +533,8 @@ fn update_soil_compaction_example(
     if state.use_sparse_lbvh_dem {
         if let Some(mut b) = state.bed.take() {
             let mut last = Ok((0, 0, 0, 0.0, 0, 0.0, 0.0, 0, 0));
-            for _ in 0..COMPACTION_SUBSTEPS {
+            let (calls, gpu_substeps) = soil_compaction_step_batch(state.use_gpu_sparse_lbvh_dem);
+            for _ in 0..calls {
                 last = if state.use_gpu_sparse_lbvh_dem {
                     match (sim.engine.device(), sim.engine.queue()) {
                         (Some(device), Some(queue)) => {
@@ -528,6 +553,7 @@ fn update_soil_compaction_example(
                                 roller_dir,
                                 roller_speed,
                                 COMPACTION_DT,
+                                gpu_substeps,
                             );
                             state.dem_kernel = Some(kernel);
                             result
@@ -590,7 +616,7 @@ fn update_soil_compaction_example(
                     resident_reseeds,
                 )) => {
                     state.last_lbvh_backend = if state.use_gpu_sparse_lbvh_dem {
-                        "resident GPU sparse-LBVH DEM owner"
+                        "GPU DEM; CPU mirror once per frame"
                     } else {
                         "owned CPU sparse-LBVH DEM"
                     };
@@ -643,7 +669,7 @@ fn soil_compaction_pane(ui: &mut egui::Ui, state: &mut SoilCompactionState) {
     ));
     ui.label(format!("max leaf grains: {}", state.last_lbvh_max_leaf));
     ui.label(format!(
-        "one-step max |Δy|: {:.4} m",
+        "last call max |Δy|: {:.4} m",
         state.last_lbvh_max_delta_y_m
     ));
     ui.label(format!(
