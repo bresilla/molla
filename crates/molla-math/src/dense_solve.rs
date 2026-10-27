@@ -55,6 +55,13 @@ pub fn dense_chol(a: &mut [Real], n: usize) -> Result<()> {
 /// Solve `L · y = b` (forward substitution) with `L` lower triangular.
 /// Reads only the lower triangle (including diagonal) of `l`.
 pub fn forward_sub(l: &[Real], b: &[Real], n: usize) -> Result<Vec<Real>> {
+    let mut y = b.to_vec();
+    forward_sub_in_place(l, &mut y, n)?;
+    Ok(y)
+}
+
+/// [`forward_sub`] overwriting `b` with `y`.
+pub fn forward_sub_in_place(l: &[Real], b: &mut [Real], n: usize) -> Result<()> {
     if l.len() != n * n || b.len() != n {
         return Err(Error::Build(format!(
             "forward_sub: l.len()={}, b.len()={}, expected n²={}, n={}",
@@ -64,11 +71,10 @@ pub fn forward_sub(l: &[Real], b: &[Real], n: usize) -> Result<Vec<Real>> {
             n
         )));
     }
-    let mut y = vec![0.0; n];
     for i in 0..n {
         let mut s = b[i];
         for k in 0..i {
-            s -= l[i * n + k] * y[k];
+            s -= l[i * n + k] * b[k];
         }
         let l_ii = l[i * n + i];
         if l_ii.abs() < 1e-30 {
@@ -76,15 +82,22 @@ pub fn forward_sub(l: &[Real], b: &[Real], n: usize) -> Result<Vec<Real>> {
                 "forward_sub: zero diagonal at row {i}"
             )));
         }
-        y[i] = s / l_ii;
+        b[i] = s / l_ii;
     }
-    Ok(y)
+    Ok(())
 }
 
 /// Solve `Lᵀ · x = y` (back substitution) with `L` lower triangular.
 /// Reads only the lower triangle of `l` (treats it as `L`, computes
 /// using `Lᵀ`).
 pub fn back_sub(l: &[Real], y: &[Real], n: usize) -> Result<Vec<Real>> {
+    let mut x = y.to_vec();
+    back_sub_in_place(l, &mut x, n)?;
+    Ok(x)
+}
+
+/// [`back_sub`] overwriting `y` with `x`.
+pub fn back_sub_in_place(l: &[Real], y: &mut [Real], n: usize) -> Result<()> {
     if l.len() != n * n || y.len() != n {
         return Err(Error::Build(format!(
             "back_sub: l.len()={}, y.len()={}, expected n²={}, n={}",
@@ -94,20 +107,19 @@ pub fn back_sub(l: &[Real], y: &[Real], n: usize) -> Result<Vec<Real>> {
             n
         )));
     }
-    let mut x = vec![0.0; n];
     for i in (0..n).rev() {
         let mut s = y[i];
         for k in (i + 1)..n {
             // Lᵀ[i,k] = L[k,i].
-            s -= l[k * n + i] * x[k];
+            s -= l[k * n + i] * y[k];
         }
         let l_ii = l[i * n + i];
         if l_ii.abs() < 1e-30 {
             return Err(Error::Build(format!("back_sub: zero diagonal at row {i}")));
         }
-        x[i] = s / l_ii;
+        y[i] = s / l_ii;
     }
-    Ok(x)
+    Ok(())
 }
 
 /// Solve `A · x = b` for SPD `A` via Cholesky: factors `A` in-place

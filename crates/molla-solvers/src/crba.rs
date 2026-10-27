@@ -147,8 +147,8 @@ fn matrix<const FILTER_LOCKED: bool>(
     // Per-joint DOF offset in the local M layout.
     let mut local_dof_offset: Vec<usize> = vec![0; n_joints + 1];
 
-    // Per-body world-frame spatial inertia at world origin.
-    let mut body_inertia_world: Vec<SpatialMatrix6> = vec![SpatialMatrix6::ZERO; n_joints];
+    // Per-body world-frame spatial inertia at world origin, then composite.
+    let mut composite: Vec<SpatialMatrix6> = vec![SpatialMatrix6::ZERO; n_joints];
 
     let mut local_dof_total = 0usize;
     for k in 0..n_joints {
@@ -201,8 +201,7 @@ fn matrix<const FILTER_LOCKED: bool>(
         let com_world = (cw.position - origin) + cw.rotation * body_com[child];
         let r = Mat3::from_quat(cw.rotation);
         let i_world = r * body_inertia[child] * r.transpose();
-        body_inertia_world[k] =
-            spatial_inertia_at_world_origin(body_mass[child], com_world, i_world);
+        composite[k] = spatial_inertia_at_world_origin(body_mass[child], com_world, i_world);
     }
     local_dof_offset[n_joints] = local_dof_total;
 
@@ -218,7 +217,6 @@ fn matrix<const FILTER_LOCKED: bool>(
     }
 
     // ── Composite inertia (leaf-to-root accumulate) ──────────────
-    let mut composite = body_inertia_world.clone();
     for k in (0..n_joints).rev() {
         if let Some(p) = parent_joint_local[k] {
             composite[p] = composite[p].add(&composite[k]);

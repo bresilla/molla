@@ -464,12 +464,10 @@ fn feedback_solve<const BLOCKS: bool>(
     n: usize,
 ) -> Result<Vec<Real>> {
     let scales: Vec<_> = (0..n).map(|i| matrix[i * n + i].sqrt()).collect();
-    let normalized: Vec<_> = (0..n)
-        .flat_map(|i| {
-            let scales = &scales;
-            (0..n).map(move |j| matrix[i * n + j] / scales[i] / scales[j])
-        })
-        .collect();
+    let mut normalized = Vec::with_capacity(n * n);
+    for i in 0..n {
+        normalized.extend((0..n).map(|j| matrix[i * n + j] / scales[i] / scales[j]));
+    }
     let rhs: Vec<_> = rhs
         .iter()
         .zip(&scales)
@@ -496,13 +494,21 @@ fn bounded_solve_inner<const BLOCKS: bool, const FEEDBACK: bool>(
     let _span = tracing::debug_span!("loop_bounded_solve", rows = n).entered();
     let mut x: Vec<_> = bounds.iter().map(|b| 0.0_f64.clamp(b[0], b[1])).collect();
     let mut fixed: Vec<bool> = bounds.iter().map(|b| b[0] == b[1]).collect();
+    let mut free = Vec::with_capacity(n);
+    let mut reduced = Vec::new();
     for _ in 0..(4 * n + 32) {
-        let free: Vec<_> = (0..n).filter(|&i| !fixed[i]).collect();
+        free.clear();
+        free.extend((0..n).filter(|&i| !fixed[i]));
         let size = free.len();
-        let a: Vec<_> = free
-            .iter()
-            .flat_map(|&i| free.iter().map(move |&j| matrix[i * n + j]))
-            .collect();
+        let a = if size == n {
+            matrix
+        } else {
+            reduced.clear();
+            for &i in &free {
+                reduced.extend(free.iter().map(|&j| matrix[i * n + j]));
+            }
+            &reduced[..]
+        };
         let b: Vec<_> = free
             .iter()
             .map(|&i| {
@@ -514,11 +520,11 @@ fn bounded_solve_inner<const BLOCKS: bool, const FEEDBACK: bool>(
             })
             .collect();
         let candidate = if FEEDBACK {
-            feedback_solve::<BLOCKS>(&a, &b, size)?
+            feedback_solve::<BLOCKS>(a, &b, size)?
         } else if BLOCKS {
-            crate::rigid_impulse::blocks::solve(&a, &b, size)?
+            crate::rigid_impulse::blocks::solve(a, &b, size)?
         } else {
-            crate::rigid_impulse::solve_mass(&a, &b, size)?
+            crate::rigid_impulse::solve_mass(a, &b, size)?
         };
         let mut alpha: Real = 1.0;
         let mut hit = None;

@@ -3,7 +3,9 @@
 use molla_core::{Error, Result};
 use molla_math::{
     Real, SpatialVector,
-    dense_solve::{back_sub, dense_chol, dense_eig_sym, forward_sub},
+    dense_solve::{
+        back_sub_in_place, dense_chol, dense_eig_sym, forward_sub, forward_sub_in_place,
+    },
 };
 use molla_sim::{MassProperties, Model, State, eval_body_velocities};
 
@@ -227,24 +229,23 @@ enum MassDecomposition {
 
 /// Certify a normalized Cholesky spectrum above the relative null-mode cutoff.
 fn cholesky_resolves_modes(factor: &[Real], n: usize) -> bool {
-    let mut rows = vec![0.; n];
-    let mut columns = vec![0.; n];
+    let mut bounds = vec![0.; n];
     for i in 0..n {
         let mut bound = 1.;
         for j in 0..i {
-            bound += factor[i * n + j].abs() * rows[j];
+            bound += factor[i * n + j].abs() * bounds[j];
         }
-        rows[i] = bound / factor[i * n + i];
+        bounds[i] = bound / factor[i * n + i];
     }
+    let rows = bounds.iter().copied().fold(0., Real::max);
     for i in (0..n).rev() {
         let mut bound = 1.;
         for j in i + 1..n {
-            bound += factor[j * n + i].abs() * columns[j];
+            bound += factor[j * n + i].abs() * bounds[j];
         }
-        columns[i] = bound / factor[i * n + i];
+        bounds[i] = bound / factor[i * n + i];
     }
-    let inverse_bound =
-        rows.into_iter().fold(0., Real::max) * columns.into_iter().fold(0., Real::max);
+    let inverse_bound = rows * bounds.into_iter().fold(0., Real::max);
     inverse_bound.is_finite() && inverse_bound * n as Real * 1e-12 < 1.
 }
 
@@ -291,14 +292,14 @@ impl MassFactor {
         let decomposition = if scale == 0.0 {
             MassDecomposition::Zero
         } else {
-            let normalized: Vec<Real> = matrix.iter().map(|v| v / scale).collect();
-            let mut factor = normalized.clone();
+            let mut factor: Vec<Real> = matrix.iter().map(|v| v / scale).collect();
             if dense_chol(&mut factor, n).is_ok()
                 && (0..n).all(|i| factor[i * n + i].powi(2) > 1e-12)
                 && cholesky_resolves_modes(&factor, n)
             {
                 MassDecomposition::Cholesky(factor)
             } else {
+                let normalized: Vec<Real> = matrix.iter().map(|v| v / scale).collect();
                 let (values, vectors) = dense_eig_sym(&normalized, n)?;
                 let floor = values.iter().copied().fold(0.0, Real::max) * 1e-12;
                 if values.iter().any(|&value| value < -floor) {
@@ -417,11 +418,13 @@ impl MassFactor {
         if matches!(self.decomposition, MassDecomposition::Zero) {
             return Ok(vec![0.0; n]);
         }
-        let rhs: Vec<Real> = rhs.iter().map(|v| v / self.scale).collect();
+        let mut rhs: Vec<Real> = rhs.iter().map(|v| v / self.scale).collect();
         match &self.decomposition {
             MassDecomposition::Zero => unreachable!(),
             MassDecomposition::Cholesky(factor) => {
-                back_sub(factor, &forward_sub(factor, &rhs, n)?, n)
+                forward_sub_in_place(factor, &mut rhs, n)?;
+                back_sub_in_place(factor, &mut rhs, n)?;
+                Ok(rhs)
             }
             MassDecomposition::Spectral {
                 values,
