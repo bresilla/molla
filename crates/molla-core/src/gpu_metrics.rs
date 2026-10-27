@@ -1,5 +1,7 @@
 //! Scoped dispatch, logical transfer and observed allocation counters on the host thread.
 
+pub const ENABLED: bool = cfg!(feature = "gpu-metrics");
+
 #[cfg(feature = "gpu-metrics")]
 mod enabled {
     use crate::{Error, Result};

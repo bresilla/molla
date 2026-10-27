@@ -1,7 +1,7 @@
 use molla_core::{Error, Result};
 use std::any::{Any, TypeId};
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 struct Entry {
     kind: TypeId,
@@ -11,7 +11,65 @@ struct Entry {
 
 pub(crate) struct ProgramCache {
     capacity: usize,
-    entries: Mutex<VecDeque<Entry>>,
+    state: Mutex<CacheState>,
+    changed: Condvar,
+}
+
+struct Build {
+    kind: TypeId,
+    variant: String,
+    identity: Arc<()>,
+}
+
+#[derive(Default)]
+struct CacheState {
+    entries: VecDeque<Entry>,
+    builds: Vec<Build>,
+    epoch: Arc<()>,
+}
+
+struct Admission<'a> {
+    cache: &'a ProgramCache,
+    identity: Arc<()>,
+    epoch: Arc<()>,
+    released: bool,
+}
+
+impl Admission<'_> {
+    fn release(&mut self, program: Option<Arc<dyn Any + Send + Sync>>) {
+        let mut state = self.cache.state.lock().unwrap_or_else(|e| e.into_inner());
+        let index = state
+            .builds
+            .iter()
+            .position(|b| Arc::ptr_eq(&b.identity, &self.identity))
+            .expect("live cache admission");
+        let build = state.builds.swap_remove(index);
+        let mut retired = None;
+        if let Some(program) = program {
+            if Arc::ptr_eq(&state.epoch, &self.epoch) {
+                state.entries.push_back(Entry {
+                    kind: build.kind,
+                    variant: build.variant,
+                    program,
+                });
+                if state.entries.len() > self.cache.capacity {
+                    retired = state.entries.pop_front();
+                }
+            }
+        }
+        self.released = true;
+        drop(state);
+        self.cache.changed.notify_all();
+        drop(retired);
+    }
+}
+
+impl Drop for Admission<'_> {
+    fn drop(&mut self) {
+        if !self.released {
+            self.release(None);
+        }
+    }
 }
 
 impl Default for ProgramCache {
@@ -25,7 +83,8 @@ impl ProgramCache {
         assert!(capacity > 0);
         Self {
             capacity,
-            entries: Mutex::new(VecDeque::new()),
+            state: Mutex::new(CacheState::default()),
+            changed: Condvar::new(),
         }
     }
 
@@ -34,40 +93,59 @@ impl ProgramCache {
         variant: &str,
         create: impl FnOnce() -> Result<T>,
     ) -> Result<Arc<T>> {
-        let mut entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if let Some(index) = entries
-            .iter()
-            .position(|entry| entry.kind == TypeId::of::<T>() && entry.variant == variant)
-        {
-            let entry = entries.remove(index).expect("matched program entry");
-            let program = Arc::clone(&entry.program)
-                .downcast::<T>()
-                .map_err(|_| Error::Gpu("GPU program cache type mismatch".into()))?;
-            entries.push_back(entry);
-            return Ok(program);
-        }
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut admission = loop {
+            if let Some(index) = state
+                .entries
+                .iter()
+                .position(|entry| entry.kind == TypeId::of::<T>() && entry.variant == variant)
+            {
+                let entry = state.entries.remove(index).expect("matched program entry");
+                let program = Arc::clone(&entry.program)
+                    .downcast::<T>()
+                    .map_err(|_| Error::Gpu("GPU program cache type mismatch".into()))?;
+                state.entries.push_back(entry);
+                return Ok(program);
+            }
+            if state.builds.len() < self.capacity.min(2)
+                && !state
+                    .builds
+                    .iter()
+                    .any(|b| b.kind == TypeId::of::<T>() && b.variant == variant)
+            {
+                let identity = Arc::new(());
+                state.builds.push(Build {
+                    kind: TypeId::of::<T>(),
+                    variant: variant.to_owned(),
+                    identity: identity.clone(),
+                });
+                break Admission {
+                    cache: self,
+                    identity,
+                    epoch: state.epoch.clone(),
+                    released: false,
+                };
+            }
+            state = self.changed.wait(state).unwrap_or_else(|e| e.into_inner());
+        };
+        drop(state);
         let program = Arc::new(create()?);
-        entries.push_back(Entry {
-            kind: TypeId::of::<T>(),
-            variant: variant.to_owned(),
-            program: program.clone(),
-        });
-        if entries.len() > self.capacity {
-            entries.pop_front();
-        }
+        admission.release(Some(program.clone()));
         Ok(program)
     }
 
     pub(crate) fn clear(&self) {
-        self.entries
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clear();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let retired = std::mem::take(&mut state.entries);
+        state.epoch = Arc::new(());
+        drop(state);
+        drop(retired);
     }
 }
+
+#[cfg(test)]
+#[path = "program_cache_concurrency_tests.rs"]
+mod concurrency_tests;
 
 #[cfg(test)]
 mod tests {
@@ -119,7 +197,7 @@ mod tests {
         assert!(weak_b.upgrade().is_none());
         assert_eq!(*a, 1);
         assert_eq!(*cache.get_or_create("b", || Ok(4_u32)).unwrap(), 4);
-        assert_eq!(cache.entries.lock().unwrap().len(), 2);
+        assert_eq!(cache.state.lock().unwrap().entries.len(), 2);
         assert_eq!(*a, 1);
     }
 

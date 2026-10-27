@@ -23,6 +23,202 @@ use molla_core::{Error, Result};
 /// See module docstring.
 static GPU_LOCK: Mutex<()> = Mutex::new(());
 
+#[test]
+#[ignore = "needs a real GPU adapter"]
+fn parallel_retained_sort_matches_stable_reference_across_scan_tiles() {
+    let _lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().unwrap();
+    println!("adapter={:?}", engine.adapter_info());
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let kernel = RadixSortKernel::new(device.clone(), queue.clone(), 256).unwrap();
+    for n in [
+        1, 31, 32, 33, 255, 256, 257, 65_535, 65_536, 65_537, 100_003,
+    ] {
+        let keys = alloc_u32_buf(device, "parallel keys", n + 7);
+        let values = alloc_u32_buf(device, "parallel values", n + 7);
+        let sort = kernel.prepare_parallel(&keys, &values, n).unwrap();
+        assert_eq!(sort.resource_counts(), [7, 6, 4]);
+        assert_eq!(sort.dispatch_count(), 16);
+        assert_eq!(
+            sort.scratch_bytes(),
+            (n * 8 + n.div_ceil(256) * 1024 + 1088) as u64
+        );
+        for pattern in 0..5 {
+            let mut random = lcg(n as u64 + 7);
+            let input: Vec<u32> = (0..n)
+                .map(|i| match pattern {
+                    0 => random(),
+                    1 => u32::MAX,
+                    2 => (random() & 255) << 24,
+                    3 => (n - i) as u32,
+                    _ => (i as u32 * 73) % 257,
+                })
+                .collect();
+            let payload: Vec<u32> = (0..n as u32).map(|i| i.wrapping_mul(0x9e3779b9)).collect();
+            let expected = cpu_reference(&input, &payload);
+            let mut padded_keys = input.clone();
+            padded_keys.extend([0x13579bdf; 7]);
+            let mut padded_values = payload.clone();
+            padded_values.extend([0xfdb97531; 7]);
+            queue.write_buffer(&keys, 0, bytemuck::cast_slice(&padded_keys));
+            queue.write_buffer(&values, 0, bytemuck::cast_slice(&padded_values));
+            let mut encoder = device.create_command_encoder(&Default::default());
+            sort.encode(&mut encoder);
+            queue.submit([encoder.finish()]);
+            let actual_keys = read_u32_buf(device, queue, &keys, n + 7).unwrap();
+            let actual_values = read_u32_buf(device, queue, &values, n + 7).unwrap();
+            assert_eq!(
+                &actual_keys[..n],
+                expected.0,
+                "keys n={n} pattern={pattern}"
+            );
+            assert_eq!(
+                &actual_values[..n],
+                expected.1,
+                "values n={n} pattern={pattern}"
+            );
+            assert_eq!(&actual_keys[n..], &[0x13579bdf; 7]);
+            assert_eq!(&actual_values[n..], &[0xfdb97531; 7]);
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs a real GPU adapter"]
+#[cfg(feature = "resource-counters")]
+fn parallel_retained_sort_queued_lifecycle_has_no_hot_allocations_or_transfers() {
+    use molla_core::gpu_metrics::{DeviceScope, DispatchScope, TransferScope};
+    let _lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let kernel = RadixSortKernel::new(device.clone(), queue.clone(), 256).unwrap();
+    let buffers: Vec<_> = [513, 100_003]
+        .into_iter()
+        .map(|n| {
+            (
+                n,
+                alloc_u32_buf(device, "independent keys", n),
+                alloc_u32_buf(device, "independent values", n),
+            )
+        })
+        .collect();
+    let sorts: Vec<_> = buffers
+        .iter()
+        .map(|(n, k, v)| kernel.prepare_parallel(k, v, *n).unwrap())
+        .collect();
+    let invalid_scope = DeviceScope::start().unwrap();
+    assert!(
+        kernel
+            .prepare_parallel(&buffers[0].1, &buffers[0].2, 0)
+            .is_err()
+    );
+    assert!(
+        kernel
+            .prepare_parallel(&buffers[0].1, &buffers[0].1, 1)
+            .is_err()
+    );
+    assert!(
+        kernel
+            .prepare_parallel(&buffers[0].1, &buffers[0].2, 514)
+            .is_err()
+    );
+    assert!(
+        kernel
+            .prepare_parallel(&buffers[0].1, &buffers[0].2, usize::MAX)
+            .is_err()
+    );
+    assert_eq!(invalid_scope.finish().observations, 0);
+    drop(kernel);
+    let output = alloc_u32_buf(device, "queued snapshots", 2 * (513 + 100_003) * 3);
+    let mut expected_output = Vec::new();
+    let mut offset = 0;
+    for round in 0..3 {
+        for (index, (n, keys, values)) in buffers.iter().enumerate() {
+            let input: Vec<_> = (0..*n as u32).map(|i| (i * 97 + round) % 131).collect();
+            let payload: Vec<_> = (0..*n as u32).rev().collect();
+            let expected = cpu_reference(&input, &payload);
+            expected_output.extend(expected.0);
+            expected_output.extend(expected.1);
+            queue.write_buffer(keys, 0, bytemuck::cast_slice(&input));
+            queue.write_buffer(values, 0, bytemuck::cast_slice(&payload));
+            let resources = DeviceScope::start().unwrap();
+            let transfers = TransferScope::start().unwrap();
+            let dispatches = DispatchScope::start().unwrap();
+            let mut encoder = device.create_command_encoder(&Default::default());
+            sorts[index].encode(&mut encoder);
+            encoder.copy_buffer_to_buffer(keys, 0, &output, offset, *n as u64 * 4);
+            offset += *n as u64 * 4;
+            encoder.copy_buffer_to_buffer(values, 0, &output, offset, *n as u64 * 4);
+            offset += *n as u64 * 4;
+            queue.submit([encoder.finish()]);
+            let resources = resources.finish();
+            let transfers = transfers.finish();
+            let dispatches = dispatches.finish();
+            assert_eq!(resources.observations, 0);
+            assert!(!resources.invalid && !transfers.overflowed && !dispatches.overflowed);
+            assert_eq!(transfers.upload_bytes + transfers.readback_bytes, 0);
+            assert_eq!(dispatches.encoded_dispatches, 16);
+        }
+    }
+    drop(sorts);
+    drop(buffers);
+    assert_eq!(
+        read_u32_buf(device, queue, &output, expected_output.len()).unwrap(),
+        expected_output
+    );
+}
+
+#[test]
+#[ignore = "needs a real GPU adapter; paired diagnostic benchmark"]
+fn parallel_retained_sort_paired_benchmark() {
+    use std::time::Instant;
+    let _lock = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let engine = Engine::new_gpu().unwrap();
+    println!("adapter={:?}", engine.adapter_info());
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let kernel = RadixSortKernel::new(device.clone(), queue.clone(), 256).unwrap();
+    for n in [513, 50_000, 100_003] {
+        let keys = alloc_u32_buf(device, "paired keys", n);
+        let values = alloc_u32_buf(device, "paired values", n);
+        let sorts = [
+            kernel.prepare(&keys, &values, n).unwrap(),
+            kernel.prepare_parallel(&keys, &values, n).unwrap(),
+        ];
+        let mut random = lcg(31);
+        let input: Vec<_> = (0..n).map(|_| random() % 4096).collect();
+        let payload: Vec<_> = (0..n as u32).collect();
+        let expected = cpu_reference(&input, &payload);
+        for round in 0..8 {
+            for mode in if round % 2 == 0 { [0, 1] } else { [1, 0] } {
+                queue.write_buffer(&keys, 0, bytemuck::cast_slice(&input));
+                queue.write_buffer(&values, 0, bytemuck::cast_slice(&payload));
+                queue.submit([]);
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                let start = Instant::now();
+                let mut encoder = device.create_command_encoder(&Default::default());
+                sorts[mode].encode(&mut encoder);
+                queue.submit([encoder.finish()]);
+                let encode_ms = start.elapsed().as_secs_f64() * 1000.;
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                let wall_ms = start.elapsed().as_secs_f64() * 1000.;
+                assert_eq!(read_u32_buf(device, queue, &keys, n).unwrap(), expected.0);
+                assert_eq!(read_u32_buf(device, queue, &values, n).unwrap(), expected.1);
+                if round >= 2 {
+                    println!(
+                        "RADIX_SAMPLE n={n} round={} mode={} encode_ms={encode_ms:.6} wall_ms={wall_ms:.6} scratch_bytes={} parity=exact performance_accepted=false",
+                        round - 2,
+                        ["reference", "parallel"][mode],
+                        sorts[mode].scratch_bytes()
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Allocate a STORAGE | COPY_SRC | COPY_DST u32 buffer of `len` slots.
 fn alloc_u32_buf(device: &wgpu::Device, label: &str, len: usize) -> wgpu::Buffer {
     let bytes = (len * core::mem::size_of::<u32>()) as u64;

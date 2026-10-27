@@ -13,6 +13,7 @@ workspace = true
 [features]
 default = []
 gpu = ["dep:wgpu", "molla-core/gpu"]
+resource-counters = ["gpu", "wgpu/counters", "molla-core/gpu-metrics"]
 
 [dependencies]
 molla-core = { path = "../molla-core", default-features = false }

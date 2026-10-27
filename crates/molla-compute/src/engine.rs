@@ -58,6 +58,7 @@ impl AdapterInfo {
 /// via [`Engine::new_cpu`] / [`Engine::new_gpu`] / [`Engine::new`].
 pub struct Engine {
     programs: crate::program_cache::ProgramCache,
+    pipeline_cache: Option<wgpu::PipelineCache>,
     backend: Backend,
     adapter_info: Option<AdapterInfo>,
     device: Option<Arc<wgpu::Device>>,
@@ -126,6 +127,7 @@ impl Engine {
         Self {
             backend: Backend::Cpu,
             programs: Default::default(),
+            pipeline_cache: None,
             adapter_info: None,
             device: None,
             queue: None,
@@ -171,6 +173,7 @@ impl Engine {
         Self {
             backend: Backend::External,
             programs: Default::default(),
+            pipeline_cache: None,
             adapter_info,
             device: Some(device),
             queue: Some(queue),
@@ -214,8 +217,72 @@ impl Engine {
             .check()
     }
 
+    /// Enable compiler caching on a device requested with `PIPELINE_CACHE`.
+    /// Existing programs remain valid; only subsequent pipeline builds use this cache.
+    /// Incompatible snapshots fall back to empty caches. No disk I/O is performed.
+    pub fn enable_pipeline_cache(
+        &mut self,
+        snapshot: Option<&crate::PipelineCacheSnapshot>,
+    ) -> Result<()> {
+        self.check_device()?;
+        let device = self.device.as_ref().expect("GPU health has a device");
+        if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
+            return Err(Error::Gpu(
+                "PIPELINE_CACHE feature was not requested".into(),
+            ));
+        }
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let allocation = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        // Snapshot bytes originate from get_data or the unsafe import contract.
+        let cache = unsafe {
+            device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+                label: Some("molla::compiler cache"),
+                data: snapshot.map(|snapshot| snapshot.as_bytes()),
+                fallback: true,
+            })
+        };
+        let errors = [
+            pollster::block_on(internal.pop()),
+            pollster::block_on(allocation.pop()),
+            pollster::block_on(validation.pop()),
+        ];
+        self.check_device()?;
+        if let Some(error) = errors.into_iter().flatten().next() {
+            return Err(Error::Gpu(format!(
+                "GPU compiler cache initialization: {error}"
+            )));
+        }
+        self.pipeline_cache = Some(cache);
+        Ok(())
+    }
+
+    /// Compiler cache for pipelines created on this engine's device.
+    pub fn pipeline_cache(&self) -> Option<&wgpu::PipelineCache> {
+        self.pipeline_cache.as_ref()
+    }
+
+    /// Export driver compilation data, not physical state or a cache-hit report.
+    /// This explicit setup/maintenance operation may block and allocate host memory.
+    pub fn pipeline_cache_snapshot(&self) -> Result<Option<crate::PipelineCacheSnapshot>> {
+        self.check_device()?;
+        let snapshot = self
+            .pipeline_cache
+            .as_ref()
+            .and_then(|cache| cache.get_data())
+            .map(|bytes| crate::PipelineCacheSnapshot { bytes });
+        self.check_device()?;
+        Ok(snapshot)
+    }
+
+    /// Stop supplying compiler data to future builds; existing programs remain valid.
+    pub fn disable_pipeline_cache(&mut self) {
+        self.pipeline_cache = None;
+    }
+
     /// Retain up to 64 immutable GPU programs by type and compiler-input variant.
-    /// Initialization is serialized; the initializer must not reenter this engine's cache.
+    /// Up to two different keys initialize concurrently; each key has one initializer.
+    /// Initializers must not reenter this engine's cache.
     /// Programs contain pipelines/layouts, not model/state buffers. Failed builds are not retained.
     pub fn cached_gpu_program<T: std::any::Any + Send + Sync>(
         &self,
@@ -243,6 +310,7 @@ impl Engine {
     }
 
     /// Drop retained programs; existing kernels keep their own references.
+    /// In-flight builds finish for their callers but are not retained after this clear.
     pub fn clear_gpu_program_cache(&self) {
         self.programs.clear();
     }
@@ -301,6 +369,7 @@ fn init_gpu(backends: wgpu::Backends, features: wgpu::Features) -> Result<Engine
     device.set_device_lost_callback(move |reason, message| signal.record(reason, message));
     Ok(Engine {
         programs: Default::default(),
+        pipeline_cache: None,
         backend: Backend::Gpu(backends),
         adapter_info: Some(adapter_info),
         device: Some(Arc::new(device)),
@@ -451,5 +520,58 @@ mod tests {
             .cached_gpu_program::<wgpu::ShaderModule>("retry", |_| panic!("valid variant rebuilt"))
             .unwrap();
         assert!(Arc::ptr_eq(&valid, &again));
+    }
+
+    #[test]
+    #[ignore = "requires GPU; concurrent cache initializers and thread-local validation scopes"]
+    fn gpu_program_cache_isolates_concurrent_validation_errors() {
+        let engine = Engine::new_gpu().unwrap();
+        let barrier = std::sync::Barrier::new(2);
+        let build = |bad| {
+            engine.cached_gpu_program(if bad { "bad" } else { "good" }, |device| {
+                barrier.wait();
+                Ok(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("parallel cache validation"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        if bad {
+                            "invalid shader"
+                        } else {
+                            "@compute @workgroup_size(1) fn main() {}"
+                        }
+                        .into(),
+                    ),
+                }))
+            })
+        };
+        let (bad, good) = std::thread::scope(|scope| {
+            let bad = scope.spawn(|| build(true));
+            let good = scope.spawn(|| build(false));
+            (bad.join().unwrap(), good.join().unwrap())
+        });
+        assert!(
+            bad.unwrap_err()
+                .to_string()
+                .contains("GPU program initialization")
+        );
+        let good = good.unwrap();
+        assert!(Arc::ptr_eq(
+            &good,
+            &engine
+                .cached_gpu_program::<wgpu::ShaderModule>("good", |_| panic!(
+                    "valid concurrent build lost"
+                ))
+                .unwrap()
+        ));
+        engine
+            .cached_gpu_program("bad", |device| {
+                Ok(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("parallel failure retry"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        "@compute @workgroup_size(1) fn main() {}".into(),
+                    ),
+                }))
+            })
+            .unwrap();
+        engine.check_device().unwrap();
     }
 }

@@ -2609,7 +2609,7 @@ dependencies = [
  "log",
  "rustversion",
  "windows-link 0.2.1",
- "windows-result 0.3.4",
+ "windows-result 0.4.1",
 ]
 
 [[package]]
@@ -2727,7 +2727,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.18",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -3383,6 +3383,7 @@ dependencies = [
  "molla-sim",
  "molla-storage",
  "molla-vehicle",
+ "naga 29.0.4",
  "rayon",
  "rustfft",
  "wgpu 29.0.4",
@@ -3439,6 +3440,8 @@ dependencies = [
 name = "molla-solvers"
 version = "0.0.1"
 dependencies = [
+ "ash",
+ "blake3",
  "bytemuck",
  "criterion",
  "glam 0.30.10",
@@ -3453,6 +3456,9 @@ dependencies = [
  "molla-sim",
  "molla-storage",
  "molla-vehicle",
+ "naga 29.0.4",
+ "serde_json",
+ "spirv-tools",
  "tracing",
  "wgpu 29.0.4",
 ]
@@ -3480,10 +3486,13 @@ dependencies = [
  "bevy_egui",
  "bevy_frost",
  "bevy_glacial",
+ "blake3",
  "mimalloc",
  "molla",
+ "molla-solvers",
  "molla-vehicle",
  "pollster",
+ "serde_json",
  "wgpu 29.0.4",
 ]
 
@@ -4938,6 +4947,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9571ea910ebd84c86af4b3ed27f9dbdc6ad06f17c5f96146b2b671e2976744f"
 dependencies = [
  "bitflags 2.11.1",
+]
+
+[[package]]
+name = "spirv-tools"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43bbd243a64a3ac7f87f8f026977285fc578698627337bd65a309576e89ad00f"
+dependencies = [
+ "spirv-tools-sys",
+]
+
+[[package]]
+name = "spirv-tools-sys"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3dbb2c54a9c790946820dd59163c63155e00204e0cbdc4d18374bee4d868ae66"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

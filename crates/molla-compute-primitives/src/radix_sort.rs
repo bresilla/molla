@@ -74,29 +74,39 @@ pub struct RadixSortKernel {
 
 /// Fixed-length stable sort with independent retained scratch and bindings.
 pub struct RadixSortDispatch {
-    pipelines: [wgpu::ComputePipeline; 3],
+    pipelines: Vec<wgpu::ComputePipeline>,
+    groups: Vec<u32>,
     data: [wgpu::BindGroup; 2],
     uniforms: [wgpu::BindGroup; 4],
-    blocks: u32,
+    scratch_bytes: u64,
 }
 
 impl RadixSortDispatch {
-    /// Record twelve ordered passes without allocation, upload or submission.
+    /// Record the prepared stable sort without allocation, upload or submission.
     pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
         for digit in 0..4 {
-            for stage in 0..3 {
+            for (pipeline, &groups) in self.pipelines.iter().zip(&self.groups) {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-                pass.set_pipeline(&self.pipelines[stage]);
+                pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &self.data[digit % 2], &[]);
                 pass.set_bind_group(1, &self.uniforms[digit], &[]);
-                pass.dispatch_workgroups(if stage == 1 { 1 } else { self.blocks }, 1, 1);
+                pass.dispatch_workgroups(groups, 1, 1);
                 molla_core::gpu_metrics::record_dispatch();
             }
         }
     }
 
     pub fn resource_counts(&self) -> [usize; 3] {
-        [7, 6, 3]
+        [7, 6, self.pipelines.len()]
+    }
+
+    /// Logical retained scratch/uniform bytes, excluding caller buffers and backend overhead.
+    pub fn scratch_bytes(&self) -> u64 {
+        self.scratch_bytes
+    }
+
+    pub fn dispatch_count(&self) -> usize {
+        4 * self.pipelines.len()
     }
 }
 
@@ -232,15 +242,42 @@ impl RadixSortKernel {
         values: &wgpu::Buffer,
         len: usize,
     ) -> Result<RadixSortDispatch> {
+        self.prepare_impl(keys, values, len, false)
+    }
+
+    /// Prepare a stable sort with per-digit parallel scans and lane-ranked scatter.
+    /// Source buffers and the queue must belong to this kernel's device.
+    pub fn prepare_parallel(
+        &self,
+        keys: &wgpu::Buffer,
+        values: &wgpu::Buffer,
+        len: usize,
+    ) -> Result<RadixSortDispatch> {
+        self.prepare_impl(keys, values, len, true)
+    }
+
+    fn prepare_impl(
+        &self,
+        keys: &wgpu::Buffer,
+        values: &wgpu::Buffer,
+        len: usize,
+        parallel: bool,
+    ) -> Result<RadixSortDispatch> {
         let limits = self.device.limits();
         let bytes = (len as u64).saturating_mul(4);
         let blocks = (len as u64).div_ceil(u64::from(BLOCK_SIZE));
-        let bins_bytes = blocks.saturating_mul(256 * 4);
+        let bins_bytes = blocks
+            .saturating_mul(256 * 4)
+            .saturating_add(u64::from(parallel) * 1024);
         if len == 0
             || len > u32::MAX as usize
             || keys == values
             || blocks > u64::from(limits.max_compute_workgroups_per_dimension)
             || bins_bytes > limits.max_storage_buffer_binding_size
+            || bins_bytes > limits.max_buffer_size
+            || (parallel
+                && (limits.max_compute_workgroup_storage_size < 9216
+                    || limits.max_compute_workgroups_per_dimension < 256))
             || [keys, values].iter().any(|b| {
                 b.size() < bytes
                     || b.size() > limits.max_storage_buffer_binding_size
@@ -251,6 +288,47 @@ impl RadixSortKernel {
                 "invalid retained radix-sort capacity or buffers".into(),
             ));
         }
+        let (pipelines, groups) = if parallel {
+            let shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("parallel stable radix sort"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        include_str!("../shaders/radix_sort_parallel.wgsl").into(),
+                    ),
+                });
+            let layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("parallel stable radix sort"),
+                    bind_group_layouts: &[Some(&self.layout_data), Some(&self.layout_uniforms)],
+                    immediate_size: 0,
+                });
+            let mut pipelines = vec![self.pipeline_count.clone()];
+            pipelines.extend(
+                ["scan_block_bins", "scan_digit_totals", "scatter_parallel"].map(|entry| {
+                    self.device
+                        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                            label: Some(entry),
+                            layout: Some(&layout),
+                            module: &shader,
+                            entry_point: Some(entry),
+                            compilation_options: Default::default(),
+                            cache: None,
+                        })
+                }),
+            );
+            (pipelines, vec![blocks as u32, 256, 1, blocks as u32])
+        } else {
+            (
+                vec![
+                    self.pipeline_count.clone(),
+                    self.pipeline_scan.clone(),
+                    self.pipeline_scatter.clone(),
+                ],
+                vec![blocks as u32, 1, blocks as u32],
+            )
+        };
         let scratch_keys = alloc_storage(&self.device, "retained sort keys", bytes);
         let scratch_values = alloc_storage(&self.device, "retained sort values", bytes);
         let bins = alloc_storage(&self.device, "retained sort bins", bins_bytes);
@@ -302,14 +380,11 @@ impl RadixSortKernel {
             })
         });
         Ok(RadixSortDispatch {
-            pipelines: [
-                self.pipeline_count.clone(),
-                self.pipeline_scan.clone(),
-                self.pipeline_scatter.clone(),
-            ],
+            pipelines,
+            groups,
             data,
             uniforms,
-            blocks: blocks as u32,
+            scratch_bytes: bytes * 2 + bins_bytes + 64,
         })
     }
 
