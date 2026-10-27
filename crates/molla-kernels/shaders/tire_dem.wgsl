@@ -1,3 +1,5 @@
+override AUDIT_CONTACTS: bool = false;
+
 struct ContactCell {
     center_radius: vec4<f32>,
     force: vec4<f32>,
@@ -345,16 +347,22 @@ fn step_dem_lbvh(@builtin(global_invocation_id) gid: vec3<u32>) {
                     }
                     let j = lbvh_sorted_indices[cursor];
                     if (j != i && j < u.dims.x) {
-                        force += pair_force(
-                            p0.xyz,
-                            v0.xyz,
-                            pos_in[j].xyz,
-                            vel_in[j].xyz,
-                            grain_radius * 2.0,
-                            normal_stiffness,
-                            damping,
-                            friction
-                        );
+                        if AUDIT_CONTACTS {
+                            let dist = length(p0.xyz - pos_in[j].xyz);
+                            let contact = dist >= 1.0e-9 && dist < grain_radius * 2.0;
+                            pos_out[i * u.dims.x + j] = vec4<f32>(1.0, select(0.0, 1.0, contact), 0.0, 0.0);
+                        } else {
+                            force += pair_force(
+                                p0.xyz,
+                                v0.xyz,
+                                pos_in[j].xyz,
+                                vel_in[j].xyz,
+                                grain_radius * 2.0,
+                                normal_stiffness,
+                                damping,
+                                friction
+                            );
+                        }
                     }
                 }
             } else {
@@ -371,6 +379,8 @@ fn step_dem_lbvh(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
+
+    if AUDIT_CONTACTS { return; }
 
     let pen = (floor_y + grain_radius) - p0.y;
     if (pen > 0.0) {

@@ -5,6 +5,15 @@
 
 #![cfg(feature = "gpu")]
 
+#[path = "support/tire_vehicle_fem_cavity_cases.rs"]
+mod cavity_frame_tests;
+
+#[path = "support/tire_fem_constitutive.rs"]
+mod constitutive;
+
+#[path = "support/tire_fem_dihedral.rs"]
+mod dihedral;
+
 use molla_compute::Engine;
 use molla_kernels::{
     BrushWheelOutput, TIRE_FEM_ATLAS_SHADER, TireBrushGpuKernel, TireFemContactFeedbackGpuTerrain,
@@ -1483,7 +1492,8 @@ fn tire_fem_batch_atlas_buffers_rewrite_topology_indices_for_fused_dispatch() {
         "atlas contract entry must route nodes through tire ownership rows"
     );
     assert!(
-        TIRE_FEM_ATLAS_SHADER.contains("let F = transpose(mat3x3<f32>(f0, f1, f2))")
+        TIRE_FEM_ATLAS_SHADER.contains("let F = tetra_deformation(ib)")
+            && TIRE_FEM_ATLAS_SHADER.contains("let origin = pos_in[tet_indices[ib]].xyz")
             && TIRE_FEM_ATLAS_SHADER.contains("tet_mu[t] + params.phys3.z")
             && TIRE_FEM_ATLAS_SHADER.contains("add_fiber_stress")
             && TIRE_FEM_ATLAS_SHADER.contains("node_tet_offsets[i]")
@@ -2223,10 +2233,7 @@ fn tire_fem_resident_vehicle_fem_atlas_substep_sequences_nodes_brush_and_hubs_gp
 #[test]
 #[ignore = "needs a real wgpu adapter"]
 fn tire_fem_resident_vehicle_fem_atlas_owner_steps_gpu() {
-    let Some(engine) = try_engine() else {
-        eprintln!("skipping resident vehicle/FEM atlas owner hardware dispatch: no wgpu adapter");
-        return;
-    };
+    let engine = try_engine().expect("GPU required for prepared vehicle/FEM acceptance");
     let device = engine.device().unwrap().clone();
     let queue = engine.queue().unwrap().clone();
     let fem_kernel = TireFemGpuKernel::new(&device);
@@ -2276,22 +2283,37 @@ fn tire_fem_resident_vehicle_fem_atlas_owner_steps_gpu() {
         vertical_damping: 0.0,
         dt: 1.0 / 600.0,
     };
-    let mut owner = fem_kernel
-        .create_resident_vehicle_fem_atlas_owner(
-            &vehicle_kernel,
-            &device,
-            &queue,
-            &tire_inputs,
-            &spin_input,
-            &suspension_input,
-            brush_input,
-            &planar_input,
-            &vertical_input,
-        )
-        .expect("combined resident owner");
+    let build = || {
+        fem_kernel
+            .create_resident_vehicle_fem_atlas_owner(
+                &vehicle_kernel,
+                &device,
+                &queue,
+                &tire_inputs,
+                &spin_input,
+                &suspension_input,
+                brush_input.clone(),
+                &planar_input,
+                &vertical_input,
+            )
+            .expect("combined resident owner")
+    };
+    let mut owner = build();
+    let mut candidate = build();
+    let mut resident = build();
+    let mut prepared = molla_kernels::PreparedTireVehicleChassisStep::new(
+        &engine,
+        &vehicle_kernel,
+        &brush_kernel,
+        &candidate.vehicle,
+        None,
+        1.0 / 600.0,
+        4096,
+    )
+    .unwrap();
     assert_eq!(owner.tire_count(), tire_inputs.len());
 
-    let fem_params = tire_inputs
+    let mut fem_params = tire_inputs
         .iter()
         .map(|input| TireFemGpuParams {
             dt: 1.0 / 600.0,
@@ -2300,7 +2322,7 @@ fn tire_fem_resident_vehicle_fem_atlas_owner_steps_gpu() {
             ..input.params
         })
         .collect::<Vec<_>>();
-    let base_hub_params = tire_inputs
+    let mut base_hub_params = tire_inputs
         .iter()
         .map(|_| TireFemHubParams {
             dt: 1.0 / 600.0,
@@ -2316,27 +2338,339 @@ fn tire_fem_resident_vehicle_fem_atlas_owner_steps_gpu() {
         })
         .collect::<Vec<_>>();
 
-    let brush = fem_kernel
-        .step_resident_vehicle_fem_atlas_owner(
+    let mut full = molla_kernels::PreparedTireVehicleFemStep::new(
+        &engine,
+        &fem_kernel,
+        &vehicle_kernel,
+        &brush_kernel,
+        &resident,
+        None,
+        1. / 600.,
+        &fem_params,
+        &base_hub_params,
+        1.,
+        4096,
+    )
+    .unwrap();
+    assert!(full.step(&engine, &mut candidate).is_err());
+    assert!(full.step(&Engine::new_cpu(), &mut resident).is_err());
+    let readback_bytes = molla_kernels::PreparedTireVehicleFemReadback::required_bytes(
+        resident.fem().total_node_count(),
+        2,
+    )
+    .unwrap();
+    let mut reader = molla_kernels::PreparedTireVehicleFemReadback::new(
+        &engine,
+        &full,
+        &resident,
+        readback_bytes,
+    )
+    .unwrap();
+    assert!(reader.read_blocking(&engine, &full, &candidate).is_err());
+    assert!(
+        reader
+            .read_blocking(&Engine::new_cpu(), &full, &resident)
+            .is_err()
+    );
+    #[cfg(feature = "resource-counters")]
+    let rejected_resources = molla_core::gpu_metrics::DeviceScope::start().unwrap();
+    assert!(
+        molla_kernels::PreparedTireVehicleFemReadback::new(
+            &engine,
+            &full,
+            &resident,
+            readback_bytes - 1
+        )
+        .is_err()
+    );
+    assert!(
+        molla_kernels::PreparedTireVehicleFemStep::new(
+            &engine,
+            &fem_kernel,
             &vehicle_kernel,
             &brush_kernel,
-            &device,
-            &queue,
-            &mut owner,
-            &fem_params,
-            1.0 / 600.0,
+            &resident,
             None,
+            1. / 600.,
+            &fem_params,
             &base_hub_params,
-            1.0,
+            1.,
+            0,
         )
-        .expect("combined resident owner step");
-    assert_eq!(brush.wheel_count, tire_inputs.len());
-    let hub_rows = fem_kernel
-        .readback_resident_atlas_hub_rows(&device, &queue, owner.fem())
-        .expect("owner resident hub rows");
+        .is_err()
+    );
+    #[cfg(feature = "resource-counters")]
+    assert_eq!(rejected_resources.finish().observations, 0);
     assert!(
-        hub_rows[1][0] > 0.0 && hub_rows[3][0] > 0.0,
-        "combined owner should advance both hubs from base/brush force: {hub_rows:?}"
+        full.update_configuration(&engine, &resident, &[], &base_hub_params, 1.)
+            .is_err()
+    );
+    for frame in 0..4 {
+        fem_params[0].pressure_pa += 100.;
+        base_hub_params[0].external_force_xyz[0] += 1.;
+        let force_scale = 1. + 0.01 * frame as f32;
+        for state in [&mut owner, &mut candidate, &mut resident] {
+            state.vehicle.brush.brush_input.wheel_controls[0][2] = 180_000. + 1000. * frame as f32;
+        }
+        #[cfg(feature = "resource-counters")]
+        let resources = molla_core::gpu_metrics::DeviceScope::start().unwrap();
+        #[cfg(feature = "resource-counters")]
+        let transfers = molla_core::gpu_metrics::TransferScope::start().unwrap();
+        let changed = prepared
+            .update_wheel_configuration(&engine, &candidate.vehicle)
+            .unwrap();
+        assert_eq!(changed, frame > 0);
+        #[cfg(feature = "resource-counters")]
+        {
+            assert_eq!(resources.finish().observations, 0);
+            let measured = transfers.finish();
+            assert_eq!(measured.readback_bytes, 0);
+            assert_eq!(measured.upload_bytes, if changed { 192 } else { 0 });
+        }
+        assert!(
+            !prepared
+                .update_wheel_configuration(&engine, &candidate.vehicle)
+                .unwrap()
+        );
+        full.update_configuration(
+            &engine,
+            &resident,
+            &fem_params,
+            &base_hub_params,
+            force_scale,
+        )
+        .unwrap();
+        #[cfg(feature = "resource-counters")]
+        let resident_resources = molla_core::gpu_metrics::DeviceScope::start().unwrap();
+        #[cfg(feature = "resource-counters")]
+        let resident_transfers = molla_core::gpu_metrics::TransferScope::start().unwrap();
+        #[cfg(feature = "resource-counters")]
+        let resident_dispatches = molla_core::gpu_metrics::DispatchScope::start().unwrap();
+        full.update_configuration(
+            &engine,
+            &resident,
+            &fem_params,
+            &base_hub_params,
+            force_scale,
+        )
+        .unwrap();
+        let resident_output = full.step(&engine, &mut resident).unwrap();
+        #[cfg(feature = "resource-counters")]
+        {
+            assert_eq!(resident_resources.finish().observations, 0);
+            let transfers = resident_transfers.finish();
+            assert_eq!(transfers.upload_bytes, 0);
+            assert_eq!(transfers.readback_bytes, 0);
+            assert_eq!(resident_dispatches.finish().encoded_dispatches, 9);
+        }
+        let brush = fem_kernel
+            .step_resident_vehicle_fem_atlas_owner(
+                &vehicle_kernel,
+                &brush_kernel,
+                &device,
+                &queue,
+                &mut owner,
+                &fem_params,
+                1.0 / 600.0,
+                None,
+                &base_hub_params,
+                force_scale,
+            )
+            .expect("combined resident owner step");
+        let output = fem_kernel
+            .step_resident_vehicle_fem_atlas_owner_prepared(
+                &engine,
+                &mut candidate,
+                &fem_params,
+                &prepared,
+                &base_hub_params,
+                force_scale,
+            )
+            .unwrap();
+        let a = brush_kernel
+            .readback_resident_output(&device, &queue, &brush)
+            .unwrap();
+        let b = brush_kernel
+            .readback_resident_output(&device, &queue, &output)
+            .unwrap();
+        let c = brush_kernel
+            .readback_resident_output(&device, &queue, &resident_output)
+            .unwrap();
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&a),
+            bytemuck::cast_slice::<_, u8>(&c)
+        );
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&a),
+            bytemuck::cast_slice::<_, u8>(&b)
+        );
+        let a = fem_kernel
+            .readback_resident_atlas_batch(&device, &queue, owner.fem())
+            .unwrap();
+        let b = fem_kernel
+            .readback_resident_atlas_batch(&device, &queue, candidate.fem())
+            .unwrap();
+        let c = fem_kernel
+            .readback_resident_atlas_batch(&device, &queue, resident.fem())
+            .unwrap();
+        #[cfg(feature = "resource-counters")]
+        let read_resources = molla_core::gpu_metrics::DeviceScope::start().unwrap();
+        #[cfg(feature = "resource-counters")]
+        let read_transfers = molla_core::gpu_metrics::TransferScope::start().unwrap();
+        let frame_data = reader.read_blocking(&engine, &full, &resident).unwrap();
+        #[cfg(feature = "resource-counters")]
+        {
+            assert_eq!(read_resources.finish().observations, 0);
+            let transfers = read_transfers.finish();
+            assert_eq!(transfers.upload_bytes, 0);
+            assert_eq!(transfers.readback_bytes, readback_bytes);
+        }
+        for (i, ((a, b), c)) in a.iter().zip(b).zip(c).enumerate() {
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&a.positions),
+                bytemuck::cast_slice::<_, u8>(frame_data.positions(i).unwrap())
+            );
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&a.velocities),
+                bytemuck::cast_slice::<_, u8>(frame_data.velocities(i).unwrap())
+            );
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&a.positions),
+                bytemuck::cast_slice::<_, u8>(&c.positions)
+            );
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&a.velocities),
+                bytemuck::cast_slice::<_, u8>(&c.velocities)
+            );
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&a.forces),
+                bytemuck::cast_slice::<_, u8>(&c.forces)
+            );
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&a.positions),
+                bytemuck::cast_slice::<_, u8>(&b.positions)
+            );
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&a.velocities),
+                bytemuck::cast_slice::<_, u8>(&b.velocities)
+            );
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&a.forces),
+                bytemuck::cast_slice::<_, u8>(&b.forces)
+            );
+            assert!(
+                b.positions
+                    .iter()
+                    .flatten()
+                    .chain(b.velocities.iter().flatten())
+                    .all(|v| v.is_finite())
+            );
+        }
+        assert_eq!(
+            fem_kernel
+                .readback_resident_atlas_hub_rows(&device, &queue, owner.fem())
+                .unwrap(),
+            fem_kernel
+                .readback_resident_atlas_hub_rows(&device, &queue, candidate.fem())
+                .unwrap(),
+        );
+        assert_eq!(brush.wheel_count, tire_inputs.len());
+        let hub_rows = fem_kernel
+            .readback_resident_atlas_hub_rows(&device, &queue, owner.fem())
+            .expect("owner resident hub rows");
+        assert_eq!(frame_data.hub_rows(), hub_rows);
+        let p = vehicle_kernel
+            .readback_planar_resident_state(&device, &queue, &owner.vehicle.planar)
+            .unwrap();
+        let v = vehicle_kernel
+            .readback_vertical_resident_state(&device, &queue, &owner.vehicle.vertical)
+            .unwrap();
+        assert_eq!(
+            p.position_xz,
+            [
+                frame_data.planar_rows()[0][0],
+                frame_data.planar_rows()[0][1]
+            ]
+        );
+        assert_eq!(
+            p.velocity_xz,
+            [
+                frame_data.planar_rows()[0][2],
+                frame_data.planar_rows()[0][3]
+            ]
+        );
+        assert_eq!(
+            [p.yaw, p.yaw_rate, p.yaw_moment],
+            frame_data.planar_rows()[1][..3]
+        );
+        assert_eq!([v.y, v.vy, v.force_y], frame_data.vertical_row()[..3]);
+        assert_eq!(p.finite, frame_data.planar_rows()[1][3] > 0.5);
+        assert_eq!(v.finite, frame_data.vertical_row()[3] > 0.5);
+        assert_eq!(
+            vehicle_kernel
+                .readback_wheel_spin_resident(&device, &queue, &owner.vehicle.brush.spin)
+                .unwrap()
+                .rows,
+            frame_data.spin_rows()
+        );
+        assert_eq!(
+            vehicle_kernel
+                .readback_suspension_resident(&device, &queue, &owner.vehicle.brush.suspension)
+                .unwrap()
+                .rows,
+            frame_data.suspension_rows()
+        );
+        assert_eq!(
+            hub_rows,
+            fem_kernel
+                .readback_resident_atlas_hub_rows(&device, &queue, resident.fem())
+                .unwrap()
+        );
+        if frame == 0 {
+            assert!(
+                hub_rows[1][0] > 0.0 && hub_rows[3][0] > 0.0,
+                "combined owner should initially advance both hubs from base/brush force: {hub_rows:?}"
+            );
+        }
+        assert!(hub_rows.iter().flatten().all(|v| v.is_finite()));
+    }
+    println!(
+        "prepared vehicle/FEM: four pressure-changing substeps, exact brush/nodes/velocities/forces/hubs; configuration refresh 192 bytes, no allocation"
+    );
+    println!(
+        "full prepared vehicle/FEM: changing pressure/FEM/hub/scale, exact three-path parity; 36 dispatches, zero hot allocation/uploads/readbacks"
+    );
+    let queued = full.step(&engine, &mut resident).unwrap();
+    println!(
+        "retained FEM frame bridge: four frames exact, {readback_bytes} bytes/read, zero hot buffer allocation, one mapping per frame"
+    );
+    cavity_frame_tests::run(
+        &engine,
+        &fem_kernel,
+        &vehicle_kernel,
+        &brush_kernel,
+        build,
+        &fem_params,
+        &base_hub_params,
+    );
+    engine
+        .device_health()
+        .unwrap()
+        .record(wgpu::DeviceLostReason::Destroyed, "fixture".into());
+    assert!(full.step(&engine, &mut resident).is_err());
+    assert!(reader.read_blocking(&engine, &full, &resident).is_err());
+    assert!(
+        full.update_configuration(&engine, &resident, &fem_params, &base_hub_params, 1.)
+            .is_err()
+    );
+    drop(full);
+    drop(resident);
+    assert_eq!(
+        brush_kernel
+            .readback_resident_output(&device, &queue, &queued)
+            .unwrap()
+            .len(),
+        2
     );
 }
 

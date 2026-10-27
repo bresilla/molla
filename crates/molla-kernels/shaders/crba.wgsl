@@ -265,9 +265,10 @@ fn crba_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             let force = smat6_mul_sv(i_a[k], s_lin[k][a], s_ang[k][a]);
             let linear = vec3<f32>(force[0], force[1], force[2]);
             let angular = vec3<f32>(force[3], force[4], force[5]);
-            for (var b = 0u; b < dof_local_width[k]; b += 1u) {
-                mass_matrix[m_off + (dof_k + a) * n_dof + dof_k + b] =
-                    dot(s_lin[k][b], linear) + dot(s_ang[k][b], angular);
+            for (var b = 0u; b <= a; b += 1u) {
+                let value = dot(s_lin[k][b], linear) + dot(s_ang[k][b], angular);
+                mass_matrix[m_off + (dof_k + a) * n_dof + dof_k + b] = value;
+                mass_matrix[m_off + (dof_k + b) * n_dof + dof_k + a] = value;
             }
             var cur = parent_local[k];
             loop {

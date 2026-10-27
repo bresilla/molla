@@ -11,6 +11,10 @@ use molla_core::{Error, Result};
 
 use crate::tire_fem::TireFemContactTerrain;
 
+#[path = "soil_mpm_feedback.rs"]
+mod feedback;
+pub use feedback::{PreparedTireMpmFeedback, TireMpmResidentFeedback};
+
 const WORKGROUP_SIZE: u32 = 64;
 
 #[repr(C)]
@@ -53,7 +57,7 @@ pub struct TireMpmGpuInPlaceParams {
     pub damping: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TireMpmTerrainRasterParams {
     pub particle_count: u32,
     pub origin: [f32; 2],
@@ -68,6 +72,47 @@ pub struct TireMpmTerrainRasterGpuOutput {
     pub heights: Vec<f32>,
     pub sinkage: Vec<f32>,
     pub surface_velocity_map: Vec<[f32; 4]>,
+}
+
+impl TireMpmTerrainRasterGpuOutput {
+    /// Convert raster rows to the CPU FEM terrain contract without particle reconstruction.
+    pub fn into_fem_contact_terrain(
+        self,
+        params: TireMpmTerrainRasterParams,
+        friction: f32,
+        soil_rolling_resistance_scale: f32,
+        surface_velocity: [f32; 3],
+    ) -> Result<TireFemContactTerrain> {
+        let n = params.validate()?;
+        if self.heights.len() != n
+            || self.sinkage.len() != n
+            || self.surface_velocity_map.len() != n
+        {
+            return Err(Error::Solver(
+                "MPM terrain snapshot: raster row count mismatch".into(),
+            ));
+        }
+        Ok(TireFemContactTerrain {
+            origin: params.origin,
+            spacing: params.spacing,
+            nx: params.nx,
+            nz: params.nz,
+            heights: self.heights,
+            friction: friction.max(0.0),
+            friction_map: None,
+            water_film_map: None,
+            sinkage_map: Some(self.sinkage),
+            soil_rolling_resistance_scale: if soil_rolling_resistance_scale.is_finite() {
+                soil_rolling_resistance_scale.max(0.0)
+            } else {
+                0.0
+            },
+            surface_velocity: surface_velocity.map(|v| if v.is_finite() { v } else { 0.0 }),
+            surface_velocity_map: Some(self.surface_velocity_map),
+            sdf_primitives: Vec::new(),
+            triangles: Vec::new(),
+        })
+    }
 }
 
 /// GPU/CPU-owned tire-MPM material-point state plus a heightfield bridge for
@@ -102,6 +147,8 @@ struct TireMpmRasterUniforms {
 }
 
 pub struct TireMpmGpuKernel {
+    device: wgpu::Device,
+    binned_raster: crate::soil_mpm_raster::MpmRasterKernel,
     pipeline: wgpu::ComputePipeline,
     pipeline_in_place: wgpu::ComputePipeline,
     pipeline_raster: wgpu::ComputePipeline,
@@ -173,12 +220,7 @@ impl TireMpmGpuInPlaceParams {
 }
 
 impl TireMpmTerrainRasterParams {
-    fn validate(&self) -> Result<usize> {
-        if self.particle_count == 0 {
-            return Err(Error::Solver(
-                "tire_mpm raster: at least one material point required".into(),
-            ));
-        }
+    pub(crate) fn validate(&self) -> Result<usize> {
         if self.nx == 0 || self.nz == 0 {
             return Err(Error::Solver(
                 "tire_mpm raster: nx/nz must be non-zero".into(),
@@ -197,7 +239,11 @@ impl TireMpmTerrainRasterParams {
                 "tire_mpm raster: origin/rest_height must be finite".into(),
             ));
         }
-        Ok(self.nx as usize * self.nz as usize)
+        self.nx
+            .checked_mul(self.nz)
+            .filter(|_| self.nx <= i32::MAX as u32 && self.nz <= i32::MAX as u32)
+            .map(|n| n as usize)
+            .ok_or_else(|| Error::Solver("tire_mpm raster: dimensions overflow".into()))
     }
 }
 
@@ -578,6 +624,8 @@ impl TireMpmGpuKernel {
             cache: None,
         });
         Self {
+            device: device.clone(),
+            binned_raster: crate::soil_mpm_raster::MpmRasterKernel::new(device),
             pipeline,
             pipeline_in_place,
             pipeline_raster,
@@ -591,6 +639,67 @@ impl TireMpmGpuKernel {
     }
 
     pub fn dispatch_raster_to_buffers(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        positions: &wgpu::Buffer,
+        velocities: &wgpu::Buffer,
+        compaction: &wgpu::Buffer,
+        heights: &wgpu::Buffer,
+        sinkage: &wgpu::Buffer,
+        surface_velocity_map: &wgpu::Buffer,
+        params: &TireMpmTerrainRasterParams,
+        fallback_surface_velocity: [f32; 3],
+    ) -> Result<()> {
+        let prepared = self.prepare_raster_to_buffers(
+            device,
+            positions,
+            velocities,
+            compaction,
+            heights,
+            sinkage,
+            surface_velocity_map,
+            params,
+            fallback_surface_velocity,
+        )?;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::tire_mpm binned raster encoder"),
+        });
+        prepared.encode(&mut encoder);
+        queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
+    }
+
+    /// Prepares a reusable particle-binned export over fixed device buffers.
+    pub fn prepare_raster_to_buffers(
+        &self,
+        device: &wgpu::Device,
+        positions: &wgpu::Buffer,
+        velocities: &wgpu::Buffer,
+        compaction: &wgpu::Buffer,
+        heights: &wgpu::Buffer,
+        sinkage: &wgpu::Buffer,
+        surface_velocity_map: &wgpu::Buffer,
+        params: &TireMpmTerrainRasterParams,
+        fallback_surface_velocity: [f32; 3],
+    ) -> Result<crate::PreparedTireMpmRaster> {
+        self.binned_raster.prepare(
+            device,
+            [
+                positions,
+                compaction,
+                velocities,
+                heights,
+                sinkage,
+                surface_velocity_map,
+            ],
+            params,
+            fallback_surface_velocity,
+        )
+    }
+
+    /// Runs the exhaustive GPU reference export for matched-work comparisons.
+    pub fn dispatch_raster_reference_to_buffers(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,

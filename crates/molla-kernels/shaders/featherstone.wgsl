@@ -30,7 +30,7 @@ struct Uniforms {
     drift_only:         u32,
     stable_motor_feedback: u32,
     external_scalar_bounds: u32,
-    compensated_coordinates: u32, control_body_wrenches: u32, pad1: u32,
+    compensated_coordinates: u32, control_body_wrenches: u32, paired_rates: u32,
 };
 
 const JOINT_PRISMATIC: u32 = 0u;
@@ -139,6 +139,9 @@ fn drive_torque(mode: u32, q: f32, qd: f32, kp: f32, kd: f32, pos_t: f32, vel_t:
 @group(3) @binding(3) var<storage, read_write> velocity_delta: array<f32>;
 @group(3) @binding(4) var<storage, read_write> coordinate_error: array<atomic<u32>>;
 @group(3) @binding(5) var<storage, read_write> position_error: array<atomic<u32>>;
+@group(3) @binding(6) var<storage, read_write> paired_rates: array<vec2<f32>>;
+@group(3) @binding(7) var<storage, read_write> paired_rate_delta: array<vec2<f32>>;
+@group(3) @binding(8) var<storage, read_write> body_velocity_low: array<SpatialVecGpu>;
 @group(4) @binding(0) var<uniform> uniforms: Uniforms;
 
 // Stage 42 v3 + 39E — per-joint cable spring/damper + per-DOF muscle
@@ -352,7 +355,14 @@ fn transform_inverse(t: Transform) -> Transform {
 }
 
 struct PositionPair { high: vec3<f32>, low: vec3<f32> }
+override local_position_rounding: bool = false;
+var<workgroup> position_rounding_scratch: array<atomic<u32>,64>;
+var<private> position_rounding_lane: u32;
 fn position_round(child: u32, value: f32) -> f32 {
+    if local_position_rounding {
+        atomicStore(&position_rounding_scratch[position_rounding_lane], bitcast<u32>(value));
+        return bitcast<f32>(atomicAdd(&position_rounding_scratch[position_rounding_lane], 0u));
+    }
     atomicStore(&position_error[4u * child + 3u], bitcast<u32>(value));
     return bitcast<f32>(atomicLoad(&position_error[4u * child + 3u]));
 }
@@ -394,7 +404,16 @@ fn position_residue(body: u32) -> vec3<f32> {
         bitcast<f32>(atomicLoad(&position_error[4u * body + 1u])),
         bitcast<f32>(atomicLoad(&position_error[4u * body + 2u])));
 }
+fn zero_position_rotation(q: QuaternionPair, value: PositionPair) -> bool {
+    let magnitude=vec3<u32>(0x7fffffffu);
+    let exponent=vec4<u32>(0x7f800000u);
+    return all((bitcast<vec3<u32>>(value.high)&magnitude)==vec3<u32>(0u))
+        && all((bitcast<vec3<u32>>(value.low)&magnitude)==vec3<u32>(0u))
+        && all((bitcast<vec4<u32>>(q.high)&exponent)!=exponent)
+        && all((bitcast<vec4<u32>>(q.low)&exponent)!=exponent);
+}
 fn position_pair_rotate(child: u32, q: QuaternionPair, value: PositionPair) -> PositionPair {
+    if zero_position_rotation(q,value) { return PositionPair(vec3<f32>(0.0),vec3<f32>(0.0)); }
     let inverse=QuaternionPair(vec4<f32>(-q.high.xyz,q.high.w),vec4<f32>(-q.low.xyz,q.low.w));
     let vector=QuaternionPair(vec4<f32>(value.high,0.0),vec4<f32>(value.low,0.0));
     let result=multiply(child,multiply(child,q,vector),inverse);
@@ -791,7 +810,8 @@ fn motor_coordinate(joint: u32, axis: u32) -> f32 {
 // ─── Kernel ────────────────────────────────────────────────────────
 
 @compute @workgroup_size(64)
-fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    position_rounding_lane=lane;
     root_response_paired=false;
     mixed_velocity_enabled=false;
     if atomicLoad(&stop_status) != 0u { return; }
@@ -811,6 +831,22 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
     let spatial_origin = body_q[u32(joint_child[j_begin])].position.xyz;
     let position_only = uniforms.drift_only == 2u;
     let refresh_only = uniforms.drift_only == 3u;
+    if uniforms.paired_rates!=0u {
+        for (var j=j_begin;j<j_end;j++) {
+            if !body_rate_input_valid(u32(joint_child[j])) { atomicOr(&stop_status,32u); return; }
+            if joint_parent[j]>=0 && !body_rate_input_valid(u32(joint_parent[j])) { atomicOr(&stop_status,32u); return; }
+        }
+        for (var d=joint_dof_offset[j_begin]; d<joint_dof_offset[j_end]; d++) {
+            let rate=paired_rates[d];
+            if any((bitcast<vec2<u32>>(rate) & vec2<u32>(0x7f800000u))==vec2<u32>(0x7f800000u))
+                || rate.x+rate.y!=rate.x {
+                atomicOr(&stop_status,32u); return;
+            }
+        }
+        for (var d=joint_dof_offset[j_begin]; d<joint_dof_offset[j_end]; d++) {
+            joint_qd[d]=paired_rates[d].x;
+        }
+    }
     if position_only {
         var moved = false;
         for (var j = j_begin; j < j_end; j++) {
@@ -1530,15 +1566,19 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         let n_dof = n_dof_arr[k];
         let damp = max(1.0 - uniforms.joint_damping * uniforms.dt, 0.0);
         var previous: array<f32,6>;
+        var previous_pair: array<vec2<f32>,6>;
         var predicted_rate: array<f32,6>;
+        rate_rounding_child=u32(joint_child[j]);
         for (var d = 0u; d < joint_dof_offset[j+1u]-dof; d++) {
             previous[d] = joint_qd[dof+d];
+            if uniforms.paired_rates!=0u { previous_pair[d]=paired_rates[dof+d]; }
         }
         if (body_flags[u32(joint_child[j])] & 3u) != 0u || joint_enabled[j]==0u {
             if position_only { continue; }
             for (var d = dof; d < joint_dof_offset[j+1u]; d++) {
                 if uniforms.drift_only == 0u { velocity_delta[d] = -joint_qd[d]; }
                 joint_qd[d] = 0.0;
+                rate_finish(d,previous_pair[d-dof],true);
             }
             continue;
         }
@@ -1560,17 +1600,18 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
                 coordinate_limit_set(coord,dof,false);
                 if uniforms.drift_only == 0u { velocity_delta[dof] = -joint_qd[dof]; }
                 joint_qd[dof] = select(0.0, previous[0u], position_only);
+                rate_finish(dof,previous_pair[0u],true);
                 continue;
             }
-            let qd_int = mixed_integrated_rate(j,k,0u,q_dd_arr[k][0u]);
-            let qd_damped = qd_int * damp;
+            let qd_damped = rate_integrate(j,k,0u,q_dd_arr[k][0u],damp);
             predicted_rate[0u] = qd_damped;
-            let qd_capped = clamp_or_passthrough(qd_damped, joint_velocity_limit[dof]);
+            var qd_capped=qd_damped;
+            if !position_only && !local_scalar_bounds { qd_capped=rate_cap(dof,qd_damped); }
             if position_only || local_scalar_bounds {
                 joint_qd[dof] = qd_damped;
-                joint_q[coord] = coordinate_advance(coord, qd_damped * uniforms.dt);
+                joint_q[coord] = rate_coordinate_advance(coord,dof,qd_damped);
             } else {
-                let q_pred = coordinate_advance(coord, qd_capped * uniforms.dt);
+                let q_pred = rate_coordinate_advance(coord,dof,qd_capped);
                 joint_qd[dof] = qd_capped;
                 joint_q[coord] = q_pred;
                 if coordinate_limit_gap(coord,dof,false)>0.0 { coordinate_limit_set(coord,dof,false); }
@@ -1580,12 +1621,11 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Stage 39E — 2 scalar coords (q_l, q_b), 2 dofs. Symplectic
             // Euler per DoF, identical to two stacked 1-DoF integrators.
             for (var dd = 0u; dd < 2u; dd = dd + 1u) {
-                let qd_int = mixed_integrated_rate(j,k,dd,q_dd_arr[k][dd]);
-                let qd_damped = qd_int * damp;
+                let qd_damped = rate_integrate(j,k,dd,q_dd_arr[k][dd],damp);
                 predicted_rate[dd] = qd_damped;
-                let qd_capped = select(clamp_or_passthrough(qd_damped, joint_velocity_limit[dof + dd]), qd_damped,
-                    position_only || local_scalar_bounds);
-                let q_pred = coordinate_advance(coord + dd, qd_capped * uniforms.dt);
+                var qd_capped=qd_damped;
+                if !position_only && !local_scalar_bounds { qd_capped=rate_cap(dof+dd,qd_damped); }
+                let q_pred = rate_coordinate_advance(coord+dd,dof+dd,qd_capped);
                 let lo = joint_limit_lower[dof + dd];
                 let hi = joint_limit_upper[dof + dd];
                 var q_clamped = q_pred;
@@ -1604,16 +1644,16 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         } else if (jt == JOINT_BALL) {
             var omega = vec3<f32>(joint_qd[dof], joint_qd[dof+1u], joint_qd[dof+2u]);
-            for (var d=0u; d<3u; d++) { omega[d]=mixed_integrated_rate(j,k,d,q_dd_arr[k][d])*damp; }
+            for (var d=0u; d<3u; d++) { omega[d]=rate_integrate(j,k,d,q_dd_arr[k][d],damp); }
             for (var d = 0u; d < 3u; d += 1u) { predicted_rate[d] = omega[d]; }
             if !position_only && !local_scalar_bounds {
-                for (var d = 0u; d < 3u; d++) { omega[d] = clamp_or_passthrough(omega[d],joint_velocity_limit[dof+d]); }
+                for (var d = 0u; d < 3u; d++) { omega[d] = rate_cap(dof+d,omega[d]); }
             }
             let q_old = vec4<f32>(joint_q[coord], joint_q[coord+1u], joint_q[coord+2u], joint_q[coord+3u]);
             let dq = vec4<f32>(omega.x * 0.5, omega.y * 0.5, omega.z * 0.5, 0.0);
             let q_dot = quat_mul(dq, q_old);
             var q_new = normalize(q_old + q_dot * uniforms.dt);
-            if uniforms.compensated_coordinates!=0u { q_new=coordinate_quaternion_advance(coord,omega); }
+            if uniforms.compensated_coordinates!=0u { q_new=rate_quaternion_advance(coord,dof,omega); }
             joint_q[coord]    = q_new.x;
             joint_q[coord+1u] = q_new.y;
             joint_q[coord+2u] = q_new.z;
@@ -1629,8 +1669,8 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             var v = vec3<f32>(joint_qd[dof], joint_qd[dof+1u], joint_qd[dof+2u]);
             var omega = vec3<f32>(joint_qd[dof+3u], joint_qd[dof+4u], joint_qd[dof+5u]);
             for (var d=0u; d<3u; d++) {
-                v[d]=mixed_integrated_rate(j,k,d,q_dd_arr[k][d])*damp;
-                omega[d]=mixed_integrated_rate(j,k,d+3u,q_dd_arr[k][d+3u])*damp;
+                v[d]=rate_integrate(j,k,d,q_dd_arr[k][d],damp);
+                omega[d]=rate_integrate(j,k,d+3u,q_dd_arr[k][d+3u],damp);
             }
             for (var d = 0u; d < 3u; d += 1u) {
                 predicted_rate[d] = v[d];
@@ -1638,18 +1678,18 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             if !position_only && !local_scalar_bounds {
                 for (var d = 0u; d < 3u; d++) {
-                    v[d] = clamp_or_passthrough(v[d],joint_velocity_limit[dof+d]);
-                    omega[d] = clamp_or_passthrough(omega[d],joint_velocity_limit[dof+3u+d]);
+                    v[d] = rate_cap(dof+d,v[d]);
+                    omega[d] = rate_cap(dof+3u+d,omega[d]);
                 }
             }
-            let p_new = vec3<f32>(coordinate_advance(coord, v.x * uniforms.dt),
-                coordinate_advance(coord+1u, v.y * uniforms.dt), coordinate_advance(coord+2u, v.z * uniforms.dt));
+            let p_new = vec3<f32>(rate_coordinate_advance(coord,dof,v.x),
+                rate_coordinate_advance(coord+1u,dof+1u,v.y), rate_coordinate_advance(coord+2u,dof+2u,v.z));
             let r_old = vec4<f32>(joint_q[coord+3u], joint_q[coord+4u], joint_q[coord+5u], joint_q[coord+6u]);
             let dq = vec4<f32>(omega.x * 0.5, omega.y * 0.5, omega.z * 0.5, 0.0);
             let r_dot = quat_mul(dq, r_old);
             var r_new = normalize(r_old + r_dot * uniforms.dt);
             if uniforms.compensated_coordinates != 0u {
-                r_new = coordinate_quaternion_advance(coord+3u,omega);
+                r_new = rate_quaternion_advance(coord+3u,dof+3u,omega);
             }
             joint_q[coord]    = p_new.x;
             joint_q[coord+1u] = p_new.y;
@@ -1790,6 +1830,12 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
                 velocity_delta[dof+d] = delta;
             }
         }
+        for (var d=0u; d<joint_dof_offset[j+1u]-dof; d++) {
+            let locked=motion_axis_point(j,d) && (jt==JOINT_PRISMATIC || jt==JOINT_REVOLUTE
+                || (jt==JOINT_D6 && (d<3u || d6_angular_lock_count(j)==3u))
+                || (jt==JOINT_BALL && motion_axis_point(j,0u) && motion_axis_point(j,1u) && motion_axis_point(j,2u)));
+            rate_finish(dof+d,previous_pair[d],locked);
+        }
     }
 
     }
@@ -1801,6 +1847,7 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         let child  = u32(joint_child[j]);
         if (body_flags[child] & 2u) != 0u {
             body_qd[child] = SpatialVecGpu(vec4<f32>(0.0), vec4<f32>(0.0));
+            if uniforms.paired_rates!=0u { body_velocity_low[child]=SpatialVecGpu(vec4<f32>(0.0),vec4<f32>(0.0)); }
             continue;
         }
         if (body_flags[child] & 1u) != 0u {
@@ -1829,6 +1876,7 @@ fn featherstone_step(@builtin(global_invocation_id) gid: vec3<u32>) {
         body_q[child] = transform_compose(after, xc_inv);
         if (uniforms.compensated_coordinates != 0u) { publish_compensated_position(j, parent_world); }
         let center = body_q[child].position.xyz + quat_rotate(body_q[child].rotation, body_com[child].xyz);
+        if uniforms.paired_rates!=0u { publish_paired_body_velocity(j); continue; }
         var velocity = SpatialVecGpu(vec4<f32>(0.0), vec4<f32>(0.0));
         if parent >= 0 {
             let p = u32(parent);

@@ -1375,14 +1375,14 @@ fn tire_dem_resident_fem_terrain_owner_steps_and_keeps_gpu_terrain() {
 fn tire_dem_resident_fem_owner_uses_no_readback_gpu_lbvh_builder_source_guard() {
     let src = include_str!("../src/tire_dem.rs");
     let owner_step = src
-        .split("pub fn step_sparse_lbvh_gpu_mirrored")
+        .split("pub fn step_sparse_lbvh_gpu_resident(")
         .nth(1)
         .expect("resident DEM/FEM terrain owner step should exist")
         .split("pub fn resident_state")
         .next()
         .expect("resident owner step body should precede accessors");
     assert!(
-        owner_step.contains("build_resident_sparse_lbvh_tree_rows_gpu_radix"),
+        owner_step.contains("resident::ResidentStepper::new"),
         "resident DEM/FEM owner should build sparse-LBVH topology from resident GPU buffers"
     );
     assert!(

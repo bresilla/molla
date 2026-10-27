@@ -12,6 +12,10 @@ use molla_core::{Error, Result};
 const WORKGROUP_SIZE: u32 = 64;
 const SEGMENTS_MAX: u32 = 256;
 
+#[path = "tire_brush_terrain.rs"]
+mod resident_terrain;
+pub use resident_terrain::{BrushTerrainGpu, PreparedTireBrushTerrain};
+
 /// Per-wheel input row uploaded to the GPU brush kernel.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable, Default)]
@@ -84,6 +88,7 @@ struct TerrainUniformsCpu {
 }
 
 pub struct TireBrushGpuKernel {
+    device: wgpu::Device,
     pipeline: wgpu::ComputePipeline,
     layout_io: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
@@ -155,6 +160,7 @@ impl TireBrushGpuKernel {
             cache: None,
         });
         Self {
+            device: device.clone(),
             pipeline,
             layout_io,
             layout_uniforms,

@@ -81,14 +81,17 @@ fn tetra_force_on_node(node_id: u32, positions: ptr<function, array<vec3<f32>, 1
         let p1 = (*positions)[i1];
         let p2 = (*positions)[i2];
         let p3 = (*positions)[i3];
-        let g0 = tet_grads[base + 0u].xyz;
         let g1 = tet_grads[base + 1u].xyz;
         let g2 = tet_grads[base + 2u].xyz;
         let g3 = tet_grads[base + 3u].xyz;
+        let g0 = -(g1 + g2 + g3);
+        let e1 = p1 - p0;
+        let e2 = p2 - p0;
+        let e3 = p3 - p0;
         let F = mat3x3<f32>(
-            p0 * g0.x + p1 * g1.x + p2 * g2.x + p3 * g3.x,
-            p0 * g0.y + p1 * g1.y + p2 * g2.y + p3 * g3.y,
-            p0 * g0.z + p1 * g1.z + p2 * g2.z + p3 * g3.z,
+            e1 * g1.x + e2 * g2.x + e3 * g3.x,
+            e1 * g1.y + e2 * g2.y + e3 * g3.y,
+            e1 * g1.z + e2 * g2.z + e3 * g3.z,
         );
         let det_f = determinant(F);
         let safe_j = max(det_f, 1.0e-4);
@@ -96,8 +99,8 @@ fn tetra_force_on_node(node_id: u32, positions: ptr<function, array<vec3<f32>, 1
         let lambda = tet_lambda[t];
         let log_j = log(safe_j);
         let inv_j = 1.0 / safe_j;
-        let inv_f = inv_j * transpose(adjugate3(F));
-        let p_stress = mu * F + (lambda * log_j - mu) * inv_f;
+        let inv_f_t = inv_j * cofactor3(F);
+        let p_stress = mu * F + (lambda * log_j - mu) * inv_f_t;
         let volume = tet_volume[t];
         var contrib = vec3<f32>(0.0, 0.0, 0.0);
         if (i0 == node_id) { contrib = -volume * (p_stress * g0); }
@@ -109,7 +112,7 @@ fn tetra_force_on_node(node_id: u32, positions: ptr<function, array<vec3<f32>, 1
     return f;
 }
 
-fn adjugate3(m: mat3x3<f32>) -> mat3x3<f32> {
+fn cofactor3(m: mat3x3<f32>) -> mat3x3<f32> {
     let a = m[0]; let b = m[1]; let c = m[2];
     let r0 = vec3<f32>(b.y * c.z - b.z * c.y, b.z * c.x - b.x * c.z, b.x * c.y - b.y * c.x);
     let r1 = vec3<f32>(c.y * a.z - c.z * a.y, c.z * a.x - c.x * a.z, c.x * a.y - c.y * a.x);

@@ -12,6 +12,10 @@ workspace = true
 
 [features]
 default = []
+lazy-paired-drift = ["gpu"]
+native-geometry-drift = ["gpu"]
+native-lazy-geometry-drift = ["native-geometry-drift", "lazy-paired-drift"]
+resource-counters = ["gpu", "wgpu/counters", "molla-core/gpu-metrics"]
 gpu = [
     "dep:molla-compute",
     "dep:wgpu",
@@ -46,6 +50,7 @@ wgpu = { version = "29", optional = true, default-features = false, features = [
 ] }
 
 [dev-dependencies]
+naga = { version = "29", features = ["wgsl-in", "spv-out"] }
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
 glam = "0.30"
 rustfft = "6"

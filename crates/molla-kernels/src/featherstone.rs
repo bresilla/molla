@@ -28,7 +28,7 @@ struct Uniforms {
     external_scalar_bounds: u32,
     compensated_coordinates: u32,
     control_body_wrenches: u32,
-    padding: u32,
+    paired_rates: u32,
 }
 
 const WORKGROUP_SIZE: u32 = 64;
@@ -142,6 +142,25 @@ fn validate_compliance(model: &Model) -> Result<()> {
     if records.len() != model.joint_dof_total {
         return Err(Error::Gpu("invalid GPU joint compliance length".into()));
     }
+    let offsets = model.joint_dof_offset.host()?;
+    let kinds = model.joint_type.host()?;
+    if offsets.len() != kinds.len() + 1
+        || offsets.first() != Some(&0)
+        || offsets.last().copied().map(|v| v as usize) != Some(records.len())
+        || offsets.windows(2).any(|range| range[0] > range[1])
+    {
+        return Err(Error::Gpu("invalid GPU joint compliance offsets".into()));
+    }
+    for (joint, range) in offsets.windows(2).enumerate() {
+        let active = records[range[0] as usize..range[1] as usize]
+            .iter()
+            .any(|record| record.enabled != 0);
+        if active && (kinds[joint] != molla_sim::JointType::D6 as u32 || range[1] - range[0] != 6) {
+            return Err(Error::Gpu(
+                "joint compliance requires a six-DOF D6 joint".into(),
+            ));
+        }
+    }
     for c in records.iter().filter(|c| c.enabled != 0) {
         c.validate()?;
         let packed = c.to_gpu();
@@ -173,22 +192,65 @@ fn validate_compliance(model: &Model) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "featherstone_rounding_tests.rs"]
+mod rounding_tests;
+
+#[cfg(test)]
+#[path = "featherstone_no_contraction_tests.rs"]
+mod no_contraction_tests;
+
+#[cfg(test)]
+#[path = "featherstone_zero_rotation_tests.rs"]
+mod zero_rotation_tests;
+
+#[cfg(test)]
+#[path = "featherstone_body_rates_tests.rs"]
+mod body_rates_tests;
+
+#[cfg(test)]
+#[path = "featherstone_acceleration_oracle.rs"]
+mod acceleration_oracle;
+
+#[path = "featherstone_lazy_anchors.rs"]
+mod lazy_anchors;
+
+#[path = "featherstone_drift_backend.rs"]
+mod drift_backend;
+use drift_backend::DriftBackend;
+
+#[cfg(test)]
+#[path = "featherstone_construction_tests.rs"]
+mod construction_tests;
+
+#[cfg(test)]
+#[path = "featherstone_external_prediction_tests.rs"]
+mod external_prediction_tests;
+#[cfg(test)]
+#[path = "featherstone_pipeline_cache_tests.rs"]
+mod pipeline_cache_tests;
+#[path = "featherstone_rates.rs"]
+mod rates;
+#[cfg(test)]
+#[path = "featherstone_rates_tests.rs"]
+mod rates_tests;
+
 struct FeatherstoneBindings {
-    buffers: [wgpu::Buffer; 52],
+    buffers: [wgpu::Buffer; 55],
     groups: [wgpu::BindGroup; 5],
 }
 
 impl FeatherstoneBindings {
-    fn matches(&self, buffers: &[&wgpu::Buffer; 52]) -> bool {
+    fn matches(&self, buffers: &[&wgpu::Buffer; 55]) -> bool {
         self.buffers.iter().zip(buffers).all(|(a, b)| a == *b)
     }
 
     fn new(
         device: &wgpu::Device,
         layouts: [&wgpu::BindGroupLayout; 5],
-        buffers: [&wgpu::Buffer; 52],
+        buffers: [&wgpu::Buffer; 55],
     ) -> Self {
-        let ranges = [0..18, 18..31, 31..41, 41..47, 47..52];
+        let ranges = [0..18, 18..31, 31..41, 41..50, 50..55];
         let groups = std::array::from_fn(|i| {
             let entries: Vec<_> = buffers[ranges[i].clone()]
                 .iter()
@@ -218,9 +280,24 @@ struct CompensatedState {
     position_error: wgpu::Buffer,
 }
 
+#[path = "featherstone_joint_types.rs"]
+mod joint_types;
+
 /// GPU Featherstone-style dynamics kernel.
 pub struct FeatherstoneKernel {
+    drift_backend: DriftBackend,
+    specialized_joint_types: Option<std::sync::Arc<[u32]>>,
+    split_acceleration: bool,
+    external_prediction_only: bool,
     pipeline: wgpu::ComputePipeline,
+    execution: FeatherstoneExecution,
+    dynamics_pipeline: wgpu::ComputePipeline,
+    dynamics_workgroup_size: u32,
+    unrestricted_drift_pipeline: wgpu::ComputePipeline,
+    #[cfg(test)]
+    force_generic_drift: bool,
+    #[cfg(test)]
+    force_generic_dynamics: bool,
     layout_model: wgpu::BindGroupLayout,
     layout_state: wgpu::BindGroupLayout,
     layout_control: wgpu::BindGroupLayout,
@@ -256,10 +333,25 @@ pub struct FeatherstoneKernel {
     coordinate_states: Vec<CompensatedState>,
     coordinate_fallback: wgpu::Buffer,
     position_fallback: wgpu::Buffer,
+    rate_states: Vec<rates::RateState>,
+    paired_rate_program: bool,
+    paired_delta: Option<wgpu::Buffer>,
+    rate_fallback: [wgpu::Buffer; 2],
+    body_velocity_fallback: wgpu::Buffer,
+    dispatch_timestamps: Option<(wgpu::QuerySet, [Option<u32>; 2])>,
 }
 
 struct FeatherstoneProgram {
+    specialized_joint_types: Option<std::sync::Arc<[u32]>>,
+    split_acceleration: bool,
+    external_prediction_only: bool,
+    paired_rates: bool,
     pipeline: wgpu::ComputePipeline,
+    execution: FeatherstoneExecution,
+    dynamics_pipeline: wgpu::ComputePipeline,
+    dynamics_workgroup_size: u32,
+    unrestricted_drift_pipeline: wgpu::ComputePipeline,
+    drift_backend: DriftBackend,
     layout_model: wgpu::BindGroupLayout,
     layout_state: wgpu::BindGroupLayout,
     layout_control: wgpu::BindGroupLayout,
@@ -268,10 +360,384 @@ struct FeatherstoneProgram {
     layout_uniforms: wgpu::BindGroupLayout,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FeatherstoneRounding {
+    #[default]
+    Storage,
+    /// Shared rounding barriers with persistent coordinate writeback.
+    ExperimentalShared,
+}
+
+impl FeatherstoneRounding {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Storage => "portable-storage-rounding",
+            Self::ExperimentalShared => "experimental-shared-scratch-with-coordinate-writeback",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FeatherstonePasses {
+    #[cfg(test)]
+    PhaseOnly(u32),
+    #[cfg(test)]
+    UnrestrictedScalarOnly,
+    #[cfg(test)]
+    LoopHintOnly(bool),
+    #[cfg(test)]
+    TractorJointKindsOnly,
+    Both,
+    BothSharedDynamics,
+    BothConstraintScratch,
+    BothSingleLaneDynamics,
+    #[cfg(test)]
+    GenericAndDynamics,
+    #[cfg(test)]
+    GenericAndSingleLaneDynamics,
+    #[cfg(test)]
+    GenericAndNoContractionDynamics,
+    #[cfg(test)]
+    GenericAndIntermediateRounding,
+    #[cfg(test)]
+    GenericAndResidualRounding,
+    #[cfg(test)]
+    GenericAndPassthroughControl,
+    #[cfg(test)]
+    GenericAndSharedDynamics,
+    #[cfg(test)]
+    GenericAndConstraintScratch,
+    #[cfg(test)]
+    GenericOnly,
+    PairedUnrestricted,
+    PairedExternalPrediction,
+    #[cfg(test)]
+    GenericWithoutZeroRotation,
+    #[cfg(test)]
+    UnrestrictedDriftWithoutZeroRotation,
+    #[cfg(test)]
+    GenericWithPositionProduct,
+    #[cfg(test)]
+    UnrestrictedDriftWithPositionProduct,
+    #[cfg(test)]
+    UnrestrictedDriftOnly,
+    #[cfg(test)]
+    UnrestrictedDriftLazyAnchors,
+    #[cfg(test)]
+    UnrestrictedDriftNativePosition,
+    #[cfg(test)]
+    UnrestrictedDriftNativeGeometry,
+    #[cfg(test)]
+    UnrestrictedDriftNativeGeometryLazyAnchors,
+    #[cfg(test)]
+    PairedAccelerationOnly,
+    #[cfg(test)]
+    PairedAccelerationNativeGeometry,
+    #[cfg(test)]
+    PairedRigorousAccelerationOnly,
+    #[cfg(test)]
+    PairedRigorousAccelerationNativeGeometry,
+    #[cfg(test)]
+    PairedRigorousAccelerationSwitchedGeometry,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FeatherstoneExecution {
+    #[default]
+    Generic,
+    ExperimentalWorkgroupScratch,
+    ExperimentalConstraintScratch,
+    ExperimentalSingleLane,
+    /// Specialize 1–32 model-wide joint types; type/count edits require reconstruction.
+    /// Enabled flags, limits, compliance and physical state remain dynamic.
+    ExperimentalJointTypes,
+}
+
+impl FeatherstoneExecution {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Generic => "runtime-mode-generic",
+            Self::ExperimentalWorkgroupScratch => "experimental-workgroup-dynamics-scratch",
+            Self::ExperimentalConstraintScratch => "experimental-workgroup-constraint-scratch",
+            Self::ExperimentalSingleLane => "experimental-single-lane-private-dynamics",
+            Self::ExperimentalJointTypes => "experimental-model-joint-types",
+        }
+    }
+}
+
+fn validate_execution(
+    execution: FeatherstoneExecution,
+    joints: u32,
+    articulations: usize,
+    limits: &wgpu::Limits,
+) -> Result<()> {
+    if !matches!(
+        execution,
+        FeatherstoneExecution::Generic | FeatherstoneExecution::ExperimentalJointTypes
+    ) && (joints > 32
+        || scratch_bytes(execution, joints) > limits.max_compute_workgroup_storage_size
+        || articulations > limits.max_compute_workgroups_per_dimension as usize)
+    {
+        return Err(Error::Gpu(
+            "workgroup dynamics scratch exceeds device limits".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn scratch_bytes(execution: FeatherstoneExecution, joints: u32) -> u32 {
+    if execution == FeatherstoneExecution::ExperimentalSingleLane {
+        return 256;
+    }
+    let base = 272 * joints + 3 * (24 * joints).div_ceil(16) * 16 + 288;
+    if execution == FeatherstoneExecution::ExperimentalConstraintScratch {
+        base + 528 * joints + (4 * joints).div_ceil(16) * 16
+    } else {
+        base
+    }
+}
+
+impl FeatherstonePasses {
+    #[cfg(test)]
+    fn uses_passthrough(self) -> bool {
+        matches!(
+            self,
+            Self::GenericAndNoContractionDynamics
+                | Self::GenericAndPassthroughControl
+                | Self::GenericAndIntermediateRounding
+                | Self::GenericAndResidualRounding
+        )
+    }
+    fn single_lane(self) -> bool {
+        match self {
+            Self::BothSingleLaneDynamics => true,
+            #[cfg(test)]
+            Self::GenericAndSingleLaneDynamics => true,
+            _ => false,
+        }
+    }
+    fn shared_dynamics(self) -> bool {
+        match self {
+            Self::BothSharedDynamics | Self::BothConstraintScratch => true,
+            #[cfg(test)]
+            Self::GenericAndSharedDynamics => true,
+            #[cfg(test)]
+            Self::GenericAndConstraintScratch => true,
+            _ => false,
+        }
+    }
+
+    fn dynamics_source(self, source: &str) -> Option<String> {
+        if self == Self::PairedUnrestricted {
+            return Some(rates::split_acceleration_source(source, true));
+        }
+        if self.single_lane() {
+            assert_eq!(source.matches("@compute @workgroup_size(64)").count(), 1);
+            return Some(source.replace(
+                "@compute @workgroup_size(64)",
+                "@compute @workgroup_size(1)",
+            ));
+        }
+        if self.constraint_scratch() {
+            return Some(constraint_scratch_source(source));
+        }
+        if self.shared_dynamics() {
+            return Some(shared_dynamics_source(source));
+        }
+        #[cfg(test)]
+        if self == Self::GenericAndPassthroughControl {
+            return Some(no_contraction_tests::control_source(source));
+        }
+        #[cfg(test)]
+        if matches!(
+            self,
+            Self::GenericAndNoContractionDynamics
+                | Self::GenericAndIntermediateRounding
+                | Self::GenericAndResidualRounding
+        ) {
+            return Some(no_contraction_tests::candidate_source(source));
+        }
+        #[cfg(test)]
+        if self == Self::GenericAndDynamics {
+            return Some(dynamics_source(source));
+        }
+        None
+    }
+
+    fn constraint_scratch(self) -> bool {
+        match self {
+            Self::BothConstraintScratch => true,
+            #[cfg(test)]
+            Self::GenericAndConstraintScratch => true,
+            _ => false,
+        }
+    }
+
+    fn dynamics_width(self) -> u32 {
+        if self.single_lane() {
+            return 1;
+        }
+        if self.shared_dynamics() {
+            1
+        } else {
+            WORKGROUP_SIZE
+        }
+    }
+}
+
 impl FeatherstoneProgram {
     fn new(device: &wgpu::Device, joint_capacity: u32, mixed_stop_rows: usize) -> Self {
+        Self::with_rounding(
+            device,
+            joint_capacity,
+            mixed_stop_rows,
+            FeatherstoneRounding::Storage,
+        )
+    }
+
+    fn with_rounding(
+        device: &wgpu::Device,
+        joint_capacity: u32,
+        mixed_stop_rows: usize,
+        rounding: FeatherstoneRounding,
+    ) -> Self {
+        Self::with_options(
+            device,
+            joint_capacity,
+            mixed_stop_rows,
+            rounding,
+            FeatherstoneExecution::Generic,
+            false,
+            false,
+            None,
+            None,
+        )
+    }
+
+    fn with_options(
+        device: &wgpu::Device,
+        joint_capacity: u32,
+        mixed_stop_rows: usize,
+        rounding: FeatherstoneRounding,
+        execution: FeatherstoneExecution,
+        paired_rates: bool,
+        unrestricted: bool,
+        cache: Option<&wgpu::PipelineCache>,
+        specialized_joint_types: Option<&[u32]>,
+    ) -> Self {
+        let shared = rounding == FeatherstoneRounding::ExperimentalShared;
+        assert!(!unrestricted || paired_rates);
+        Self::with_rate_precision_cached(
+            device,
+            joint_capacity,
+            mixed_stop_rows,
+            shared,
+            false,
+            shared,
+            if unrestricted {
+                FeatherstonePasses::PairedUnrestricted
+            } else {
+                match execution {
+                    FeatherstoneExecution::Generic
+                    | FeatherstoneExecution::ExperimentalJointTypes => FeatherstonePasses::Both,
+                    FeatherstoneExecution::ExperimentalWorkgroupScratch => {
+                        FeatherstonePasses::BothSharedDynamics
+                    }
+                    FeatherstoneExecution::ExperimentalConstraintScratch => {
+                        FeatherstonePasses::BothConstraintScratch
+                    }
+                    FeatherstoneExecution::ExperimentalSingleLane => {
+                        FeatherstonePasses::BothSingleLaneDynamics
+                    }
+                }
+            },
+            paired_rates,
+            cache,
+            specialized_joint_types,
+        )
+    }
+
+    #[cfg(test)]
+    fn with_precision(
+        device: &wgpu::Device,
+        joint_capacity: u32,
+        mixed_stop_rows: usize,
+        local: bool,
+        native_sum: bool,
+        local_coordinates: bool,
+        passes: FeatherstonePasses,
+    ) -> Self {
+        Self::with_rate_precision(
+            device,
+            joint_capacity,
+            mixed_stop_rows,
+            local,
+            native_sum,
+            local_coordinates,
+            passes,
+            false,
+        )
+    }
+
+    #[cfg(test)]
+    fn with_rate_precision(
+        device: &wgpu::Device,
+        joint_capacity: u32,
+        mixed_stop_rows: usize,
+        local: bool,
+        native_sum: bool,
+        local_coordinates: bool,
+        passes: FeatherstonePasses,
+        paired_rates: bool,
+    ) -> Self {
+        Self::with_rate_precision_cached(
+            device,
+            joint_capacity,
+            mixed_stop_rows,
+            local,
+            native_sum,
+            local_coordinates,
+            passes,
+            paired_rates,
+            None,
+            None,
+        )
+    }
+
+    fn with_rate_precision_cached(
+        device: &wgpu::Device,
+        joint_capacity: u32,
+        mixed_stop_rows: usize,
+        local: bool,
+        native_sum: bool,
+        local_coordinates: bool,
+        passes: FeatherstonePasses,
+        paired_rates: bool,
+        cache: Option<&wgpu::PipelineCache>,
+        specialized_joint_types: Option<&[u32]>,
+    ) -> Self {
+        let construction_trace =
+            std::env::var_os("MOLLA_GPU_CONSTRUCTION_TRACE").map(|_| std::time::Instant::now());
+        let trace = |stage: &str| {
+            if let Some(start) = construction_trace {
+                eprintln!(
+                    "GPU construction featherstone joints={joint_capacity} mixed_rows={mixed_stop_rows} paired={paired_rates} t={:.6}s {stage}",
+                    start.elapsed().as_secs_f64()
+                );
+            }
+        };
+        trace("begin");
+        assert!(!native_sum || device.features().contains(wgpu::Features::SHADER_F64));
+        #[cfg(test)]
+        if passes.constraint_scratch() {
+            let bytes = scratch_bytes(
+                FeatherstoneExecution::ExperimentalConstraintScratch,
+                joint_capacity,
+            );
+            assert!(bytes <= device.limits().max_compute_workgroup_storage_size);
+        }
         let source = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
             include_str!("../shaders/featherstone.wgsl"),
             include_str!("../shaders/featherstone_stops.wgsl"),
             include_str!("../shaders/featherstone_feedback.wgsl"),
@@ -280,7 +746,9 @@ impl FeatherstoneProgram {
             include_str!("../shaders/joint_euler_chart.wgsl"),
             include_str!("../shaders/euler_bound_precision.wgsl"),
             include_str!("../shaders/featherstone_mixed_stops.wgsl"),
-            include_str!("../shaders/cone_geometry.wgsl")
+            include_str!("../shaders/cone_geometry.wgsl"),
+            include_str!("../shaders/featherstone_rates.wgsl"),
+            include_str!("../shaders/featherstone_body_rates.wgsl")
         )
         .replace(
             "const MAX_JOINTS_PER_ART: u32 = 32u;",
@@ -290,11 +758,158 @@ impl FeatherstoneProgram {
             "const MAX_MIXED_STOP_ROWS: u32 = 1u;",
             &format!("const MAX_MIXED_STOP_ROWS: u32 = {mixed_stop_rows}u;"),
         );
+        let source = if paired_rates {
+            rates::shader_source(&source)
+        } else {
+            source.replace("uniforms.paired_rates", "0u")
+        };
+        #[cfg(test)]
+        let source = if matches!(
+            passes,
+            FeatherstonePasses::GenericWithoutZeroRotation
+                | FeatherstonePasses::UnrestrictedDriftWithoutZeroRotation
+        ) {
+            zero_rotation_tests::reference_source(&source)
+        } else {
+            source
+        };
+        #[cfg(test)]
+        let source = if matches!(
+            passes,
+            FeatherstonePasses::GenericWithPositionProduct
+                | FeatherstonePasses::UnrestrictedDriftWithPositionProduct
+        ) {
+            zero_rotation_tests::xyz_candidate_source(&source)
+        } else {
+            source
+        };
+        #[cfg(test)]
+        let source = if matches!(
+            passes,
+            FeatherstonePasses::UnrestrictedDriftLazyAnchors
+                | FeatherstonePasses::UnrestrictedDriftNativeGeometryLazyAnchors
+        ) {
+            lazy_anchors::source(&source)
+        } else {
+            source
+        };
+        #[cfg(test)]
+        let source = if native_sum {
+            native_sum_test_source(&source, paired_rates, passes)
+        } else {
+            source
+        };
+        let source = if local_coordinates {
+            assert_eq!(source.matches("fn coordinate_round(").count(), 1);
+            format!(
+                "{}\n{}",
+                source.replace("fn coordinate_round(", "fn storage_coordinate_round("),
+                include_str!("../shaders/featherstone_shared_coordinate.wgsl")
+            )
+        } else {
+            source
+        };
+        #[cfg(test)]
+        let source = if matches!(
+            passes,
+            FeatherstonePasses::UnrestrictedDriftOnly
+                | FeatherstonePasses::UnrestrictedDriftLazyAnchors
+                | FeatherstonePasses::UnrestrictedDriftNativePosition
+                | FeatherstonePasses::UnrestrictedDriftNativeGeometry
+                | FeatherstonePasses::UnrestrictedDriftNativeGeometryLazyAnchors
+                | FeatherstonePasses::UnrestrictedDriftWithoutZeroRotation
+                | FeatherstonePasses::UnrestrictedDriftWithPositionProduct
+        ) {
+            unrestricted_drift_source(&source)
+        } else {
+            source
+        };
+        let source = match specialized_joint_types {
+            Some(kinds) => joint_types::source(&source, kinds)
+                .expect("validated model joint types and shader load syntax"),
+            None => source,
+        };
+        let primary_source = if passes == FeatherstonePasses::PairedExternalPrediction {
+            rates::external_prediction_source(&source)
+        } else if passes == FeatherstonePasses::PairedUnrestricted {
+            rates::split_acceleration_source(&source, false)
+        } else {
+            source.clone()
+        };
+        #[cfg(test)]
+        let primary_source = match passes {
+            FeatherstonePasses::PairedRigorousAccelerationSwitchedGeometry => {
+                switched_rigorous_acceleration_source(&primary_source)
+            }
+            FeatherstonePasses::PairedRigorousAccelerationOnly
+            | FeatherstonePasses::PairedRigorousAccelerationNativeGeometry => {
+                fixed_rigorous_acceleration_source(&primary_source)
+            }
+            FeatherstonePasses::PairedAccelerationOnly
+            | FeatherstonePasses::PairedAccelerationNativeGeometry => {
+                rates::split_acceleration_source(&primary_source, true)
+            }
+            FeatherstonePasses::TractorJointKindsOnly => {
+                construction_tests::joint_kind_source(&primary_source, &[4, 1, 1, 1, 1, 1]).unwrap()
+            }
+            FeatherstonePasses::PhaseOnly(phase) => {
+                construction_tests::phase_source(&primary_source, phase)
+            }
+            FeatherstonePasses::UnrestrictedScalarOnly => {
+                rates::unrestricted_source(&primary_source)
+            }
+            _ => primary_source,
+        };
+        trace("modules begin");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::featherstone"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: wgpu::ShaderSource::Wgsl(
+                rates::dispatch_source(&primary_source, paired_rates).into(),
+            ),
+        });
+        #[cfg(test)]
+        let shader = if let FeatherstonePasses::LoopHintOnly(hint) = passes {
+            construction_tests::loop_hint_shader(device, &primary_source, hint)
+        } else {
+            shader
+        };
+        let dynamics_shader = passes.dynamics_source(&source).map(|candidate| {
+            let candidate = rates::dispatch_source(&candidate, paired_rates);
+            #[cfg(test)]
+            if passes == FeatherstonePasses::GenericAndResidualRounding {
+                return no_contraction_tests::residual_shader(
+                    device,
+                    &candidate,
+                    "featherstone_step",
+                );
+            }
+            #[cfg(test)]
+            if passes == FeatherstonePasses::GenericAndIntermediateRounding {
+                return no_contraction_tests::intermediate_shader(
+                    device,
+                    &candidate,
+                    "featherstone_step",
+                );
+            }
+            #[cfg(test)]
+            if passes == FeatherstonePasses::GenericAndPassthroughControl {
+                return no_contraction_tests::control_shader(
+                    device,
+                    &candidate,
+                    "featherstone_step",
+                );
+            }
+            #[cfg(test)]
+            if passes == FeatherstonePasses::GenericAndNoContractionDynamics {
+                return no_contraction_tests::shader(device, &candidate, "featherstone_step");
+            }
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("molla::featherstone dynamics"),
+                source: wgpu::ShaderSource::Wgsl(candidate.into()),
+            })
         });
 
+        trace("modules ready");
         let layout_model = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::featherstone model"),
             entries: &storage_entries(18, true),
@@ -316,6 +931,9 @@ impl FeatherstoneProgram {
                 storage_entries(4, false)[3],
                 storage_entries(5, false)[4],
                 storage_entries(6, false)[5],
+                storage_entries(7, false)[6],
+                storage_entries(8, false)[7],
+                storage_entries(9, false)[8],
             ],
         });
         let layout_uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -352,17 +970,161 @@ impl FeatherstoneProgram {
             immediate_size: 0,
         });
 
+        #[cfg(test)]
+        let construction = (passes.uses_passthrough()
+            || passes == FeatherstonePasses::PairedUnrestricted)
+            .then(|| {
+                eprintln!("selective pipeline: generic construction begin");
+                std::time::Instant::now()
+            });
+        let constants = [("local_position_rounding", f64::from(local))];
+        let constants: &[(&str, f64)] = &constants;
+        #[cfg(test)]
+        let constants = if matches!(passes, FeatherstonePasses::LoopHintOnly(_)) {
+            &[][..]
+        } else {
+            constants
+        };
+        trace("generic pipeline begin");
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("molla::featherstone"),
             layout: Some(&pipeline_layout),
             module: &shader,
             entry_point: Some("featherstone_step"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants,
+                ..Default::default()
+            },
+            cache,
         });
 
+        trace("generic pipeline ready");
+        #[cfg(test)]
+        if let Some(start) = construction {
+            eprintln!(
+                "selective pipeline: generic ready after {:.6} seconds",
+                start.elapsed().as_secs_f64()
+            );
+        }
+        trace("unrestricted drift begin");
+        let drift_backend = if matches!(
+            passes,
+            FeatherstonePasses::Both
+                | FeatherstonePasses::BothSharedDynamics
+                | FeatherstonePasses::BothConstraintScratch
+                | FeatherstonePasses::BothSingleLaneDynamics
+                | FeatherstonePasses::PairedUnrestricted
+                | FeatherstonePasses::PairedExternalPrediction
+        ) {
+            DriftBackend::select(paired_rates, local, native_sum, local_coordinates)
+        } else {
+            DriftBackend::Eager
+        };
+        drift_backend
+            .validate_features(device.features())
+            .expect("validated paired drift device features");
+        let unrestricted_drift_pipeline = if matches!(
+            passes,
+            FeatherstonePasses::Both
+                | FeatherstonePasses::BothSharedDynamics
+                | FeatherstonePasses::BothConstraintScratch
+                | FeatherstonePasses::BothSingleLaneDynamics
+        ) || (drift_backend != DriftBackend::Eager
+            && matches!(
+                passes,
+                FeatherstonePasses::PairedUnrestricted
+                    | FeatherstonePasses::PairedExternalPrediction
+            )) {
+            let drift_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("molla::featherstone unrestricted drift"),
+                source: wgpu::ShaderSource::Wgsl(
+                    rates::dispatch_source(
+                        &drift_backend.source(&source, paired_rates),
+                        paired_rates,
+                    )
+                    .into(),
+                ),
+            });
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("molla::featherstone unrestricted drift"),
+                layout: Some(&pipeline_layout),
+                module: &drift_shader,
+                entry_point: Some("featherstone_step"),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[("local_position_rounding", f64::from(local))],
+                    ..Default::default()
+                },
+                cache,
+            })
+        } else {
+            pipeline.clone()
+        };
+
+        trace("unrestricted drift ready");
+        let dynamics_pipeline = if let Some(shader) = dynamics_shader {
+            trace("dynamics pipeline begin");
+            #[cfg(test)]
+            let dynamics_construction = construction.map(|_| {
+                eprintln!("selective pipeline: candidate construction begin");
+                std::time::Instant::now()
+            });
+            let constants = [("local_position_rounding", f64::from(local))];
+            let constants: &[(&str, f64)] = &constants;
+            #[cfg(test)]
+            let constants = if passes.uses_passthrough() {
+                &[][..]
+            } else {
+                constants
+            };
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("molla::featherstone dynamics"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("featherstone_step"),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..Default::default()
+                },
+                cache,
+            });
+            #[cfg(test)]
+            if let Some(start) = dynamics_construction {
+                eprintln!(
+                    "selective pipeline: candidate ready after {:.6} seconds",
+                    start.elapsed().as_secs_f64()
+                );
+            }
+            pipeline
+        } else {
+            pipeline.clone()
+        };
+
+        trace("program ready");
         Self {
+            specialized_joint_types: specialized_joint_types.map(std::sync::Arc::from),
+            split_acceleration: passes == FeatherstonePasses::PairedUnrestricted,
+            external_prediction_only: passes == FeatherstonePasses::PairedExternalPrediction,
+            paired_rates,
             pipeline,
+            execution: if specialized_joint_types.is_some() {
+                FeatherstoneExecution::ExperimentalJointTypes
+            } else if passes.single_lane() {
+                FeatherstoneExecution::ExperimentalSingleLane
+            } else if passes.constraint_scratch() {
+                FeatherstoneExecution::ExperimentalConstraintScratch
+            } else if passes.shared_dynamics() {
+                FeatherstoneExecution::ExperimentalWorkgroupScratch
+            } else {
+                FeatherstoneExecution::Generic
+            },
+            dynamics_pipeline,
+            dynamics_workgroup_size: if paired_rates {
+                1
+            } else {
+                passes.dynamics_width()
+            },
+            unrestricted_drift_pipeline,
+            drift_backend,
             layout_model,
             layout_state,
             layout_control,
@@ -371,6 +1133,212 @@ impl FeatherstoneProgram {
             layout_uniforms,
         }
     }
+}
+
+#[cfg(test)]
+fn dynamics_source(source: &str) -> String {
+    assert!(source.contains("uniforms.drift_only"));
+    source.replace("uniforms.drift_only", "0u")
+}
+
+fn shared_dynamics_source(source: &str) -> String {
+    let source = hoist_scratch(
+        source,
+        &[
+            "v_lin",
+            "v_ang",
+            "c_lin",
+            "c_ang",
+            "i_a",
+            "p_lin",
+            "p_ang",
+            "a_lin",
+            "a_ang",
+            "d_inv_arr",
+            "u_tau_arr",
+            "dof_active_arr",
+            "root_applied",
+        ],
+    );
+    assert_eq!(source.matches("@compute @workgroup_size(64)").count(), 1);
+    source.replace(
+        "@compute @workgroup_size(64)",
+        "@compute @workgroup_size(1)",
+    )
+}
+
+fn hoist_scratch(source: &str, names: &[&str]) -> String {
+    let mut source = source.to_owned();
+    let mut declarations = String::new();
+    for name in names {
+        let prefix = format!("    var {name}:");
+        let matches: Vec<_> = source
+            .lines()
+            .filter(|line| line.starts_with(&prefix))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "missing unique scratch declaration: {name}"
+        );
+        let declaration = matches[0].to_owned();
+        declarations.push_str(
+            &declaration
+                .trim_start()
+                .replacen("var ", "var<workgroup> ", 1),
+        );
+        declarations.push('\n');
+        source = source.replace(&format!("{declaration}\n"), "");
+    }
+    format!("{declarations}\n{source}")
+}
+
+fn constraint_scratch_source(source: &str) -> String {
+    let mut source = hoist_scratch(
+        &shared_dynamics_source(source),
+        &[
+            "n_dof_arr",
+            "s_lin",
+            "s_ang",
+            "u_lin",
+            "u_ang",
+            "d_dense_inv",
+        ],
+    );
+    for (parameter, kind, global) in [
+        ("counts", "StopCounts", "n_dof_arr"),
+        ("sl", "StopVectors", "s_lin"),
+        ("sa", "StopVectors", "s_ang"),
+        ("ul", "StopVectors", "u_lin"),
+        ("ua", "StopVectors", "u_ang"),
+        ("inverse", "StopBlocks", "d_dense_inv"),
+    ] {
+        for gap in ["", " "] {
+            source = source.replace(
+                &format!("{parameter}: ptr<function,{gap}{kind}>"),
+                &format!("{parameter}: u32"),
+            );
+        }
+        source = source
+            .replace(&format!("(*{parameter})"), global)
+            .replace(&format!("&{global}"), "0u");
+    }
+    source
+}
+
+#[cfg(test)]
+fn native_sum_test_source(source: &str, paired_rates: bool, passes: FeatherstonePasses) -> String {
+    assert_eq!(source.matches("fn position_sum(").count(), 1);
+    assert_eq!(source.matches("fn coordinate_sum(").count(), 1);
+    let source = format!(
+        "{}\n{}\n{}",
+        source
+            .replace("fn position_sum(", "fn storage_position_sum(")
+            .replace("fn coordinate_sum(", "fn storage_coordinate_sum("),
+        include_str!("../shaders/featherstone_native_sum.wgsl"),
+        "fn position_sum(child: u32, a: f32, b: f32) -> vec2<f32> { let high=position_round(child,a+b); return native_two_sum_with_high(a,b,high); }\nfn coordinate_sum(coord: u32, a: f32, b: f32) -> vec2<f32> { let high=coordinate_round(coord,a+b); let result=native_two_sum_with_high(a,b,high); atomicStore(&coordinate_error[coord],bitcast<u32>(result.y)); return result; }"
+    );
+    if paired_rates {
+        let original =
+            "let high=position_round(child,a+b); return native_two_sum_with_high(a,b,high);";
+        assert_eq!(source.matches(original).count(), 1);
+        let source = source.replace(original,"let high=position_round(child,a+b); let result=native_two_sum_with_high(a,b,high); return vec2<f32>(high,position_round(child,result.y));");
+        if matches!(
+            passes,
+            FeatherstonePasses::UnrestrictedDriftNativePosition
+                | FeatherstonePasses::UnrestrictedDriftNativeGeometry
+                | FeatherstonePasses::UnrestrictedDriftNativeGeometryLazyAnchors
+                | FeatherstonePasses::PairedAccelerationNativeGeometry
+                | FeatherstonePasses::PairedRigorousAccelerationNativeGeometry
+                | FeatherstonePasses::PairedRigorousAccelerationSwitchedGeometry
+        ) {
+            let source = source
+                .replace("fn coordinate_sum(", "fn native_coordinate_sum(")
+                .replace("fn storage_coordinate_sum(", "fn coordinate_sum(");
+            if matches!(
+                passes,
+                FeatherstonePasses::UnrestrictedDriftNativeGeometry
+                    | FeatherstonePasses::UnrestrictedDriftNativeGeometryLazyAnchors
+                    | FeatherstonePasses::PairedAccelerationNativeGeometry
+                    | FeatherstonePasses::PairedRigorousAccelerationNativeGeometry
+                    | FeatherstonePasses::PairedRigorousAccelerationSwitchedGeometry
+            ) {
+                let original =
+                    "fn position_sum(child: u32, a: f32, b: f32) -> vec2<f32> { let high=";
+                assert_eq!(source.matches(original).count(), 1);
+                source.replace(original,"fn position_sum(child: u32, a: f32, b: f32) -> vec2<f32> { if !fk_pair_rounding { return storage_position_sum(child,a,b); } let high=")
+            } else {
+                source
+            }
+        } else {
+            source
+        }
+    } else {
+        source
+    }
+}
+
+#[cfg(test)]
+fn fixed_rigorous_acceleration_source(source: &str) -> String {
+    let source = rates::split_acceleration_source(source, true);
+    assert_eq!(source.matches("uniforms.rigorous_d_solve").count(), 1);
+    source.replace("uniforms.rigorous_d_solve", "1u")
+}
+
+#[cfg(test)]
+fn switched_rigorous_acceleration_source(source: &str) -> String {
+    let source = fixed_rigorous_acceleration_source(source);
+    assert_eq!(source.matches("uniforms.joint_damping").count(), 3);
+    let source = source.replace("uniforms.joint_damping", "0.0");
+    let guard = "if !fk_pair_rounding { return storage_position_sum(child,a,b); }";
+    assert_eq!(source.matches(guard).count(), 1);
+    source.replace(guard, "if uniforms.joint_damping == 0.0 || !fk_pair_rounding { return storage_position_sum(child,a,b); }")
+}
+
+fn unrestricted_drift_source(source: &str) -> String {
+    let stop_gate = "has_stops = has_stops && uniforms.external_scalar_bounds == 0u && !position_only && !refresh_only;";
+    assert_eq!(source.matches(stop_gate).count(), 1);
+    source
+        .replace("uniforms.drift_only", "1u")
+        .replace(stop_gate, "has_stops = false; mixed_stops = false;")
+}
+
+#[cfg(test)]
+fn unrestricted_drift_program_source(source: &str, paired: bool, lazy: bool) -> String {
+    let source = unrestricted_drift_source(source);
+    if paired && lazy {
+        lazy_anchors::source(&source)
+    } else {
+        source
+    }
+}
+
+#[cfg(test)]
+fn lazy_drift_enabled(
+    paired: bool,
+    local: bool,
+    native_sum: bool,
+    local_coordinates: bool,
+) -> bool {
+    DriftBackend::select(paired, local, native_sum, local_coordinates) == DriftBackend::Lazy
+}
+
+fn unrestricted_drift(model: &Model) -> Result<bool> {
+    Ok(model
+        .joint_limit_lower
+        .host()?
+        .iter()
+        .all(|v| v.is_infinite())
+        && model
+            .joint_limit_upper
+            .host()?
+            .iter()
+            .all(|v| v.is_infinite())
+        && model
+            .joint_velocity_limit
+            .host()?
+            .iter()
+            .all(|v| v.is_infinite()))
 }
 
 fn kernel_configuration(model: &Model) -> (Vec<u32>, usize) {
@@ -393,6 +1361,33 @@ fn kernel_configuration(model: &Model) -> (Vec<u32>, usize) {
 }
 
 impl FeatherstoneKernel {
+    /// Retained unrestricted-drift pipeline identity, not the last dispatched phase.
+    pub fn unrestricted_drift_backend(&self) -> &'static str {
+        self.drift_backend.label()
+    }
+    /// Build selection for storage-rounded paired unrestricted drift.
+    pub const fn paired_drift_build_variant() -> &'static str {
+        DriftBackend::compiled().build_label()
+    }
+
+    /// Device features required by the configured storage-rounded paired drift backend.
+    pub fn paired_drift_required_features() -> wgpu::Features {
+        DriftBackend::compiled().required_features()
+    }
+    pub fn execution(&self) -> FeatherstoneExecution {
+        self.execution
+    }
+
+    /// Set timestamp slots consumed by the next dispatch attempt, including refresh or drift.
+    pub fn set_dispatch_timestamps(&mut self, timestamps: Option<(wgpu::QuerySet, [u32; 2])>) {
+        self.dispatch_timestamps = timestamps.map(|(set, slots)| (set, slots.map(Some)));
+    }
+
+    /// Ends a timestamp interval begun by an earlier prediction pass.
+    pub fn set_dispatch_end_timestamp(&mut self, query: wgpu::QuerySet, index: u32) {
+        self.dispatch_timestamps = Some((query, [None, Some(index)]));
+    }
+
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, model: &Model) -> Self {
         let (art_offsets, mixed_rows) = kernel_configuration(model);
         let program = FeatherstoneProgram::new(
@@ -405,22 +1400,171 @@ impl FeatherstoneKernel {
 
     /// Reuse immutable shader/layout programs within an engine; buffers remain kernel-local.
     pub fn new_cached(engine: &molla_compute::Engine, model: &Model) -> Result<Self> {
+        Self::new_cached_with_rounding(engine, model, FeatherstoneRounding::Storage)
+    }
+
+    pub fn new_cached_with_rounding(
+        engine: &molla_compute::Engine,
+        model: &Model,
+        rounding: FeatherstoneRounding,
+    ) -> Result<Self> {
+        Self::new_cached_with_options(engine, model, rounding, FeatherstoneExecution::Generic)
+    }
+
+    pub fn new_cached_with_options(
+        engine: &molla_compute::Engine,
+        model: &Model,
+        rounding: FeatherstoneRounding,
+        execution: FeatherstoneExecution,
+    ) -> Result<Self> {
+        Self::new_cached_with_rate_mode(engine, model, rounding, execution, false)
+    }
+
+    /// Construct an experimental paired-rate program; prepare its state set before stepping.
+    pub fn new_cached_with_paired_rates(
+        engine: &molla_compute::Engine,
+        model: &Model,
+        rounding: FeatherstoneRounding,
+        execution: FeatherstoneExecution,
+    ) -> Result<Self> {
+        Self::new_cached_with_rate_mode(engine, model, rounding, execution, true)
+    }
+
+    /// Constructs unrestricted paired drift/refresh/displacement without an ABA program.
+    /// Ordinary force-prediction dispatch is rejected; rates must be supplied externally.
+    pub fn new_cached_for_external_prediction(
+        engine: &molla_compute::Engine,
+        model: &Model,
+    ) -> Result<Self> {
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Gpu("external prediction requires GPU".into()))?;
+        let queue = engine.queue().unwrap();
+        if !rates::unrestricted_model(model)? {
+            return Err(Error::Gpu(
+                "external prediction requires unrestricted paired drift".into(),
+            ));
+        }
+        DriftBackend::select(true, false, false, false).validate_features(device.features())?;
+        let (offsets, rows) = kernel_configuration(model);
+        let capacity = articulation_scratch_capacity(&offsets);
+        if offsets.len().saturating_sub(1)
+            > device.limits().max_compute_workgroups_per_dimension as usize
+        {
+            return Err(Error::Gpu(
+                "external prediction articulation dispatch limit".into(),
+            ));
+        }
+        let build = |device: &wgpu::Device| {
+            Ok(FeatherstoneProgram::with_rate_precision_cached(
+                device,
+                capacity,
+                rows,
+                false,
+                false,
+                false,
+                FeatherstonePasses::PairedExternalPrediction,
+                true,
+                engine.pipeline_cache(),
+                None,
+            ))
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let program = engine.cached_gpu_program(
+            &format!(
+                "external-prediction;capacity={capacity};rows={rows};drift={}",
+                Self::paired_drift_build_variant()
+            ),
+            build,
+        )?;
+        #[cfg(target_arch = "wasm32")]
+        let program = build(device)?;
+        Ok(Self::from_program(
+            device, queue, model, offsets, rows, &program,
+        ))
+    }
+
+    fn new_cached_with_rate_mode(
+        engine: &molla_compute::Engine,
+        model: &Model,
+        rounding: FeatherstoneRounding,
+        execution: FeatherstoneExecution,
+        paired_rates: bool,
+    ) -> Result<Self> {
         let device = engine
             .device()
             .ok_or_else(|| Error::Gpu("engine has no GPU device".into()))?;
         let queue = engine
             .queue()
             .ok_or_else(|| Error::Gpu("engine has no GPU queue".into()))?;
+        let shared = rounding == FeatherstoneRounding::ExperimentalShared;
+        DriftBackend::select(paired_rates, shared, false, shared)
+            .validate_features(device.features())?;
         let (art_offsets, mixed_rows) = kernel_configuration(model);
         let joint_capacity = articulation_scratch_capacity(&art_offsets);
+        let specialized_joint_types = if execution == FeatherstoneExecution::ExperimentalJointTypes
+        {
+            let kinds = model.joint_type.host()?;
+            joint_types::validate_kinds(kinds)?;
+            joint_types::validate_model(model, Some(kinds))?;
+            Some(kinds)
+        } else {
+            None
+        };
+        let unrestricted = paired_rates
+            && rounding == FeatherstoneRounding::Storage
+            && matches!(
+                execution,
+                FeatherstoneExecution::Generic | FeatherstoneExecution::ExperimentalJointTypes
+            )
+            && rates::unrestricted_model(model)?;
+        if paired_rates
+            && art_offsets.len().saturating_sub(1)
+                > device.limits().max_compute_workgroups_per_dimension as usize
+        {
+            return Err(Error::Gpu(
+                "paired articulation dispatch exceeds device limits".into(),
+            ));
+        }
+        validate_execution(
+            execution,
+            joint_capacity,
+            art_offsets.len().saturating_sub(1),
+            &device.limits(),
+        )?;
         #[cfg(not(target_arch = "wasm32"))]
-        let variant = format!("joints={joint_capacity};mixed_rows={mixed_rows}");
+        let variant = format!(
+            "joints={joint_capacity};mixed_rows={mixed_rows};rounding={};execution={};paired_rates={paired_rates};unrestricted={unrestricted};joint_types={specialized_joint_types:?};paired_drift={}",
+            rounding.label(),
+            execution.label(),
+            Self::paired_drift_build_variant()
+        );
         #[cfg(not(target_arch = "wasm32"))]
         let program = engine.cached_gpu_program(&variant, |device| {
-            Ok(FeatherstoneProgram::new(device, joint_capacity, mixed_rows))
+            Ok(FeatherstoneProgram::with_options(
+                device,
+                joint_capacity,
+                mixed_rows,
+                rounding,
+                execution,
+                paired_rates,
+                unrestricted,
+                engine.pipeline_cache(),
+                specialized_joint_types,
+            ))
         })?;
         #[cfg(target_arch = "wasm32")]
-        let program = FeatherstoneProgram::new(device, joint_capacity, mixed_rows);
+        let program = FeatherstoneProgram::with_options(
+            device,
+            joint_capacity,
+            mixed_rows,
+            rounding,
+            execution,
+            paired_rates,
+            unrestricted,
+            engine.pipeline_cache(),
+            specialized_joint_types,
+        );
         Ok(Self::from_program(
             device,
             queue,
@@ -497,7 +1641,9 @@ impl FeatherstoneKernel {
             &wgpu::BufferDescriptor {
                 label: Some("molla generalized velocity increments"),
                 size: dof_total as u64 * 4,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }
         );
@@ -533,6 +1679,18 @@ impl FeatherstoneKernel {
         });
         Self {
             pipeline,
+            specialized_joint_types: program.specialized_joint_types.clone(),
+            split_acceleration: program.split_acceleration,
+            external_prediction_only: program.external_prediction_only,
+            execution: program.execution,
+            unrestricted_drift_pipeline: program.unrestricted_drift_pipeline.clone(),
+            drift_backend: program.drift_backend,
+            dynamics_pipeline: program.dynamics_pipeline.clone(),
+            dynamics_workgroup_size: program.dynamics_workgroup_size,
+            #[cfg(test)]
+            force_generic_drift: false,
+            #[cfg(test)]
+            force_generic_dynamics: false,
             layout_model,
             layout_state,
             layout_control,
@@ -569,6 +1727,30 @@ impl FeatherstoneKernel {
             coordinate_count: model.joint_coord_total,
             body_count: model.body_count,
             coordinate_states: Vec::new(),
+            rate_states: Vec::new(),
+            paired_rate_program: program.paired_rates,
+            paired_delta: None,
+            body_velocity_fallback: molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla disabled body velocity compensation"),
+                    size: 32,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                }
+            ),
+            rate_fallback: std::array::from_fn(|_| {
+                molla_core::gpu_create_buffer!(
+                    device,
+                    &wgpu::BufferDescriptor {
+                        label: Some("molla disabled paired rates"),
+                        size: 8,
+                        usage: wgpu::BufferUsages::STORAGE,
+                        mapped_at_creation: false,
+                    }
+                )
+            }),
+            dispatch_timestamps: None,
             coordinate_fallback: molla_core::gpu_create_buffer!(
                 device,
                 &wgpu::BufferDescriptor {
@@ -946,6 +2128,18 @@ impl FeatherstoneKernel {
         displacement: Option<&wgpu::Buffer>,
         refresh_only: bool,
     ) -> Result<()> {
+        let timestamps = self.dispatch_timestamps.take();
+        if self.external_prediction_only && !drift_only {
+            return Err(Error::Solver("external prediction program cannot dispatch ABA; use prepared prediction and drift".into()));
+        }
+        joint_types::validate_model(model, self.specialized_joint_types.as_deref())?;
+        if (self.split_acceleration || self.external_prediction_only)
+            && !rates::unrestricted_model(model)?
+        {
+            return Err(Error::Solver(
+                "split paired prediction requires an unrestricted model".into(),
+            ));
+        }
         if model.joint_count == 0 {
             return Ok(());
         }
@@ -981,6 +2175,24 @@ impl FeatherstoneKernel {
             };
             Some((find(state_in)?, find(state_out)?))
         };
+        let rates = if self.rate_states.is_empty() {
+            None
+        } else {
+            if compensation.is_none() {
+                return Err(Error::Solver(
+                    "paired rates require coordinate compensation".into(),
+                ));
+            }
+            let find = |state: &State| -> Result<&rates::RateState> {
+                let mirror = state.joint_qd.device_buffer_current()?;
+                let body = state.body_qd.device_buffer_current()?;
+                self.rate_states
+                    .iter()
+                    .find(|s| &s.mirror == mirror && &s.body_mirror == body)
+                    .ok_or_else(|| Error::Solver("unprepared paired generalized rate state".into()))
+            };
+            Some((find(state_in)?, find(state_out)?))
+        };
         if self.stable_motor_feedback && !drift_only && !rigorous_d_solve {
             return Err(Error::Solver(
                 "GPU stable feedback requires rigorous dynamics".into(),
@@ -995,8 +2207,22 @@ impl FeatherstoneKernel {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("molla::featherstone encoder"),
         });
+        if !drift_only {
+            if let Some(delta) = &self.paired_delta {
+                encoder.clear_buffer(delta, 0, None);
+            }
+        }
         copy_buffer(&mut encoder, &state_in.body_q, &state_out.body_q)?;
         copy_buffer(&mut encoder, &state_in.body_qd, &state_out.body_qd)?;
+        if let Some((input, output)) = rates {
+            encoder.copy_buffer_to_buffer(
+                &input.body_low,
+                0,
+                &output.body_low,
+                0,
+                self.body_count as u64 * 32,
+            );
+        }
         copy_buffer(&mut encoder, &state_in.joint_q, &state_out.joint_q)?;
         if let Some((input, output)) = compensation {
             if self.coordinate_count != 0 {
@@ -1018,6 +2244,15 @@ impl FeatherstoneKernel {
         }
         if !drift_only || displacement.is_some() || refresh_only {
             copy_buffer(&mut encoder, &state_in.joint_qd, &state_out.joint_qd)?;
+            if let Some((input, output)) = rates {
+                encoder.copy_buffer_to_buffer(
+                    &input.pairs,
+                    0,
+                    &output.pairs,
+                    0,
+                    self.dof_total as u64 * 8,
+                );
+            }
         }
         copy_buffer(&mut encoder, &state_in.body_f, &state_out.body_f)?;
 
@@ -1074,6 +2309,13 @@ impl FeatherstoneKernel {
             compensation
                 .map(|(_, output)| &output.position_error)
                 .unwrap_or(&self.position_fallback),
+            rates
+                .map(|(_, output)| &output.pairs)
+                .unwrap_or(&self.rate_fallback[0]),
+            self.paired_delta.as_ref().unwrap_or(&self.rate_fallback[1]),
+            rates
+                .map(|(_, output)| &output.body_low)
+                .unwrap_or(&self.body_velocity_fallback),
             binding_buffer(&model.joint_cable_stiffness_linear, &self.zero_dof_buf)?,
             binding_buffer(&model.joint_cable_stiffness_bend, &self.zero_dof_buf)?,
             binding_buffer(&model.joint_cable_damping_linear, &self.zero_dof_buf)?,
@@ -1123,7 +2365,7 @@ impl FeatherstoneKernel {
             external_scalar_bounds: u32::from(self.external_scalar_bounds),
             compensated_coordinates,
             control_body_wrenches: u32::from(!control.body_external_f.is_empty()),
-            padding: 0,
+            paired_rates: u32::from(rates.is_some()),
         };
         molla_core::gpu_write_buffer!(
             queue,
@@ -1134,18 +2376,52 @@ impl FeatherstoneKernel {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("molla::featherstone pass"),
-                timestamp_writes: None,
+                timestamp_writes: timestamps.as_ref().map(|(query_set, indices)| {
+                    wgpu::ComputePassTimestampWrites {
+                        query_set,
+                        beginning_of_pass_write_index: indices[0],
+                        end_of_pass_write_index: indices[1],
+                    }
+                }),
             });
-            pass.set_pipeline(&self.pipeline);
+            let specialized = uniforms.drift_only == 1 && unrestricted_drift(model)?;
+            #[cfg(test)]
+            let specialized = specialized && !self.force_generic_drift;
+            let pipeline = if specialized {
+                &self.unrestricted_drift_pipeline
+            } else {
+                &self.pipeline
+            };
+            let dynamics = uniforms.drift_only == 0;
+            #[cfg(test)]
+            let dynamics = dynamics && !self.force_generic_dynamics;
+            let pipeline = if dynamics {
+                &self.dynamics_pipeline
+            } else {
+                pipeline
+            };
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bindings.groups[0], &[]);
             pass.set_bind_group(1, &bindings.groups[1], &[]);
             pass.set_bind_group(2, &bindings.groups[2], &[]);
             pass.set_bind_group(3, &bindings.groups[3], &[]);
             pass.set_bind_group(4, &self.uniform_group, &[]);
             pass.set_bind_group(5, &bindings.groups[4], &[]);
-            let groups = self.articulation_count.div_ceil(WORKGROUP_SIZE);
+            let workgroup_size = if dynamics {
+                self.dynamics_workgroup_size
+            } else if self.paired_rate_program {
+                1
+            } else {
+                WORKGROUP_SIZE
+            };
+            let groups = self.articulation_count.div_ceil(workgroup_size);
             pass.dispatch_workgroups(groups.max(1), 1, 1);
             molla_core::gpu_metrics::record_dispatch();
+            if dynamics && self.split_acceleration {
+                pass.set_pipeline(&self.pipeline);
+                pass.dispatch_workgroups(groups.max(1), 1, 1);
+                molla_core::gpu_metrics::record_dispatch();
+            }
         }
         queue.submit(std::iter::once(encoder.finish()));
 

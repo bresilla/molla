@@ -18,6 +18,10 @@ use crate::tire_fem::{
 
 const WORKGROUP_SIZE: u32 = 64;
 
+#[path = "tire_vehicle_prepared_step.rs"]
+mod prepared_step;
+pub use prepared_step::PreparedTireVehicleChassisStep;
+
 #[derive(Clone, Debug)]
 pub struct TireVehicleYawGpuInput {
     /// Wheel offsets from chassis COM in world/body planar coordinates.
@@ -351,6 +355,7 @@ struct VehicleUniforms {
 }
 
 pub struct TireVehicleYawGpuKernel {
+    device: wgpu::Device,
     pipeline_yaw: wgpu::ComputePipeline,
     pipeline_planar: wgpu::ComputePipeline,
     pipeline_planar_from_brush: wgpu::ComputePipeline,
@@ -1555,6 +1560,7 @@ impl TireVehicleYawGpuKernel {
                 cache: None,
             });
         Self {
+            device: device.clone(),
             pipeline_yaw,
             pipeline_planar,
             pipeline_planar_from_brush,
@@ -4022,6 +4028,61 @@ impl TireVehicleYawGpuKernel {
             dt,
         )?;
         Ok(brush_output)
+    }
+
+    /// Advances the resident chassis with retained brush scratch and GPU terrain.
+    /// Owner buffers must belong to the engine. Other vehicle stages retain their
+    /// existing allocation/submission behavior; this is not an atomic frame API.
+    pub fn step_resident_chassis_brush_owner_with_gpu_terrain(
+        &self,
+        engine: &molla_compute::Engine,
+        owner: &mut TireVehicleResidentChassisBrushOwner,
+        dt: f32,
+        brush: &crate::PreparedTireBrushTerrain,
+    ) -> Result<TireBrushResidentOutput> {
+        brush.validate_owner(engine, owner.wheel_count())?;
+        let device = engine
+            .device()
+            .ok_or_else(|| Error::Solver("GPU vehicle engine required".into()))?;
+        crate::soil_gpu_identity::validate_soil_device(device, &self.device)?;
+        let queue = engine.queue().unwrap();
+        self.step_wheel_spin_resident(device, queue, &mut owner.brush.spin, dt)?;
+        self.step_suspension_resident_from_vertical_state(
+            device,
+            queue,
+            &owner.brush.suspension,
+            &owner.vertical,
+        )?;
+        let rows = self.dispatch_brush_rows_from_spin_suspension_chassis_resident(
+            device,
+            queue,
+            &owner.brush.spin,
+            &owner.brush.suspension,
+            &owner.planar,
+            &owner.vertical,
+            &owner.brush.brush_input,
+        )?;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        brush.encode(engine, &mut encoder, &rows.buffer)?;
+        queue.submit([encoder.finish()]);
+        let output = brush.output();
+        self.step_planar_resident_from_brush_output(
+            device,
+            queue,
+            &mut owner.planar,
+            &output.buffer,
+            output.wheel_count,
+            dt,
+        )?;
+        self.step_vertical_resident_from_suspension(
+            device,
+            queue,
+            &mut owner.vertical,
+            owner.brush.suspension.rows_buffer(),
+            owner.brush.suspension.wheel_count(),
+            dt,
+        )?;
+        Ok(output)
     }
 
     pub fn step_resident_chassis_brush_owner_from_resident_state(

@@ -8,6 +8,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use molla_core::{Error, Result};
+use std::sync::Arc;
 
 use crate::tire_fem::{TireFemContactSdfPrimitive, TireFemContactTerrain, TireFemContactTriangle};
 
@@ -76,9 +77,10 @@ pub struct TireBekkerGpuResidentTerrain {
 pub struct TireBekkerFemTerrainOwner {
     bekker: TireBekkerGpuInput,
     friction: f32,
-    friction_map: Option<Vec<f32>>,
-    water_film_map: Option<Vec<f32>>,
-    surface_velocity_map: Option<Vec<[f32; 4]>>,
+    friction_map: BekkerMaterialMap<f32>,
+    water_film_map: BekkerMaterialMap<f32>,
+    surface_velocity_map: BekkerMaterialMap<[f32; 4]>,
+    material_kernel: Option<Arc<()>>,
     surface_velocity: [f32; 3],
     soil_rolling_resistance_scale: f32,
     sdf_primitives: Vec<TireFemContactSdfPrimitive>,
@@ -95,6 +97,7 @@ struct BekkerUniforms {
 }
 
 pub struct TireBekkerGpuKernel {
+    material_identity: Arc<()>,
     pipeline: wgpu::ComputePipeline,
     layout_io: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
@@ -105,6 +108,74 @@ pub struct TireBekkerResidentOutput {
     pub heights: wgpu::Buffer,
     pub sinkage: wgpu::Buffer,
     pub cell_count: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+struct BekkerMaterialMap<T> {
+    values: Option<Vec<T>>,
+    uniform: Option<T>,
+    buffer: Option<wgpu::Buffer>,
+}
+
+impl<T: Pod + PartialEq> BekkerMaterialMap<T> {
+    fn set(&mut self, values: Option<Vec<T>>) {
+        if self.values != values {
+            self.values = values;
+            self.uniform = None;
+            self.buffer = None;
+        }
+    }
+
+    fn set_uniform(&mut self, value: T, len: usize) -> bool {
+        if self.uniform == Some(value) && self.values.as_ref().is_some_and(|v| v.len() == len) {
+            return false;
+        }
+        if self
+            .values
+            .as_ref()
+            .is_some_and(|v| v.len() == len && v.iter().all(|&x| x == value))
+        {
+            self.uniform = Some(value);
+            return false;
+        }
+        match self.values.as_mut() {
+            Some(values) => {
+                values.resize(len, value);
+                values.fill(value);
+            }
+            None => self.values = Some(vec![value; len]),
+        }
+        self.uniform = Some(value);
+        self.buffer = None;
+        true
+    }
+
+    fn gpu_buffer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        label: &str,
+    ) -> Option<wgpu::Buffer> {
+        let values = self.values.as_ref()?;
+        if self.buffer.is_none() {
+            let buffer = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: core::mem::size_of_val(values.as_slice()).max(4) as u64,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST
+                        | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }
+            );
+            if !values.is_empty() {
+                molla_core::gpu_write_buffer!(queue, &buffer, 0, bytemuck::cast_slice(values));
+            }
+            self.buffer = Some(buffer);
+        }
+        self.buffer.clone()
+    }
 }
 
 impl TireBekkerGpuInput {
@@ -160,9 +231,10 @@ impl TireBekkerFemTerrainOwner {
                 bekker_n,
             },
             friction: friction.max(0.0),
-            friction_map: None,
-            water_film_map: None,
-            surface_velocity_map: None,
+            friction_map: BekkerMaterialMap::default(),
+            water_film_map: BekkerMaterialMap::default(),
+            surface_velocity_map: BekkerMaterialMap::default(),
+            material_kernel: None,
             surface_velocity: [0.0; 3],
             soil_rolling_resistance_scale: 1.0,
             sdf_primitives: Vec::new(),
@@ -177,9 +249,10 @@ impl TireBekkerFemTerrainOwner {
         Ok(Self {
             bekker: input,
             friction: friction.max(0.0),
-            friction_map: None,
-            water_film_map: None,
-            surface_velocity_map: None,
+            friction_map: BekkerMaterialMap::default(),
+            water_film_map: BekkerMaterialMap::default(),
+            surface_velocity_map: BekkerMaterialMap::default(),
+            material_kernel: None,
             surface_velocity: [0.0; 3],
             soil_rolling_resistance_scale: 1.0,
             sdf_primitives: Vec::new(),
@@ -196,7 +269,7 @@ impl TireBekkerFemTerrainOwner {
                 ));
             }
         }
-        self.friction_map = friction_map;
+        self.friction_map.set(friction_map);
         Ok(())
     }
 
@@ -209,7 +282,7 @@ impl TireBekkerFemTerrainOwner {
                 ));
             }
         }
-        self.water_film_map = water_film_map;
+        self.water_film_map.set(water_film_map);
         Ok(())
     }
 
@@ -230,8 +303,30 @@ impl TireBekkerFemTerrainOwner {
                 ));
             }
         }
-        self.surface_velocity_map = surface_velocity_map;
+        self.surface_velocity_map.set(surface_velocity_map);
         Ok(())
+    }
+
+    /// Fill the friction map, returning whether its values changed.
+    pub fn set_uniform_friction_map(&mut self, friction: f32) -> Result<bool> {
+        if !friction.is_finite() {
+            return Err(Error::Solver(
+                "tire_bekker: uniform friction must be finite".into(),
+            ));
+        }
+        let n = self.bekker.cell_count()?;
+        Ok(self.friction_map.set_uniform(friction, n))
+    }
+
+    /// Fill the water-film map, returning whether its values changed.
+    pub fn set_uniform_water_film_map(&mut self, depth_m: f32) -> Result<bool> {
+        if !depth_m.is_finite() {
+            return Err(Error::Solver(
+                "tire_bekker: uniform water film must be finite".into(),
+            ));
+        }
+        let n = self.bekker.cell_count()?;
+        Ok(self.water_film_map.set_uniform(depth_m, n))
     }
 
     pub fn set_surface_velocity(&mut self, surface_velocity: [f32; 3]) {
@@ -295,6 +390,8 @@ impl TireBekkerFemTerrainOwner {
     /// drawing and reset/fallback determinism, but downstream FEM contact can
     /// consume the returned buffers directly instead of rebuilding a CPU
     /// heightfield first.
+    /// Unchanged material maps share buffers; edits create new buffers so
+    /// previously returned terrain views retain their material values.
     pub fn apply_contacts_gpu_resident(
         &mut self,
         device: &wgpu::Device,
@@ -307,51 +404,26 @@ impl TireBekkerFemTerrainOwner {
         let out = kernel.readback_resident_output(device, queue, &resident)?;
         self.bekker.heights = out.heights;
         self.bekker.sinkage = out.sinkage;
-        Ok(self.resident_terrain_from_buffers(device, queue, resident))
+        Ok(self.resident_terrain_from_buffers(device, queue, kernel, resident))
     }
 
     fn resident_terrain_from_buffers(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        kernel: &TireBekkerGpuKernel,
         resident: TireBekkerResidentOutput,
     ) -> TireBekkerGpuResidentTerrain {
-        let usage_ro = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
-        let f32_bytes = |len: usize| (len.max(1) * core::mem::size_of::<f32>()) as u64;
-        let upload_map = |label: &str, rows: &Option<Vec<f32>>| -> Option<wgpu::Buffer> {
-            rows.as_ref().map(|map| {
-                let buf = molla_core::gpu_create_buffer!(
-                    device,
-                    &wgpu::BufferDescriptor {
-                        label: Some(label),
-                        size: f32_bytes(map.len()),
-                        usage: usage_ro,
-                        mapped_at_creation: false,
-                    }
-                );
-                if !map.is_empty() {
-                    molla_core::gpu_write_buffer!(queue, &buf, 0, bytemuck::cast_slice(map));
-                }
-                buf
-            })
-        };
-        let upload_vec4_map = |label: &str, rows: &Option<Vec<[f32; 4]>>| -> Option<wgpu::Buffer> {
-            rows.as_ref().map(|map| {
-                let buf = molla_core::gpu_create_buffer!(
-                    device,
-                    &wgpu::BufferDescriptor {
-                        label: Some(label),
-                        size: (map.len().max(1) * core::mem::size_of::<[f32; 4]>()) as u64,
-                        usage: usage_ro,
-                        mapped_at_creation: false,
-                    }
-                );
-                if !map.is_empty() {
-                    molla_core::gpu_write_buffer!(queue, &buf, 0, bytemuck::cast_slice(map));
-                }
-                buf
-            })
-        };
+        if self
+            .material_kernel
+            .as_ref()
+            .is_none_or(|id| !Arc::ptr_eq(id, &kernel.material_identity))
+        {
+            self.friction_map.buffer = None;
+            self.water_film_map.buffer = None;
+            self.surface_velocity_map.buffer = None;
+            self.material_kernel = Some(kernel.material_identity.clone());
+        }
         TireBekkerGpuResidentTerrain {
             origin: self.bekker.origin,
             spacing: self.bekker.spacing,
@@ -360,11 +432,20 @@ impl TireBekkerFemTerrainOwner {
             friction: self.friction,
             heights: resident.heights,
             sinkage: resident.sinkage,
-            friction_map: upload_map("tire_bekker resident friction map", &self.friction_map),
-            water_film_map: upload_map("tire_bekker resident water film map", &self.water_film_map),
-            surface_velocity_map: upload_vec4_map(
+            friction_map: self.friction_map.gpu_buffer(
+                device,
+                queue,
+                "tire_bekker resident friction map",
+            ),
+            water_film_map: self.water_film_map.gpu_buffer(
+                device,
+                queue,
+                "tire_bekker resident water film map",
+            ),
+            surface_velocity_map: self.surface_velocity_map.gpu_buffer(
+                device,
+                queue,
                 "tire_bekker resident surface velocity map",
-                &self.surface_velocity_map,
             ),
             surface_velocity: self.surface_velocity,
             soil_rolling_resistance_scale: self.soil_rolling_resistance_scale,
@@ -379,12 +460,12 @@ impl TireBekkerFemTerrainOwner {
             nz: self.bekker.nz,
             heights: self.bekker.heights.clone(),
             friction: self.friction,
-            friction_map: self.friction_map.clone(),
-            water_film_map: self.water_film_map.clone(),
+            friction_map: self.friction_map.values.clone(),
+            water_film_map: self.water_film_map.values.clone(),
             sinkage_map: Some(self.bekker.sinkage.clone()),
             soil_rolling_resistance_scale: self.soil_rolling_resistance_scale,
             surface_velocity: self.surface_velocity,
-            surface_velocity_map: self.surface_velocity_map.clone(),
+            surface_velocity_map: self.surface_velocity_map.values.clone(),
             sdf_primitives: self.sdf_primitives.clone(),
             triangles: self.triangles.clone(),
         }
@@ -475,6 +556,7 @@ impl TireBekkerGpuKernel {
             cache: None,
         });
         Self {
+            material_identity: Arc::new(()),
             pipeline,
             layout_io,
             layout_uniforms,

@@ -25,6 +25,10 @@ fn try_engine() -> Option<Engine> {
     Engine::new_gpu().ok()
 }
 
+#[cfg(feature = "resource-counters")]
+#[path = "tire_vehicle_gpu/resident_terrain.rs"]
+mod resident_terrain;
+
 fn sample_yaw_input() -> TireVehicleYawGpuInput {
     TireVehicleYawGpuInput {
         wheel_offsets: vec![

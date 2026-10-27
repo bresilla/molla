@@ -18,6 +18,9 @@ use std::sync::Arc;
 
 const WORKGROUP_SIZE: u32 = 64;
 
+#[path = "soil_dem_resident.rs"]
+mod resident;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable, Default)]
 pub struct TireDemContactCell {
@@ -153,6 +156,15 @@ pub struct TireDemResidentTerrainReadback {
 /// Topology construction, the hot DEM step, and height/sinkage/surface-velocity
 /// terrain export stay on resident GPU buffers.
 pub struct TireDemResidentFemTerrainOwner {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    device_identity: resident::NativeIdentity,
+    queue_identity: resident::NativeIdentity,
+    stepper: Option<resident::ResidentStepper>,
+    state_revision: u64,
+    mirror_revision: u64,
+    rebuild_interval: u32,
+    topology_stats: TireDemTopologyStats,
     terrain_params: TireDemResidentTerrainParams,
     reference_heights: Vec<f32>,
     lbvh_scene_min: [f32; 3],
@@ -163,6 +175,20 @@ pub struct TireDemResidentFemTerrainOwner {
     mirror_positions: Vec<[f32; 4]>,
     mirror_velocities: Vec<[f32; 4]>,
     reseed_count: u64,
+}
+
+/// Submitted topology updates across resets and capacity changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TireDemTopologyStats {
+    pub rebuilds: u64,
+    pub refits: u64,
+}
+
+/// Directed pairs from the production LBVH traversal's diagnostic specialization.
+#[derive(Clone, Debug)]
+pub struct TireDemContactAudit {
+    pub candidates: Vec<[u32; 2]>,
+    pub contacts: Vec<[u32; 2]>,
 }
 
 impl TireDemResidentTerrainOutput {
@@ -208,6 +234,15 @@ impl TireDemResidentFemTerrainOwner {
         positions: &[[f32; 4]],
         velocities: &[[f32; 4]],
     ) -> Result<Self> {
+        let device_identity = resident::device_identity(device).ok_or_else(|| {
+            Error::Solver("resident DEM: unsupported native device identity".into())
+        })?;
+        let queue_identity = resident::queue_identity(queue).ok_or_else(|| {
+            Error::Solver("resident DEM: unsupported native queue identity".into())
+        })?;
+        if Some(device_identity) != resident::device_identity(&kernel.device) {
+            return Err(Error::Solver("resident DEM: kernel/device mismatch".into()));
+        }
         if positions.len() != velocities.len() {
             return Err(Error::Solver(
                 "tire_dem_resident_fem_owner: positions/velocities length mismatch".into(),
@@ -236,6 +271,15 @@ impl TireDemResidentFemTerrainOwner {
         Ok(Self {
             terrain_params,
             reference_heights,
+            device: device.clone(),
+            queue: queue.clone(),
+            device_identity,
+            queue_identity,
+            stepper: None,
+            state_revision: 0,
+            mirror_revision: 0,
+            rebuild_interval: 1,
+            topology_stats: TireDemTopologyStats::default(),
             lbvh_scene_min,
             lbvh_scene_extent,
             state,
@@ -263,6 +307,11 @@ impl TireDemResidentFemTerrainOwner {
         positions: &[[f32; 4]],
         velocities: &[[f32; 4]],
     ) -> Result<()> {
+        self.validate_device(device, queue, kernel)?;
+        let revision = self
+            .state_revision
+            .checked_add(1)
+            .ok_or_else(|| Error::Solver("resident DEM: revision overflow".into()))?;
         if positions.len() != velocities.len() {
             return Err(Error::Solver(
                 "tire_dem_resident_fem_owner_reseed: positions/velocities length mismatch".into(),
@@ -297,6 +346,9 @@ impl TireDemResidentFemTerrainOwner {
             self.terrain_params,
         )?;
         self.reference_heights = reference_heights;
+        self.stepper = None;
+        self.state_revision = revision;
+        self.mirror_revision = revision;
         self.lbvh_scene_min = lbvh_scene_min;
         self.lbvh_scene_extent = lbvh_scene_extent;
         self.lbvh = None;
@@ -316,16 +368,39 @@ impl TireDemResidentFemTerrainOwner {
         params: TireDemStepParams,
         leaf_size: usize,
     ) -> Result<TireDemFemTerrainStepReport> {
+        self.step_sparse_lbvh_gpu_mirrored_n(device, queue, kernel, contacts, params, leaf_size, 1)
+    }
+
+    /// Advances fixed contacts/parameters for N substeps, then refreshes CPU telemetry once.
+    /// Reported displacement spans the entire call.
+    pub fn step_sparse_lbvh_gpu_mirrored_n(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        kernel: &TireDemGpuKernel,
+        contacts: &[TireDemContactCell],
+        params: TireDemStepParams,
+        leaf_size: usize,
+        substeps: u32,
+    ) -> Result<TireDemFemTerrainStepReport> {
+        self.validate_device(device, queue, kernel)?;
+        resident::ResidentStepper::validate_step(contacts, params)?;
+        if substeps == 0
+            || self
+                .state_revision
+                .checked_add(u64::from(substeps))
+                .is_none()
+        {
+            return Err(Error::Solver("resident DEM: invalid substep count".into()));
+        }
+        if self.mirror_revision != self.state_revision {
+            self.refresh_mirror(device, queue, kernel)?;
+        }
         let before_positions = self.mirror_positions.clone();
         let leaf_size = leaf_size.clamp(1, 32);
-        self.lbvh = Some(kernel.build_resident_sparse_lbvh_tree_rows_gpu_radix(
-            device,
-            queue,
-            &self.state,
-            self.lbvh_scene_min,
-            self.lbvh_scene_extent,
-            leaf_size,
-        )?);
+        for _ in 0..substeps {
+            self.step_sparse_lbvh_gpu_resident(device, queue, kernel, contacts, params, leaf_size)?;
+        }
         let resident_lbvh = self
             .lbvh
             .as_ref()
@@ -333,29 +408,8 @@ impl TireDemResidentFemTerrainOwner {
         let lbvh_node_count = resident_lbvh.node_count;
         let lbvh_leaf_count = self.state.grain_count.div_ceil(leaf_size);
         let lbvh_max_leaf_grains = self.state.grain_count.min(leaf_size) as u32;
-        let next = kernel
-            .dispatch_lbvh_step_resident_state_with_resident_lbvh(
-                device,
-                queue,
-                &self.state,
-                contacts,
-                params,
-                resident_lbvh,
-            )?
-            .into_state();
-        let terrain = kernel.dispatch_resident_terrain_raster(
-            device,
-            queue,
-            &next,
-            &self.reference_heights,
-            self.terrain_params,
-        )?;
-        let terrain_readback = kernel.readback_resident_terrain(device, queue, &terrain)?;
-        let mirror = kernel.readback_resident_state(device, queue, &next)?;
-        self.mirror_positions = mirror.positions;
-        self.mirror_velocities = mirror.velocities;
-        self.state = next;
-        self.terrain = terrain;
+        let terrain_readback = kernel.readback_resident_terrain(device, queue, &self.terrain)?;
+        self.refresh_mirror(device, queue, kernel)?;
 
         let max_position_delta_y_m = self
             .mirror_positions
@@ -378,6 +432,133 @@ impl TireDemResidentFemTerrainOwner {
                 .copied()
                 .fold(0.0_f32, f32::max),
         })
+    }
+
+    /// Submits topology update → contact/DEM step → terrain export without state downloads.
+    /// Fixed capacities reuse particle, tree, sort, export and binding resources.
+    /// The CPU mirror remains at `mirror_revision()` until explicitly refreshed.
+    pub fn step_sparse_lbvh_gpu_resident(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        kernel: &TireDemGpuKernel,
+        contacts: &[TireDemContactCell],
+        params: TireDemStepParams,
+        leaf_size: usize,
+    ) -> Result<()> {
+        self.validate_device(device, queue, kernel)?;
+        resident::ResidentStepper::validate_step(contacts, params)?;
+        let revision = self
+            .state_revision
+            .checked_add(1)
+            .ok_or_else(|| Error::Solver("resident DEM: revision overflow".into()))?;
+        if self
+            .stepper
+            .as_ref()
+            .is_none_or(|s| !s.supports(leaf_size, contacts.len()))
+        {
+            let capacity = contacts
+                .len()
+                .max(8)
+                .checked_next_power_of_two()
+                .ok_or_else(|| Error::Solver("resident DEM: contact capacity overflow".into()))?;
+            self.stepper = Some(resident::ResidentStepper::new(
+                device,
+                queue,
+                kernel,
+                &self.state,
+                &self.terrain,
+                &self.reference_heights,
+                self.lbvh_scene_min,
+                self.lbvh_scene_extent,
+                leaf_size,
+                capacity,
+            )?);
+        }
+        let stepper = self.stepper.as_mut().expect("prepared resident DEM");
+        if self.rebuild_interval > 1 {
+            stepper.prepare_ordered(device, kernel);
+        }
+        let rebuilt = stepper.submit(
+            &self.device,
+            &self.queue,
+            contacts,
+            params,
+            self.rebuild_interval,
+        );
+        if rebuilt {
+            self.topology_stats.rebuilds = self.topology_stats.rebuilds.saturating_add(1);
+        } else {
+            self.topology_stats.refits = self.topology_stats.refits.saturating_add(1);
+        }
+        self.state = stepper.state();
+        self.lbvh = Some(stepper.tree());
+        self.state_revision = revision;
+        Ok(())
+    }
+
+    /// Downloads the current particle state and updates the CPU mirror revision.
+    pub fn refresh_mirror(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        kernel: &TireDemGpuKernel,
+    ) -> Result<()> {
+        self.validate_device(device, queue, kernel)?;
+        let mirror = kernel.readback_resident_state(device, queue, &self.state)?;
+        self.mirror_positions = mirror.positions;
+        self.mirror_velocities = mirror.velocities;
+        self.mirror_revision = self.state_revision;
+        Ok(())
+    }
+
+    fn validate_device(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        kernel: &TireDemGpuKernel,
+    ) -> Result<()> {
+        if Some(self.device_identity) != resident::device_identity(device)
+            || Some(self.queue_identity) != resident::queue_identity(queue)
+            || Some(self.device_identity) != resident::device_identity(&kernel.device)
+        {
+            return Err(Error::Solver(
+                "resident DEM: device/queue/kernel mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn state_revision(&self) -> u64 {
+        self.state_revision
+    }
+
+    /// Sets the maximum steps between Morton reorders; one rebuilds every step.
+    /// Every step refits all bounds before queries, regardless of this interval.
+    /// Refit steps accumulate contacts in current Morton/ID order using complete batches.
+    pub fn set_lbvh_rebuild_interval(&mut self, interval: u32) -> Result<()> {
+        if interval == 0 {
+            return Err(Error::Solver(
+                "resident DEM: rebuild interval must be nonzero".into(),
+            ));
+        }
+        if interval != self.rebuild_interval {
+            self.rebuild_interval = interval;
+            if let Some(stepper) = &mut self.stepper {
+                stepper.invalidate_topology();
+            }
+        }
+        Ok(())
+    }
+
+    pub fn lbvh_rebuild_interval(&self) -> u32 {
+        self.rebuild_interval
+    }
+    pub fn topology_stats(&self) -> TireDemTopologyStats {
+        self.topology_stats
+    }
+    pub fn mirror_revision(&self) -> u64 {
+        self.mirror_revision
     }
 
     pub fn resident_state(&self) -> &TireDemResidentState {
@@ -898,6 +1079,8 @@ struct TireDemStepUniforms {
 }
 
 pub struct TireDemGpuKernel {
+    device: wgpu::Device,
+    binned_raster: crate::soil_dem_raster::DemRasterKernel,
     pipeline: wgpu::ComputePipeline,
     step_pipeline: wgpu::ComputePipeline,
     grid_step_pipeline: wgpu::ComputePipeline,
@@ -2334,9 +2517,9 @@ fn validate_dem_resident_terrain_params(
     reference_heights: &[f32],
     params: TireDemResidentTerrainParams,
 ) -> Result<usize> {
-    if grain_count == 0 {
+    if grain_count > u32::MAX as usize {
         return Err(Error::Solver(
-            "tire_dem_resident_terrain: at least one grain required".into(),
+            "tire_dem_resident_terrain: grain count overflow".into(),
         ));
     }
     validate_dem_fem_terrain_grid(
@@ -2348,9 +2531,12 @@ fn validate_dem_resident_terrain_params(
         0.0,
         params.grain_radius,
     )?;
-    let row_count = (params.nx as usize)
-        .checked_mul(params.nz as usize)
-        .ok_or_else(|| Error::Solver("tire_dem_resident_terrain: row count overflow".into()))?;
+    let row_count = params
+        .nx
+        .checked_mul(params.nz)
+        .filter(|_| params.nx <= i32::MAX as u32 && params.nz <= i32::MAX as u32)
+        .ok_or_else(|| Error::Solver("tire_dem_resident_terrain: row count overflow".into()))?
+        as usize;
     if reference_heights.len() != row_count {
         return Err(Error::Solver(format!(
             "tire_dem_resident_terrain: reference height row count mismatch: got {}, expected {row_count}",
@@ -3592,9 +3778,11 @@ impl TireDemGpuKernel {
         Self {
             pipeline,
             step_pipeline,
+            device: device.clone(),
             grid_step_pipeline,
             lbvh_step_pipeline,
             terrain_raster_pipeline,
+            binned_raster: crate::soil_dem_raster::DemRasterKernel::new(device),
             unbounded_key_pipeline,
             unbounded_range_pipeline,
             sparse_lbvh_morton_pipeline,
@@ -4879,6 +5067,73 @@ impl TireDemGpuKernel {
     }
 
     pub fn dispatch_resident_terrain_raster(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        state: &TireDemResidentState,
+        reference_heights: &[f32],
+        params: TireDemResidentTerrainParams,
+    ) -> Result<TireDemResidentTerrainOutput> {
+        let cells =
+            validate_dem_resident_terrain_params(state.grain_count, reference_heights, params)?
+                as u64;
+        let limits = device.limits();
+        if cells * 16 > u64::from(limits.max_storage_buffer_binding_size)
+            || cells * 16 > limits.max_buffer_size
+        {
+            return Err(Error::Solver(
+                "soil DEM raster: output exceeds device limits".into(),
+            ));
+        }
+        let allocate = |label, stride| {
+            molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: cells * stride,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }
+            )
+        };
+        let reference = allocate("soil DEM reference heights", 4);
+        let terrain = TireDemResidentTerrainOutput {
+            heights: allocate("soil DEM heights", 4),
+            sinkage: allocate("soil DEM sinkage", 4),
+            surface_velocity_rows: allocate("soil DEM surface velocity", 16),
+            params,
+        };
+        let prepared = self.prepare_resident_terrain_raster(device, state, &reference, &terrain)?;
+        molla_core::gpu_write_buffer!(
+            queue,
+            &reference,
+            0,
+            bytemuck::cast_slice(reference_heights)
+        );
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("soil DEM binned raster"),
+        });
+        prepared.encode(&mut encoder);
+        queue.submit([encoder.finish()]);
+        Ok(terrain)
+    }
+
+    /// Prepares fixed-buffer terrain export with no per-encode allocation or readback.
+    pub fn prepare_resident_terrain_raster(
+        &self,
+        device: &wgpu::Device,
+        state: &TireDemResidentState,
+        reference_heights: &wgpu::Buffer,
+        terrain: &TireDemResidentTerrainOutput,
+    ) -> Result<crate::PreparedTireDemRaster> {
+        self.binned_raster
+            .prepare(device, state, reference_heights, terrain)
+    }
+
+    /// Dispatches the original exhaustive GPU raster for comparison.
+    pub fn dispatch_resident_terrain_raster_reference(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,

@@ -140,9 +140,9 @@ fn tire_bekker_exposes_resident_fem_feedback_terrain_path() {
     assert!(
         source.contains("heights: resident.heights")
             && source.contains("sinkage: resident.sinkage")
-            && source.contains("friction_map: upload_map")
-            && source.contains("water_film_map: upload_map")
-            && source.contains("surface_velocity_map: upload_vec4_map"),
+            && source.contains("self.friction_map.gpu_buffer(")
+            && source.contains("self.water_film_map.gpu_buffer(")
+            && source.contains("self.surface_velocity_map.gpu_buffer("),
         "resident Bekker terrain should preserve height/sinkage plus material/film/velocity maps"
     );
 }

@@ -119,7 +119,29 @@ fn det3(m: mat3x3<f32>) -> f32 {
     return dot(m[0], cross(m[1], m[2]));
 }
 
-fn inv3(m: mat3x3<f32>) -> mat3x3<f32> {
+fn tetra_deformation(ib: u32) -> mat3x3<f32> {
+    let origin = pos_in[tet_indices[ib]].xyz;
+    var f0 = vec3<f32>(0.0);
+    var f1 = vec3<f32>(0.0);
+    var f2 = vec3<f32>(0.0);
+    for (var a: u32 = 1u; a < 4u; a = a + 1u) {
+        let x = pos_in[tet_indices[ib + a]].xyz - origin;
+        let g = tet_grads[ib + a].xyz;
+        f0 = f0 + x.x * g;
+        f1 = f1 + x.y * g;
+        f2 = f2 + x.z * g;
+    }
+    return transpose(mat3x3<f32>(f0, f1, f2));
+}
+
+fn tetra_gradient(ib: u32, local: u32) -> vec3<f32> {
+    if (local == 0u) {
+        return -(tet_grads[ib + 1u].xyz + tet_grads[ib + 2u].xyz + tet_grads[ib + 3u].xyz);
+    }
+    return tet_grads[ib + local].xyz;
+}
+
+fn inverse_transpose3(m: mat3x3<f32>) -> mat3x3<f32> {
     let c0 = cross(m[1], m[2]);
     let c1 = cross(m[2], m[0]);
     let c2 = cross(m[0], m[1]);
@@ -127,34 +149,6 @@ fn inv3(m: mat3x3<f32>) -> mat3x3<f32> {
     return mat3x3<f32>(c0 / d, c1 / d, c2 / d);
 }
 
-fn add_fiber_stress(P_in: mat3x3<f32>, F: mat3x3<f32>, a0: vec3<f32>, k1: f32, k2: f32) -> mat3x3<f32> {
-    var P = P_in;
-    if (k1 <= 0.0) {
-        return P;
-    }
-    let Fa0 = F * a0;
-    let i4 = dot(Fa0, Fa0);
-    if (i4 <= 1.0) {
-        return P;
-    }
-    let stretch = i4 - 1.0;
-    var exp_factor: f32 = 1.0;
-    if (k2 > 0.0) {
-        exp_factor = exp(min(k2 * stretch * stretch, 30.0));
-    }
-    let coeff = 2.0 * k1 * stretch * exp_factor;
-    // P_aniso[r,c] = coeff · (F a0)_r · a0[c]
-    P[0][0] = P[0][0] + coeff * Fa0.x * a0.x;
-    P[1][0] = P[1][0] + coeff * Fa0.x * a0.y;
-    P[2][0] = P[2][0] + coeff * Fa0.x * a0.z;
-    P[0][1] = P[0][1] + coeff * Fa0.y * a0.x;
-    P[1][1] = P[1][1] + coeff * Fa0.y * a0.y;
-    P[2][1] = P[2][1] + coeff * Fa0.y * a0.z;
-    P[0][2] = P[0][2] + coeff * Fa0.z * a0.x;
-    P[1][2] = P[1][2] + coeff * Fa0.z * a0.y;
-    P[2][2] = P[2][2] + coeff * Fa0.z * a0.z;
-    return P;
-}
 
 fn tetra_signed_volume(x0: vec3<f32>, x1: vec3<f32>, x2: vec3<f32>, x3: vec3<f32>) -> f32 {
     return det3(mat3x3<f32>(x1 - x0, x2 - x0, x3 - x0)) / 6.0;
@@ -173,74 +167,6 @@ fn tetra_volume_grad(local: u32, x0: vec3<f32>, x1: vec3<f32>, x2: vec3<f32>, x3
     return cross(x1 - x0, x2 - x0) / 6.0;
 }
 
-fn quad_dihedral_angle(x0: vec3<f32>, x1: vec3<f32>, x2: vec3<f32>, x3: vec3<f32>) -> f32 {
-    let n0 = safe_normalize(cross(x1 - x0, x2 - x0), vec3<f32>(1.0, 0.0, 0.0));
-    let n1 = safe_normalize(cross(x2 - x0, x3 - x0), vec3<f32>(1.0, 0.0, 0.0));
-    return acos(clamp(dot(n0, n1), -1.0, 1.0));
-}
-
-fn quad_dihedral_grad(local: u32, axis: u32, x0: vec3<f32>, x1: vec3<f32>, x2: vec3<f32>, x3: vec3<f32>) -> f32 {
-    let eps = 1.0e-5;
-    var p0 = x0;
-    var p1 = x1;
-    var p2 = x2;
-    var p3 = x3;
-    if (local == 0u) {
-        if (axis == 0u) { p0.x = p0.x + eps; }
-        if (axis == 1u) { p0.y = p0.y + eps; }
-        if (axis == 2u) { p0.z = p0.z + eps; }
-    }
-    if (local == 1u) {
-        if (axis == 0u) { p1.x = p1.x + eps; }
-        if (axis == 1u) { p1.y = p1.y + eps; }
-        if (axis == 2u) { p1.z = p1.z + eps; }
-    }
-    if (local == 2u) {
-        if (axis == 0u) { p2.x = p2.x + eps; }
-        if (axis == 1u) { p2.y = p2.y + eps; }
-        if (axis == 2u) { p2.z = p2.z + eps; }
-    }
-    if (local == 3u) {
-        if (axis == 0u) { p3.x = p3.x + eps; }
-        if (axis == 1u) { p3.y = p3.y + eps; }
-        if (axis == 2u) { p3.z = p3.z + eps; }
-    }
-    let plus = quad_dihedral_angle(p0, p1, p2, p3);
-    p0 = x0;
-    p1 = x1;
-    p2 = x2;
-    p3 = x3;
-    if (local == 0u) {
-        if (axis == 0u) { p0.x = p0.x - eps; }
-        if (axis == 1u) { p0.y = p0.y - eps; }
-        if (axis == 2u) { p0.z = p0.z - eps; }
-    }
-    if (local == 1u) {
-        if (axis == 0u) { p1.x = p1.x - eps; }
-        if (axis == 1u) { p1.y = p1.y - eps; }
-        if (axis == 2u) { p1.z = p1.z - eps; }
-    }
-    if (local == 2u) {
-        if (axis == 0u) { p2.x = p2.x - eps; }
-        if (axis == 1u) { p2.y = p2.y - eps; }
-        if (axis == 2u) { p2.z = p2.z - eps; }
-    }
-    if (local == 3u) {
-        if (axis == 0u) { p3.x = p3.x - eps; }
-        if (axis == 1u) { p3.y = p3.y - eps; }
-        if (axis == 2u) { p3.z = p3.z - eps; }
-    }
-    let minus = quad_dihedral_angle(p0, p1, p2, p3);
-    return clamp((plus - minus) / (2.0 * eps), -1.0e4, 1.0e4);
-}
-
-fn quad_dihedral_grad_vec(local: u32, x0: vec3<f32>, x1: vec3<f32>, x2: vec3<f32>, x3: vec3<f32>) -> vec3<f32> {
-    return vec3<f32>(
-        quad_dihedral_grad(local, 0u, x0, x1, x2, x3),
-        quad_dihedral_grad(local, 1u, x0, x1, x2, x3),
-        quad_dihedral_grad(local, 2u, x0, x1, x2, x3),
-    );
-}
 
 @compute @workgroup_size(64)
 fn step_nodes(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -273,20 +199,8 @@ fn step_nodes(@builtin(global_invocation_id) gid: vec3<u32>) {
         let local = entry & 3u;
         let ib = t * 4u;
 
-        var f0 = vec3<f32>(0.0);
-        var f1 = vec3<f32>(0.0);
-        var f2 = vec3<f32>(0.0);
-        for (var a: u32 = 0u; a < 4u; a = a + 1u) {
-            let id = tet_indices[ib + a];
-            let x = pos_in[id].xyz;
-            let g = tet_grads[ib + a].xyz;
-            f0 = f0 + x.x * g;
-            f1 = f1 + x.y * g;
-            f2 = f2 + x.z * g;
-        }
-
-        let F = transpose(mat3x3<f32>(f0, f1, f2));
-        let FinvT = transpose(inv3(F));
+        let F = tetra_deformation(ib);
+        let FinvT = inverse_transpose3(F);
         let J = max(det3(F), 0.20);
         let logJ = log(J);
         // Stage (b)/(c) — uniform belt-proxy μ added on top of per-tet μ.
@@ -295,12 +209,20 @@ fn step_nodes(@builtin(global_invocation_id) gid: vec3<u32>) {
         var P = mu * (F - FinvT) + lambda * logJ * FinvT;
 
         // Stage (c/c2) — crossed Holzapfel ply families.
-        P = add_fiber_stress(P, F, tet_fiber_dir[t].xyz, tet_fiber_k1[t], tet_fiber_k2[t]);
-        P = add_fiber_stress(P, F, tet_fiber_dir_b[t].xyz, tet_fiber_k1_b[t], tet_fiber_k2_b[t]);
-        P = add_fiber_stress(P, F, tet_fiber_dir_c[t].xyz, tet_fiber_k1_c[t], tet_fiber_k2_c[t]);
-        P = add_fiber_stress(P, F, tet_fiber_dir_d[t].xyz, tet_fiber_k1_d[t], tet_fiber_k2_d[t]);
-
-        let g_node = tet_grads[ib + local].xyz;
+        let g_node = tetra_gradient(ib, local);
+        var fibre_tangent = 0.0;
+        let fiber0 = add_fiber_stress(P, F, tet_fiber_dir[t].xyz, tet_fiber_k1[t], tet_fiber_k2[t], g_node);
+        P = fiber0.stress;
+        fibre_tangent = fibre_tangent + fiber0.tangent;
+        let fiber1 = add_fiber_stress(P, F, tet_fiber_dir_b[t].xyz, tet_fiber_k1_b[t], tet_fiber_k2_b[t], g_node);
+        P = fiber1.stress;
+        fibre_tangent = fibre_tangent + fiber1.tangent;
+        let fiber2 = add_fiber_stress(P, F, tet_fiber_dir_c[t].xyz, tet_fiber_k1_c[t], tet_fiber_k2_c[t], g_node);
+        P = fiber2.stress;
+        fibre_tangent = fibre_tangent + fiber2.tangent;
+        let fiber3 = add_fiber_stress(P, F, tet_fiber_dir_d[t].xyz, tet_fiber_k1_d[t], tet_fiber_k2_d[t], g_node);
+        P = fiber3.stress;
+        fibre_tangent = fibre_tangent + fiber3.tangent;
         let sg = P * g_node;
         force = force - tet_volume[t] * sg;
 
@@ -309,12 +231,8 @@ fn step_nodes(@builtin(global_invocation_id) gid: vec3<u32>) {
         // full Newton solve; it mirrors the CPU denominator
         // `m + c·dt + scale·k_diag·dt²`.
         let grad_norm2 = dot(g_node, g_node);
-        let fibre_tangent = abs(tet_fiber_k1[t]) * (1.0 + abs(tet_fiber_k2[t]))
-            + abs(tet_fiber_k1_b[t]) * (1.0 + abs(tet_fiber_k2_b[t]))
-            + abs(tet_fiber_k1_c[t]) * (1.0 + abs(tet_fiber_k2_c[t]))
-            + abs(tet_fiber_k1_d[t]) * (1.0 + abs(tet_fiber_k2_d[t]));
         node_stiffness_diag = node_stiffness_diag
-            + tet_volume[t] * (abs(mu) + abs(lambda) + fibre_tangent) * grad_norm2;
+            + tet_volume[t] * ((abs(mu) + abs(lambda)) * grad_norm2 + fibre_tangent);
     }
 
     // Bead/rim coupling to the current hub pose + cavity-pressure
@@ -523,10 +441,11 @@ fn step_nodes(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (abs(c_diag) <= 1.0e-5) {
                 continue;
             }
-            let g0 = quad_dihedral_grad_vec(0u, x0, x1, x2, x3);
-            let g1 = quad_dihedral_grad_vec(1u, x0, x1, x2, x3);
-            let g2 = quad_dihedral_grad_vec(2u, x0, x1, x2, x3);
-            let g3 = quad_dihedral_grad_vec(3u, x0, x1, x2, x3);
+            let gradients = quad_dihedral_gradients(x0, x1, x2, x3);
+            let g0 = gradients[0];
+            let g1 = gradients[1];
+            let g2 = gradients[2];
+            let g3 = gradients[3];
             let w0 = 1.0 / max(mass_in[ids.x], 1.0e-9);
             let w1 = 1.0 / max(mass_in[ids.y], 1.0e-9);
             let w2 = 1.0 / max(mass_in[ids.z], 1.0e-9);
@@ -590,18 +509,7 @@ fn step_nodes(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (abs(dot(tet_fiber_dir_c[t].xyz, radial)) < 0.85 || abs(dot(tet_fiber_dir_d[t].xyz, axial)) < 0.85) {
                 continue;
             }
-            var pf0 = vec3<f32>(0.0);
-            var pf1 = vec3<f32>(0.0);
-            var pf2 = vec3<f32>(0.0);
-            for (var a: u32 = 0u; a < 4u; a = a + 1u) {
-                let id = tet_indices[ib + a];
-                let x = pos_in[id].xyz;
-                let g = tet_grads[ib + a].xyz;
-                pf0 = pf0 + x.x * g;
-                pf1 = pf1 + x.y * g;
-                pf2 = pf2 + x.z * g;
-            }
-            let Fp = transpose(mat3x3<f32>(pf0, pf1, pf2));
+            let Fp = tetra_deformation(ib);
             for (var family: u32 = 0u; family < 4u; family = family + 1u) {
                 var dir = tet_fiber_dir[t].xyz;
                 if (family == 1u) { dir = tet_fiber_dir_b[t].xyz; }
@@ -614,7 +522,7 @@ fn step_nodes(@builtin(global_invocation_id) gid: vec3<u32>) {
                     continue;
                 }
                 let stretch_grad_dir = fa / stretch;
-                let g0s = dot(tet_grads[ib + 0u].xyz, dir);
+                let g0s = dot(tetra_gradient(ib, 0u), dir);
                 let g1s = dot(tet_grads[ib + 1u].xyz, dir);
                 let g2s = dot(tet_grads[ib + 2u].xyz, dir);
                 let g3s = dot(tet_grads[ib + 3u].xyz, dir);

@@ -22,12 +22,33 @@ use crate::tire_vehicle::{
 
 const WORKGROUP_SIZE: u32 = 64;
 
+#[path = "tire_fem_terrain_feedback.rs"]
+mod terrain_feedback;
+pub use terrain_feedback::PreparedTireFemTerrainFeedback;
+#[path = "soil_terrain_queries.rs"]
+mod terrain_queries;
+pub use terrain_queries::{PreparedSoilTerrainQueries, SoilTerrainSample};
+#[path = "tire_vehicle_fem_prepared_step.rs"]
+mod vehicle_prepared_step;
+pub use vehicle_prepared_step::PreparedTireVehicleFemStep;
+#[path = "tire_vehicle_fem_readback.rs"]
+mod vehicle_readback;
+pub use vehicle_readback::{PreparedTireVehicleFemReadback, TireVehicleFemFrame};
+#[path = "tire_fem_topology.rs"]
+mod topology;
+
 /// WGSL source for the fused tire-FEM atlas node-step kernel.
 ///
 /// The shader keeps the same physical FEM node update as the single-tire
 /// `tire_fem.wgsl` path, but routes each atlas-global node through per-tire
 /// ownership, parameter, and offset rows.
-pub const TIRE_FEM_ATLAS_SHADER: &str = include_str!("../shaders/tire_fem_atlas.wgsl");
+pub const TIRE_FEM_ATLAS_SHADER: &str = concat!(
+    include_str!("../shaders/tire_fem_fiber.wgsl"),
+    "\n",
+    include_str!("../shaders/tire_fem_dihedral_analytic.wgsl"),
+    "\n",
+    include_str!("../shaders/tire_fem_atlas.wgsl")
+);
 
 /// WGSL source-guard shader for the matrix-free Newton tire-FEM debug
 /// timestep.
@@ -173,6 +194,8 @@ pub struct TireFemGpuInput {
     /// Four vertex indices per tet.
     pub tet_indices: Vec<u32>,
     /// Four shape-function gradients per tet, matching `tet_indices`.
+    /// GPU deformation uses vertex-zero-relative edges; its dependent gradient
+    /// is reconstructed as minus the sum of gradients one through three.
     pub tet_grads: Vec<[f32; 4]>,
     pub tet_volumes: Vec<f32>,
     pub tet_mu: Vec<f32>,
@@ -1072,12 +1095,15 @@ impl TireFemResidentContact {
 }
 
 pub struct TireFemContactFeedbackKernel {
+    device: wgpu::Device,
+    identity: std::sync::Arc<()>,
     pipeline: wgpu::ComputePipeline,
     layout_io: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
 }
 
 pub struct TireFemGpuKernel {
+    device: wgpu::Device,
     pipeline: wgpu::ComputePipeline,
     layout_io: wgpu::BindGroupLayout,
     layout_uniforms: wgpu::BindGroupLayout,
@@ -1593,6 +1619,7 @@ pub struct TireFemGpuBatch {
 /// atlas path; higher-level viewer code can move to this owner without
 /// changing per-tire output shapes.
 pub struct TireFemGpuAtlasBatch {
+    device: wgpu::Device,
     atlas: TireFemGpuBatchAtlasBuffers,
     pos_a: wgpu::Buffer,
     pos_b: wgpu::Buffer,
@@ -3385,7 +3412,13 @@ pub fn tire_fem_torque_gpu_contract() -> TireFemTorqueGpuContract {
 
 /// Cached WGSL source for the single-tire FEM step kernel — used by the
 /// PLAN_TOURQUE Stage G contract's source-guard check.
-const TIRE_FEM_SHADER_SRC: &str = include_str!("../shaders/tire_fem.wgsl");
+const TIRE_FEM_SHADER_SRC: &str = concat!(
+    include_str!("../shaders/tire_fem_fiber.wgsl"),
+    "\n",
+    include_str!("../shaders/tire_fem_dihedral_analytic.wgsl"),
+    "\n",
+    include_str!("../shaders/tire_fem.wgsl")
+);
 
 /// PLAN_REALTIRE Stream C G4 closure flag. Flip this back to `false` if
 /// the contact-driven parity lane
@@ -3428,7 +3461,7 @@ impl TireFemGpuKernel {
     pub fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("molla::tire_fem"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/tire_fem.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(TIRE_FEM_SHADER_SRC.into()),
         });
         let layout_io = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("molla::tire_fem io"),
@@ -3748,6 +3781,7 @@ impl TireFemGpuKernel {
         });
 
         Self {
+            device: device.clone(),
             pipeline,
             layout_io,
             layout_uniforms,
@@ -5800,6 +5834,7 @@ impl TireFemGpuKernel {
         let fb_forces_buf = mk_fb("tire_fem_atlas feedback force rows", total_nodes);
 
         Ok(TireFemGpuAtlasBatch {
+            device: device.clone(),
             atlas,
             pos_a,
             pos_b,
@@ -7213,6 +7248,40 @@ impl TireFemGpuKernel {
     ///
     /// This is the owner-oriented wrapper around
     /// [`Self::step_resident_vehicle_fem_atlas_from_brush_owner`].
+    /// Advances FEM nodes, prepared chassis/brush, then FEM hubs in queue order.
+    /// Validates the prepared owner before advancing FEM nodes. FEM stages retain
+    /// their existing allocations/submissions; this is not atomic frame rollback.
+    pub fn step_resident_vehicle_fem_atlas_owner_prepared(
+        &self,
+        engine: &molla_compute::Engine,
+        owner: &mut TireResidentVehicleFemAtlasOwner,
+        fem_params: &[TireFemGpuParams],
+        chassis: &crate::PreparedTireVehicleChassisStep,
+        base_hub_params: &[TireFemHubParams],
+        force_scale: f32,
+    ) -> Result<TireBrushResidentOutput> {
+        chassis.validate(engine, &owner.vehicle)?;
+        if fem_params.len() != owner.tire_count || base_hub_params.len() != owner.tire_count {
+            return Err(Error::Solver(
+                "prepared vehicle/FEM parameter count mismatch".into(),
+            ));
+        }
+        let device = engine.device().unwrap();
+        let queue = engine.queue().unwrap();
+        self.step_resident_atlas_batch(device, queue, &mut owner.fem, fem_params)?;
+        let output = chassis.step(engine, &mut owner.vehicle)?;
+        self.step_resident_atlas_hubs_from_brush_output(
+            device,
+            queue,
+            &owner.fem,
+            &output.buffer,
+            output.wheel_count,
+            base_hub_params,
+            force_scale,
+        )?;
+        Ok(output)
+    }
+
     pub fn step_resident_vehicle_fem_atlas_owner(
         &self,
         vehicle_kernel: &TireVehicleYawGpuKernel,
@@ -8140,6 +8209,8 @@ impl TireFemContactFeedbackKernel {
             cache: None,
         });
         Self {
+            device: device.clone(),
+            identity: std::sync::Arc::new(()),
             pipeline,
             layout_io,
             layout_uniforms,
@@ -9491,7 +9562,7 @@ fn validate_input(input: &TireFemGpuInput) -> Result<()> {
             ));
         }
     }
-    Ok(())
+    topology::validate(input)
 }
 
 /// Host-side input for the GPU matrix-free Newton tire-FEM debug timestep.
