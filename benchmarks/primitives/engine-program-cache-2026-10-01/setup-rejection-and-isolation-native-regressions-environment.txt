@@ -1,4 +1,0 @@
-2026-10-01T23:03:33+02:00
-da495a0971c666c7230dd49e0b2a48d0307fc7a4
-NVIDIA GeForce RTX 4080, 595.91.07, 11963 MiB, 16376 MiB, 0 %
-prior_owned_timeout=212516 start_ticks=42212070 prior_owned_make=212517 start_ticks=42212070

@@ -1,8 +1,0 @@
-gate_start=static-shaders date=2026-10-02T13:47:50+02:00
-gate_end=static-shaders exit=0 date=2026-10-02T13:48:45+02:00
-gate_start=cpu-primitives date=2026-10-02T13:48:45+02:00
-gate_end=cpu-primitives exit=0 date=2026-10-02T13:52:42+02:00
-gate_start=breakage-kinematics date=2026-10-02T13:52:42+02:00
-gate_end=breakage-kinematics exit=0 date=2026-10-02T14:19:03+02:00
-gate_start=remaining-production date=2026-10-02T14:19:03+02:00
-gate_end=remaining-production exit=2 date=2026-10-02T14:32:43+02:00

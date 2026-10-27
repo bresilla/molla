@@ -1,3 +1,0 @@
-spread	cpu_a32_steps10_cloud100k_camera640_device	86.4627290132
-spread	gpu_a32_steps10_cloud100k_camera640_device	6.273387679
-validated cases=2 groups=10 first=10 warmup=1280 samples=5120 p95_spread_over_10_percent=1

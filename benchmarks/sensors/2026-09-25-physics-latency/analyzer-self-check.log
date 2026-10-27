@@ -1,7 +1,0 @@
-validated cases=48 groups=144 first=144 warmup=1152 samples=9216 p95_spread_over_10_percent=0
-Synthetic constant quantile mismatches=0
-/tmp/molla-physics-analysis-bad.tsv:2: transfer/submission accounting mismatch
-/tmp/molla-physics-analysis-incomplete.tsv:10512: incomplete matrix
-/tmp/molla-physics-analysis-timer.tsv:2: unexpected timestamp in control run
-validated cases=48 groups=144 first=144 warmup=1152 samples=9216 p95_spread_over_10_percent=0
-Synthetic timed quantile mismatches=0

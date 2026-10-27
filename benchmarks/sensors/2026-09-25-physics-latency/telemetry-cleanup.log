@@ -1,9 +1,0 @@
-Fri Sep 25 06:36:36 UTC 2026
-Stopping owned telemetry PID 174053, stdout=/tmp/molla-threaded-physics-longwarm-gpu.csv
-Stopping owned telemetry PID 3999502, stdout=/tmp/molla-latency-matrix-gpu.csv
-Stopping owned telemetry PID 4002882, stdout=/tmp/molla-latency-control-gpu.csv
-Stopping owned telemetry PID 4006214, stdout=/tmp/molla-latency-steady-gpu.csv
-Stopping owned telemetry PID 4051227, stdout=/tmp/molla-camera-latency-matrix-gpu.csv
-Stopping owned telemetry PID 4055464, stdout=/tmp/molla-camera-latency-control-gpu.csv
-
-Verified all six recorded telemetry PIDs absent after cleanup; no active sensor physics benchmark found.

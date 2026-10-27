@@ -1,6 +1,0 @@
-------------------------------------------
-Project: molla v0.0.1
-Display: x11 backend
-------------------------------------------
-   Compiling molla-solvers v0.0.1 (/home/bresilla/data/code/OUSD/molla/crates/molla-solvers)
-    Finished `release` profile [optimized] target(s) in 14.10s

@@ -1,5 +1,0 @@
-added_manifest_path crates/molla-sensors/benches/support/camera_latency_smoke.rs
-added_manifest_path crates/molla-sensors/benches/support/cloud_benchmark_sizes.rs
-changed_source crates/molla-sensors/benches/bench_camera_latency.rs
-changed_source crates/molla-sensors/benches/bench_sensor_cloud.rs
-changed_source crates/molla-sensors/tests/latency_benchmark_mode.rs
