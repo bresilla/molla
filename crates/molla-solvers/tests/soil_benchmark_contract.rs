@@ -663,7 +663,7 @@ fn make_runner_propagates_checker_failure_timeout_and_preserves_evidence() {
     let smi = dir.0.join("fake-smi");
     fs::write(
         &cargo,
-        r#"#!/bin/bash
+        r#"#!/usr/bin/env bash
 case "$1" in
   build) exit 0 ;;
   run) echo checker-invoked; exit "$CHECK_EXIT" ;;
@@ -678,7 +678,7 @@ esac
     .unwrap();
     fs::write(
         &smi,
-        "#!/bin/bash\nprintf 'synthetic hardware fixture\\n'\n",
+        "#!/usr/bin/env bash\nprintf 'synthetic hardware fixture\\n'\n",
     )
     .unwrap();
     for path in [&cargo, &smi] {

@@ -430,11 +430,11 @@ Run `make test-soil-newton-active-publication-runtime RUN_WITH=nixVulkan` for
 source/metadata checks and bounded capture/native-feedback GPU checks.
 For the full diagnostic fixture use
 `benchmarks/soil/2026-10-11-newton-active-publication-runtime/actual.sh` with
-`/bin/bash`; it uses Make, a fresh output directory and a 180-second cap.
+`bash`; it uses Make, a fresh output directory and a 180-second cap.
 The captured solver speedup is not a full-frame speed or calibration claim.
 
 The test-only equal-input shadow diagnostic is run by
-`/bin/bash benchmarks/soil/2026-10-11-newton-publication-shadow/run.sh`.
+`bash benchmarks/soil/2026-10-11-newton-publication-shadow/run.sh`.
 It compares methods 20/21 on every contact solve through 14 live frames, retains
 first-difference metadata, and never feeds shadow outputs into the world.
 Its extra solver/storage/dispatches/readbacks exclude performance acceptance.
