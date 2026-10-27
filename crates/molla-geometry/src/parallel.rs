@@ -1,5 +1,6 @@
-//! The thread pool collision work runs on: `MOLLA_THREADS` workers, by default
-//! a quarter of the cores and at most four; one keeps all of it on the caller.
+//! The thread pool molla's parallel work runs on: `MOLLA_THREADS` workers, by
+//! default a quarter of the cores and at most four; one keeps all of it on the
+//! caller.
 
 use std::sync::OnceLock;
 
@@ -26,6 +27,20 @@ fn pool() -> Option<&'static rayon::ThreadPool> {
             .flatten()
     })
     .as_ref()
+}
+
+/// Workers on the pool; one without it.
+pub fn threads() -> usize {
+    pool().map_or(1, rayon::ThreadPool::current_num_threads)
+}
+
+/// `f` over each of `parts`, on the pool when there are several. Results keep
+/// the parts' order.
+pub fn map_parts<T: Send, R: Send>(parts: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
+    match pool() {
+        Some(pool) if parts.len() > 1 => pool.install(|| parts.into_par_iter().map(&f).collect()),
+        _ => parts.into_iter().map(f).collect(),
+    }
 }
 
 /// `f` over consecutive chunks of `items`, each with the index it starts at;

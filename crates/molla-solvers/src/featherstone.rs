@@ -1511,13 +1511,49 @@ fn cpu_step_inner<'m, const LOCAL: bool>(
 
     let seed = std::mem::replace(mass_seed, crate::joint_mass::MassSeed::new(model));
     let mut joint_mass = crate::joint_mass::JointMass::with_seed(model, state_out, Some(seed))?;
-    let motor_inertias = effective_drive_inertias(
-        model,
-        control,
-        stable_motor_feedback,
-        &mut joint_mass,
-        activation.map(|active| active.articulations.as_slice()),
-    )?;
+    let active_articulations = activation.map(|active| active.articulations.as_slice());
+    let parts = if LOCAL {
+        articulation_parts(model, active_articulations)?
+    } else {
+        Vec::new()
+    };
+    let mut masses: Vec<_> = parts
+        .iter()
+        .map(|part| joint_mass.split_off(part.clone()))
+        .collect();
+    let motor_inertias = if parts.is_empty() {
+        effective_drive_inertias(
+            model,
+            control,
+            stable_motor_feedback,
+            &mut joint_mass,
+            active_articulations,
+        )?
+    } else {
+        let solved = molla_geometry::parallel::map_parts(
+            parts.iter().cloned().zip(masses.drain(..)).collect(),
+            |(part, mut mass)| {
+                let mut inertias = vec![1.0; model.joint_dof_total];
+                let solved = drive_inertias_of(
+                    model,
+                    control,
+                    stable_motor_feedback,
+                    &mut mass,
+                    active_articulations,
+                    part,
+                    &mut inertias,
+                );
+                (mass, solved.map(|()| inertias))
+            },
+        );
+        let mut motor_inertias = vec![1.0; model.joint_dof_total];
+        for (part, (mass, solved)) in parts.iter().zip(solved) {
+            let (dofs, _) = part_spans(model, part)?;
+            motor_inertias[dofs.clone()].copy_from_slice(&solved?[dofs]);
+            masses.push(mass);
+        }
+        motor_inertias
+    };
 
     let joint_type = model.joint_type.host()?;
     let joint_parent = model.joint_parent.host()?;
@@ -1597,314 +1633,321 @@ fn cpu_step_inner<'m, const LOCAL: bool>(
     } else {
         model.joint_count
     };
-    let mut v_body = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
-    let mut c_term = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
-    let mut i_a = JointScratch::<_, LOCAL>::new(scratch_len, SpatialMatrix6::ZERO);
-    let mut p_a = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
-    let mut s_cols =
-        JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
-    let mut dof_active = JointScratch::<_, LOCAL>::new(scratch_len, [false; MAX_JOINT_DOFS]);
-    let mut dof_count = JointScratch::<_, LOCAL>::new(scratch_len, 0usize);
-    let mut u_per_dof =
-        JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
-    let mut d_inv_per_dof = JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS]);
-    let mut u_tau_per_dof = JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS]);
-    let mut l_chol_per_joint =
-        JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS * MAX_JOINT_DOFS]);
-
     // ── Per-articulation outer loop ─────────────────────────────────
-    let mut q_new: Vec<Real> = q_in.clone();
-    let mut qd_new: Vec<Real> = qd_in.clone();
-    let mut q_dd = vec![0.0_f64; model.joint_dof_total];
-    drop(setup_span);
-    let mut a_body = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
-    for art in 0..art_count {
-        if activation.is_some_and(|active| !active.articulations[art]) {
-            continue;
-        }
-        let j_begin = art_start[art] as usize;
-        let j_end = art_start[art + 1] as usize;
-        if j_begin == j_end {
-            continue;
-        }
-        let rigorous_d_solve = rigorous_d_solve
-            || crate::joint_limits::has_mixed_stops(model, j_begin..j_end, rigorous_distance)?;
-        let spatial_origin = body_q[joint_child[j_begin] as usize].position;
-
-        v_body.reset(j_begin, j_end);
-        c_term.reset(j_begin, j_end);
-        i_a.reset(j_begin, j_end);
-        p_a.reset(j_begin, j_end);
-        s_cols.reset(j_begin, j_end);
-        dof_active.reset(j_begin, j_end);
-        dof_count.reset(j_begin, j_end);
-        u_per_dof.reset(j_begin, j_end);
-        d_inv_per_dof.reset(j_begin, j_end);
-        u_tau_per_dof.reset(j_begin, j_end);
-        l_chol_per_joint.reset(j_begin, j_end);
-        a_body.reset(j_begin, j_end);
-        let mut root_applied_tau = [0.0; MAX_JOINT_DOFS];
-
-        // ── Pass 1: forward kinematics + body kinematics ─────────────────
-        let kinematics_span = tracing::debug_span!("aba_kinematics").entered();
-        for j in j_begin..j_end {
-            let jt = joint_type_from_u32(joint_type[j]);
-            let parent = joint_parent[j];
-            let child = joint_child[j] as usize;
-
-            let (mut motion_frame, direction) = model.joint_motion_frame(&body_q, &q_in, j)?;
-            motion_frame.position -= spatial_origin;
-
-            // Build motion subspace (per-DOF).
-            let dof_idx = joint_dof_offset[j] as usize;
-            let mut n_dof = build_motion_subspace(
-                jt,
-                motion_frame,
-                joint_axis[j],
-                dof_idx,
-                limit_lower,
-                limit_upper,
-                &mut s_cols[j],
-                &mut dof_active[j],
-            );
-            for column in &mut s_cols[j] {
-                *column = column.scale(direction);
+    let step_articulations = |articulations: std::ops::Range<usize>,
+                              q_dd: &mut [Real],
+                              q_new: &mut [Real],
+                              qd_new: &mut [Real],
+                              efforts: &mut [JointEffort],
+                              joint_mass: &mut crate::joint_mass::JointMass<'_>|
+     -> Result<()> {
+        let mut v_body = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
+        let mut c_term = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
+        let mut i_a = JointScratch::<_, LOCAL>::new(scratch_len, SpatialMatrix6::ZERO);
+        let mut p_a = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
+        let mut s_cols =
+            JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
+        let mut dof_active = JointScratch::<_, LOCAL>::new(scratch_len, [false; MAX_JOINT_DOFS]);
+        let mut dof_count = JointScratch::<_, LOCAL>::new(scratch_len, 0usize);
+        let mut u_per_dof =
+            JointScratch::<_, LOCAL>::new(scratch_len, [SpatialVector::ZERO; MAX_JOINT_DOFS]);
+        let mut d_inv_per_dof =
+            JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS]);
+        let mut u_tau_per_dof =
+            JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS]);
+        let mut l_chol_per_joint =
+            JointScratch::<_, LOCAL>::new(scratch_len, [0.0_f64; MAX_JOINT_DOFS * MAX_JOINT_DOFS]);
+        let mut a_body = JointScratch::<_, LOCAL>::new(scratch_len, SpatialVector::ZERO);
+        for art in articulations {
+            if activation.is_some_and(|active| !active.articulations[art]) {
+                continue;
             }
-            if body_flags[child] & BodyFlags::IMMOVABLE != 0 || joint_enabled[j] == 0 {
-                n_dof = 0;
-                s_cols[j].fill(SpatialVector::ZERO);
-                dof_active[j].fill(false);
+            let j_begin = art_start[art] as usize;
+            let j_end = art_start[art + 1] as usize;
+            if j_begin == j_end {
+                continue;
             }
-            dof_count[j] = n_dof;
+            let rigorous_d_solve = rigorous_d_solve
+                || crate::joint_limits::has_mixed_stops(model, j_begin..j_end, rigorous_distance)?;
+            let spatial_origin = body_q[joint_child[j_begin] as usize].position;
 
-            // Joint velocity = sum of S_k · qd_k.
-            let mut v_j = SpatialVector::ZERO;
-            for k in 0..n_dof {
-                if !dof_active[j][k] {
-                    continue;
+            v_body.reset(j_begin, j_end);
+            c_term.reset(j_begin, j_end);
+            i_a.reset(j_begin, j_end);
+            p_a.reset(j_begin, j_end);
+            s_cols.reset(j_begin, j_end);
+            dof_active.reset(j_begin, j_end);
+            dof_count.reset(j_begin, j_end);
+            u_per_dof.reset(j_begin, j_end);
+            d_inv_per_dof.reset(j_begin, j_end);
+            u_tau_per_dof.reset(j_begin, j_end);
+            l_chol_per_joint.reset(j_begin, j_end);
+            a_body.reset(j_begin, j_end);
+            let mut root_applied_tau = [0.0; MAX_JOINT_DOFS];
+
+            // ── Pass 1: forward kinematics + body kinematics ─────────────────
+            let kinematics_span = tracing::debug_span!("aba_kinematics").entered();
+            for j in j_begin..j_end {
+                let jt = joint_type_from_u32(joint_type[j]);
+                let parent = joint_parent[j];
+                let child = joint_child[j] as usize;
+
+                let (mut motion_frame, direction) = model.joint_motion_frame(&body_q, &q_in, j)?;
+                motion_frame.position -= spatial_origin;
+
+                // Build motion subspace (per-DOF).
+                let dof_idx = joint_dof_offset[j] as usize;
+                let mut n_dof = build_motion_subspace(
+                    jt,
+                    motion_frame,
+                    joint_axis[j],
+                    dof_idx,
+                    limit_lower,
+                    limit_upper,
+                    &mut s_cols[j],
+                    &mut dof_active[j],
+                );
+                for column in &mut s_cols[j] {
+                    *column = column.scale(direction);
                 }
-                let qd_k = qd_in.get(dof_idx + k).copied().unwrap_or(0.0);
-                v_j = v_j + s_cols[j][k].scale(qd_k);
-            }
-
-            // Parent body's spatial velocity.
-            let v_p = if parent < 0 {
-                SpatialVector::ZERO
-            } else {
-                let mut v = SpatialVector::ZERO;
-                for k in j_begin..j {
-                    if joint_child[k] as usize == parent as usize {
-                        v = v_body[k];
-                        break;
-                    }
+                if body_flags[child] & BodyFlags::IMMOVABLE != 0 || joint_enabled[j] == 0 {
+                    n_dof = 0;
+                    s_cols[j].fill(SpatialVector::ZERO);
+                    dof_active[j].fill(false);
                 }
-                v
-            };
+                dof_count[j] = n_dof;
 
-            let v_i = if body_flags[child] & BodyFlags::FIXED != 0 {
-                SpatialVector::ZERO
-            } else if body_flags[child] & BodyFlags::KINEMATIC != 0 {
-                let velocity = state_in.body_qd.host()?[child];
-                let com = body_q[child].position - spatial_origin
-                    + body_q[child].rotation * body_com[child];
-                SpatialVector::new(
-                    velocity.linear - velocity.angular.cross(com),
-                    velocity.angular,
-                )
-            } else {
-                v_p + v_j
-            };
-            v_body[j] = v_i;
-            c_term[j] = spatial_cross(v_i, v_j);
-            if matches!(jt, JointType::Free | JointType::Distance | JointType::D6) {
-                let translation = motion_frame.rotation
-                    * Vec3::new(qd_in[dof_idx], qd_in[dof_idx + 1], qd_in[dof_idx + 2]);
-                c_term[j].linear -= v_j.angular.cross(translation);
-            }
-
-            // World-axis spatial inertia about the articulation origin.
-            let cw = body_q[child];
-            let com_world = cw.position - spatial_origin + cw.rotation * body_com[child];
-            let i_local_world = rotate_inertia(cw.rotation, body_inertia[child]);
-            let i_s = SpatialMatrix6::from_body(body_mass[child], com_world, i_local_world);
-
-            // Initial articulated inertia and bias.
-            // Bias = v ×* (I·v) − f_grav − f_ext, where f_ext is the
-            // user-applied wrench at COM (state.body_f, world frame),
-            // re-expressed at the articulation origin.
-            let world_idx = body_world[child].max(0) as usize;
-            let g = gravity[world_idx];
-            let f_g_lin = g * body_mass[child];
-            let f_g_ang = com_world.cross(f_g_lin);
-            let f_grav = SpatialVector::new(f_g_lin, f_g_ang);
-            // External wrench at COM: caller fills `body_f[child]` with
-            // (force, torque_at_COM) in world frame. Re-express at world
-            // articulation origin: linear unchanged, angular gets +r_com × F.
-            let ext_com = body_f_in.get(child).copied().unwrap_or(SpatialVector::ZERO);
-            let f_ext_lin = ext_com.linear;
-            let f_ext_ang = ext_com.angular + com_world.cross(ext_com.linear);
-            let f_ext = SpatialVector::new(f_ext_lin, f_ext_ang);
-            let bias = spatial_cross_dual(v_i, i_s.mul_sv(v_i));
-            let p_init = bias - f_grav - f_ext;
-            i_a[j] = i_s;
-            p_a[j] = p_init;
-        }
-        drop(kinematics_span);
-
-        // ── Pass 2: backward — articulated inertia accumulation ──────────
-        let backward_span = tracing::debug_span!("aba_backward").entered();
-        for j in (j_begin..j_end).rev() {
-            let parent = joint_parent[j];
-            let jt = joint_type_from_u32(joint_type[j]);
-            let enabled = joint_enabled.get(j).copied().unwrap_or(1) != 0;
-            let n_dof = dof_count[j];
-            let supported = enabled && !matches!(jt, JointType::Fixed);
-
-            let dof_idx = joint_dof_offset[j] as usize;
-            let coord_idx = joint_coord_offset[j] as usize;
-
-            if supported && n_dof > 0 {
-                let angular_bounds = if jt == JointType::D6 {
-                    let records = model.joint_compliance.host()?;
-                    let bound = |axis: usize, upper: bool| {
-                        let dof = dof_idx + 3 + axis;
-                        if let Some(c) = records.get(dof).filter(|c| c.enabled != 0) {
-                            if upper { c.upper } else { c.lower }
-                        } else if upper {
-                            limit_upper[dof]
-                        } else {
-                            limit_lower[dof]
-                        }
-                    };
-                    Some((
-                        Vec3::from_array(std::array::from_fn(|k| bound(k, false))),
-                        Vec3::from_array(std::array::from_fn(|k| bound(k, true))),
-                    ))
-                } else {
-                    None
-                };
-                // Compute per-DOF generalised force `u_tau_k = tau_k − S_k^T · p_a[j]`
-                // from drives + friction + effort first; this is
-                // independent of the deflation strategy below.
+                // Joint velocity = sum of S_k · qd_k.
+                let mut v_j = SpatialVector::ZERO;
                 for k in 0..n_dof {
                     if !dof_active[j][k] {
-                        u_tau_per_dof[j][k] = 0.0;
                         continue;
                     }
-                    let s_k = s_cols[j][k];
-                    let dof_g = dof_idx + k;
-                    let qd_now = qd_in.get(dof_g).copied().unwrap_or(0.0);
-                    let q_now = motor_coordinate(jt, &q_in[coord_idx..], k, angular_bounds);
-                    let mode =
-                        JointTargetMode::from_u32(target_mode.get(dof_g).copied().unwrap_or(0));
-                    let kp = target_kp.get(dof_g).copied().unwrap_or(0.0);
-                    let kd = target_kd.get(dof_g).copied().unwrap_or(0.0);
-                    let pos_t = target_pos.get(dof_g).copied().unwrap_or(0.0);
-                    let vel_t = target_vel.get(dof_g).copied().unwrap_or(0.0);
-                    let drive = match mode {
-                        JointTargetMode::None => 0.0,
-                        JointTargetMode::Position => kp * (pos_t - q_now) - kd * qd_now,
-                        JointTargetMode::Velocity => kd * (vel_t - qd_now),
-                        JointTargetMode::PositionVelocity => {
-                            kp * (pos_t - q_now) + kd * (vel_t - qd_now)
+                    let qd_k = qd_in.get(dof_idx + k).copied().unwrap_or(0.0);
+                    v_j = v_j + s_cols[j][k].scale(qd_k);
+                }
+
+                // Parent body's spatial velocity.
+                let v_p = if parent < 0 {
+                    SpatialVector::ZERO
+                } else {
+                    let mut v = SpatialVector::ZERO;
+                    for k in j_begin..j {
+                        if joint_child[k] as usize == parent as usize {
+                            v = v_body[k];
+                            break;
                         }
-                        JointTargetMode::Effort => pos_t,
+                    }
+                    v
+                };
+
+                let v_i = if body_flags[child] & BodyFlags::FIXED != 0 {
+                    SpatialVector::ZERO
+                } else if body_flags[child] & BodyFlags::KINEMATIC != 0 {
+                    let velocity = state_in.body_qd.host()?[child];
+                    let com = body_q[child].position - spatial_origin
+                        + body_q[child].rotation * body_com[child];
+                    SpatialVector::new(
+                        velocity.linear - velocity.angular.cross(com),
+                        velocity.angular,
+                    )
+                } else {
+                    v_p + v_j
+                };
+                v_body[j] = v_i;
+                c_term[j] = spatial_cross(v_i, v_j);
+                if matches!(jt, JointType::Free | JointType::Distance | JointType::D6) {
+                    let translation = motion_frame.rotation
+                        * Vec3::new(qd_in[dof_idx], qd_in[dof_idx + 1], qd_in[dof_idx + 2]);
+                    c_term[j].linear -= v_j.angular.cross(translation);
+                }
+
+                // World-axis spatial inertia about the articulation origin.
+                let cw = body_q[child];
+                let com_world = cw.position - spatial_origin + cw.rotation * body_com[child];
+                let i_local_world = rotate_inertia(cw.rotation, body_inertia[child]);
+                let i_s = SpatialMatrix6::from_body(body_mass[child], com_world, i_local_world);
+
+                // Initial articulated inertia and bias.
+                // Bias = v ×* (I·v) − f_grav − f_ext, where f_ext is the
+                // user-applied wrench at COM (state.body_f, world frame),
+                // re-expressed at the articulation origin.
+                let world_idx = body_world[child].max(0) as usize;
+                let g = gravity[world_idx];
+                let f_g_lin = g * body_mass[child];
+                let f_g_ang = com_world.cross(f_g_lin);
+                let f_grav = SpatialVector::new(f_g_lin, f_g_ang);
+                // External wrench at COM: caller fills `body_f[child]` with
+                // (force, torque_at_COM) in world frame. Re-express at world
+                // articulation origin: linear unchanged, angular gets +r_com × F.
+                let ext_com = body_f_in.get(child).copied().unwrap_or(SpatialVector::ZERO);
+                let f_ext_lin = ext_com.linear;
+                let f_ext_ang = ext_com.angular + com_world.cross(ext_com.linear);
+                let f_ext = SpatialVector::new(f_ext_lin, f_ext_ang);
+                let bias = spatial_cross_dual(v_i, i_s.mul_sv(v_i));
+                let p_init = bias - f_grav - f_ext;
+                i_a[j] = i_s;
+                p_a[j] = p_init;
+            }
+            drop(kinematics_span);
+
+            // ── Pass 2: backward — articulated inertia accumulation ──────────
+            let backward_span = tracing::debug_span!("aba_backward").entered();
+            for j in (j_begin..j_end).rev() {
+                let parent = joint_parent[j];
+                let jt = joint_type_from_u32(joint_type[j]);
+                let enabled = joint_enabled.get(j).copied().unwrap_or(1) != 0;
+                let n_dof = dof_count[j];
+                let supported = enabled && !matches!(jt, JointType::Fixed);
+
+                let dof_idx = joint_dof_offset[j] as usize;
+                let coord_idx = joint_coord_offset[j] as usize;
+
+                if supported && n_dof > 0 {
+                    let angular_bounds = if jt == JointType::D6 {
+                        let records = model.joint_compliance.host()?;
+                        let bound = |axis: usize, upper: bool| {
+                            let dof = dof_idx + 3 + axis;
+                            if let Some(c) = records.get(dof).filter(|c| c.enabled != 0) {
+                                if upper { c.upper } else { c.lower }
+                            } else if upper {
+                                limit_upper[dof]
+                            } else {
+                                limit_lower[dof]
+                            }
+                        };
+                        Some((
+                            Vec3::from_array(std::array::from_fn(|k| bound(k, false))),
+                            Vec3::from_array(std::array::from_fn(|k| bound(k, true))),
+                        ))
+                    } else {
+                        None
                     };
-                    let scale =
-                        if mode != JointTargetMode::Effort && motor_models.get(dof_g) == Some(&1) {
+                    // Compute per-DOF generalised force `u_tau_k = tau_k − S_k^T · p_a[j]`
+                    // from drives + friction + effort first; this is
+                    // independent of the deflation strategy below.
+                    for k in 0..n_dof {
+                        if !dof_active[j][k] {
+                            u_tau_per_dof[j][k] = 0.0;
+                            continue;
+                        }
+                        let s_k = s_cols[j][k];
+                        let dof_g = dof_idx + k;
+                        let qd_now = qd_in.get(dof_g).copied().unwrap_or(0.0);
+                        let q_now = motor_coordinate(jt, &q_in[coord_idx..], k, angular_bounds);
+                        let mode =
+                            JointTargetMode::from_u32(target_mode.get(dof_g).copied().unwrap_or(0));
+                        let kp = target_kp.get(dof_g).copied().unwrap_or(0.0);
+                        let kd = target_kd.get(dof_g).copied().unwrap_or(0.0);
+                        let pos_t = target_pos.get(dof_g).copied().unwrap_or(0.0);
+                        let vel_t = target_vel.get(dof_g).copied().unwrap_or(0.0);
+                        let drive = match mode {
+                            JointTargetMode::None => 0.0,
+                            JointTargetMode::Position => kp * (pos_t - q_now) - kd * qd_now,
+                            JointTargetMode::Velocity => kd * (vel_t - qd_now),
+                            JointTargetMode::PositionVelocity => {
+                                kp * (pos_t - q_now) + kd * (vel_t - qd_now)
+                            }
+                            JointTargetMode::Effort => pos_t,
+                        };
+                        let scale = if mode != JointTargetMode::Effort
+                            && motor_models.get(dof_g) == Some(&1)
+                        {
                             motor_inertias[dof_g]
                         } else {
                             1.0
                         };
-                    let inertia = motor_inertias[dof_g];
-                    let damping = brake_damping.get(dof_g).copied().unwrap_or(0.0);
-                    let brake_load = if damping > 0.0 && inertia > 0.0 {
-                        damping * dt / inertia
-                    } else {
-                        0.0
-                    };
-                    // The generalised force the rest of the subtree, gravity
-                    // and contacts put on this DOF.
-                    let load = -sv_dot(s_k, p_a[j]);
-                    // Backward Euler over drive and brake together under that
-                    // load; the brake takes −c·q̇⁺ of the predicted rate, the
-                    // drive the rest.
-                    let implicit_drive = if stable_motor_feedback
-                        && (1..=3).contains(&(mode as u32))
-                        && inertia > 0.0
-                    {
-                        let stiffness = if mode == JointTargetMode::Velocity {
+                        let inertia = motor_inertias[dof_g];
+                        let damping = brake_damping.get(dof_g).copied().unwrap_or(0.0);
+                        let brake_load = if damping > 0.0 && inertia > 0.0 {
+                            damping * dt / inertia
+                        } else {
                             0.0
-                        } else {
-                            kp
                         };
-                        let drive_load = (kd + stiffness * dt) * scale * dt / inertia;
-                        let total = ((drive - stiffness * dt * qd_now) * scale
-                            - damping * qd_now
-                            - (drive_load + brake_load) * load)
-                            / (1.0 + drive_load + brake_load);
-                        total + damping * (qd_now + dt / inertia * (total + load))
-                    } else {
-                        drive * scale
-                    };
-                    let drive_torque = clamp_or_passthrough(
-                        implicit_drive,
-                        motor_max_force
-                            .get(dof_g)
-                            .copied()
-                            .unwrap_or(Real::INFINITY),
-                    );
-                    let brake_torque = if brake_load > 0.0 {
-                        -damping * (qd_now + dt / inertia * (drive_torque + load))
-                            / (1.0 + brake_load)
-                    } else {
-                        0.0
-                    };
-                    efforts[dof_g] = JointEffort {
-                        drive: drive_torque,
-                        brake: brake_torque,
-                    };
-                    let mu = joint_friction.get(dof_g).copied().unwrap_or(0.0);
-                    let friction_torque = -mu * qd_now;
-                    // Stage 39E — CABLE per-DoF spring + damper. Only applied
-                    // when joint type is CABLE (the buffers are zero for
-                    // every other type).
-                    let cable_torque = if matches!(jt, JointType::Cable) {
-                        let (k_stiff, c_damp) = if k == 0 {
-                            (
-                                cable_k_lin.get(j).copied().unwrap_or(0.0),
-                                cable_c_lin.get(j).copied().unwrap_or(0.0),
-                            )
+                        // The generalised force the rest of the subtree, gravity
+                        // and contacts put on this DOF.
+                        let load = -sv_dot(s_k, p_a[j]);
+                        // Backward Euler over drive and brake together under that
+                        // load; the brake takes −c·q̇⁺ of the predicted rate, the
+                        // drive the rest.
+                        let implicit_drive = if stable_motor_feedback
+                            && (1..=3).contains(&(mode as u32))
+                            && inertia > 0.0
+                        {
+                            let stiffness = if mode == JointTargetMode::Velocity {
+                                0.0
+                            } else {
+                                kp
+                            };
+                            let drive_load = (kd + stiffness * dt) * scale * dt / inertia;
+                            let total = ((drive - stiffness * dt * qd_now) * scale
+                                - damping * qd_now
+                                - (drive_load + brake_load) * load)
+                                / (1.0 + drive_load + brake_load);
+                            total + damping * (qd_now + dt / inertia * (total + load))
                         } else {
-                            (
-                                cable_k_bend.get(j).copied().unwrap_or(0.0),
-                                cable_c_bend.get(j).copied().unwrap_or(0.0),
-                            )
+                            drive * scale
                         };
-                        -k_stiff * q_now - c_damp * qd_now
-                    } else {
-                        0.0
-                    };
-                    // Stage 42 v2 — Hill-type muscle actuators. Sum over
-                    // every muscle attached to this joint via the CSR
-                    // (`joint_muscle_offsets[j] .. [j+1]`). Only the
-                    // linear stretch DoF (k == 0) is driven; muscles on
-                    // CABLE bend would need oblique-fibre pennation we
-                    // don't model yet.
-                    let muscle_torque = if matches!(jt, JointType::Cable)
-                        && k == 0
-                        && j + 1 < joint_muscle_offsets.len()
-                    {
-                        let lo = joint_muscle_offsets[j] as usize;
-                        let hi = joint_muscle_offsets[j + 1] as usize;
-                        let mut sum: Real = 0.0;
-                        for slot in lo..hi {
-                            let m_id = joint_muscle_indices.get(slot).copied().unwrap_or(u32::MAX)
-                                as usize;
-                            if m_id == usize::MAX {
-                                continue;
-                            }
-                            let m = crate::actuators::Muscle {
+                        let drive_torque = clamp_or_passthrough(
+                            implicit_drive,
+                            motor_max_force
+                                .get(dof_g)
+                                .copied()
+                                .unwrap_or(Real::INFINITY),
+                        );
+                        let brake_torque = if brake_load > 0.0 {
+                            -damping * (qd_now + dt / inertia * (drive_torque + load))
+                                / (1.0 + brake_load)
+                        } else {
+                            0.0
+                        };
+                        efforts[dof_g] = JointEffort {
+                            drive: drive_torque,
+                            brake: brake_torque,
+                        };
+                        let mu = joint_friction.get(dof_g).copied().unwrap_or(0.0);
+                        let friction_torque = -mu * qd_now;
+                        // Stage 39E — CABLE per-DoF spring + damper. Only applied
+                        // when joint type is CABLE (the buffers are zero for
+                        // every other type).
+                        let cable_torque = if matches!(jt, JointType::Cable) {
+                            let (k_stiff, c_damp) = if k == 0 {
+                                (
+                                    cable_k_lin.get(j).copied().unwrap_or(0.0),
+                                    cable_c_lin.get(j).copied().unwrap_or(0.0),
+                                )
+                            } else {
+                                (
+                                    cable_k_bend.get(j).copied().unwrap_or(0.0),
+                                    cable_c_bend.get(j).copied().unwrap_or(0.0),
+                                )
+                            };
+                            -k_stiff * q_now - c_damp * qd_now
+                        } else {
+                            0.0
+                        };
+                        // Stage 42 v2 — Hill-type muscle actuators. Sum over
+                        // every muscle attached to this joint via the CSR
+                        // (`joint_muscle_offsets[j] .. [j+1]`). Only the
+                        // linear stretch DoF (k == 0) is driven; muscles on
+                        // CABLE bend would need oblique-fibre pennation we
+                        // don't model yet.
+                        let muscle_torque =
+                            if matches!(jt, JointType::Cable)
+                                && k == 0
+                                && j + 1 < joint_muscle_offsets.len()
+                            {
+                                let lo = joint_muscle_offsets[j] as usize;
+                                let hi = joint_muscle_offsets[j + 1] as usize;
+                                let mut sum: Real = 0.0;
+                                for slot in lo..hi {
+                                    let m_id =
+                                        joint_muscle_indices.get(slot).copied().unwrap_or(u32::MAX)
+                                            as usize;
+                                    if m_id == usize::MAX {
+                                        continue;
+                                    }
+                                    let m = crate::actuators::Muscle {
                                 joint: crate::core::JointId::from_index(j),
                                 config: crate::actuators::MuscleConfig {
                                     f_max: muscle_f_max.get(m_id).copied().unwrap_or(0.0),
@@ -1930,53 +1973,155 @@ fn cpu_step_inner<'m, const LOCAL: bool>(
                                     polarity: muscle_polarity.get(m_id).copied().unwrap_or(1.0),
                                 },
                             };
-                            // Sign convention: each muscle's `Muscle::torque`
-                            // already applies its own `polarity`. Agonists
-                            // pull q_l negative, antagonists pull it
-                            // positive; balanced pairs cancel.
-                            sum += m.torque(q_now, qd_now);
-                        }
-                        sum
-                    } else {
-                        0.0
-                    };
-                    let tau_raw = control_force.get(dof_g).copied().unwrap_or(0.0)
-                        + drive_torque
-                        + brake_torque
-                        + friction_torque
-                        + cable_torque
-                        + muscle_torque;
-                    let tau_app = clamp_or_passthrough(
-                        tau_raw,
-                        effort_limit.get(dof_g).copied().unwrap_or(Real::NAN),
-                    );
-                    u_tau_per_dof[j][k] = tau_app - sv_dot(s_k, p_a[j]);
-                    if j == j_begin {
-                        root_applied_tau[k] = tau_app;
-                    }
-                }
-
-                if rigorous_d_solve && n_dof > 1 {
-                    // Stage 17.1 rigorous path — full dense Cholesky on D.
-                    //   U_block = I^A · S        (6 × n_dof)
-                    //   D       = S^T · U_block  (n_dof × n_dof)
-                    //   I^a     = I^A − U · D^{-1} · U^T (6×6, full block-deflate)
-                    //   p^a     = p^A + I^a · c + U · (D^{-1} · u_tau)
-                    let i_a_j = i_a[j];
-                    // Build U = I^A · S and the lower-right active mask.
-                    let mut active_idx: [usize; MAX_JOINT_DOFS] = [0; MAX_JOINT_DOFS];
-                    let mut n_act: usize = 0;
-                    for k in 0..n_dof {
-                        if dof_active[j][k] {
-                            u_per_dof[j][k] = i_a_j.mul_sv(s_cols[j][k]);
-                            active_idx[n_act] = k;
-                            n_act += 1;
-                        } else {
-                            u_per_dof[j][k] = SpatialVector::ZERO;
+                                    // Sign convention: each muscle's `Muscle::torque`
+                                    // already applies its own `polarity`. Agonists
+                                    // pull q_l negative, antagonists pull it
+                                    // positive; balanced pairs cancel.
+                                    sum += m.torque(q_now, qd_now);
+                                }
+                                sum
+                            } else {
+                                0.0
+                            };
+                        let tau_raw = control_force.get(dof_g).copied().unwrap_or(0.0)
+                            + drive_torque
+                            + brake_torque
+                            + friction_torque
+                            + cable_torque
+                            + muscle_torque;
+                        let tau_app = clamp_or_passthrough(
+                            tau_raw,
+                            effort_limit.get(dof_g).copied().unwrap_or(Real::NAN),
+                        );
+                        u_tau_per_dof[j][k] = tau_app - sv_dot(s_k, p_a[j]);
+                        if j == j_begin {
+                            root_applied_tau[k] = tau_app;
                         }
                     }
 
-                    if n_act == 0 {
+                    if rigorous_d_solve && n_dof > 1 {
+                        // Stage 17.1 rigorous path — full dense Cholesky on D.
+                        //   U_block = I^A · S        (6 × n_dof)
+                        //   D       = S^T · U_block  (n_dof × n_dof)
+                        //   I^a     = I^A − U · D^{-1} · U^T (6×6, full block-deflate)
+                        //   p^a     = p^A + I^a · c + U · (D^{-1} · u_tau)
+                        let i_a_j = i_a[j];
+                        // Build U = I^A · S and the lower-right active mask.
+                        let mut active_idx: [usize; MAX_JOINT_DOFS] = [0; MAX_JOINT_DOFS];
+                        let mut n_act: usize = 0;
+                        for k in 0..n_dof {
+                            if dof_active[j][k] {
+                                u_per_dof[j][k] = i_a_j.mul_sv(s_cols[j][k]);
+                                active_idx[n_act] = k;
+                                n_act += 1;
+                            } else {
+                                u_per_dof[j][k] = SpatialVector::ZERO;
+                            }
+                        }
+
+                        if n_act == 0 {
+                            if parent >= 0 {
+                                let mut parent_joint: Option<usize> = None;
+                                for k in j_begin..j {
+                                    if joint_child[k] as usize == parent as usize {
+                                        parent_joint = Some(k);
+                                        break;
+                                    }
+                                }
+                                if let Some(pj) = parent_joint {
+                                    i_a[pj] = i_a[pj].add(&i_a_j);
+                                    p_a[pj] = p_a[pj] + p_a[j];
+                                }
+                            }
+                            continue;
+                        }
+
+                        // Pack n_act × n_act D and n_act-vector u_tau.
+                        let mut d_mat = [0.0; MAX_JOINT_DOFS * MAX_JOINT_DOFS];
+                        let mut u_tau_packed = [0.0; MAX_JOINT_DOFS];
+                        for ai in 0..n_act {
+                            let ki = active_idx[ai];
+                            let s_ki = s_cols[j][ki];
+                            u_tau_packed[ai] = u_tau_per_dof[j][ki];
+                            for aj in 0..n_act {
+                                let kj = active_idx[aj];
+                                d_mat[ai * n_act + aj] = sv_dot(s_ki, u_per_dof[j][kj]);
+                            }
+                        }
+
+                        // Cholesky factor — fall back to per-DOF rank-1 if D
+                        // is not SPD (singular column / locked DOFs).
+                        let mut d_chol = d_mat;
+                        let chol_ok = dense_chol(&mut d_chol[..n_act * n_act], n_act).is_ok();
+                        if !chol_ok {
+                            // Degenerate D — fall back to sequential rank-1.
+                            apply_rank1_backward(
+                                j,
+                                n_dof,
+                                &mut i_a,
+                                &mut p_a,
+                                &dof_active,
+                                &s_cols,
+                                &mut u_per_dof,
+                                &mut d_inv_per_dof,
+                                &u_tau_per_dof,
+                                &c_term,
+                                joint_parent,
+                                joint_child,
+                                j_begin,
+                            );
+                            continue;
+                        }
+                        // Stash the Cholesky factor for the forward pass.
+                        for r in 0..n_act {
+                            for c in 0..n_act {
+                                l_chol_per_joint[j][r * MAX_JOINT_DOFS + c] = d_chol[r * n_act + c];
+                            }
+                        }
+                        // Solve D · y = u_tau via the cached Cholesky factor.
+                        let d_inv_u_tau = solve_joint_block(&d_chol, &u_tau_packed, n_act);
+
+                        // I^a = I^A − Σ_{i,j} U_i · (D^{-1})_{ij} · U_j^T
+                        // Build via the Cholesky factor too: for each column k
+                        // of U, solve `D · w_k = U^T_k` and accumulate
+                        // `i_a − = Σ_k U_k · w_k^T`. Cheaper expression: form
+                        // `W = U · D^{-1}` (6 × n_act); then `i_a = i_a − W · U^T`.
+                        // Build I^a directly: I^a = I^A − U_block · D^{-1} · U_block^T
+                        // via I^a = I^A − Σ_k U_k · (D^{-1} U^T)_k where the
+                        // intermediate is column k of D^{-1} U^T.
+                        // Compute cols of D^{-1} U^T: for each spatial component
+                        // c in 0..6, pack u_c = (U_0[c], U_1[c], …) and solve.
+                        let mut dinv_ut = [[0.0; MAX_JOINT_DOFS]; 6];
+                        for cc in 0..6 {
+                            let mut rhs = [0.0; MAX_JOINT_DOFS];
+                            for ai in 0..n_act {
+                                let ki = active_idx[ai];
+                                let u_ki = u_per_dof[j][ki];
+                                rhs[ai] = sv_component(u_ki, cc);
+                            }
+                            dinv_ut[cc] = solve_joint_block(&d_chol, &rhs, n_act);
+                        }
+                        // Now i_a = i_a − Σ_k U_k · row_k(D^{-1} U^T)
+                        // row_k(D^{-1} U^T) is a 6-vector: (dinv_ut[0][k], …, dinv_ut[5][k]).
+                        let mut i_curr = i_a_j;
+                        for ai in 0..n_act {
+                            let ki = active_idx[ai];
+                            let u_ki = u_per_dof[j][ki];
+                            let row = SpatialVector::new(
+                                Vec3::new(dinv_ut[0][ai], dinv_ut[1][ai], dinv_ut[2][ai]),
+                                Vec3::new(dinv_ut[3][ai], dinv_ut[4][ai], dinv_ut[5][ai]),
+                            );
+                            let outer = SpatialMatrix6::outer(u_ki, row);
+                            i_curr = i_curr.sub(&outer);
+                        }
+
+                        // p^a = p^A + I^a · c + Σ_k U_k · (D^{-1} u_tau)_k
+                        let mut p_articulated = p_a[j] + i_curr.mul_sv(c_term[j]);
+                        for ai in 0..n_act {
+                            let ki = active_idx[ai];
+                            p_articulated = p_articulated + u_per_dof[j][ki].scale(d_inv_u_tau[ai]);
+                        }
+
                         if parent >= 0 {
                             let mut parent_joint: Option<usize> = None;
                             for k in j_begin..j {
@@ -1986,32 +2131,13 @@ fn cpu_step_inner<'m, const LOCAL: bool>(
                                 }
                             }
                             if let Some(pj) = parent_joint {
-                                i_a[pj] = i_a[pj].add(&i_a_j);
-                                p_a[pj] = p_a[pj] + p_a[j];
+                                i_a[pj] = i_a[pj].add(&i_curr);
+                                p_a[pj] = p_a[pj] + p_articulated;
                             }
                         }
-                        continue;
-                    }
-
-                    // Pack n_act × n_act D and n_act-vector u_tau.
-                    let mut d_mat = [0.0; MAX_JOINT_DOFS * MAX_JOINT_DOFS];
-                    let mut u_tau_packed = [0.0; MAX_JOINT_DOFS];
-                    for ai in 0..n_act {
-                        let ki = active_idx[ai];
-                        let s_ki = s_cols[j][ki];
-                        u_tau_packed[ai] = u_tau_per_dof[j][ki];
-                        for aj in 0..n_act {
-                            let kj = active_idx[aj];
-                            d_mat[ai * n_act + aj] = sv_dot(s_ki, u_per_dof[j][kj]);
-                        }
-                    }
-
-                    // Cholesky factor — fall back to per-DOF rank-1 if D
-                    // is not SPD (singular column / locked DOFs).
-                    let mut d_chol = d_mat;
-                    let chol_ok = dense_chol(&mut d_chol[..n_act * n_act], n_act).is_ok();
-                    if !chol_ok {
-                        // Degenerate D — fall back to sequential rank-1.
+                    } else {
+                        // v1 sequential rank-1 deflation (default — exact when
+                        // D is diagonal, approximate but stable when not).
                         apply_rank1_backward(
                             j,
                             n_dof,
@@ -2027,273 +2153,232 @@ fn cpu_step_inner<'m, const LOCAL: bool>(
                             joint_child,
                             j_begin,
                         );
-                        continue;
                     }
-                    // Stash the Cholesky factor for the forward pass.
-                    for r in 0..n_act {
-                        for c in 0..n_act {
-                            l_chol_per_joint[j][r * MAX_JOINT_DOFS + c] = d_chol[r * n_act + c];
-                        }
-                    }
-                    // Solve D · y = u_tau via the cached Cholesky factor.
-                    let d_inv_u_tau = solve_joint_block(&d_chol, &u_tau_packed, n_act);
+                } else if parent >= 0
+                    && body_flags[joint_child[j] as usize] & BodyFlags::IMMOVABLE == 0
+                    && let Some(pj) = (j_begin..j).find(|&k| joint_child[k] == parent)
+                {
+                    i_a[pj] = i_a[pj].add(&i_a[j]);
+                    p_a[pj] = p_a[pj] + p_a[j] + i_a[j].mul_sv(c_term[j]);
+                }
+            }
 
-                    // I^a = I^A − Σ_{i,j} U_i · (D^{-1})_{ij} · U_j^T
-                    // Build via the Cholesky factor too: for each column k
-                    // of U, solve `D · w_k = U^T_k` and accumulate
-                    // `i_a − = Σ_k U_k · w_k^T`. Cheaper expression: form
-                    // `W = U · D^{-1}` (6 × n_act); then `i_a = i_a − W · U^T`.
-                    // Build I^a directly: I^a = I^A − U_block · D^{-1} · U_block^T
-                    // via I^a = I^A − Σ_k U_k · (D^{-1} U^T)_k where the
-                    // intermediate is column k of D^{-1} U^T.
-                    // Compute cols of D^{-1} U^T: for each spatial component
-                    // c in 0..6, pack u_c = (U_0[c], U_1[c], …) and solve.
-                    let mut dinv_ut = [[0.0; MAX_JOINT_DOFS]; 6];
-                    for cc in 0..6 {
-                        let mut rhs = [0.0; MAX_JOINT_DOFS];
-                        for ai in 0..n_act {
-                            let ki = active_idx[ai];
-                            let u_ki = u_per_dof[j][ki];
-                            rhs[ai] = sv_component(u_ki, cc);
-                        }
-                        dinv_ut[cc] = solve_joint_block(&d_chol, &rhs, n_act);
-                    }
-                    // Now i_a = i_a − Σ_k U_k · row_k(D^{-1} U^T)
-                    // row_k(D^{-1} U^T) is a 6-vector: (dinv_ut[0][k], …, dinv_ut[5][k]).
-                    let mut i_curr = i_a_j;
-                    for ai in 0..n_act {
-                        let ki = active_idx[ai];
-                        let u_ki = u_per_dof[j][ki];
-                        let row = SpatialVector::new(
-                            Vec3::new(dinv_ut[0][ai], dinv_ut[1][ai], dinv_ut[2][ai]),
-                            Vec3::new(dinv_ut[3][ai], dinv_ut[4][ai], dinv_ut[5][ai]),
+            drop(backward_span);
+            // ── Pass 3: forward — solve for joint accelerations ──────────────
+            let acceleration_span = tracing::debug_span!("aba_accelerations").entered();
+            for j in j_begin..j_end {
+                let parent = joint_parent[j];
+                let jt = joint_type_from_u32(joint_type[j]);
+                let enabled = joint_enabled.get(j).copied().unwrap_or(1) != 0;
+                let n_dof = dof_count[j];
+                let supported = enabled && !matches!(jt, JointType::Fixed);
+
+                if body_flags[joint_child[j] as usize] & BodyFlags::IMMOVABLE != 0 {
+                    let child = joint_child[j] as usize;
+                    if body_flags[child] & BodyFlags::FIXED == 0 {
+                        let velocity = state_in.body_qd.host()?[child];
+                        let prescribed = model.body_kinematic_acceleration.host()?[child];
+                        let center = body_q[child].position - spatial_origin
+                            + body_q[child].rotation * body_com[child];
+                        a_body[j] = SpatialVector::new(
+                            prescribed.linear
+                                - prescribed.angular.cross(center)
+                                - velocity.angular.cross(velocity.linear),
+                            prescribed.angular,
                         );
-                        let outer = SpatialMatrix6::outer(u_ki, row);
-                        i_curr = i_curr.sub(&outer);
                     }
+                    continue;
+                }
 
-                    // p^a = p^A + I^a · c + Σ_k U_k · (D^{-1} u_tau)_k
-                    let mut p_articulated = p_a[j] + i_curr.mul_sv(c_term[j]);
-                    for ai in 0..n_act {
-                        let ki = active_idx[ai];
-                        p_articulated = p_articulated + u_per_dof[j][ki].scale(d_inv_u_tau[ai]);
-                    }
-
-                    if parent >= 0 {
-                        let mut parent_joint: Option<usize> = None;
-                        for k in j_begin..j {
-                            if joint_child[k] as usize == parent as usize {
-                                parent_joint = Some(k);
-                                break;
-                            }
-                        }
-                        if let Some(pj) = parent_joint {
-                            i_a[pj] = i_a[pj].add(&i_curr);
-                            p_a[pj] = p_a[pj] + p_articulated;
-                        }
-                    }
+                let a_p = if parent < 0 {
+                    SpatialVector::ZERO
                 } else {
-                    // v1 sequential rank-1 deflation (default — exact when
-                    // D is diagonal, approximate but stable when not).
-                    apply_rank1_backward(
-                        j,
-                        n_dof,
-                        &mut i_a,
-                        &mut p_a,
-                        &dof_active,
-                        &s_cols,
-                        &mut u_per_dof,
-                        &mut d_inv_per_dof,
-                        &u_tau_per_dof,
-                        &c_term,
-                        joint_parent,
-                        joint_child,
-                        j_begin,
-                    );
-                }
-            } else if parent >= 0
-                && body_flags[joint_child[j] as usize] & BodyFlags::IMMOVABLE == 0
-                && let Some(pj) = (j_begin..j).find(|&k| joint_child[k] == parent)
-            {
-                i_a[pj] = i_a[pj].add(&i_a[j]);
-                p_a[pj] = p_a[pj] + p_a[j] + i_a[j].mul_sv(c_term[j]);
-            }
-        }
-
-        drop(backward_span);
-        // ── Pass 3: forward — solve for joint accelerations ──────────────
-        let acceleration_span = tracing::debug_span!("aba_accelerations").entered();
-        for j in j_begin..j_end {
-            let parent = joint_parent[j];
-            let jt = joint_type_from_u32(joint_type[j]);
-            let enabled = joint_enabled.get(j).copied().unwrap_or(1) != 0;
-            let n_dof = dof_count[j];
-            let supported = enabled && !matches!(jt, JointType::Fixed);
-
-            if body_flags[joint_child[j] as usize] & BodyFlags::IMMOVABLE != 0 {
-                let child = joint_child[j] as usize;
-                if body_flags[child] & BodyFlags::FIXED == 0 {
-                    let velocity = state_in.body_qd.host()?[child];
-                    let prescribed = model.body_kinematic_acceleration.host()?[child];
-                    let center = body_q[child].position - spatial_origin
-                        + body_q[child].rotation * body_com[child];
-                    a_body[j] = SpatialVector::new(
-                        prescribed.linear
-                            - prescribed.angular.cross(center)
-                            - velocity.angular.cross(velocity.linear),
-                        prescribed.angular,
-                    );
-                }
-                continue;
-            }
-
-            let a_p = if parent < 0 {
-                SpatialVector::ZERO
-            } else {
-                let mut a = SpatialVector::ZERO;
-                for k in j_begin..j {
-                    if joint_child[k] as usize == parent as usize {
-                        a = a_body[k];
-                        break;
-                    }
-                }
-                a
-            };
-
-            let a_bias = a_p + c_term[j];
-            if supported && n_dof > 0 {
-                let dof_idx = joint_dof_offset[j] as usize;
-                let mut s_qdd = SpatialVector::ZERO;
-
-                if rigorous_d_solve && n_dof > 1 {
-                    // Build active list + RHS vector `r_k = u_tau_k − U_k^T · a_p`.
-                    let mut active_idx: [usize; MAX_JOINT_DOFS] = [0; MAX_JOINT_DOFS];
-                    let mut n_act: usize = 0;
-                    for k in 0..n_dof {
-                        if dof_active[j][k] {
-                            active_idx[n_act] = k;
-                            n_act += 1;
+                    let mut a = SpatialVector::ZERO;
+                    for k in j_begin..j {
+                        if joint_child[k] as usize == parent as usize {
+                            a = a_body[k];
+                            break;
                         }
                     }
-                    if n_act > 0 {
-                        let mut rhs = [0.0; MAX_JOINT_DOFS];
-                        for ai in 0..n_act {
-                            let ki = active_idx[ai];
-                            rhs[ai] = u_tau_per_dof[j][ki] - sv_dot(u_per_dof[j][ki], a_bias);
-                        }
-                        // Re-pack the cached Cholesky factor into a flat n_act×n_act.
-                        let mut l_packed = [0.0; MAX_JOINT_DOFS * MAX_JOINT_DOFS];
-                        for r in 0..n_act {
-                            for c in 0..n_act {
-                                l_packed[r * n_act + c] =
-                                    l_chol_per_joint[j][r * MAX_JOINT_DOFS + c];
+                    a
+                };
+
+                let a_bias = a_p + c_term[j];
+                if supported && n_dof > 0 {
+                    let dof_idx = joint_dof_offset[j] as usize;
+                    let mut s_qdd = SpatialVector::ZERO;
+
+                    if rigorous_d_solve && n_dof > 1 {
+                        // Build active list + RHS vector `r_k = u_tau_k − U_k^T · a_p`.
+                        let mut active_idx: [usize; MAX_JOINT_DOFS] = [0; MAX_JOINT_DOFS];
+                        let mut n_act: usize = 0;
+                        for k in 0..n_dof {
+                            if dof_active[j][k] {
+                                active_idx[n_act] = k;
+                                n_act += 1;
                             }
                         }
-                        // Solve D · q̈ = rhs via the stored Cholesky.
-                        // If Cholesky was zeroed (degenerate fallback path),
-                        // l_packed.diag is zero → forward_sub guards via 1/L_ii.
-                        let degenerate = (0..n_act).any(|i| l_packed[i * n_act + i].abs() < 1e-30);
-                        if degenerate {
-                            // Fall back to the sequential rank-1 result.
-                            for k in 0..n_dof {
-                                if !dof_active[j][k] {
-                                    continue;
-                                }
-                                let q_dd_k = (u_tau_per_dof[j][k]
-                                    - sv_dot(u_per_dof[j][k], a_bias))
-                                    * d_inv_per_dof[j][k];
-                                q_dd[dof_idx + k] = q_dd_k;
-                                s_qdd = s_qdd + s_cols[j][k].scale(q_dd_k);
-                            }
-                        } else {
-                            let q_dd_active = solve_joint_block(&l_packed, &rhs, n_act);
+                        if n_act > 0 {
+                            let mut rhs = [0.0; MAX_JOINT_DOFS];
                             for ai in 0..n_act {
                                 let ki = active_idx[ai];
-                                let q_dd_k = q_dd_active[ai];
-                                q_dd[dof_idx + ki] = q_dd_k;
-                                s_qdd = s_qdd + s_cols[j][ki].scale(q_dd_k);
+                                rhs[ai] = u_tau_per_dof[j][ki] - sv_dot(u_per_dof[j][ki], a_bias);
+                            }
+                            // Re-pack the cached Cholesky factor into a flat n_act×n_act.
+                            let mut l_packed = [0.0; MAX_JOINT_DOFS * MAX_JOINT_DOFS];
+                            for r in 0..n_act {
+                                for c in 0..n_act {
+                                    l_packed[r * n_act + c] =
+                                        l_chol_per_joint[j][r * MAX_JOINT_DOFS + c];
+                                }
+                            }
+                            // Solve D · q̈ = rhs via the stored Cholesky.
+                            // If Cholesky was zeroed (degenerate fallback path),
+                            // l_packed.diag is zero → forward_sub guards via 1/L_ii.
+                            let degenerate =
+                                (0..n_act).any(|i| l_packed[i * n_act + i].abs() < 1e-30);
+                            if degenerate {
+                                // Fall back to the sequential rank-1 result.
+                                for k in 0..n_dof {
+                                    if !dof_active[j][k] {
+                                        continue;
+                                    }
+                                    let q_dd_k = (u_tau_per_dof[j][k]
+                                        - sv_dot(u_per_dof[j][k], a_bias))
+                                        * d_inv_per_dof[j][k];
+                                    q_dd[dof_idx + k] = q_dd_k;
+                                    s_qdd = s_qdd + s_cols[j][k].scale(q_dd_k);
+                                }
+                            } else {
+                                let q_dd_active = solve_joint_block(&l_packed, &rhs, n_act);
+                                for ai in 0..n_act {
+                                    let ki = active_idx[ai];
+                                    let q_dd_k = q_dd_active[ai];
+                                    q_dd[dof_idx + ki] = q_dd_k;
+                                    s_qdd = s_qdd + s_cols[j][ki].scale(q_dd_k);
+                                }
                             }
                         }
-                    }
-                } else {
-                    for k in 0..n_dof {
-                        if !dof_active[j][k] {
-                            continue;
+                    } else {
+                        for k in 0..n_dof {
+                            if !dof_active[j][k] {
+                                continue;
+                            }
+                            let q_dd_k = (u_tau_per_dof[j][k] - sv_dot(u_per_dof[j][k], a_bias))
+                                * d_inv_per_dof[j][k];
+                            q_dd[dof_idx + k] = q_dd_k;
+                            s_qdd = s_qdd + s_cols[j][k].scale(q_dd_k);
                         }
-                        let q_dd_k = (u_tau_per_dof[j][k] - sv_dot(u_per_dof[j][k], a_bias))
-                            * d_inv_per_dof[j][k];
-                        q_dd[dof_idx + k] = q_dd_k;
-                        s_qdd = s_qdd + s_cols[j][k].scale(q_dd_k);
                     }
+                    a_body[j] = a_bias + s_qdd;
+                } else {
+                    a_body[j] = a_bias;
                 }
-                a_body[j] = a_bias + s_qdd;
-            } else {
-                a_body[j] = a_bias;
             }
-        }
 
-        drop(acceleration_span);
-        let limits_span = tracing::debug_span!("aba_constraints").entered();
-        if j_end == j_begin + 1
-            && let Some(acceleration) = singular_root::acceleration(
-                model,
-                state_out,
-                art,
-                j_begin,
-                &root_applied_tau,
-                &body_f_in,
-                &mut joint_mass,
-            )?
-        {
-            let first = joint_dof_offset[j_begin] as usize;
-            q_dd[first..first + acceleration.len()].copy_from_slice(&acceleration);
-        }
+            drop(acceleration_span);
+            let limits_span = tracing::debug_span!("aba_constraints").entered();
+            if j_end == j_begin + 1
+                && let Some(acceleration) = singular_root::acceleration(
+                    model,
+                    state_out,
+                    art,
+                    j_begin,
+                    &root_applied_tau,
+                    &body_f_in,
+                    joint_mass,
+                )?
+            {
+                let first = joint_dof_offset[j_begin] as usize;
+                q_dd[first..first + acceleration.len()].copy_from_slice(&acceleration);
+            }
 
-        if stable_motor_feedback {
-            crate::joint_drives::react_velocity_drives(
+            if stable_motor_feedback {
+                crate::joint_drives::react_velocity_drives(
+                    model, control, state_out, art, q_dd, efforts, dt, joint_mass,
+                )?;
+            }
+            if !defer_constraints {
+                crate::joint_limits::react_scalar_stops(
+                    model,
+                    state_out,
+                    art,
+                    q_dd,
+                    dt,
+                    joint_damping,
+                    rigorous_distance,
+                    joint_mass,
+                )?;
+            }
+
+            // ── Integrate q, q̇ for joints in this articulation ──────────────
+            drop(limits_span);
+            let integration_span = tracing::debug_span!("aba_integration").entered();
+            integration::integrate(
                 model,
-                control,
-                state_out,
-                art,
-                &mut q_dd,
-                efforts,
-                dt,
-                &mut joint_mass,
-            )?;
-        }
-        if !defer_constraints {
-            crate::joint_limits::react_scalar_stops(
-                model,
-                state_out,
-                art,
-                &mut q_dd,
+                j_begin..j_end,
+                &q_in,
+                &qd_in,
+                q_dd,
                 dt,
                 joint_damping,
                 rigorous_distance,
-                &mut joint_mass,
+                defer_constraints
+                    || crate::joint_limits::has_mixed_stops(
+                        model,
+                        j_begin..j_end,
+                        rigorous_distance,
+                    )?,
+                true,
+                q_new,
+                qd_new,
             )?;
-        }
-
-        // ── Integrate q, q̇ for joints in this articulation ──────────────
-        drop(limits_span);
-        let integration_span = tracing::debug_span!("aba_integration").entered();
-        integration::integrate(
-            model,
-            j_begin..j_end,
-            &q_in,
-            &qd_in,
-            &q_dd,
-            dt,
-            joint_damping,
-            rigorous_distance,
-            defer_constraints
-                || crate::joint_limits::has_mixed_stops(model, j_begin..j_end, rigorous_distance)?,
-            true,
+            drop(integration_span);
+        } // end per-articulation outer loop
+        Ok(())
+    };
+    let mut q_new: Vec<Real> = q_in.clone();
+    let mut qd_new: Vec<Real> = qd_in.clone();
+    let mut q_dd = vec![0.0_f64; model.joint_dof_total];
+    drop(setup_span);
+    if parts.is_empty() {
+        step_articulations(
+            0..art_count,
+            &mut q_dd,
             &mut q_new,
             &mut qd_new,
+            efforts,
+            &mut joint_mass,
         )?;
-        drop(integration_span);
-    } // end per-articulation outer loop
+    } else {
+        let stepped = molla_geometry::parallel::map_parts(
+            parts.iter().cloned().zip(masses.drain(..)).collect(),
+            |(part, mut mass)| {
+                let mut q_dd = q_dd.clone();
+                let mut q_new = q_new.clone();
+                let mut qd_new = qd_new.clone();
+                let mut efforts = efforts.to_vec();
+                let stepped = step_articulations(
+                    part,
+                    &mut q_dd,
+                    &mut q_new,
+                    &mut qd_new,
+                    &mut efforts,
+                    &mut mass,
+                );
+                (mass, stepped.map(|()| (q_dd, q_new, qd_new, efforts)))
+            },
+        );
+        for (part, (mass, stepped)) in parts.iter().zip(stepped) {
+            let (part_q_dd, part_q_new, part_qd_new, part_efforts) = stepped?;
+            let (dofs, coords) = part_spans(model, part)?;
+            q_dd[dofs.clone()].copy_from_slice(&part_q_dd[dofs.clone()]);
+            qd_new[dofs.clone()].copy_from_slice(&part_qd_new[dofs.clone()]);
+            efforts[dofs.clone()].copy_from_slice(&part_efforts[dofs]);
+            q_new[coords.clone()].copy_from_slice(&part_q_new[coords]);
+            joint_mass.absorb(mass);
+        }
+    }
     joint_mass.export(mass_seed)?;
 
     if !defer_constraints
@@ -2473,6 +2558,92 @@ fn project_angular_limits(
     (rotation, velocity)
 }
 
+/// Fewest squared articulation DOFs worth splitting a step across the pool.
+const MIN_PARALLEL_WEIGHT: usize = 1024;
+
+/// Runs of consecutive articulations, one per pool worker and about equal in
+/// squared DOFs of the stepped ones; none when the step is too small to split.
+fn articulation_parts(
+    model: &Model,
+    active: Option<&[bool]>,
+) -> Result<Vec<std::ops::Range<usize>>> {
+    let forced = forced_parts();
+    let threads = forced.unwrap_or_else(molla_geometry::parallel::threads);
+    let count = model.articulation_count;
+    if threads < 2 || count < 2 {
+        return Ok(Vec::new());
+    }
+    let starts = model.articulation_start.host()?;
+    let offsets = model.joint_dof_offset.host()?;
+    let weights: Vec<usize> = (0..count)
+        .map(|art| {
+            let dofs = (offsets[starts[art + 1] as usize] - offsets[starts[art] as usize]) as usize;
+            if active.is_some_and(|active| !active[art]) {
+                0
+            } else {
+                dofs * dofs
+            }
+        })
+        .collect();
+    let total: usize = weights.iter().sum();
+    if forced.is_none()
+        && (total < MIN_PARALLEL_WEIGHT || weights.iter().filter(|&&weight| weight > 0).count() < 2)
+    {
+        return Ok(Vec::new());
+    }
+    Ok(split_runs(&weights, threads))
+}
+
+/// At most `parts` nonempty runs covering `weights` in order, each closing
+/// once the runs so far hold their share of the total.
+fn split_runs(weights: &[usize], parts: usize) -> Vec<std::ops::Range<usize>> {
+    let total: usize = weights.iter().sum();
+    let mut runs = Vec::with_capacity(parts);
+    let (mut start, mut sum) = (0, 0);
+    for (index, weight) in weights.iter().enumerate() {
+        sum += weight;
+        if runs.len() + 1 < parts && sum * parts >= total * (runs.len() + 1) {
+            runs.push(start..index + 1);
+            start = index + 1;
+        }
+    }
+    runs.push(start..weights.len());
+    runs.retain(|run| !run.is_empty());
+    runs
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Parts every step on this thread splits into, whatever its size.
+    pub(crate) static FORCED_PARTS: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn forced_parts() -> Option<usize> {
+    FORCED_PARTS.get()
+}
+
+#[cfg(not(test))]
+fn forced_parts() -> Option<usize> {
+    None
+}
+
+/// The DOFs and the coordinates of a run of articulations.
+fn part_spans(
+    model: &Model,
+    part: &std::ops::Range<usize>,
+) -> Result<(std::ops::Range<usize>, std::ops::Range<usize>)> {
+    let starts = model.articulation_start.host()?;
+    let (begin, end) = (starts[part.start] as usize, starts[part.end] as usize);
+    let dofs = model.joint_dof_offset.host()?;
+    let coords = model.joint_coord_offset.host()?;
+    Ok((
+        dofs[begin] as usize..dofs[end] as usize,
+        coords[begin] as usize..coords[end] as usize,
+    ))
+}
+
 /// Compute 1 / (M^-1)[i,i] for active feedback motors and joint springs.
 fn effective_drive_inertias(
     model: &Model,
@@ -2481,8 +2652,30 @@ fn effective_drive_inertias(
     joint_mass: &mut crate::joint_mass::JointMass<'_>,
     active: Option<&[bool]>,
 ) -> Result<Vec<Real>> {
-    let _span = tracing::debug_span!("drive_inertias").entered();
     let mut result = vec![1.0; model.joint_dof_total];
+    drive_inertias_of(
+        model,
+        control,
+        stable_feedback,
+        joint_mass,
+        active,
+        0..model.articulation_count.max(1),
+        &mut result,
+    )?;
+    Ok(result)
+}
+
+/// [`effective_drive_inertias`] of `articulations`, written over their DOFs in `result`.
+fn drive_inertias_of(
+    model: &Model,
+    control: &Control,
+    stable_feedback: bool,
+    joint_mass: &mut crate::joint_mass::JointMass<'_>,
+    active: Option<&[bool]>,
+    articulations: std::ops::Range<usize>,
+    result: &mut [Real],
+) -> Result<()> {
+    let _span = tracing::debug_span!("drive_inertias").entered();
     let models = control.joint_motor_model.host()?;
     let modes = control.joint_target_mode.host()?;
     let compliance = model.joint_compliance.host()?;
@@ -2496,11 +2689,11 @@ fn effective_drive_inertias(
             || brakes.get(dof).is_some_and(|&c| c > 0.0)
     };
     if !(0..model.joint_dof_total).any(requested) {
-        return Ok(result);
+        return Ok(());
     }
     let starts = model.articulation_start.host()?;
     let offsets = model.joint_dof_offset.host()?;
-    for articulation in 0..model.articulation_count.max(1) {
+    for articulation in articulations {
         let (begin, end) = if model.articulation_count == 0 {
             (0, model.joint_count)
         } else {
@@ -2602,7 +2795,7 @@ fn effective_drive_inertias(
             joint_mass.retain_cholesky(articulation, factor, count, scale)?;
         }
     }
-    Ok(result)
+    Ok(())
 }
 
 /// Diagonal of `(L Lᵀ)⁻¹` from the nonzero suffix of `L⁻¹ e_index`, for finite L.
@@ -2843,6 +3036,10 @@ mod mass_seed_tests;
 #[cfg(test)]
 #[path = "featherstone_factor_seed.rs"]
 mod factor_seed_tests;
+
+#[cfg(test)]
+#[path = "featherstone_parallel_tests.rs"]
+mod parallel_tests;
 
 #[cfg(test)]
 mod tests {

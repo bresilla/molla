@@ -1,4 +1,4 @@
-use molla_core::Result;
+use molla_core::{Error, Result};
 use molla_math::Real;
 use molla_sim::{Model, State};
 
@@ -17,10 +17,12 @@ struct Entry {
     drive_locks: Option<drive_locks::Projection>,
 }
 
-/// Lazy articulation mass responses at one immutable post-FK state.
+/// Lazy articulation mass responses at one immutable post-FK state, for the
+/// articulations from `first` on.
 pub(crate) struct JointMass<'a> {
     model: &'a Model,
     state: &'a State,
+    first: usize,
     entries: Vec<Option<Entry>>,
 }
 
@@ -29,7 +31,27 @@ impl<'a> JointMass<'a> {
         Self {
             model,
             state,
+            first: 0,
             entries: (0..model.articulation_count.max(1)).map(|_| None).collect(),
+        }
+    }
+
+    /// Moves the responses of `articulations` into a part of their own.
+    pub(crate) fn split_off(&mut self, articulations: std::ops::Range<usize>) -> Self {
+        let slots = articulations.start - self.first..articulations.end - self.first;
+        Self {
+            model: self.model,
+            state: self.state,
+            first: articulations.start,
+            entries: self.entries[slots].iter_mut().map(Option::take).collect(),
+        }
+    }
+
+    /// Takes back the responses `part` holds.
+    pub(crate) fn absorb(&mut self, part: Self) {
+        let start = part.first - self.first;
+        for (slot, entry) in self.entries[start..].iter_mut().zip(part.entries) {
+            *slot = entry;
         }
     }
 
@@ -53,14 +75,15 @@ impl<'a> JointMass<'a> {
 
     /// Records every matrix built here, with its full-rank factor, into `seed`.
     pub(crate) fn export(self, seed: &mut MassSeed<'_>) -> Result<()> {
+        let first = self.first;
         let matrices = self
             .entries
             .into_iter()
             .enumerate()
-            .filter_map(|(art, entry)| {
+            .filter_map(|(slot, entry)| {
                 entry.map(|entry| {
                     (
-                        art,
+                        first + slot,
                         (
                             entry.matrix,
                             entry.factor.and_then(MassFactor::into_full_rank),
@@ -73,14 +96,18 @@ impl<'a> JointMass<'a> {
     }
 
     fn entry(&mut self, articulation: usize) -> Result<&mut Entry> {
-        if self.entries[articulation].is_none() {
-            self.entries[articulation] = Some(Entry {
+        let slot = articulation
+            .checked_sub(self.first)
+            .and_then(|slot| self.entries.get_mut(slot))
+            .ok_or_else(|| Error::Solver("articulation outside this mass part".into()))?;
+        if slot.is_none() {
+            *slot = Some(Entry {
                 matrix: crate::response_mass_matrix(self.model, self.state, articulation)?,
                 factor: None,
                 drive_locks: None,
             });
         }
-        Ok(self.entries[articulation].as_mut().unwrap())
+        Ok(slot.as_mut().unwrap())
     }
 
     pub(crate) fn matrix(&mut self, articulation: usize) -> Result<&[Real]> {
@@ -89,7 +116,7 @@ impl<'a> JointMass<'a> {
 
     pub(crate) fn cached_cholesky(&self, articulation: usize, n: usize) -> Option<(Real, &[Real])> {
         self.entries
-            .get(articulation)?
+            .get(articulation.checked_sub(self.first)?)?
             .as_ref()?
             .factor
             .as_ref()?

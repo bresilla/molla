@@ -27,7 +27,7 @@ pub mod mesh_bvh;
 #[cfg(feature = "gpu")]
 mod mesh_bvh_raycast_gpu;
 mod mesh_cache;
-mod parallel;
+pub mod parallel;
 pub mod mpr;
 #[cfg(feature = "gpu")]
 mod mpr_gpu;
