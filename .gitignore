@@ -6,3 +6,4 @@ Cargo.lock.bak
 # Transient session/tempfiles the viewer writes alongside loaded assets.
 assets/.molla_session_*.usda
 assets/.molla_tmp_*.usda
+book/book
