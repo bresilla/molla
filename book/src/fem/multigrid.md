@@ -1,6 +1,6 @@
 # Multigrid and AMG
 
-`crates/molla/src/fem/multigrid.rs` ships **geometric multigrid**
+`crates/molla-fem/src/multigrid.rs` ships **geometric multigrid**
 (Stage 48 v3) on a uniformly refined mesh hierarchy. The
 [AMS preconditioner](./eddy.md#amspreconditioner) uses one V-cycle in
 place of its inner CG solve. **Algebraic multigrid** (AMG,

@@ -1,11 +1,14 @@
 name: rust
 
 # CI matrix:
-#   - build-test:           cargo fmt + build + cargo test (default lane;
-#                           the operator-invoked `#[ignore]`d GPU/perf
-#                           tests are excluded — they need a wgpu adapter
-#                           which GitHub Actions ubuntu-latest doesn't
-#                           expose).
+#   - build-test:           cargo fmt + clippy (-D warnings, all
+#                           features/targets) + build + cargo test
+#                           (default lane; the operator-invoked
+#                           `#[ignore]`d GPU/perf tests are excluded —
+#                           they need a wgpu adapter which GitHub
+#                           Actions ubuntu-latest doesn't expose) +
+#                           the no-default-features (CPU-only) build
+#                           and test lane.
 #   - ignored-tests:        cargo test --workspace -- --ignored. Most
 #                           ignored tests panic without a GPU; this job
 #                           is allowed to fail (`continue-on-error`)
@@ -25,6 +28,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # The hosted runner's linker OOMs (ld bus error) on the full-debuginfo
+  # Bevy viewer binary; line-tables keep backtraces useful at a fraction
+  # of the link memory. CI-only — local builds keep full debuginfo.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # Incremental artifacts double-to-triple target/ size and the hosted
+  # runner's disk is the real constraint (the ld SIGBUS in the
+  # no-default-features lane was mmap-on-full-disk).
+  CARGO_INCREMENTAL: 0
 
 concurrency:
   group: rust-${{ github.ref }}
@@ -58,11 +69,33 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
+      # Same lint gate as `make harden`. The workspace reached zero
+      # clippy warnings on 2026-07-02 (INSPECTION.md T1a) — keep it
+      # there. Lint-policy allows live in [workspace.lints.clippy].
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
       - name: cargo build
         run: cargo build --workspace --all-targets
 
       - name: cargo test
         run: cargo test --workspace
+
+      # CPU-only lane: `gpu` off must keep compiling and passing for
+      # headless consumers (also part of `make harden`).
+      # The full-features lanes above leave tens of GB in target/; this
+      # lane builds a second artifact universe, so reclaim the disk
+      # first (the rebuild is cheaper than the SIGBUS).
+      - name: reclaim disk before the CPU-only lane
+        run: |
+          df -h /
+          cargo clean
+          df -h /
+      - name: cargo check (no default features)
+        run: cargo check --workspace --no-default-features
+
+      - name: cargo test (no default features)
+        run: cargo test --workspace --no-default-features
 
   ignored-tests:
     # Run the `#[ignore]`-gated suite (GPU + wall-clock perf tests). On
@@ -72,18 +105,17 @@ jobs:
     # on tests it physically can't run; promote to a hard gate once a
     # GPU-equipped runner is wired in.
     #
-    # Failure-bucket guide for log triage (May 2026 audit):
+    # Failure-bucket guide for log triage:
     #   1. `Engine::new_gpu()` panic                 → expected on
     #      CPU-only runner; the panic message is the *intent*.
-    #   2. `MOLLA_NEWTON_PYTHON` env-var panic       → expected; the
-    #      Newton oracle needs a venv'd Python install (see
-    #      `Makefile::test-oracle`).
-    #   3. Wall-clock perf-gate failures (LBVH 10k,
+    #   2. Wall-clock perf-gate failures (LBVH 10k,
     #      MPM 50k+64³, etc.) under contended runs   → typically
     #      `--test-threads` contention; perf gates document this with
     #      a hint to re-run single-threaded.
-    #   4. SIGSEGV / kernel panic                    → real GPU bug
+    #   3. SIGSEGV / kernel panic                    → real GPU bug
     #      surfaced by the parallel run; investigate.
+    # (The Newton oracle is pure ported Rust — no Python/venv is
+    # involved; see book/src/testing/strategy.md.)
     name: ignored tests (GPU/perf — visibility only)
     runs-on: ubuntu-latest
     continue-on-error: true

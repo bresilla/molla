@@ -133,9 +133,8 @@ for:
 
 The Stage-17 multi-DoF Featherstone runs the same Cholesky on the
 effective `D` matrix regardless of how many axes are locked. The
-dedicated Revolute / Prismatic types remain in the API for clarity
-(and because URDF/MJCF reference them directly), but mechanically D6
-covers them.
+dedicated Revolute / Prismatic types remain in the API for clarity, but
+mechanically D6 covers them.
 
 ## Reduced-coordinate dynamics — what changed at Stage 17
 

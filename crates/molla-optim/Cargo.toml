@@ -1,0 +1,14 @@
+[package]
+name = "molla-optim"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "First-order host optimizers for molla."
+
+[lints]
+workspace = true
+
+[dependencies]
+molla-math = { path = "../molla-math" }

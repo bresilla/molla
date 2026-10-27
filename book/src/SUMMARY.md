@@ -87,7 +87,7 @@
   - [Explicit](./solvers/mpm_explicit.md)
   - [Semi-implicit](./solvers/mpm_semi_implicit.md)
   - [Implicit Bingham](./solvers/mpm_implicit.md)
-- [MuJoCo wrapper](./solvers/mujoco.md)
+- [Barrier-Newton contact (IPC)](./solvers/barrier_newton.md)
 
 ---
 
@@ -103,6 +103,7 @@
 - [Higher-order elements (P2)](./fem/p2.md)
 - [Discontinuous Galerkin](./fem/dg.md)
 - [Stokes & Navier-Stokes](./fem/stokes_ns.md)
+- [Mixed (u, p) elasticity](./fem/mixed_elasticity.md)
 - [APIC FEM-MPM coupling](./fem/apic.md)
 - [Adjoint / differentiable FEM](./fem/adjoint.md)
 - [Adaptive mesh refinement (AMR)](./fem/amr.md)
@@ -113,14 +114,34 @@
 - [Nonconforming meshes](./fem/nonconforming.md)
 - [Signorini hard contact](./fem/signorini.md)
 - [Coulomb friction](./fem/friction.md)
+- [Phase-field fracture](./fem/phase_field.md)
 
 ---
 
 # Sensors
 
+- [Geometry, frames and numerical contracts](./sensors/contracts.md)
 - [Raycaster](./sensors/raycaster.md)
+- [Sensor geometry snapshots](./sensors/scene.md)
+- [Device-resident LiDAR batches](./sensors/lidar_batch.md)
 - [TiledCamera](./sensors/tiled_camera.md)
+- [GPU image processing](./sensors/image_processing.md)
+- [GPU point-cloud processing](./sensors/cloud_processing.md)
+- [Selected point-cloud export](./sensors/cloud_export.md)
+- [GPU spatial bins and reductions](./sensors/cloud_grid.md)
+- [GPU class and instance annotation](./sensors/annotation.md)
 - [IMU](./sensors/imu.md)
+- [Generic sensors (Webots set)](./sensors/generic_sensors.md)
+- [Asynchronous sensor readback](./sensors/readback.md)
+- [Sensor device loss and recovery boundaries](./sensors/device_lifecycle.md)
+- [Leased GPU snapshots](./sensors/snapshot.md)
+- [Direct leased sensor outputs](./sensors/device_results.md)
+- [Simulation-time scheduling](./sensors/scheduler.md)
+- [Viewer sensor integration](./sensors/viewer.md)
+- [Per-frame sensor latency measurements](./sensors/latency_benchmarks.md)
+- [Camera and processing-chain latency](./sensors/camera_latency_benchmarks.md)
+- [LiDAR cloud/grid-chain latency](./sensors/cloud_latency_benchmarks.md)
+- [Physics and sensor combined-load measurements](./sensors/physics_latency_benchmarks.md)
 - [Contact sensor](./sensors/contact_sensor.md)
 - [Frame transform](./sensors/frame_transform.md)
 
@@ -133,6 +154,13 @@
 - [Neural controllers](./actuators/neural.md)
 - [DC motor clamping](./actuators/dc_motor.md)
 - [Muscle (Hill-type + SEE)](./actuators/muscle.md)
+- [Rigid-world devices (Webots set)](./actuators/devices.md)
+
+---
+
+# Vehicle
+
+- [molla-vehicle overview](./vehicle/overview.md)
 
 ---
 
@@ -145,15 +173,8 @@
 - [FEM adjoint](./autograd/fem.md)
 - [Raycast adjoint](./autograd/raycast.md)
 - [Differentiable Gaussian splat renderer](./autograd/splat.md)
-
----
-
-# Importers
-
-- [URDF](./importers/urdf.md)
-- [MJCF (writer)](./importers/mjcf.md)
-- [USD (usd_molla)](./importers/usd.md)
-- [Gmsh (mshio)](./importers/gmsh.md)
+- [GPU cloth & softbody adjoints](./autograd/cloth_softbody_gpu.md)
+- [Eulerian fluid adjoint](./autograd/stam_fluid.md)
 
 ---
 
@@ -161,7 +182,7 @@
 
 - [Bevy adapter](./adapters/bevy.md)
 - [Viewer overview](./viewer/overview.md)
-- [Scene catalog (#1-101)](./viewer/scenes.md)
+- [Scene catalog (#1-124)](./viewer/scenes.md)
 
 ---
 

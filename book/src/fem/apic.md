@@ -3,7 +3,7 @@
 The APIC (**A**ffine **P**article-**I**n-**C**ell) hybrid couples a
 Material-Point-Method (MPM) particle representation with an FEM
 mesh-side velocity update. It lives in
-`crates/molla/src/fem/apic_coupling.rs` (CPU, Stage 37.6) and
+`crates/molla-fem/src/apic_coupling.rs` (CPU, Stage 37.6) and
 `apic_coupling_gpu.rs` (GPU, Stage 41 v2). Particles transfer
 momentum to mesh nodes via APIC weights, the mesh solves the
 velocity-field step, and particles read the updated node velocities
@@ -90,8 +90,8 @@ For each substep `Δt`:
 
 ## Contract tests
 
-The CPU implementation ships three round-trip tests in
-`crates/molla/tests/`:
+The CPU implementation ships round-trip tests in
+`crates/molla-fem/tests/fem_apic.rs`:
 
 | Test                                | What it verifies                            |
 |-------------------------------------|---------------------------------------------|
@@ -164,3 +164,26 @@ particle count rises.
 - [Stokes / NS](./stokes_ns.md) — the planned full pressure-Poisson
   replacement for the viscous-smoothing placeholder.
 - [Mesh](./mesh.md) — `FemMesh` is what `ApicHybrid` owns.
+
+
+## Pressure projection (Stage 37.6.1)
+
+`ApicHybrid::step_projected` (CPU) and `step_gpu_projected` (device) add a
+real incompressibility projection between the grid update and G2P: a
+per-tet (P0) pressure solved through the lumped-mass Schur operator
+`S = D M⁻¹ Dᵀ` over *deposit-supported* fluid tets, matrix-free CG,
+correction `v ← v − M⁻¹ Dᵀ q`. Two formulations were rejected on evidence:
+equal-order P1 node pressure only cancels nodal moments (per-tet L2
+divergence stalled at 23%), and Richardson outer loops on it *diverge*
+(LBB checkerboard amplification). The P0 scheme drives per-tet divergence
+to the solver floor — machine epsilon on the compressing-blob contract.
+
+The GPU port records the whole CG loop in one compute pass (zero
+readbacks) and carries a **convergence freeze**: once `rr ≤ 1e-12·rr_init`
+both α and β clamp to zero, because f32 CG *diverges past the correct
+answer* if iterated beyond convergence (measured: 40 iters ≈ 1e-5 parity
+vs the f64 CPU oracle, 120 iters blew up to O(1) before the freeze;
+9.9e-7 after). Particle→tet localisation uses `TetLookupGrid` — a uniform
+grid whose cell-sorted CSR candidate lists preserve first-match-in-cell-
+order semantics exactly (bitwise-equal weights vs brute force over 4000
+probe points).

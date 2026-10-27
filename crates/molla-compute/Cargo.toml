@@ -1,0 +1,26 @@
+[package]
+name = "molla-compute"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "wgpu runtime selection and device/queue ownership for molla."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+gpu = ["dep:wgpu", "dep:pollster", "molla-core/gpu"]
+
+[dependencies]
+molla-core = { path = "../molla-core", default-features = false }
+pollster = { version = "0.4", optional = true }
+wgpu = { version = "29", optional = true, default-features = false, features = [
+    "wgsl",
+    "vulkan",
+    "metal",
+    "dx12",
+    "std",
+] }

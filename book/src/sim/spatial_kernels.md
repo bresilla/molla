@@ -135,9 +135,9 @@ Stage 16 split CRBA + RNEA into matched CPU oracles and GPU kernels:
 
 | kernel | shader | purpose |
 |--------|--------|---------|
-| `CrbaKernel` | [`crba.wgsl`](https://github.com/molla/molla/blob/main/crates/molla/shaders/crba.wgsl) | per-articulation `M(q)` build |
-| `RneaKernel` | [`rnea.wgsl`](https://github.com/molla/molla/blob/main/crates/molla/shaders/rnea.wgsl) | per-articulation `τ(q, q̇, q̈)` |
-| `JacobianKernel` | [`jacobian.wgsl`](https://github.com/molla/molla/blob/main/crates/molla/shaders/jacobian.wgsl) | per-(articulation, target) `J(q)` (planned) |
+| `CrbaKernel` | [`crba.wgsl`](https://github.com/molla/molla/blob/main/crates/molla-kernels/shaders/crba.wgsl) | per-articulation `M(q)` build |
+| `RneaKernel` | [`rnea.wgsl`](https://github.com/molla/molla/blob/main/crates/molla-kernels/shaders/rnea.wgsl) | per-articulation `τ(q, q̇, q̈)` |
+| `JacobianKernel` | [`jacobian.wgsl`](https://github.com/molla/molla/blob/main/crates/molla-kernels/shaders/jacobian.wgsl) | per-(articulation, target) `J(q)` (planned) |
 
 The kernel layout mirrors Featherstone's: one workgroup per
 articulation, parallel passes over joints within the articulation

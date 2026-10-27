@@ -1,0 +1,66 @@
+[package]
+name = "molla-kernels"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "WGSL compute kernel dispatch wrappers for molla."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+lazy-paired-drift = ["gpu"]
+native-geometry-drift = ["gpu"]
+native-lazy-geometry-drift = ["native-geometry-drift", "lazy-paired-drift"]
+resource-counters = ["gpu", "wgpu/counters", "molla-core/gpu-metrics"]
+gpu = [
+    "dep:molla-compute",
+    "dep:wgpu",
+    "molla-compute-primitives/gpu",
+    "molla-compute/gpu",
+    "molla-core/gpu",
+    "molla-geometry/gpu",
+    "molla-storage/gpu",
+    "molla-sim/gpu",
+    "dep:molla-vehicle",
+]
+
+[dependencies]
+molla-core = { path = "../molla-core", default-features = false }
+molla-compute = { path = "../molla-compute", default-features = false, optional = true }
+molla-compute-primitives = { path = "../molla-compute-primitives", default-features = false }
+molla-autograd = { path = "../molla-autograd" }
+molla-geometry = { path = "../molla-geometry", default-features = false }
+molla-math = { path = "../molla-math" }
+molla-optim = { path = "../molla-optim" }
+molla-sim = { path = "../molla-sim", default-features = false }
+molla-storage = { path = "../molla-storage", default-features = false }
+molla-vehicle = { path = "../molla-vehicle", optional = true }
+bytemuck = { version = "1.18", features = ["derive"] }
+rayon = "1.10"
+wgpu = { version = "29", optional = true, default-features = false, features = [
+    "wgsl",
+    "vulkan",
+    "metal",
+    "dx12",
+    "std",
+] }
+
+[dev-dependencies]
+naga = { version = "29", features = ["wgsl-in", "spv-out"] }
+criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+glam = "0.30"
+rustfft = "6"
+
+[[bench]]
+name = "bench_fft"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_spgemm_gpu"
+harness = false
+required-features = ["gpu"]

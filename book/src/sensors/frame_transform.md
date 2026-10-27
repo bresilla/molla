@@ -6,8 +6,8 @@ frame's pose **expressed in a reference frame**. It mirrors Newton's
 `SensorFrameTransform` and is the primitive for end-effector
 tracking, chase-cam targets, and trajectory recording.
 
-Source: `crates/molla/src/sensors/frame_transform.rs`. Shader:
-`crates/molla/shaders/frame_transform.wgsl` (one thread per target).
+Source: `crates/molla-sensors/src/frame_transform.rs`. Shader:
+`crates/molla-kernels/shaders/frame_transform.wgsl` (one thread per target).
 
 ## Targets + reading
 
@@ -64,10 +64,58 @@ println!("tool in base= {:?}", r[0].relative.position);
 ```
 
 When a reference is supplied, it occupies index 0 of the sensor's
-internal target array — the kernel computes its world pose first so
-later threads can chain through its inverse. The returned `Vec` only
+internal target array. Each invocation independently computes the reference
+world pose; there is no dependency on another invocation finishing first.
+The returned `Vec` only
 contains the caller-supplied targets; the reference is an
 implementation slot.
+
+All retained target/configuration and output arrays, including the optional
+reference slot, share a default 1 GiB host/device payload cap.
+`new_with_limits(engine, model, reference, targets, SensorArrayLimits)` overrides
+it; `storage_usage()` reports the checked estimate. The caller-owned body-pose
+buffer is checked against device limits but is not included in owned storage.
+Collection and leased output pools have separate budgets. See
+[fixed-array storage budgets](imu.md#fixed-array-storage-budgets).
+
+### Device-resident outputs
+
+`encode` can also write directly into protected output slots and compose multiple
+producers in one submission. See [direct leased outputs](device_results.md) for
+pool configuration, input ownership, active ranges and pending-result lifetimes.
+
+`dispatch(engine, state)` returns `FrameDeviceReadings` without collection
+or CPU waits. Its `world_position`, `world_rotation`, `relative_position`
+and `relative_rotation` channels are borrowed `DeviceBuffer`s. Always use
+`target_range`: `0..N` without a reference, `1..N+1` with one. The underlying
+buffers include the internal reference slot when configured.
+
+Submit GPU consumers before redispatch, or enqueue selected channels/ranges
+into an external [`ReadbackRing`](readback.md). Unsubmitted command buffers
+do not prevent output reuse. `update()` uses one reusable staging slot and
+one bounded grouped collection of exactly 64 bytes per requested target,
+excluding the internal reference. `readback_stats()` records this internal
+collection only.
+
+State poses must be current on the same engine, including GPU-authoritative
+states whose host mirror is stale. Local mount poses must be finite rigid
+transforms with unit quaternions; the caller must also supply valid rigid
+body poses. Recreate after replacing/remapping bodies; count changes are
+rejected but same-sized index remapping is not detectable through raw State.
+There is no implicit scheduling or stable-handle remapping yet.
+
+`dispatch_stats()` exposes submissions, kernel dispatches and binding
+preparations. Two least-recently-used bound-buffer variants are retained;
+alternating two physics pose buffers needs no new uniforms/bind groups after
+warm-up. In-place pose changes reuse bindings; buffer replacement prepares a
+new set. Each preparation creates one uniform and three bind groups. These
+counters exclude construction, command encoders, readback and driver staging.
+
+`FrameTransformKernel::prepare` / `encode_prepared` allow lower-level shared
+command streams. The caller validates indices/ranges, tracks output authority
+and submits before rewriting a prepared parameter buffer. Use distinct bindings
+for differing parameters in one pending batch. The public sensor `encode` path
+composes these operations into directly leased output slots.
 
 If you want both an absolute readout and a chain-relative readout
 of the same frame, register it twice: once with `None` reference (or

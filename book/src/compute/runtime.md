@@ -34,6 +34,11 @@ impl Engine {
     pub fn new_cpu() -> Self;
     pub fn new_gpu() -> Result<Self>;
     pub fn new(backend: Backend) -> Result<Self>;
+    pub fn from_device(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        adapter_info: Option<AdapterInfo>,
+    ) -> Self;
 
     pub fn backend(&self) -> Backend;
     pub fn adapter_info(&self) -> Option<&AdapterInfo>;
@@ -47,6 +52,15 @@ walks the `wgpu::Instance`, picks the highest-performance adapter,
 and requests a device with that adapter's native limits. `new(backend)`
 is the general constructor; `Backend::Gpu(wgpu::Backends::VULKAN)`
 forces a specific API.
+
+`from_device` adopts a device and queue that another runtime owns, such
+as a renderer that already holds the GPU; its backend reports
+`Backend::External` and `Engine::new(Backend::External)` is an error.
+The owner keeps its own device-lost callback, so this engine's
+`DeviceHealth` only knows what the owner forwards through
+`DeviceHealth::record`; every Molla resource created through the engine
+belongs to the adopted device and must be dropped before it. Gearbox uses
+this to run the GPU sensors on Bevy's render device.
 
 `device()` / `queue()` return `None` on CPU backends. Callers that
 require GPU should bail loudly:

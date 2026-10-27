@@ -1,6 +1,6 @@
 # Discontinuous Galerkin (DG)
 
-The DG cluster — `crates/molla/src/fem/dg_element.rs` (~2700 lines)
+The DG cluster — `crates/molla-fem/src/dg_element.rs` (~2700 lines)
 and `dg_time_integrator.rs` (~200 lines) — is the second-largest
 chapter set in the FEM stack. DG generalises classical continuous
 Galerkin (CG) by **dropping inter-element continuity**: a vertex shared
@@ -58,6 +58,7 @@ hyperbolic specials (Burgers shock, SWE dam-break).
 | 43 v2    | SSP-RK2 / RK3 time integration; Nitsche weak Dirichlet      |
 | 43 v3    | P2 DG, SWE-specific HLL / HLLC / RoeSwe, Krivodonova limiter |
 | 43 v4    | GPU port of HLL / HLLC / RoeSwe (queued)                    |
+| C2       | 2D compressible Euler physical / Rusanov / HLL flux helpers |
 
 ## The DG semi-discrete system
 
@@ -77,6 +78,18 @@ RHS routine inverts it on-the-fly inside `du/dt = M⁻¹ R(u)` before
 handing to the [time integrator](./dg_time.md).
 
 The `dg_element.rs` API exposes the building blocks:
+
+For compressible-flow follow-ons, the Euler helpers mirror the SWE
+pointwise flux API:
+
+```rust
+pub fn euler_pressure_2d(u: [Real; 4], gamma: Real) -> Real;
+pub fn euler_flux_dot_n_2d(u: [Real; 4], n: Vec3, gamma: Real) -> [Real; 4];
+pub fn compute_euler_numerical_flux_rusanov_2d(... ) -> [Real; 4];
+pub fn compute_euler_numerical_flux_hll_2d(... ) -> [Real; 4];
+```
+
+The state is conservative `(ρ, ρu, ρv, E)`, with an ideal-gas EOS.
 
 ```rust
 pub fn compute_element_dg_mass(cell, vertices, degree) -> Vec<Vec<Real>>;

@@ -1,6 +1,6 @@
 # Global assembly
 
-`crates/molla/src/fem/assembly.rs` is where the [element kernels](./elements.md)
+`crates/molla-fem/src/assembly.rs` is where the [element kernels](./elements.md)
 meet the sparse `BsrMatrix`. The whole module is ~160 lines because
 all the heavy lifting lives in the kernels (per-cell math) and in
 `BsrMatrix::from_scalar_triplets` (CSR construction with dedupe and

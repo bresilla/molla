@@ -82,14 +82,9 @@ high-stiffness constraint each step. Two common patterns:
 - **End-effector mount**: bolt a sensor / camera shape to a rigid
   parent. The mount doesn't move relative to the host, so a Fixed
   joint is faster than two bodies + a WELD equality.
-- **Sub-mesh aggregation**: importers that unwrap a single rigid
-  CAD assembly into multiple component bodies use Fixed joints
-  to glue them back together while preserving the visual hierarchy.
-
-The MuJoCo wrapper (Stage 22) translates molla's `Fixed` joints to
-MJCF `<equality><weld/>` between parent and child (instead of a
-freejoint + a weld, which would be a redundant DoF). Round-trip
-fidelity is preserved.
+- **Sub-body aggregation**: procedural builders that split one rigid assembly
+  into multiple component bodies use Fixed joints to glue them back together
+  while preserving the visual hierarchy.
 
 ## Free
 
@@ -135,8 +130,7 @@ each step.
 | GPU support             |    ✓     |    ✓      |   ✓   |  ✓   |
 | Joint drive (`Control`) |    ✓     |    ✓      |   —   |  ✓   |
 | Limits via `set_joint_limits` | ✓ |    ✓      |   —   |  per-axis |
-| MuJoCo round-trip       |    ✓     |    ✓      |  weld eq | ✓ (`<freejoint>`) |
-| URDF / USD source       |    ✓     |    ✓      |   ✓   |  ✓ (root) |
+| Procedural builder      |    ✓     |    ✓      |   ✓   |  ✓ (root) |
 
 See [Multi-DoF joints](./joints_multi_dof.md) for `Ball`, `Distance`, and
 `D6`, and [Cable joint](./joints_cable.md) for the rope/tendon variant.

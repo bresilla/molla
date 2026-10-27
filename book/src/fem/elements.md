@@ -1,6 +1,6 @@
 # Element kernels
 
-The element kernels in `crates/molla/src/fem/element.rs` are the
+The element kernels in `crates/molla-fem/src/element.rs` are the
 per-cell building blocks of every assembly: they take a cell + the
 vertex array (+ whatever material parameters the operator needs) and
 return a small dense matrix in row-major
@@ -180,6 +180,31 @@ Triangle plane-strain SVK is *not* implemented (the 2D contract tests
 all use linear elasticity); calling it panics with a clear message
 that points the user to the tet path. This is a deliberate "fail
 loud, don't fail silent with wrong-sized output" choice.
+
+## Neo-Hookean and Mooney-Rivlin tet tangents
+
+```rust
+pub fn compute_element_neo_hookean_energy(... ) -> Real;
+pub fn compute_element_neo_hookean_force(... ) -> Vec<Real>;
+pub fn compute_element_neo_hookean_tangent(... ) -> Vec<Vec<Real>>;
+
+pub fn compute_element_mooney_rivlin_energy(... ) -> Real;
+pub fn compute_element_mooney_rivlin_force(... ) -> Vec<Real>;
+pub fn compute_element_mooney_rivlin_tangent(... ) -> Vec<Vec<Real>>;
+```
+
+The hyperelastic tet path now includes compressible Neo-Hookean and
+Mooney-Rivlin energies. Internal forces are central finite-difference
+gradients of the closed-form element energy, and tangents are central
+finite differences of those forces. This keeps the first implementation
+auditable and gives Newton solves a consistent element tangent while a
+future optimisation pass can swap in analytic fourth-order material
+tangents.
+
+The Neo-Hookean density is stress-free at identity and has the same
+small-strain tangent as the linear isotropic element. The Mooney-Rivlin
+variant uses two invariants plus a volumetric penalty and is likewise
+stress-free at identity. Both paths currently support P1 tetrahedra.
 
 ## Convection + SUPG stabilisation
 

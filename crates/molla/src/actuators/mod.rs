@@ -38,15 +38,9 @@
 //! tracking PD on a quaternion isn't well-defined anyway; for those
 //! cases use an external orientation-error controller.
 
-// Stage 42 — Hill-type muscle actuator. Always compiled (no GPU
-// kernel yet; consumed host-side by the CPU Featherstone solver and
-// stored as parallel buffers on `Model` so the GPU path can pick it
-// up in a future stage).
-pub mod muscle;
-
-pub use muscle::{
-    force_length, force_velocity, tendon_force, update_muscle_activation, Muscle,
-    MuscleConfig, DEFAULT_TAU_ACTIVATION, DEFAULT_TENDON_STIFFNESS_RATIO,
+pub use molla_actuators::{
+    DEFAULT_TAU_ACTIVATION, DEFAULT_TENDON_STIFFNESS_RATIO, Muscle, MuscleConfig, force_length,
+    force_velocity, tendon_force, update_muscle_activation,
 };
 
 #[cfg(feature = "gpu")]
@@ -54,13 +48,13 @@ pub mod actuator;
 #[cfg(feature = "gpu")]
 pub mod clamping;
 #[cfg(feature = "gpu")]
-pub mod controller_pd;
-#[cfg(feature = "gpu")]
-pub mod controller_pid;
-#[cfg(feature = "gpu")]
 pub mod controller_neural_lstm;
 #[cfg(feature = "gpu")]
 pub mod controller_neural_mlp;
+#[cfg(feature = "gpu")]
+pub mod controller_pd;
+#[cfg(feature = "gpu")]
+pub mod controller_pid;
 #[cfg(feature = "gpu")]
 pub mod controller_pipeline_pd;
 #[cfg(feature = "gpu")]
@@ -69,27 +63,11 @@ pub mod controller_pipeline_pid;
 pub mod delay;
 
 #[cfg(feature = "gpu")]
-pub use actuator::{Actuator, ControllerStage};
-#[cfg(feature = "gpu")]
-pub use clamping::{
-    Clamping, ClampingDcMotor, ClampingDcMotorConfig, ClampingMaxEffort,
-    ClampingMaxEffortConfig, ClampingPositionBased, ClampingStage,
+pub use molla_actuators::{
+    Actuator, Clamping, ClampingDcMotor, ClampingDcMotorConfig, ClampingMaxEffort,
+    ClampingMaxEffortConfig, ClampingPositionBased, ClampingStage, ControllerNeuralLstm,
+    ControllerNeuralLstmConfig, ControllerNeuralMlp, ControllerNeuralMlpConfig, ControllerPd,
+    ControllerPdConfig, ControllerPid, ControllerPidConfig, ControllerPipelinePd,
+    ControllerPipelinePdConfig, ControllerPipelinePid, ControllerPipelinePidConfig,
+    ControllerStage, Delay, DelayConfig, LstmWeightDims, LstmWeights, MlpWeights,
 };
-#[cfg(feature = "gpu")]
-pub use controller_pd::{ControllerPd, ControllerPdConfig};
-#[cfg(feature = "gpu")]
-pub use controller_pid::{ControllerPid, ControllerPidConfig};
-#[cfg(feature = "gpu")]
-pub use controller_neural_lstm::{
-    ControllerNeuralLstm, ControllerNeuralLstmConfig, LstmWeightDims, LstmWeights,
-};
-#[cfg(feature = "gpu")]
-pub use controller_neural_mlp::{
-    ControllerNeuralMlp, ControllerNeuralMlpConfig, MlpWeights,
-};
-#[cfg(feature = "gpu")]
-pub use controller_pipeline_pd::{ControllerPipelinePd, ControllerPipelinePdConfig};
-#[cfg(feature = "gpu")]
-pub use controller_pipeline_pid::{ControllerPipelinePid, ControllerPipelinePidConfig};
-#[cfg(feature = "gpu")]
-pub use delay::{Delay, DelayConfig};

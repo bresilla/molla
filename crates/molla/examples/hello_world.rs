@@ -37,6 +37,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(not(feature = "gpu"))]
 fn main() {
-    println!("molla {} — built without `gpu` feature.", env!("CARGO_PKG_VERSION"));
+    println!(
+        "molla {} — built without `gpu` feature.",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("Re-run with `--features gpu` (default) to see adapter info.");
 }

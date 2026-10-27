@@ -1,7 +1,41 @@
 # Open items
 
-A concrete inventory of work that is **not** shipped on `main` but is on the
-trajectory the recent push has set up. Items are grouped by tier:
+> **Current open set (2026-07-04).** Most entries below have since
+> **landed** and carry an inline `**Status.** Landed` block — they are
+> kept as decision records, not backlog. Since 2026-07-02: X1 (critic
+> audit over Stages 39–51) ran — three real findings, all fixed
+> (see INSPECTION.md); the tire stream is COMPLETE (fully autonomous
+> zero-readback loop, 40-wheel fused atlas at 1.53× realtime with
+> heightfield terrain); the INSPECTION.md backlog is CLOSED. Remaining:
+>
+> | Item | What | Effort |
+> |------|------|--------|
+> | ~~C0~~ | **COMPLETE 2026-07-05** — barrier-Newton backend fully landed (all phases + κ + both couplings + LBVH + perf); see the C0 entry. Optional future slices: GPU ABD composite solve, on-device pair friction. | done |
+> | ~~A1~~ | RETIRED for deformables by C0's μ_s/μ_k friction (2026-07-04); only a rigid-XPBD variant would remain, and C0 is the recommended path. | closed |
+>
+> **A1 attempt notes (2026-07-04, reverted — start here next time).** A
+> velocity-pass-only split does NOT discriminate stick from slip: on an
+> incline with tan θ between μ_k and μ_s, the box creeps identically in
+> both cases because single-application friction under-relaxes on corner
+> contacts (the friction cousin of the B1b finding) — a per-contact
+> ACCUMULATED tangential impulse clamped to the cone across sweeps
+> (PGS-style) fixes the velocity side and is worth keeping. But true
+> stick then still leaks `g·sinθ·dt²` of POSITIONAL creep per step, and
+> naive Müller §3.5 positional friction (tangential anchor correction
+> gated on λ_t ≤ μ_s·λ_n per position iteration) OVER-STICKS: with
+> contacts regenerated every outer step, the detected depth carries the
+> contact margin + settled penetration, inflating λ_n so the ratio test
+> `λ_t/λ_n vs tan θ` always passes and even tan θ > μ_s holds. The
+> correct implementation needs contact-LIFETIME normal/tangential λ
+> accumulation (persistent contact identity across steps — the contact
+> reduction module already threads persistent IDs) so the cone ratio
+> compares displacements accumulated over the same window. That is the
+> real 1–2 day scope; the WGSL side additionally needs a per-(contact,
+> side) accumulator buffer indexed by the body-contact CSR entry to stay
+> race-free under the per-body threading model.
+> | X2 (bottom of file) | Viewer scenes for the v3–v6 solver work — HELD with the maintainer's GUI split (see GUI_SPLIT.md) | held |
+
+A concrete inventory of work from the v3–v6 push, grouped by tier:
 
 - **Tier-A — v5 follow-ups.** Small, well-scoped pieces that close out a stage
   already in flight. Each is days, not weeks. Most are "the obvious next
@@ -22,7 +56,10 @@ Every item lists:
    re-rank the item up or down.
 
 Stage numbers and commit hashes refer to entries on `main` as of
-2026-05-11 evening (HEAD `2bde182`, Stage 41 v6).
+2026-05-11 evening (HEAD `2bde182`, Stage 41 v6); the open-set banner
+above reflects 2026-07-02. Note this snapshot predates the entire
+`molla-vehicle` / tire-FEM effort, which is tracked in
+`PLAN_REALTIRE.md` + `PROGRESS.md` instead.
 
 ---
 
@@ -54,7 +91,16 @@ maps cleanly onto distinct `μ_s` / `μ_k`.
 
 ### A2. Variable per-muscle stiffness + pennation on GPU (Stage 42 v5)
 
-**Problem.** Stage 42 v3 (`bbd5c61`) shipped the Hill kernel + cable ABA on
+**Status.** Landed (implementation shipped with the C6 push; validated
+2026-07-02). The WGSL kernel reads per-muscle
+`muscle_pennation_angle`/`muscle_tendon_stiffness_ratio` storage
+buffers (`muscle.wgsl` bindings 7/9) uploaded from the `Model` arrays,
+and the heterogeneous-parameter hardware parity lane
+`per_muscle_pennation_and_stiffness_cpu_gpu_parity` in
+`crates/molla-solvers/tests/joint_muscle_gpu.rs` confirms CPU/GPU
+agreement (with a homogeneous-control guard against a vacuous pass).
+
+**Problem (historical).** Stage 42 v3 (`bbd5c61`) shipped the Hill kernel + cable ABA on
 GPU; v4 (`0411d0b`) added SEE Newton GPU/CPU parity. The remaining gap:
 per-muscle `stiffness_ratio` and pennation angle are honored on CPU but
 read from a single shared parameter on GPU (the `d38739e` critic fix did
@@ -76,115 +122,72 @@ actually needs this.
 
 ### A3. SH GPU forward for diffuse/view split (Stage 44 v5)
 
-**Problem.** Stage 44 v3 (`00d8083`) shipped spherical-harmonic colour on
-CPU; v4 (`121c9d3`) added SH band 3 + diffuse/view split. The forward
-raytrace currently still uses a per-Gaussian RGB on GPU; the SH evaluation
-runs as a CPU bake. To go end-to-end GPU we need an SH→RGB shader stage
-that evaluates SH at the view direction per pixel.
+**Status.** Landed in the modular workspace. The GPU path is
+`SplatRaytraceKernel::dispatch_sh_diffuse_view` with WGSL in
+`crates/molla-kernels/shaders/splat_raytrace_sh_diffuse_view.wgsl`.
 
-**Dependencies.** Stage 44 v3 (`00d8083`), Stage 44 v4 (`121c9d3`),
-Stage 30 (Gaussian splat primitive).
-
-**Effort.** 1–2 days. WGSL polynomial evaluation, plus per-pixel
-view-vector compute. Bands 0–3 means 16 SH coefficients per channel — fits
-comfortably in workgroup-local memory.
-
-**Priority.** Medium. Without it, GPU diff-Gaussian for view-dependent
-appearance falls back through CPU on every iteration.
-
-**Would change my mind if** Stage 44 v2 pose-recovery (`bb42665`,
-scene #99) ever needs >100 Adam iterations per second — that's the
-CPU SH bake budget breaking.
+**Result.** Diffuse RGB and the 15 band-1..3 SH-view coefficients are
+bound as separate buffers and evaluated per pixel/view direction on GPU,
+so iterative differentiable-splat workflows no longer need a CPU bake
+into full 16-coefficient band-3 SH.
 
 ### A4. DG limiter GPU port (Stage 43 v5)
 
-**Problem.** Stage 43 v4 (`bed9c43`) shipped the HLL/HLLC/Roe SWE flux on
-GPU. The Barth-Jespersen scalar limiter and Krivodonova characteristic
-limiter (Stage 43 v3, `d37995e`) still run on CPU between GPU flux
-sweeps. The host round-trip per timestep dominates wall time at fine
-mesh resolution.
+**Status.** Landed for DG-P1 shallow-water state buffers. The GPU path is
+`DgSweLimiterKernel` with WGSL in
+`crates/molla-fem/shaders/dg_swe_limiter.wgsl`.
 
-**Dependencies.** Stage 43 v3 (`d37995e`), Stage 43 v4 (`bed9c43`).
-
-**Effort.** 2 days. The limiters are local — one workgroup per element,
-read 4 neighbour cells. The Krivodonova characteristic decomposition uses
-the same Roe matrix the v4 GPU flux already builds.
-
-**Priority.** Medium. Bottleneck only kicks in once the mesh is large
-enough to amortize dispatch cost.
-
-**Would change my mind if** the DG SWE viewer scene (`#97`,
-`7cd4e06`) becomes the runtime baseline for any demo we ship — at
-that point the round-trip is visible.
+**Result.** Both scalar component-wise Barth-Jespersen and
+Krivodonova-style characteristic limiting can run as resident GPU passes
+after the Stage 43 v4 flux sweep. The dispatcher reads `state_in` and
+writes `state_out` to preserve the CPU snapshot semantics while allowing
+ping-pong buffers between GPU RK stages.
 
 ### A5. DG-AMR coarsening + level-gap recursion (Stage 45 v5)
 
-**Problem.** Stage 45 v4 (`66d976a`) shipped AMR coarsening for P1 + Krylov
-restart after re-mesh. The DG case (Stage 45 v3 / `4442e3d`) handles
-*refinement* with 2:1 face balance, but coarsening for DG with arbitrary
-level gaps `> 1` is not yet implemented. This blocks long-running AMR
-runs where transient regions need to *un*-refine.
+**Status.** Landed for DG-P1 triangle coarsening helpers.
 
-**Dependencies.** Stage 45 v3 (`4442e3d`), Stage 45 v4 (`66d976a`).
-
-**Effort.** 2–3 days. DG coarsening is an L²-projection of fine DoFs to
-the coarse cell, plus a re-balance sweep. The level-gap recursion is the
-loop that handles `level_max − level_min > 1` neighbours.
-
-**Priority.** Medium. The static-AMR cases (e.g. scene #100 `AmrHeat`,
-`571934a`) work today; this is for time-varying refinement zones.
+**Result.** `AmrMesh::coarsen_subtree` collapses deep trees from the
+leaves upward, and `project_dg_p1_tri_children_to_parent_l2` performs the
+child-to-parent L² projection for DG-P1 triangle fields. The regression
+coverage lives in `crates/molla-fem/tests/fem_amr_v5.rs`.
 
 **Would change my mind if** a moving-collider demo (the canonical AMR
 benchmark) is on the demo roadmap — then this is a blocker.
 
 ### A6. Source-side surface quadrature + TetBvh accel (Stage 47 v5)
 
-**Problem.** Stage 47 v3 (`0f5a27e`) shipped surface-only cross-mesh M_st
-quadrature; v4 (`0f9e57e`) added the coupled penalty contact
-Newton-Raphson. The source-side quadrature still loops over every source
-triangle per target point; large meshes need a BVH-accelerated query. The
-existing `MeshBvh` is host-side; molla has all the WGSL machinery but the
-TetBvh that the nonconforming projection needs is not yet wired up on GPU.
+**Status.** Landed for the current nonconforming projection paths.
 
-**Dependencies.** Stage 47 v3 (`0f5a27e`), Stage 47 v4 (`0f9e57e`),
-Stage 15 (GPU mesh BVH).
-
-**Effort.** 2–3 days. The BVH traversal is already proven for raycast;
-extend the kernel signature for "all triangles within distance ε".
-
-**Priority.** Medium-high. Linear-scan source quadrature scales as
-`O(N_tgt · N_src)` — fine for unit tests, painful for any real scene.
-
-**Would change my mind if** the user wires NonconformingField into a
-non-toy demo (FSI, hand-on-cloth, tool-on-deformable) — at that
-point this is a perf must-have.
+**Result.** `molla_geometry::TetBvh` now provides a CPU BVH over per-tet
+AABBs, and `molla-fem::NonconformingField` builds a source-side
+`SourceTetIndex` once for volume and target-surface cross-mass assembly.
+Each quadrature point queries BVH candidates before the exact
+barycentric inside-tet test, avoiding the old linear source-tet scan.
 
 ### A7. Active-set anti-cycling hardening (Stage 51 v2)
 
-**Problem.** Stage 51 (`4a4fc64`) shipped the Signorini active-set update
-loop. The current implementation uses a fixed iteration cap (no
-cycling-detection). Pathological geometry (sharp corners, near-tangent
-contact) can cause set flipping. Newton's `kamino` and most production
-solvers use Bland's rule or a least-index tiebreak.
+**Status.** Landed.
 
-**Dependencies.** Stage 49 (`60a7792`), Stage 50 (`e751d17`),
-Stage 51 (`4a4fc64`).
-
-**Effort.** 1 day. Bland's rule is one extra index sort per active-set
-update.
-
-**Priority.** Medium. The active-set already converges on every test
-case in `tests/fem_signorini_active_set.rs`; cycling is a tail-risk
-hardening.
-
-**Would change my mind if** any user-supplied geometry triggers a
-fixed-iteration cap fallback. That's the canary for cycling.
+**Result.** `solve_active_set_signorini` now records seen active sets and
+uses a Bland-style least-slave-DoF single pivot when a proposed update
+would revisit a previous set. `ActiveSetTrace::cycle_breaks` and
+`ActiveSetIteration::bland_pivot` expose the diagnostic path.
 
 ---
 
 ## Tier-B — algorithmic upgrades (week-scale)
 
 ### B1. Π-projection branch of Hiptmair-Xu AMS (Stage 48 v5)
+
+**Status.** Landed.
+
+**Result.** `molla-fem` now builds the vector-nodal interpolation
+operator `Π : (P1)^3 -> NedelecEdge`, pins the matching vector-P1
+auxiliary Laplacian at Dirichlet-touched vertices, and adds the fixed
+iteration-count Π auxiliary correction inside `AmsPreconditioner::apply`.
+The old gradient-only action remains available through
+`with_pi_projection(false)` for comparisons.
 
 **Problem.** Stage 48 v3 (`fa3616e`) shipped a geometric multigrid V-cycle
 for AMS; v4 (`c0cb1a6`) added algebraic multigrid (Ruge-Stüben). The
@@ -209,6 +212,16 @@ and we can drop the Π work.
 
 ### B2. Block-coupled preconditioning at high ωσ (Stage 48 v6)
 
+**Status.** Landed.
+
+**Result.** `solve_eddy_current_steady_ams_block` adds a high-`ωσ`
+preconditioner path. Its preconditioner applies AMS to the diagonal
+real/imaginary blocks, then performs a fixed number of stationary
+refinement sweeps against the full block-real operator so the
+off-diagonal `±ωM_σ` coupling enters `M^{-1}r`. The fixed sweep count
+is configured by `EddyCurrentConfig::block_precond_sweeps`, preserving
+linearity for GMRES.
+
 **Problem.** Stage 48's eddy-current solver decouples real/imaginary
 components in the preconditioner. At high frequency × conductivity
 (`ω·σ → ∞`), the real-imag coupling becomes dominant and the
@@ -230,6 +243,16 @@ iterations.
 
 ### B3. Frequency sweep + Coulomb-gauge enforcement (Stage 48 misc)
 
+**Status.** Landed.
+
+**Result.** `solve_eddy_current_frequency_sweep` now runs Jacobi, AMS,
+or block-AMS solves across a list of angular frequencies. Optional
+Coulomb-gauge enforcement projects each real/imaginary potential with
+`project_nedelec_coulomb_gauge`, which subtracts the least-squares
+gradient component (`G^T G φ = G^T a`) while preserving pinned edge
+DoFs. `coulomb_gauge_residual` reports the remaining discrete gauge
+residual for each sample.
+
 **Problem.** The eddy-current solver runs at a single frequency per call.
 Real industrial workflows (motor design, induction heating) need a
 parametric frequency sweep with results stored in a single buffer.
@@ -249,6 +272,14 @@ the sweep is a UX nicety.
 transformer design — that's the workflow this enables.
 
 ### B4. Full-GPU NS time integrator with on-device SSP-RK (Stage 41 v7)
+
+**Status.** Implemented in `molla-fem`: `NavierStokesGpuTimeIntegrator`
+now exposes `ImexEuler`, `SspRk2`, and `SspRk3`. SSP-RK2/3 keep all
+intermediate velocity/pressure stages in GPU buffers and use the
+`combine_states` WGSL entry point in `fem_ns_rhs_assemble.wgsl` for the
+Shu-Osher convex combinations. The host still submits the existing GPU
+stage kernels, but it no longer reads stage vectors back between SSP
+substages; only the final result is downloaded.
 
 **Problem.** Stage 41 v3 (`f2ae80f`) shipped GPU IMEX Navier-Stokes with
 the time loop on the host. Stage 41 v4 (`ccbe5c6`) added a fused
@@ -273,6 +304,15 @@ that probably isn't worth a week.
 
 ### B5. Coupled active-set + friction (Stage 49 v2 + Stage 50 integration)
 
+**Status.** Landed.
+
+**Result.** `solve_active_set_signorini_with_friction` now combines the
+PDAS active-set contact loop with the stacked normal+tangent Coulomb
+Uzawa solve. The result reports full-length per-candidate normal
+multipliers, interleaved tangent multipliers, and `FrictionState`
+entries so released contacts automatically release their friction
+state and tangent force.
+
 **Problem.** Stage 49 (`60a7792`) shipped Signorini with a fixed active
 set. Stage 50 (`e751d17`) shipped Coulomb friction *at* Signorini contact
 but assuming the normal active-set is already converged. Stage 51
@@ -295,6 +335,15 @@ test; this is a robustness upgrade for harder geometry.
 friction step destabilizes the active set on the next outer iter."
 
 ### B6. Self-contact for cross-mesh contact pipelines (Stage 47/49/50)
+
+**Status.** Landed for the CPU candidate path.
+
+**Result.** `molla-geometry` now exposes
+`detect_vertex_triangle_self_contacts`, an `O(VT)` CPU oracle that
+emits non-adjacent vertex-triangle shell contacts. `molla-fem` converts
+those into active-set gap planes with
+`signorini_candidates_from_self_contacts`, reducing multiple contacts
+on the same slave to the deepest candidate.
 
 **Problem.** Every Stage 47–51 contact pipeline (penalty in v3/v4,
 Signorini Lagrange in 49, friction in 50, active-set in 51) operates on
@@ -322,7 +371,174 @@ cross-mesh by construction.
 
 ## Tier-C — new physics axes (multi-week)
 
+### C0. Barrier-Newton contact backend (IPC-family, GPU) — flagship
+
+**Status.** Designed 2026-07-04. **Phase 1 LANDED same day** —
+`molla-solvers::barrier_contact` (`BarrierShell`): f64 incremental-potential
+Newton with the cubic compact-support barrier, mass-consistent per-contact κ,
+SPD-projected spring/barrier Hessians, matrix-free PCG (block mass-diagonal
+preconditioner), and the CCD-truncated Armijo line search. Contract tests
+(`tests/barrier_contact.rs`): FD gradient 8.8e-7 / Hessian-operator 1.2e-11;
+a 50 m/s impact whose free-flight step crosses the floor ~16× stays
+penetration-free at every accepted iterate and arrests on the surface; a
+draped drop settles with the resting gap INSIDE the barrier band
+(9.99e-4 < d̂ = 1e-3); every test ends with an explicit intersection scan.
+**Phase 2 LANDED 2026-07-04** — `molla-kernels::BarrierNewtonGpu`
+(barrier_newton.wgsl, 18 entries): device gradient/Hessian/PCG (single
+submission, f32 freeze)/TOI min-reduce/fused energy+gap+grad reductions;
+host Newton loop on 4-byte readbacks. GPU passes the phase-1 contract:
+impact penetration-free + arrested; drop holds the invariant and lands in a
+13% DEEPER energy minimum than the f64 oracle (parity gated on energy —
+drapes are non-unique). f32 reality encoded in defaults: Newton stalls at
+~1e-2 relative gradient (tighter ⇒ line-search noise jitter). **Phase 3 CPU oracle
+LANDED 2026-07-04** — VT/EE self-contact pairs on `BarrierShell`
+(clamped closest-point weights, exact-a.e. gradients FD-verified to
+3.5e-7; 3·d̂ candidates + α·max|p| ≤ d̂ travel cap = airtight additive-CCD
+argument; true DoF-removal pinning replacing the huge-mass fallacy). The
+two-layer stack and crossed-ribbon EE oracles hold the invariant
+throughout. **Phase 3b LANDED 2026-07-04** —
+device pair discovery (atomic compaction + overflow flag), gather-form
+pair gradient/Hessian (deterministic, no f32 atomics), pair TOI + travel
+cap in the CCD reduction, device pinning; the GPU two-layer stack matches
+the CPU oracle to the digit and the final intersection scan runs
+host-side with the oracle's exact machinery. **F14 is closed as
+superseded**: for deformables the barrier backend IS the penetration-free
+GPU path; VBD's CPU-only CCD gate stays by design. **Phase 4a
+LANDED 2026-07-04** — volumetric tets (exact volume gradients, Gauss-part
+SPD Hessian) and HARD strain limiting where the hard bound comes from
+LINE-SEARCH truncation (a strain-limit crossing is a TOI), with the
+barrier κ_s derived from the spring's own stiffness: an unlimited 15.8×
+stretch holds at 1.0486 < 1.05 under the same load. **Phase 4b LANDED
+2026-07-04** — lagged IPC friction with the μ_s/μ_k split on the CPU
+oracle: FD 4.7e-6 across all three mollifier regions; the discriminating
+incline (tan θ between μ_k and μ_s) holds at 0.83 mm creep vs 0.44 m
+slide — a 530× split, the oracle velocity-level friction (the A1
+attempt) cannot pass in principle. **A1 is retired for deformables.**
+**Phases 5a/5b/5c LANDED 2026-07-04** — full GPU parity for
+tets/strain/friction (the incline discriminator lands IDENTICAL digits
+on device), pair friction (layer-on-layer holds at 0.62 mm vs 1.24 m
+frictionless — pure VT/EE friction), and device Teschner-hash pair
+pruning replacing the brute-force sweeps (single-ring-complete cells,
+collisions only add candidates, overflow is a hard error). **C0 is
+FEATURE-COMPLETE** — book chapter at `solvers/barrier_newton.md`.
+**Elasticity-inclusive κ LANDED 2026-07-04** (same-day follow-on):
+κ = scale·(m + h²·Σk_incident)/h² on both backends, default on — the
+1 kN elastic-press oracle holds 11.4× more band margin than mass-only
+κ, friction λ now shares the barrier's κ, pinned vertices are
+boundary conditions (excluded from barriers/invariant), and the f32
+Newton gained a noise-floor exit. **Rigid two-way coupling LANDED 2026-07-04**: body-attached obstacles
+follow live poses, third-law-exact reaction wrenches (momentum drift
+1.4e-7 through a real impact), and a rigid-side TOI that closes the
+weak-coupling tunneling hole (ball-on-trampoline rests supported).
+**Warm-started PCG + blocked early exit LANDED 2026-07-05** (−30% on
+the GPU barrier lane, gates unchanged). **GPU behind scene 125 LANDED 2026-07-05**
+(`BarrierSolver::new_gpu`, same Solver interface, live param mapping,
+engine-GPU-path oracle in the lane). **LBVH broad phase LANDED 2026-07-05**
+(`use_lbvh`: step-granularity `LbvhBroadPhase` reuse with travel-cap
+inflation, per-iterate candidate filters; graded-mesh stress oracle).
+**ABD strong coupling LANDED 2026-07-05** (CPU oracle): affine bodies
+inside the Newton solve via proxy vertices — machinery reuse total,
+momentum machine-exact (5e-15), the weak path's tunneling case handled
+by the unified line search alone. **C0 is complete; the technical
+roadmap has no open items.** **On-device pair friction landed
+2026-07-05** (the last CPU/GPU behavioural difference — the GPU
+layer-on-layer discriminator matches the f64 oracle's 0.62 mm hold to
+the digit). One OPTIONAL enhancement slice remains noted for whenever
+a scene demands it (not open work): the GPU port of the ABD composite
+solve. Subsumes the F14 GPU-CCD item
+(currently a loud refusal on the GPU VBD backend).
+
+**Why.** Comparison against `st-tech/ppf-contact-solver` (Ando/ZOZO — cubic
+barrier with elasticity-inclusive dynamic stiffness, ACM TOG 43.6) showed
+molla's one real deficit against the contact state of the art:
+XPBD/VBD are local projection/impulse methods with **no penetration-free
+invariant** — under speed, stiff stacking, or thin geometry they can tunnel
+or hold residual penetration (B1b, the CCD gate, and contact margins are all
+symptoms of the same class). Barrier-Newton contact makes interpenetration
+*mathematically impossible* at every intermediate state, not just at
+convergence. Their other advantages (offline scale, CUDA) are design points
+we don't want; this one is a capability we lack.
+
+**What it is.** A new solver backend, peer to `XpbdSolver`/`VbdSolver`:
+
+1. **Energy.** Incremental potential per step:
+   `E(x) = ½‖x − x̃‖²_M + h²·[ elastic(x) + Σ_contacts barrier(d(x)) ]`
+   with the cubic barrier `b(d) = κ·(d − d̂)³/d̂²` for `d < d̂` (zero at and
+   beyond d̂ — compact support, no log singularity), and
+   **elasticity-inclusive dynamic stiffness**: κ per contact derived from the
+   local elastic eigen-stiffness so soft and stiff materials get consistent
+   barrier response without hand-tuned global κ (this is the TOG 43.6
+   contribution — do not substitute plain IPC log-barrier κ scheduling).
+   Friction: lagged Coulomb à la IPC (tangential quadratic mollifier around
+   the previous iterate's normal force; μ_s/μ_k split composes here
+   naturally — see the A1 findings, which this backend obsoletes for
+   deformables).
+2. **Newton loop (per step, all on device).**
+   a. Broad phase: reuse the LBVH (`molla-geometry/lbvh.rs`, already GPU).
+   b. Constraint set: vertex-triangle + edge-edge pairs within d̂ (GPU
+      pair kernels exist in the soft-contact pipeline; extend to EE).
+   c. Assemble gradient + Hessian: elastic blocks (the FEM element
+      Hessians we already assemble on GPU for `elasticity_gpu`) + per-pair
+      barrier Hessians (4×4 blocks of 3×3 — new WGSL, analytic, with the
+      standard SPD projection of indefinite pair blocks).
+   d. Solve `H Δx = −g` with the **existing** device-resident PCG
+      (`fem_cg_fused.wgsl` / `BsrAlgebraKernel` — the same machinery the
+      mixed-elasticity GPU saddle uses). Block-Jacobi preconditioner v1.
+   e. **CCD line search**: α ← min(1, 0.9·TOI(x, Δx)) then backtrack on
+      energy. TOI = GPU kernel: per-pair conservative CCD (additive-CCD is
+      the pragmatic choice over exact root-finding — monotone, GPU-friendly,
+      and sufficient for the invariant); min-reduce α across pairs
+      (single-workgroup reduction, same pattern as the APIC CG dots).
+      This kernel IS the F14 deliverable — land it here, then also wire it
+      into the VBD pre-substep pass to lift the GPU CCD refusal.
+   f. Converge on ‖g‖_∞ or Newton-decrement; f32 with the convergence
+      freeze discipline from the APIC CG port (f32 Krylov diverges past
+      convergence — proven twice in this codebase).
+3. **Strain limiting** (phase 2): singular-value constraints on F per
+   triangle folded into the same Newton solve as barrier terms on
+   `σ_max − σ_limit` — gives ZOZO-style "strict 1–5%, not rubbery" cloth.
+4. **Invariant enforcement in tests, not just code**: every test ends with
+   an explicit intersection scan (their practice, worth copying verbatim).
+
+**What we already have** (why this is tractable): GPU LBVH broad phase,
+VT soft-contact pair kernels, GPU FEM element Hessians + BSR assembly,
+device-resident PCG with on-device dots, the f32-freeze lesson, per-body
+CSR threading patterns, and a large deformable test corpus with oracles.
+The genuinely new pieces are: the barrier energy/Hessian WGSL, EE pairs,
+the additive-CCD TOI kernel + α-reduction, and the Newton driver loop.
+
+**Phasing** (each phase lands green independently):
+1. CPU oracle: barrier-Newton for a triangle-mesh shell vs a plane +
+   sphere, f64, with FD-validated gradient/Hessian and the intersection
+   scan. (Small — this is the correctness anchor for everything after.)
+2. GPU port of phase 1 (assembly + PCG + CCD line search), parity vs the
+   CPU oracle; land the TOI kernel into VBD's CCD path (closes F14).
+3. EE pairs + self-collision (the cursed cases: cloth-on-cloth, twist).
+4. Tets (reuse `elasticity_gpu` Hessians) + strain limiting + μ_s/μ_k.
+5. Scale pass: pair compaction, warm-started PCG, Hessian reuse across
+   Newton iterations where the constraint set is stable.
+
+**Oracles.** Phase 1: FD gradcheck (the `cloth_diff` recipe); analytic
+sphere-drop rest depth → barrier gap ∈ (0, d̂); intersection scan after
+every test. Phase 3: the twisted-cloth-cylinder stress test (their
+`curriculum` scenes are Apache-2.0 — port the setups, compare
+qualitative outcomes). Performance target: real-time for viewer-scale
+scenes (10k–50k vertices) — we are NOT chasing their 180M-contact offline
+regime; we are chasing their *invariant* at our scale.
+
+**Effort.** Multi-week (largest single item in the roadmap). Phase 1 is a
+1–2 session start with standalone value.
+
+
 ### C1. Multi-phase flow with surface tension
+
+**Status.** Landed for level-set / CSF primitives.
+
+**Result.** `molla-fem::multiphase` now provides
+`level_set_curvature_2d`, `level_set_smooth_delta`, and
+`csf_surface_tension_force_2d`, giving the FEM/NS stack a CPU oracle
+for continuum-surface-force surface tension from a signed-distance
+interface.
 
 **Problem.** molla has single-phase NS (Stage 36.2 / 41). Two-phase flow
 (water + air, oil + water) needs an interface tracking method (level-set
@@ -347,6 +563,15 @@ can't even render the free surface.
 
 ### C2. Compressible / Euler equations on DG (Stage 43 follow-on)
 
+**Status.** Landed for 2D Euler flux primitives.
+
+**Result.** `molla-fem` now exposes ideal-gas 2D Euler physical flux,
+pressure, Rusanov flux, and HLL flux helpers:
+`euler_flux_dot_n_2d`, `euler_pressure_2d`,
+`compute_euler_numerical_flux_rusanov_2d`, and
+`compute_euler_numerical_flux_hll_2d`. They plug into the existing DG
+face quadrature infrastructure the same way the SWE flux helpers do.
+
 **Problem.** Stage 43 v4 (`bed9c43`) shipped HLL/HLLC/Roe flux for SWE.
 The same flux library applies to compressible Euler with very few
 changes — a 5-equation system instead of 3, and an EOS (ideal gas)
@@ -368,6 +593,25 @@ The DG infra is already 90 % there.
 
 ### C3. Phase-field fracture
 
+**Status.** COMPLETE 2026-07-04 — the coupled staggered
+displacement↔damage driver (`solve_phase_field_coupled_step`) landed on
+top of the AT2 oracle: exact homogeneous identity, 8.8× notch
+localization, monotone irreversibility, 13.6% softening over 4 load
+steps. The spectral tensile split landed same-day
+(compression → exactly zero damage) and 3D tets followed 2026-07-05
+(dimension-generic driver, exact 3D identity, eig3_sym split). C3 has
+NO remaining documented gaps. Original oracle notes below.
+
+**Result.** `molla-fem` now exposes `PhaseFieldFractureParams`,
+`phase_field_degradation`, `update_phase_field_history`,
+`phase_field_fracture_energy_density`,
+`assemble_phase_field_fracture_system`, and
+`solve_phase_field_fracture_jacobi`. The implementation assembles the
+frozen-history AT2 weak form on P1 triangles/tetrahedra with the
+existing FEM mass/stiffness kernels, then solves a bounded irreversible
+Jacobi update (`d_new >= d_old`, `0 <= d <= 1`) as the CPU correctness
+oracle.
+
 **Problem.** Brittle / quasi-brittle fracture as a coupled
 displacement + damage field. The damage field `d ∈ [0, 1]` is a second
 scalar PDE solved on the same FEM mesh, with a degraded elasticity
@@ -386,6 +630,16 @@ cracking-glass demos). Not on any roadmap.
 There's no proxy in molla today.
 
 ### C4. Mooney-Rivlin / Neo-Hookean tangents
+
+**Status.** Landed for P1 tetrahedra.
+
+**Result.** `molla-fem` now exposes compressible Neo-Hookean and
+Mooney-Rivlin element energies, internal forces, and consistent
+finite-difference tangents:
+`compute_element_neo_hookean_*` and
+`compute_element_mooney_rivlin_*`. The Neo-Hookean identity tangent is
+tested against the linear-elasticity stiffness, and the
+Mooney-Rivlin tangent is tested for symmetry / zero identity force.
 
 **Problem.** Stage 36.1 ships linear elasticity + St. Venant-Kirchhoff
 (SVK) stress. SVK is wrong in compression (the strain-energy density
@@ -407,6 +661,15 @@ soft-tissue substrate. Tendons are SVK-OK; muscle bellies aren't.
 
 ### C5. Rate-and-state friction (Dieterich-Ruina)
 
+**Status.** Landed as reusable law/state helpers.
+
+**Result.** `molla-fem` now exposes
+`RateStateFrictionParams`, `RateStateFrictionState`,
+`rate_state_friction_coeff`, and `advance_rate_state_friction` for the
+Dieterich-Ruina aging law. The helper gives contact solvers a
+per-contact evolving friction coefficient without baking the law into a
+specific Signorini or particle pipeline.
+
 **Problem.** Stage 50 ships Coulomb friction. A1 above adds the
 static / kinetic split. Geological / seismic / advanced-tribology
 workloads need rate-and-state friction — a continuum law with an
@@ -425,6 +688,13 @@ present.
 advanced bearing tribology — these are the use cases for D-R.
 
 ### C6. GPU port of muscle SEE for non-default stiffness ratios
+
+**Status.** Landed with A2.
+
+**Result.** The muscle GPU path now carries
+`tendon_stiffness_ratio` through the per-muscle buffers in
+`molla-actuators`, the solver binding path, and the WGSL kernel, so
+non-default SEE stiffness ratios no longer require CPU fallback.
 
 **Problem.** Stage 42 v4 (`0411d0b`) shipped SEE (series-elastic element)
 Newton GPU/CPU parity *for the default* stiffness ratio. The
@@ -445,6 +715,16 @@ single coherent muscle-on-GPU push.
 get bundled together.
 
 ### C7. Krylov restart in transient FEM steppers
+
+**Status.** Landed for the CPU backward-Euler transient PCG path.
+
+**Result.** `molla-fem` now exposes `KrylovRestartCache` and
+`solve_transient_pcg_restarted`. The restarted solve keeps a bounded set
+of recent correction directions, computes a tiny minimum-residual
+projection in `x0 + span(cache)` before PCG, and stores the accepted
+correction for the next time step. This gives the transient steppers a
+real recycled-Krylov contract beyond simply warm-starting with the
+previous solution.
 
 **Problem.** Stage 45 v4 (`66d976a`) wired Krylov restart into
 `solve_after_remesh`. The transient steppers (`WaveStepperGpu`,

@@ -1,0 +1,31 @@
+[package]
+name = "molla-compute-primitives"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Reusable tiled compute primitives for molla."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+gpu = ["dep:wgpu", "molla-core/gpu"]
+resource-counters = ["gpu", "wgpu/counters", "molla-core/gpu-metrics"]
+
+[dependencies]
+molla-core = { path = "../molla-core", default-features = false }
+molla-math = { path = "../molla-math" }
+bytemuck = { version = "1.18", features = ["derive"] }
+wgpu = { version = "29", optional = true, default-features = false, features = [
+    "wgsl",
+    "vulkan",
+    "metal",
+    "dx12",
+    "std",
+] }
+
+[dev-dependencies]
+molla-compute = { path = "../molla-compute", default-features = false, features = ["gpu"] }

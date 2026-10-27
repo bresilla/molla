@@ -27,7 +27,7 @@ References:
 
 Stage 28 ships the CPU implementation at
 `crates/molla/src/geometry/mpr.rs`; Stage 28.1 adds the WGSL port
-in `crates/molla/shaders/mpr.wgsl`.
+in `crates/molla-geometry/shaders/mpr.wgsl`.
 
 ## Public API
 

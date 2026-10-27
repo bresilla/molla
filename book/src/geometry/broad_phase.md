@@ -12,7 +12,7 @@ parity-tested against brute force in
 | Brute force | `geometry/broad_phase.rs::brute_force_pairs` | tests only | parity checks, < 20 shapes |
 | Sweep-and-Prune (SAP) | `geometry/broad_phase.rs::BroadPhase::sap_pairs` | **yes** | up to a few hundred shapes |
 | Top-down BVH | `geometry/bvh.rs::Bvh::pairs` | opt-in | > few hundred shapes |
-| GPU LBVH | `kernels/lbvh.rs::LbvhBroadPhase` | opt-in (`gpu` feature) | > 1 k shapes |
+| GPU LBVH | `molla_geometry::LbvhBroadPhase` | opt-in (`gpu` feature) | > 1 k shapes |
 
 ## Pair filtering
 
@@ -110,7 +110,7 @@ crossover on a modern CPU).
 
 ## GPU LBVH
 
-`crates/molla/src/kernels/lbvh.rs` ships a Karras-2012 LBVH
+`crates/molla-geometry/src/lbvh.rs` ships a Karras-2012 LBVH
 ("Maximizing parallelism in the construction of BVHs, octrees, and
 k-d trees") with a parallel pair-finder. Enable via:
 

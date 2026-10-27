@@ -1,0 +1,13 @@
+[package]
+name = "molla-vehicle"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Wheeled-vehicle simulation for molla — terrain, tires, suspension, driveline."
+
+[lints]
+workspace = true
+
+[dependencies]

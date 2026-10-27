@@ -2,7 +2,7 @@
 
 Stage 48 added a **time-harmonic eddy-current** solver on top of the
 H(curl) Nedelec basis from [magnetostatics](./magneto.md). It lives
-in `crates/molla/src/fem/eddy_current.rs` (~1450 lines, including the
+in `crates/molla-fem/src/eddy_current.rs` (~1450 lines, including the
 AMS preconditioner) and solves the complex curl–curl–mass system that
 arises from the Fourier transform of Maxwell's equations.
 
@@ -73,6 +73,7 @@ pub struct EddyCurrentConfig {
     pub tol: Real,
     pub gmres_restart: usize,
     pub use_ams: bool,
+    pub block_precond_sweeps: usize,
 }
 
 pub struct EddyCurrentResult {
@@ -96,7 +97,10 @@ pub fn solve_eddy_current_steady(
 ) -> Result<EddyCurrentResult>;
 
 pub fn solve_eddy_current_steady_ams(...) -> Result<EddyCurrentResult>;
+pub fn solve_eddy_current_steady_ams_block(...) -> Result<EddyCurrentResult>;
 pub fn solve_eddy_current_steady_ams_mg(...) -> Result<EddyCurrentResult>;
+pub fn solve_eddy_current_frequency_sweep(...) -> Result<Vec<EddyFrequencySweepSample>>;
+pub fn project_nedelec_coulomb_gauge(...) -> Result<Vec<Real>>;
 ```
 
 ## Solvers — three paths
@@ -126,18 +130,30 @@ preconditioning into:
 The combination is provably **mesh-independent** under the discrete
 Helmholtz decomposition — iteration count stays bounded as `h → 0`.
 
-`build_discrete_gradient` and `build_p1_vector_laplacian` are the
-ingredients:
+`build_discrete_gradient`, `build_p1_vector_interpolation`, and
+`build_p1_vector_laplacian` are the ingredients:
 
 ```rust
 pub fn build_discrete_gradient(mesh: &FemMesh) -> Result<BsrMatrix>;
+pub fn build_p1_vector_interpolation(mesh: &FemMesh) -> Result<BsrMatrix>;
 pub fn build_p1_vector_laplacian(mesh: &FemMesh, dim: usize) -> Result<BsrMatrix>;
 ```
 
 The first returns the discrete gradient \\( G : \mathbb{R}^{n_{\text{verts}}} \to \mathbb{R}^{n_{\text{edges}}} \\)
 that maps a nodal scalar to its tangential edge-integral (entries
-\\( \pm 1 \\) only — orientation-dependent). The second assembles the
+\\( \pm 1 \\) only — orientation-dependent). The second returns the
+Π interpolation \\( \Pi : (P1)^3 \to \text{Nedelec} \\) whose edge row
+integrates the average endpoint vector field along the canonical edge:
+\\( (\Pi u)_e = \frac{1}{2}(u_a + u_b) \cdot (x_b - x_a) \\). The third assembles the
 \\( \mu \int \nabla u : \nabla v \\) Laplacian on P1 vector space.
+
+Stage 48 v5 enables the Π branch in `AmsPreconditioner::apply` by
+default. The preconditioner now combines edge Jacobi smoothing, the
+scalar gradient branch, and the vector-nodal Π branch. The latter uses
+a fixed-iteration CG solve on the pinned vector-P1 Laplacian so the
+overall preconditioner remains linear for GMRES. For compatibility
+experiments, `AmsPreconditioner::with_pi_projection(false)` restores
+the old gradient-only action.
 
 ### `solve_eddy_current_steady_ams_mg` (v3) — AMS + Multigrid V-cycle
 
@@ -147,12 +163,60 @@ hierarchy. See [multigrid](./multigrid.md) for the V-cycle structure.
 Empirically this cuts the iteration count on the larger eddy
 fixtures (32³ tets) by 4–5× over the v2 fixed-iter CG.
 
+### `solve_eddy_current_steady_ams_block` (v6) — block-coupled AMS
+
+The v6 path targets high `ωσ`, where the off-diagonal
+`±ω M_σ` block dominates and a purely block-diagonal preconditioner
+stalls. It keeps the AMS action as the approximate inverse for
+`K_main`, but applies a fixed number of stationary refinement sweeps
+against the full block-real operator:
+
+```text
+z0    = D^-1 r
+z{i+1}= z{i} + D^-1 (r - A z{i})
+```
+
+where `D^-1` means "apply AMS independently to the real and imaginary
+halves". Because `EddyCurrentConfig::block_precond_sweeps` is fixed
+for the whole solve, this is still a linear preconditioner and remains
+safe inside GMRES. `block_precond_sweeps = 1` recovers the old
+decoupled action; the default is `2`.
+
+## Frequency sweeps and Coulomb-gauge projection
+
+`solve_eddy_current_frequency_sweep` runs the same problem over a list
+of angular frequencies, using one of:
+
+```rust
+pub enum EddyCurrentSolveMode {
+    Jacobi,
+    Ams,
+    AmsBlock,
+}
+```
+
+Each returned `EddyFrequencySweepSample` records the sampled `omega`,
+the `EddyCurrentResult`, and the remaining discrete gauge residual.
+When gauge enforcement is requested, both real and imaginary edge
+potentials are projected by solving
+
+```text
+(G^T G) φ = G^T a
+a_gauge = a - Gφ
+```
+
+where `G` is the discrete P1-to-Nedelec gradient. Pinned edge values
+are restored after projection, so boundary Dirichlet conditions are
+preserved. This removes the report-facing gradient ambiguity without
+changing the curl field used by the physical validation tests.
+
 ## `AmsPreconditioner`
 
 ```rust
 pub struct AmsPreconditioner {
     g: BsrMatrix,                 // discrete gradient
     k_aux_scalar: BsrMatrix,      // H¹ Laplacian
+    pi: BsrMatrix,                // vector-P1 -> Nedelec interpolation
     k_aux_vector: BsrMatrix,      // P1 vector Laplacian
     diag_smoother: Vec<Real>,     // Jacobi smoother diagonal
     aux_solver: AuxSolver,        // CG or V-cycle

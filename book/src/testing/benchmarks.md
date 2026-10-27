@@ -1,8 +1,12 @@
 # Benchmarks
 
-molla ships 43 [`criterion`](https://github.com/bheisler/criterion.rs)
-benches in `crates/molla/benches/`, grouped by stage family. They
-serve two purposes:
+molla ships [`criterion`](https://github.com/bheisler/criterion.rs) benches in
+the crate that owns the measured functionality. Most physics benches now live
+under `crates/molla-solvers/benches/`, geometry benches under
+`crates/molla-geometry/benches/`, kernel benches under
+`crates/molla-kernels/benches/`, sensor benches under
+`crates/molla-sensors/benches/`, and facade/product step benches under
+`crates/molla/benches/`. They serve two purposes:
 
 1. **Tracking perf regressions** — criterion saves baseline times
    and reports relative changes per run.
@@ -26,13 +30,13 @@ make bench-featherstone     # CPU-vs-GPU Featherstone in one criterion group
 To run a specific bench:
 
 ```bash
-nixVulkan cargo bench -p molla --bench bench_xpbd_pile_gpu --features gpu
+nixVulkan cargo bench -p molla-solvers --bench bench_xpbd_pile_gpu --features gpu
 ```
 
-Each bench's name maps 1:1 to a `crates/molla/benches/<name>.rs`
-file. The Cargo.toml `[[bench]]` sections set
-`required-features = ["gpu"]` for the GPU benches so they only
-attempt to build when the feature is on.
+Each bench's name maps 1:1 to a `benches/<name>.rs` file in the owning crate.
+The owning crate's Cargo.toml `[[bench]]` sections set
+`required-features = ["gpu"]` for GPU benches so they only attempt to build when
+the feature is on.
 
 ## Bench inventory by family
 

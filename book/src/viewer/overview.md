@@ -97,7 +97,6 @@ match (current_solver_kind, backend) {
     (SolverKind::Featherstone, Backend::Gpu) => FeatherstoneSolver::new_gpu(&engine)?,
     (SolverKind::Vbd, Backend::Cpu)   => VbdSolver::new_cpu(),
     (SolverKind::Vbd, Backend::Gpu)   => VbdSolver::new_gpu(&engine)?,
-    (SolverKind::MuJoCo, _)           => MuJoCoSolver::new(&model)?,
 }
 ```
 
@@ -131,7 +130,7 @@ demonstration of the [CPU↔GPU design rule](../architecture/design_rules.md).
 | `Tab` | Toggle the control pane                                        |
 | `Q`   | Switch to `Scene::Quadrotor`                                   |
 | `V`   | Switch to `Scene::VbdCloth`                                    |
-| `J`   | Switch to `Scene::MuJoCo`                                      |
+| `J`   | Switch to the native reference-pendulum scene                   |
 | `G`   | Switch to `Scene::DiffArm`                                     |
 | `H`   | Switch to `Scene::DiffArm6`                                    |
 | `M`   | Switch to `Scene::MeshTools`                                   |
@@ -149,4 +148,4 @@ the dropdown in the top-left.)
 - [`adapters/bevy.md`](../adapters/bevy.md) — Bevy plumbing
   patterns + the SystemParam ceiling.
 - [`viewer/scenes.md`](./scenes.md) — full ~100-scene catalog.
-- `crates/molla_viewer/src/main.rs` — the source.
+- `bin/molla_viewer/src/main.rs` — the source.

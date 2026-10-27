@@ -267,7 +267,8 @@ into a sim-ready, GPU-uploadable `Model`:
    `joint_dof_offset`).
 8. Registers soft surfaces (tet boundary tris + cloth tessellation
    tris) into the cross-mesh VT contact pipeline.
-9. Builds per-trimesh BVHs (`TriMesh::build_bvh`).
+9. Keeps registered triangle meshes as raw model data; geometry builds
+   BVH/cache structures at collision or bake boundaries.
 10. Mirrors the host-side enum data into the GPU-friendly parallel
     arrays (`shape_geom_kind` / `shape_geom_data`).
 

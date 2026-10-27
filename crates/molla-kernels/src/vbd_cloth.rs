@@ -1,0 +1,1593 @@
+//! Rust dispatch wrapper for the cloth Vertex Block Descent (VBD)
+//! solver in `shaders/vbd_cloth.wgsl`. The kernel is split into four
+//! entry points: `predict`, `solve_color`, `apply_shape_contacts`,
+//! `velocity_recovery`. Mirrors `XpbdParticlesKernel` (graph-coloured
+//! per-pass dispatch, scratch buffers for the per-substep state).
+//!
+//! See `solvers/vbd.rs` for the algorithm description.
+
+use molla_core::{Error, Result};
+use molla_math::{GpuMat3, Mat3, Real, Transform, Vec3};
+use molla_sim::{Model, State};
+use molla_storage::{Buffer, BufferUsage};
+
+mod bindings;
+use bindings::BindingCache;
+mod coupled_patch;
+use coupled_patch::CoupledPatch;
+pub use coupled_patch::MaterialContactPatchBindings;
+mod linearization;
+use linearization::MaterialLinearization;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Uniforms {
+    particle_count: u32,
+    spring_count: u32,
+    color_count: u32,
+    color_index: u32,
+    work_count: u32,
+    dt: f32,
+    linear_damping: f32,
+    contact_stiffness: f32,
+    /// AVBD mode flag: 0 = soft (Stage 20), 1 = hard (Stage 20.1
+    /// augmented-Lagrangian dual updates).
+    is_hard: u32,
+    _pad1: f32,
+}
+
+const WORKGROUP_SIZE: u32 = 64;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DispatchMode {
+    Step,
+    BeginMaterial,
+    ContinueMaterial,
+    PolishMaterial,
+    ForceResidual,
+    Linearization,
+}
+
+#[derive(PartialEq, Eq)]
+struct MaterialContinuation {
+    groups: [wgpu::BindGroup; 5],
+    timestep: u32,
+}
+
+/// Owns the VBD pipelines + per-substep scratch buffers.
+/// Sized for a specific `(particle_count, spring_count)` — rebuild
+/// the kernel if either changes.
+pub struct VbdClothKernel {
+    bindings: BindingCache,
+    pipe_predict: wgpu::ComputePipeline,
+    pipe_retarget: wgpu::ComputePipeline,
+    pipe_cache_previous: wgpu::ComputePipeline,
+    continuation: Option<MaterialContinuation>,
+    force_samples_ready: bool,
+    coupled_patch: Option<CoupledPatch>,
+    linearization: Option<MaterialLinearization>,
+    pipe_residual_seed: wgpu::ComputePipeline,
+    pipe_force_residual: wgpu::ComputePipeline,
+    pipe_solve_color: wgpu::ComputePipeline,
+    pipe_polish_color: wgpu::ComputePipeline,
+    pipe_shape_contacts: wgpu::ComputePipeline,
+    pipe_update_dual: wgpu::ComputePipeline,
+    pipe_velocity: wgpu::ComputePipeline,
+    /// Stage 20.3 — von Mises return mapping. Dispatched once per
+    /// substep, after the per-vertex block iterations converge, with
+    /// `work_count = tet_count`. No-op when `tet_count == 0` (the
+    /// host skips the dispatch).
+    pipe_plasticity: wgpu::ComputePipeline,
+
+    layout_state: wgpu::BindGroupLayout,
+    layout_topo: wgpu::BindGroupLayout,
+    layout_out: wgpu::BindGroupLayout,
+    layout_uniforms: wgpu::BindGroupLayout,
+    layout_shapes: wgpu::BindGroupLayout,
+    /// Stage-20.2 tet bind-group layout (group 5). Always 7 bindings;
+    /// bound to dummy 1-element buffers when `tet_count == 0`.
+    layout_tets: wgpu::BindGroupLayout,
+
+    /// Per-spring stiffness (N/m), derived from XPBD compliance at
+    /// upload time as `k = 1 / max(α, ε)` and then capped to the
+    /// `max_stiffness` solver knob. Owned by the kernel because the
+    /// compliance lives in the `Model`; converting once on the host
+    /// avoids a per-step conversion in WGSL.
+    spring_stiffness: Buffer<Real>,
+    /// Particle displacements followed by six cached gradient columns per tet.
+    particle_delta: wgpu::Buffer,
+    /// Per-particle inertial displacement target.
+    inertia_y: Buffer<Vec3>,
+    /// Per-particle augmented-Lagrangian multiplier (Stage 20.1
+    /// hard-mode AVBD). Zero in soft mode. Stored as `Real` (host)
+    /// → `f32` (device) via the standard `BufferElement` projection.
+    contact_lambda: Buffer<Real>,
+
+    /// 1-element placeholder buffers for any bind group whose model
+    /// arrays may be empty (no springs / no shapes / no tets).
+    dummy_u32: Buffer<u32>,
+    dummy_real: Buffer<Real>,
+    dummy_vec3: Buffer<Vec3>,
+    dummy_i32: Buffer<i32>,
+    dummy_xform: Buffer<Transform>,
+    dummy_mat3: Buffer<Mat3>,
+    /// Stage 20.3 — separate `read_write` placeholders for the F_p /
+    /// ε_p bindings on bind group 5. wgpu refuses to bind the same
+    /// buffer with conflicting usages within a single dispatch
+    /// (read-only vs read-write), so we pre-allocate dedicated 1-elem
+    /// buffers used only when the model has no tets.
+    dummy_mat3_rw: Buffer<Mat3>,
+    dummy_real_rw: Buffer<Real>,
+
+    particle_count: u32,
+    spring_count: u32,
+}
+
+impl VbdClothKernel {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        particle_count: u32,
+        spring_count: u32,
+        per_spring_stiffness: &[Real],
+    ) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("molla::vbd_cloth"),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("../shaders/tet_viscosity.wgsl"),
+                    "\n",
+                    include_str!("../shaders/vbd_cloth.wgsl"),
+                )
+                .replace(
+                    "const CACHE_PREVIOUS_TETS: bool = false;",
+                    "const CACHE_PREVIOUS_TETS: bool = true;",
+                )
+                .into(),
+            ),
+        });
+
+        // State group: 7 read-only inputs.
+        let layout_state = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::vbd_cloth state"),
+            entries: &storage_entries(7, true),
+        });
+        // Topology group: 9 read-only inputs.
+        let layout_topo = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::vbd_cloth topo"),
+            entries: &storage_entries(9, true),
+        });
+        // Output / scratch group: 5 read-write (added contact_lambda
+        // at binding 4 for Stage 20.1 hard-mode AVBD).
+        let layout_out = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::vbd_cloth out"),
+            entries: &storage_entries(5, false),
+        });
+        let layout_uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::vbd_cloth uniforms"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        // Shapes group: 5 read-only (kind, data, body, transform, body_q).
+        let layout_shapes = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::vbd_cloth shapes"),
+            entries: &storage_entries(5, true),
+        });
+        // Stage 20.2/20.3/20.4 tet + cable-bending group:
+        //   - 10 read-only entries (7 tet + 3 cable bending) — Stage 20.2.
+        //   - 2 read-write entries (F_p, ε_p) — Stage 20.3 plasticity.
+        //   - 2 read-only entries (yield, hardening) — Stage 20.3 material.
+        //   - 1 read-write entry (back-stress α) — Stage 20.4.
+        //   - 1 read-only entry (kinematic-hardening modulus c) — Stage 20.4.
+        // 17 total, including shear/bulk viscosity at binding 16.
+        // All buffers are non-empty — when the model has no
+        // tets / bending the host binds dummy 1-element placeholders.
+        let mut tet_entries = storage_entries(10, true);
+        // Bindings 10 + 11: F_p / ε_p as read-write (mutated by the
+        // plasticity entry point).
+        tet_entries.extend(storage_entries(2, false).into_iter().map(|mut e| {
+            e.binding += 10;
+            e
+        }));
+        // Bindings 12 + 13: yield + hardening (read-only material).
+        tet_entries.extend(storage_entries(2, true).into_iter().map(|mut e| {
+            e.binding += 12;
+            e
+        }));
+        // Binding 14: back-stress α (read-write, Stage 20.4).
+        tet_entries.extend(storage_entries(1, false).into_iter().map(|mut e| {
+            e.binding += 14;
+            e
+        }));
+        // Binding 15: kinematic-hardening modulus c (read-only, Stage 20.4).
+        tet_entries.extend(storage_entries(2, true).into_iter().map(|mut e| {
+            e.binding += 15;
+            e
+        }));
+        let layout_tets = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::vbd_cloth tets"),
+            entries: &tet_entries,
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("molla::vbd_cloth layout"),
+            bind_group_layouts: &[
+                Some(&layout_state),
+                Some(&layout_topo),
+                Some(&layout_out),
+                Some(&layout_uniforms),
+                Some(&layout_shapes),
+                Some(&layout_tets),
+            ],
+            immediate_size: 0,
+        });
+
+        let make_pipeline = |entry: &str| -> wgpu::ComputePipeline {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("molla::vbd_cloth"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some(entry),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            })
+        };
+
+        let pipe_predict = make_pipeline("predict");
+        let pipe_retarget = make_pipeline("retarget");
+        let pipe_cache_previous = make_pipeline("cache_previous_tets");
+        let pipe_residual_seed = make_pipeline("residual_seed");
+        let pipe_force_residual = make_pipeline("force_residual");
+        let pipe_solve_color = make_pipeline("solve_color");
+        let pipe_polish_color = make_pipeline("polish_color");
+        let pipe_shape_contacts = make_pipeline("apply_shape_contacts");
+        let pipe_update_dual = make_pipeline("update_dual");
+        let pipe_velocity = make_pipeline("velocity_recovery");
+        let pipe_plasticity = make_pipeline("plasticity_return_map");
+
+        let pn = particle_count.max(1) as usize;
+        let sn = spring_count.max(1) as usize;
+        let stiffness_init = if per_spring_stiffness.len() == sn
+            || per_spring_stiffness.len() == spring_count as usize
+        {
+            let mut v = vec![0.0_f64; sn];
+            for (dst, src) in v.iter_mut().zip(per_spring_stiffness.iter()) {
+                *dst = *src;
+            }
+            v
+        } else {
+            vec![0.0_f64; sn]
+        };
+        let mut spring_stiffness = Buffer::from_vec(stiffness_init, BufferUsage::Storage);
+        let particle_delta = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::vbd_cloth displacement and gradient scratch"),
+                size: (pn as u64) * 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }
+        );
+        let mut inertia_y = Buffer::from_vec(vec![Vec3::ZERO; pn], BufferUsage::StorageReadWrite);
+        let mut contact_lambda = Buffer::from_vec(vec![0.0_f64; pn], BufferUsage::StorageReadWrite);
+        let _ = spring_stiffness.ensure_device(device);
+        let _ = spring_stiffness.upload(queue);
+        let _ = inertia_y.ensure_device(device);
+        let _ = inertia_y.upload(queue);
+        let _ = contact_lambda.ensure_device(device);
+        let _ = contact_lambda.upload(queue);
+
+        let mut dummy_u32 = Buffer::from_vec(vec![0u32; 2], BufferUsage::Storage);
+        let mut dummy_real = Buffer::from_vec(vec![0.0_f64; 1], BufferUsage::Storage);
+        let mut dummy_vec3 = Buffer::from_vec(vec![Vec3::ZERO; 1], BufferUsage::Storage);
+        let mut dummy_i32 = Buffer::from_vec(vec![0i32; 1], BufferUsage::Storage);
+        let mut dummy_xform = Buffer::from_vec(vec![Transform::IDENTITY; 1], BufferUsage::Storage);
+        let mut dummy_mat3 = Buffer::from_vec(vec![Mat3::IDENTITY; 1], BufferUsage::Storage);
+        // Stage 20.3 — read-write dummies for F_p / ε_p bindings.
+        let mut dummy_mat3_rw =
+            Buffer::from_vec(vec![Mat3::IDENTITY; 1], BufferUsage::StorageReadWrite);
+        let mut dummy_real_rw = Buffer::from_vec(vec![0.0_f64; 1], BufferUsage::StorageReadWrite);
+        let _ = dummy_u32.ensure_device(device);
+        let _ = dummy_u32.upload(queue);
+        let _ = dummy_real.ensure_device(device);
+        let _ = dummy_real.upload(queue);
+        let _ = dummy_vec3.ensure_device(device);
+        let _ = dummy_vec3.upload(queue);
+        let _ = dummy_i32.ensure_device(device);
+        let _ = dummy_i32.upload(queue);
+        let _ = dummy_xform.ensure_device(device);
+        let _ = dummy_xform.upload(queue);
+        let _ = dummy_mat3.ensure_device(device);
+        let _ = dummy_mat3.upload(queue);
+        let _ = dummy_mat3_rw.ensure_device(device);
+        let _ = dummy_mat3_rw.upload(queue);
+        let _ = dummy_real_rw.ensure_device(device);
+        let _ = dummy_real_rw.upload(queue);
+
+        Self {
+            bindings: BindingCache::new(64),
+            pipe_predict,
+            pipe_retarget,
+            pipe_cache_previous,
+            continuation: None,
+            force_samples_ready: false,
+            coupled_patch: None,
+            linearization: None,
+            pipe_residual_seed,
+            pipe_force_residual,
+            pipe_solve_color,
+            pipe_polish_color,
+            pipe_shape_contacts,
+            pipe_update_dual,
+            pipe_velocity,
+            pipe_plasticity,
+            layout_state,
+            layout_topo,
+            layout_out,
+            layout_uniforms,
+            layout_shapes,
+            layout_tets,
+            spring_stiffness,
+            particle_delta,
+            inertia_y,
+            contact_lambda,
+            dummy_u32,
+            dummy_real,
+            dummy_vec3,
+            dummy_i32,
+            dummy_xform,
+            dummy_mat3,
+            dummy_mat3_rw,
+            dummy_real_rw,
+            particle_count,
+            spring_count,
+        }
+    }
+
+    /// Push a fresh per-spring stiffness table (host-side) and re-upload
+    /// to the device. Useful when the user tweaks stiffness sliders in
+    /// the viewer without rebuilding the model.
+    pub fn set_spring_stiffness(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        per_spring_stiffness: &[Real],
+    ) -> Result<()> {
+        self.continuation = None;
+        self.force_samples_ready = false;
+        let sn = self.spring_count.max(1) as usize;
+        let host = self.spring_stiffness.host_mut()?;
+        for (dst, src) in host
+            .iter_mut()
+            .zip(
+                per_spring_stiffness
+                    .iter()
+                    .chain(std::iter::repeat(&0.0_f64)),
+            )
+            .take(sn)
+        {
+            *dst = *src;
+        }
+        self.spring_stiffness.ensure_device(device)?;
+        self.spring_stiffness.upload(queue)?;
+        Ok(())
+    }
+
+    /// One VBD substep: predict → (iters × colours × `solve_color`
+    /// [+ optional hard-mode `update_dual`]) → `velocity_recovery`.
+    ///
+    /// `hard_mode = true` enables Stage 20.1 augmented-Lagrangian dual
+    /// updates: after every outer iteration, an `update_dual` dispatch
+    /// bumps the per-particle multiplier `λ` by the residual penetration
+    /// so the next iteration's `solve_color` sees the cumulative force.
+    /// Soft mode (`false`) skips that pass entirely and keeps the
+    /// Stage-20 v1 quadratic-penalty behaviour.
+    #[allow(clippy::too_many_arguments)]
+    pub fn dispatch(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+        contact_stiffness: f32,
+        hard_mode: bool,
+    ) -> Result<()> {
+        self.dispatch_inner(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            iterations,
+            contact_stiffness,
+            hard_mode,
+            DispatchMode::Step,
+        )
+    }
+
+    /// Starts or continues an elastic solve with an updated inertial velocity target.
+    /// Continuation requires unchanged original positions, history, model and timestep;
+    /// only input velocities may change. Other dispatches invalidate the sequence.
+    #[allow(clippy::too_many_arguments)]
+    pub fn material_iteration(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+        begin: bool,
+    ) -> Result<()> {
+        self.material_iterations(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            iterations,
+            if begin {
+                DispatchMode::BeginMaterial
+            } else {
+                DispatchMode::ContinueMaterial
+            },
+        )
+    }
+
+    /// Continues an active elastic solve using compensated material forces.
+    #[allow(clippy::too_many_arguments)]
+    pub fn material_polish(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+    ) -> Result<()> {
+        self.material_iterations(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            iterations,
+            DispatchMode::PolishMaterial,
+        )
+    }
+
+    /// Binds one GPU-selected point/edge patch for the next material polish sequence.
+    pub fn prepare_material_contact_patch(
+        &mut self,
+        device: &wgpu::Device,
+        bindings: MaterialContactPatchBindings<'_>,
+    ) -> Result<()> {
+        if self.coupled_patch.is_none() {
+            self.coupled_patch = Some(CoupledPatch::new(
+                device,
+                [
+                    &self.layout_state,
+                    &self.layout_topo,
+                    &self.layout_out,
+                    &self.layout_uniforms,
+                    &self.layout_shapes,
+                    &self.layout_tets,
+                ],
+            )?);
+        }
+        self.coupled_patch
+            .as_mut()
+            .unwrap()
+            .prepare(device, bindings, self.particle_count)
+    }
+
+    /// Removes the retained patch bindings without changing the particle state.
+    pub fn clear_material_contact_patch(&mut self) {
+        if let Some(patch) = &mut self.coupled_patch {
+            patch.clear();
+        }
+    }
+
+    /// Enables or excludes selected patch rows in the split contact sweep.
+    pub fn encode_material_patch_contacts(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        enabled: bool,
+    ) {
+        if let Some(patch) = &self.coupled_patch {
+            patch.encode_state(encoder, usize::from(enabled));
+        }
+    }
+
+    /// Local solution, residual, active-set mask, counters and last-apply flag.
+    pub fn material_patch_diagnostics(&self) -> Option<&wgpu::Buffer> {
+        self.coupled_patch.as_ref().map(CoupledPatch::diagnostics)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn material_iterations(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+        mode: DispatchMode,
+    ) -> Result<()> {
+        let begin = mode == DispatchMode::BeginMaterial;
+        self.force_samples_ready = false;
+        if begin {
+            self.continuation = None;
+        }
+        if iterations == 0
+            || model.particle_count == 0
+            || model.particle_count as u32 != self.particle_count
+            || model.spring_count as u32 != self.spring_count
+            || model.linear_damping != 0.0
+        {
+            self.continuation = None;
+            return Err(Error::Build(
+                "invalid material continuation configuration".into(),
+            ));
+        }
+        if begin
+            && model
+                .tet_yield_stress
+                .host()?
+                .iter()
+                .any(|v| *v <= 1e29 || v.is_nan())
+        {
+            self.continuation = None;
+            return Err(Error::Build(
+                "material continuation requires elastic tets".into(),
+            ));
+        }
+        self.dispatch_inner(
+            device, queue, model, state_in, state_out, dt, iterations, 0.0, false, mode,
+        )
+    }
+
+    /// Evaluates h M^-1 |force| at q_n + h v_out; returns vec4 inertial targets with residuals in w.
+    /// Supports elastic, zero-world-damping models without shape penalties; leaves states unchanged.
+    pub fn force_residual(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+    ) -> Result<&wgpu::Buffer> {
+        self.continuation = None;
+        self.force_samples_ready = false;
+        if model.particle_count == 0
+            || model.linear_damping != 0.0
+            || model
+                .tet_yield_stress
+                .host()?
+                .iter()
+                .any(|v| *v <= 1e29 || v.is_nan())
+        {
+            return Err(Error::Build(
+                "force residual requires nonempty elastic model and zero world damping".into(),
+            ));
+        }
+        self.dispatch_inner(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            0,
+            0.0,
+            false,
+            DispatchMode::ForceResidual,
+        )?;
+        Ok(self.inertia_y.device_buffer().unwrap())
+    }
+
+    /// Signed velocity residual and analytic Jacobian action at q_n + h v_out.
+    /// Elastic tets, viscoelasticity and springs; nonidentity plastic state emits NaN.
+    #[allow(clippy::too_many_arguments)]
+    pub fn material_linearization(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        direction: &wgpu::Buffer,
+    ) -> Result<(&wgpu::Buffer, &wgpu::Buffer)> {
+        self.continuation = None;
+        self.force_samples_ready = false;
+        if let Some(linearization) = &mut self.linearization {
+            linearization.material_groups = None;
+        }
+        if model.particle_count == 0
+            || model.particle_count as u32 != self.particle_count
+            || model.spring_count as u32 != self.spring_count
+            || model.linear_damping != 0.0
+            || !model.vertex_cable_bending_entries.is_empty()
+            || model
+                .tet_yield_stress
+                .host()?
+                .iter()
+                .any(|v| *v <= 1e29 || v.is_nan())
+        {
+            return Err(Error::Build("material linearization requires matching elastic topology without world damping or cable bending".into()));
+        }
+        if self.linearization.is_none() {
+            self.linearization = Some(MaterialLinearization::new(
+                device,
+                [
+                    &self.layout_state,
+                    &self.layout_topo,
+                    &self.layout_out,
+                    &self.layout_uniforms,
+                    &self.layout_shapes,
+                    &self.layout_tets,
+                ],
+                self.particle_count,
+                model.tet_count as u32,
+            )?);
+        }
+        self.linearization
+            .as_mut()
+            .unwrap()
+            .prepare(device, direction)?;
+        self.dispatch_inner(
+            device,
+            queue,
+            model,
+            state_in,
+            state_out,
+            dt,
+            0,
+            0.0,
+            false,
+            DispatchMode::Linearization,
+        )?;
+        let linearization = self.linearization.as_ref().unwrap();
+        Ok((&linearization.residual, &linearization.action))
+    }
+
+    /// Reuses the last material linearization's bindings and cached reference gradients.
+    /// Candidate velocities and directions may change; reference positions, topology,
+    /// material parameters and timestep must stay fixed until preparation is repeated.
+    pub fn encode_material_linearization(&self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
+        self.encode_material_operator(encoder, false)
+    }
+
+    /// Overwrites the retained action buffer with positive material inverse diagonal entries.
+    pub fn encode_material_inverse_diagonal(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
+        self.encode_material_operator(encoder, true)
+    }
+
+    fn encode_material_operator(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        diagonal: bool,
+    ) -> Result<()> {
+        let linearization = self
+            .linearization
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization is not prepared".into()))?;
+        linearization
+            .cache_ready
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let groups = linearization.material_groups.as_ref().ok_or_else(|| {
+            Error::Build("material linearization bindings were invalidated".into())
+        })?;
+        let direction = linearization
+            .group
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization direction is not bound".into()))?;
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        for (i, group) in groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, group, &[]);
+        }
+        pass.set_bind_group(6, direction, &[]);
+        pass.set_pipeline(&self.pipe_residual_seed);
+        pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        pass.set_pipeline(if diagonal {
+            &linearization.diagonal_pipeline
+        } else {
+            &linearization.pipeline
+        });
+        for (uniform, blocks) in &linearization.batches {
+            pass.set_bind_group(3, uniform, &[]);
+            pass.dispatch_workgroups(*blocks, 1, 1);
+        }
+        Ok(())
+    }
+
+    /// Freezes the material stress derivative at the current retained candidate.
+    pub fn encode_material_tangent_cache(&self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
+        let linearization = self
+            .linearization
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization is not prepared".into()))?;
+        let groups = linearization
+            .material_groups
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization was invalidated".into()))?;
+        let direction = linearization
+            .group
+            .as_ref()
+            .ok_or_else(|| Error::Build("material direction is not bound".into()))?;
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        for (i, group) in groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, group, &[]);
+        }
+        pass.set_bind_group(6, direction, &[]);
+        pass.set_pipeline(&self.pipe_residual_seed);
+        pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        pass.set_pipeline(&linearization.cache_pipeline);
+        for (uniform, blocks) in &linearization.cache_batches {
+            pass.set_bind_group(3, uniform, &[]);
+            pass.dispatch_workgroups(*blocks, 1, 1);
+        }
+        linearization
+            .cache_ready
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Applies the frozen tangent; candidate, geometry and reference state must remain unchanged.
+    pub fn encode_cached_material_action(&self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
+        let linearization = self
+            .linearization
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization is not prepared".into()))?;
+        let groups = linearization
+            .material_groups
+            .as_ref()
+            .ok_or_else(|| Error::Build("material linearization was invalidated".into()))?;
+        if !linearization
+            .cache_ready
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(Error::Build(
+                "material tangent cache is not prepared".into(),
+            ));
+        }
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        for (i, group) in groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, group, &[]);
+        }
+        pass.set_bind_group(6, linearization.group.as_ref().unwrap(), &[]);
+        pass.set_pipeline(&linearization.cached_action_pipeline);
+        pass.dispatch_workgroups(self.particle_count.div_ceil(WORKGROUP_SIZE), 1, 1);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_inner(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &Model,
+        state_in: &State,
+        state_out: &mut State,
+        dt: Real,
+        iterations: u32,
+        contact_stiffness: f32,
+        hard_mode: bool,
+        mode: DispatchMode,
+    ) -> Result<()> {
+        let previous = self.continuation.take();
+        if let Some(linearization) = &mut self.linearization {
+            linearization.material_groups = None;
+        }
+        self.force_samples_ready = false;
+        let residual_only = matches!(
+            mode,
+            DispatchMode::ForceResidual | DispatchMode::Linearization
+        );
+        let reuse = matches!(
+            mode,
+            DispatchMode::ContinueMaterial | DispatchMode::PolishMaterial
+        );
+        if mode == DispatchMode::PolishMaterial
+            && let Some(patch) = self
+                .coupled_patch
+                .as_ref()
+                .filter(|patch| patch.group().is_some())
+            && (model.shape_count != 0
+                || !model.vertex_cable_bending_entries.is_empty()
+                || !state_in
+                    .particle_qd
+                    .device_buffer()
+                    .zip(model.particle_inv_mass.device_buffer())
+                    .is_some_and(|(input, mass)| patch.matches_target(input, mass)))
+        {
+            return Err(Error::Build(
+                "material patch requires matching targets and no shape or cable penalties".into(),
+            ));
+        }
+        if model.particle_count == 0 {
+            return Ok(());
+        }
+        let gpu_dt = dt as f32;
+        if !gpu_dt.is_finite() || gpu_dt <= 0.0 || !(1.0 / gpu_dt).is_finite() {
+            return Err(Error::Gpu(
+                "VBD timestep and inverse must be positive finite f32".into(),
+            ));
+        }
+        if model.tet_viscosity.len() != model.tet_count {
+            return Err(Error::Gpu(
+                "tet viscosity length must equal tet count".into(),
+            ));
+        }
+        let scratch_bytes = gradient_scratch_bytes(
+            model.particle_count,
+            model.tet_count,
+            device
+                .limits()
+                .max_storage_buffer_binding_size
+                .min(device.limits().max_buffer_size),
+        )?;
+        if self.particle_delta.size() < scratch_bytes {
+            self.particle_delta = molla_core::gpu_create_buffer!(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("molla::vbd_cloth displacement and gradient scratch"),
+                    size: scratch_bytes,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                }
+            );
+        }
+        let particle_count_u = model.particle_count as u32;
+        let spring_count_u = model.spring_count as u32;
+        let shape_count_u = model.shape_count as u32;
+        let contact_stiffness = if shape_count_u == 0 {
+            0.0
+        } else {
+            contact_stiffness
+        };
+        let color_count = model.particle_color_count as u32;
+
+        // ── Bind groups ───────────────────────────────────────────
+        let bg_state = self.bindings.storage_group(
+            device,
+            &wgpu::BindGroupDescriptor {
+                label: Some("molla::vbd_cloth state bg"),
+                layout: &self.layout_state,
+                entries: &[
+                    buffer_entry(0, state_in.particle_q.device_buffer())?,
+                    buffer_entry(1, state_in.particle_qd.device_buffer())?,
+                    buffer_entry(2, model.particle_inv_mass.device_buffer())?,
+                    buffer_entry(3, model.particle_radius.device_buffer())?,
+                    buffer_entry(4, model.particle_world.device_buffer())?,
+                    buffer_entry(5, model.gravity.device_buffer())?,
+                    buffer_entry(6, model.initial_particle_q.device_buffer())?,
+                ],
+            },
+        );
+
+        let dummy_u32_buf = self
+            .dummy_u32
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_u32 missing".into()))?;
+        let dummy_real_buf = self
+            .dummy_real
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_real missing".into()))?;
+        let sa_buf = model.spring_a.device_buffer().unwrap_or(dummy_u32_buf);
+        let sb_buf = model.spring_b.device_buffer().unwrap_or(dummy_u32_buf);
+        let rest_buf = model
+            .spring_rest_length
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        let stiff_buf = self
+            .spring_stiffness
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        let vadj_off_buf = model
+            .vertex_adjacent_springs_offsets
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let vadj_buf = model
+            .vertex_adjacent_springs
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let pcol_off_buf = model
+            .particle_color_offsets
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let pcol_idx_buf = model
+            .particle_indices_by_color
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+
+        let bg_topo = self.bindings.storage_group(
+            device,
+            &wgpu::BindGroupDescriptor {
+                label: Some("molla::vbd_cloth topo bg"),
+                layout: &self.layout_topo,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: sa_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: sb_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: rest_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: stiff_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: vadj_off_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: vadj_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: pcol_off_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: pcol_idx_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: model
+                            .spring_tension_only
+                            .device_buffer()
+                            .unwrap_or(dummy_u32_buf)
+                            .as_entire_binding(),
+                    },
+                ],
+            },
+        );
+
+        let bg_out = self.bindings.storage_group(
+            device,
+            &wgpu::BindGroupDescriptor {
+                label: Some("molla::vbd_cloth out bg"),
+                layout: &self.layout_out,
+                entries: &[
+                    buffer_entry(0, state_out.particle_q.device_buffer())?,
+                    buffer_entry(1, state_out.particle_qd.device_buffer())?,
+                    buffer_entry(2, Some(&self.particle_delta))?,
+                    buffer_entry(3, self.inertia_y.device_buffer())?,
+                    buffer_entry(4, self.contact_lambda.device_buffer())?,
+                ],
+            },
+        );
+
+        // Shapes bind group.
+        let dummy_vec3_buf = self
+            .dummy_vec3
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_vec3 missing".into()))?;
+        let dummy_i32_buf = self
+            .dummy_i32
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_i32 missing".into()))?;
+        let dummy_xform_buf = self
+            .dummy_xform
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_xform missing".into()))?;
+        let kind_buf = model
+            .shape_geom_kind
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let data_buf = model
+            .shape_geom_data
+            .device_buffer()
+            .unwrap_or(dummy_vec3_buf);
+        let body_buf = model.shape_body.device_buffer().unwrap_or(dummy_i32_buf);
+        let xform_buf = model
+            .shape_transform
+            .device_buffer()
+            .unwrap_or(dummy_xform_buf);
+        let body_q_buf = state_in.body_q.device_buffer().unwrap_or(dummy_xform_buf);
+        let bg_shapes = self.bindings.storage_group(
+            device,
+            &wgpu::BindGroupDescriptor {
+                label: Some("molla::vbd_cloth shapes bg"),
+                layout: &self.layout_shapes,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: kind_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: data_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: body_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: xform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: body_q_buf.as_entire_binding(),
+                    },
+                ],
+            },
+        );
+
+        // Stage 20.2 — tet bind group. All buffers may be empty when
+        // the model has no tets; fall through to the dummy buffers in
+        // that case (the per-vertex CSR is zero-length, so the inner
+        // tet loop in WGSL bails out immediately).
+        let tet_indices_buf = model.tet_indices.device_buffer().unwrap_or(dummy_u32_buf);
+        let dummy_mat3_buf = self
+            .dummy_mat3
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_mat3 missing".into()))?;
+        let tet_dm_inv_buf = model.tet_dm_inv.device_buffer().unwrap_or(dummy_mat3_buf);
+        let tet_rest_buf = model
+            .tet_rest_volume
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        let tet_mu_buf = model.tet_mu.device_buffer().unwrap_or(dummy_real_buf);
+        let tet_lambda_buf = model.tet_lambda.device_buffer().unwrap_or(dummy_real_buf);
+        let vat_off_buf = model
+            .vertex_adjacent_tets_offsets
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let vat_buf = model
+            .vertex_adjacent_tets
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        // Stage 20.2 — per-vertex CABLE bending CSR. Same dummy
+        // fallback as the tet buffers; the kernel reads only when
+        // `vertex_cable_bend_offsets[v + 1] - offsets[v] > 0`.
+        let vcb_off_buf = model
+            .vertex_cable_bending_offsets
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let vcb_entries_buf = model
+            .vertex_cable_bending_entries
+            .device_buffer()
+            .unwrap_or(dummy_u32_buf);
+        let vcb_k_buf = model
+            .vertex_cable_bending_k
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        // Stage 20.3 — plasticity buffers. F_p / ε_p live in `state_out`
+        // so the return-mapping kernel can write them in place; yield +
+        // hardening live on `model` (read-only material params). When a
+        // model has no tets, fall through to dedicated read-write
+        // dummies (separate from the read-only `dummy_mat3_buf` /
+        // `dummy_real_buf` to avoid wgpu's "conflicting usages on the
+        // same buffer in a single dispatch" validation error).
+        let dummy_mat3_rw_buf = self
+            .dummy_mat3_rw
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_mat3_rw missing".into()))?;
+        let dummy_real_rw_buf = self
+            .dummy_real_rw
+            .device_buffer()
+            .ok_or_else(|| Error::Gpu("dummy_real_rw missing".into()))?;
+        let fp_buf = state_out
+            .tet_f_plastic
+            .device_buffer()
+            .unwrap_or(dummy_mat3_rw_buf);
+        let eps_p_buf = state_out
+            .tet_plastic_strain
+            .device_buffer()
+            .unwrap_or(dummy_real_rw_buf);
+        let yield_buf = model
+            .tet_yield_stress
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        let hard_buf = model
+            .tet_hardening
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        // Stage 20.4 — back-stress α + kinematic-hardening modulus c.
+        let alpha_buf = state_out
+            .tet_back_stress
+            .device_buffer()
+            .unwrap_or(dummy_mat3_rw_buf);
+        let kin_hard_buf = model
+            .tet_kinematic_hardening
+            .device_buffer()
+            .unwrap_or(dummy_real_buf);
+        let viscosity_buf = if model.tet_count == 0 {
+            dummy_vec3_buf
+        } else {
+            model
+                .tet_viscosity
+                .device_buffer()
+                .ok_or_else(|| Error::Gpu("tet viscosity buffer missing".into()))?
+        };
+
+        let bg_tets = self.bindings.storage_group(
+            device,
+            &wgpu::BindGroupDescriptor {
+                label: Some("molla::vbd_cloth tets bg"),
+                layout: &self.layout_tets,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: tet_indices_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: tet_dm_inv_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: tet_rest_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: tet_mu_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: tet_lambda_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: vat_off_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: vat_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: vcb_off_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: vcb_entries_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: vcb_k_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: fp_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: eps_p_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 12,
+                        resource: yield_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 13,
+                        resource: hard_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 14,
+                        resource: alpha_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 15,
+                        resource: kin_hard_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 16,
+                        resource: viscosity_buf.as_entire_binding(),
+                    },
+                ],
+            },
+        );
+
+        let continuation = if matches!(
+            mode,
+            DispatchMode::BeginMaterial
+                | DispatchMode::ContinueMaterial
+                | DispatchMode::PolishMaterial
+        ) {
+            let key = MaterialContinuation {
+                groups: [
+                    bg_state.clone(),
+                    bg_topo.clone(),
+                    bg_out.clone(),
+                    bg_shapes.clone(),
+                    bg_tets.clone(),
+                ],
+                timestep: gpu_dt.to_bits(),
+            };
+            if reuse && previous.as_ref() != Some(&key) {
+                return Err(Error::Build(
+                    "material continuation has no matching active solve".into(),
+                ));
+            }
+            Some(key)
+        } else {
+            None
+        };
+
+        // ── Uniforms (one per dispatch) ──────────────────────────
+        let color_offsets_host = model.particle_color_offsets.host()?.to_vec();
+
+        let mut bg_uniforms: Vec<wgpu::BindGroup> = Vec::new();
+        let mut push_uniforms = |u: &Uniforms| {
+            let bg =
+                self.bindings
+                    .uniform_group(device, &self.layout_uniforms, bytemuck::bytes_of(u));
+            bg_uniforms.push(bg);
+        };
+
+        let is_hard_u: u32 = if hard_mode { 1 } else { 0 };
+        let tet_count_u = model.tet_count as u32;
+        let base = |work_count: u32, color_index: u32, contact_k: f32| Uniforms {
+            particle_count: particle_count_u,
+            spring_count: spring_count_u,
+            color_count,
+            color_index,
+            work_count,
+            dt: dt as f32,
+            linear_damping: model.linear_damping as f32,
+            contact_stiffness: contact_k,
+            is_hard: is_hard_u,
+            _pad1: 0.0,
+        };
+
+        // Predict.
+        push_uniforms(&base(particle_count_u, 0, 0.0));
+        // All elastic iterations share the per-colour and dual uniforms.
+        for k in 0..color_count {
+            let lo = color_offsets_host[k as usize];
+            let hi = color_offsets_host[k as usize + 1];
+            push_uniforms(&base(hi - lo, k, contact_stiffness));
+        }
+        if hard_mode {
+            push_uniforms(&base(particle_count_u, 0, contact_stiffness));
+        }
+        let _ = shape_count_u; // referenced in the apply_shape_contacts
+        // dispatch path; kept for future use.
+        // Velocity recovery.
+        push_uniforms(&base(particle_count_u, 0, 0.0));
+        // Stage 20.3 — plasticity return mapping. work_count = tet_count.
+        if tet_count_u > 0 {
+            push_uniforms(&base(tet_count_u, 0, 0.0));
+        }
+
+        let mut linearization_batches = Vec::new();
+        let mut tangent_batches = Vec::new();
+        if mode == DispatchMode::Linearization {
+            for start in (0..particle_count_u).step_by(512) {
+                let count = (particle_count_u - start).min(512);
+                let uniform = self.bindings.uniform_group(
+                    device,
+                    &self.layout_uniforms,
+                    bytemuck::bytes_of(&base(count, start, 0.0)),
+                );
+                linearization_batches.push((uniform, count.div_ceil(WORKGROUP_SIZE)));
+            }
+            for start in (0..tet_count_u).step_by(512) {
+                let count = (tet_count_u - start).min(512);
+                let uniform = self.bindings.uniform_group(
+                    device,
+                    &self.layout_uniforms,
+                    bytemuck::bytes_of(&base(count, start, 0.0)),
+                );
+                tangent_batches.push((uniform, count.div_ceil(WORKGROUP_SIZE)));
+            }
+        }
+
+        // ── Encode + dispatch ─────────────────────────────────────
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("molla::vbd_cloth encoder"),
+        });
+        // Stage 20.3 — copy state_in's plasticity state into state_out
+        // once at the top of the step. The plasticity kernel then
+        // reads/writes from state_out's buffers so a substep ping-pong
+        // (state_in → state_out → state_in) sees the cumulative effect
+        // without the host having to read back F_p between substeps.
+        // Skip the copy entirely when `tet_count == 0`.
+        if tet_count_u > 0 && !residual_only && !reuse {
+            if let (Some(src_fp), Some(dst_fp)) = (
+                state_in.tet_f_plastic.device_buffer(),
+                state_out.tet_f_plastic.device_buffer(),
+            ) {
+                let bytes = (model.tet_count * core::mem::size_of::<GpuMat3>()) as u64;
+                if bytes > 0 {
+                    encoder.copy_buffer_to_buffer(src_fp, 0, dst_fp, 0, bytes);
+                }
+            }
+            if let (Some(src_e), Some(dst_e)) = (
+                state_in.tet_plastic_strain.device_buffer(),
+                state_out.tet_plastic_strain.device_buffer(),
+            ) {
+                let bytes = (model.tet_count * core::mem::size_of::<f32>()) as u64;
+                if bytes > 0 {
+                    encoder.copy_buffer_to_buffer(src_e, 0, dst_e, 0, bytes);
+                }
+            }
+            // Stage 20.4 — back-stress α: same in→out copy as F_p so the
+            // kinematic-hardening kernel can mutate state_out's α in
+            // place across substeps.
+            if let (Some(src_a), Some(dst_a)) = (
+                state_in.tet_back_stress.device_buffer(),
+                state_out.tet_back_stress.device_buffer(),
+            ) {
+                let bytes = (model.tet_count * core::mem::size_of::<GpuMat3>()) as u64;
+                if bytes > 0 {
+                    encoder.copy_buffer_to_buffer(src_a, 0, dst_a, 0, bytes);
+                }
+            }
+        }
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::vbd_cloth"),
+                timestamp_writes: None,
+            });
+            pass.set_bind_group(0, &bg_state, &[]);
+            pass.set_bind_group(1, &bg_topo, &[]);
+            pass.set_bind_group(2, &bg_out, &[]);
+            pass.set_bind_group(4, &bg_shapes, &[]);
+            pass.set_bind_group(5, &bg_tets, &[]);
+            let patch = self
+                .coupled_patch
+                .as_ref()
+                .filter(|patch| mode == DispatchMode::PolishMaterial && patch.group().is_some());
+            if let Some(patch) = patch {
+                pass.set_bind_group(6, patch.group().unwrap(), &[]);
+                if patch.select_pending {
+                    pass.set_pipeline(&patch.pipelines[0]);
+                    pass.set_bind_group(3, &bg_uniforms[0], &[]);
+                    pass.dispatch_workgroups(1, 1, 1);
+                }
+            }
+
+            let dispatch = |pass: &mut wgpu::ComputePass<'_>,
+                            pipeline: &wgpu::ComputePipeline,
+                            uniform_idx: usize,
+                            work: u32| {
+                if work == 0 {
+                    return;
+                }
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(3, &bg_uniforms[uniform_idx], &[]);
+                let groups = work.div_ceil(WORKGROUP_SIZE);
+                pass.dispatch_workgroups(groups.max(1), 1, 1);
+            };
+
+            if tet_count_u > 0 && !reuse {
+                dispatch(
+                    &mut pass,
+                    &self.pipe_cache_previous,
+                    bg_uniforms.len() - 1,
+                    tet_count_u,
+                );
+            }
+            if residual_only {
+                dispatch(&mut pass, &self.pipe_residual_seed, 0, particle_count_u);
+                if mode == DispatchMode::Linearization {
+                    let linearization = self.linearization.as_ref().unwrap();
+                    pass.set_bind_group(6, linearization.group.as_ref().unwrap(), &[]);
+                    pass.set_pipeline(&linearization.pipeline);
+                    for (uniform, blocks) in &linearization_batches {
+                        pass.set_bind_group(3, uniform, &[]);
+                        pass.dispatch_workgroups(*blocks, 1, 1);
+                    }
+                } else {
+                    dispatch(&mut pass, &self.pipe_force_residual, 0, particle_count_u);
+                }
+            } else {
+                let mut idx = 0usize;
+                // Predict.
+                dispatch(
+                    &mut pass,
+                    if reuse {
+                        &self.pipe_retarget
+                    } else {
+                        &self.pipe_predict
+                    },
+                    idx,
+                    particle_count_u,
+                );
+                // Outer iterations × colours. Soft rigid contacts are
+                // baked into `solve_color` so each per-vertex Newton
+                // block sees the contact force + Hessian directly. In
+                // hard mode we follow each outer iteration with an
+                // `update_dual` dispatch that bumps the per-particle λ
+                // by the residual penetration.
+                for _ in 0..iterations {
+                    idx = 1;
+                    for k in 0..color_count {
+                        let lo = color_offsets_host[k as usize];
+                        let hi = color_offsets_host[k as usize + 1];
+                        let nc = hi - lo;
+                        let pipeline = if let Some(patch) = patch {
+                            &patch.pipelines[1]
+                        } else if mode == DispatchMode::PolishMaterial {
+                            &self.pipe_polish_color
+                        } else {
+                            &self.pipe_solve_color
+                        };
+                        dispatch(&mut pass, pipeline, idx, nc);
+                        idx += 1;
+                    }
+                    if hard_mode {
+                        dispatch(&mut pass, &self.pipe_update_dual, idx, particle_count_u);
+                    }
+                }
+                idx = 1 + color_count as usize + usize::from(hard_mode);
+                // Velocity recovery.
+                dispatch(&mut pass, &self.pipe_velocity, idx, particle_count_u);
+                idx += 1;
+                // Stage 20.3 — plasticity return mapping (one thread per
+                // tet). The kernel mutates `tet_f_plastic` / `tet_plastic_strain`
+                // in `state_out` directly (read_write storage in bind group 5).
+                if tet_count_u > 0 {
+                    dispatch(&mut pass, &self.pipe_plasticity, idx, tet_count_u);
+                    idx += 1;
+                }
+                // `pipe_shape_contacts` kept compiled for future use
+                // (warm-start initialiser, alternate AVBD safety pass);
+                // silence the unused-field warning.
+                let _ = &self.pipe_shape_contacts;
+                debug_assert_eq!(idx, bg_uniforms.len());
+                if let Some(patch) = patch {
+                    pass.set_bind_group(3, &bg_uniforms[0], &[]);
+                    for pipeline in &patch.pipelines[2..] {
+                        pass.set_pipeline(pipeline);
+                        pass.dispatch_workgroups(1, 1, 1);
+                    }
+                }
+            }
+        }
+        if mode == DispatchMode::PolishMaterial
+            && let Some(patch) = &mut self.coupled_patch
+            && patch.group().is_some()
+        {
+            patch.encode_state(&mut encoder, 2);
+            patch.select_pending = false;
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        self.continuation = continuation;
+
+        if mode == DispatchMode::Linearization {
+            self.linearization.as_mut().unwrap().batches = linearization_batches;
+            self.linearization.as_mut().unwrap().cache_batches = tangent_batches;
+            self.linearization.as_mut().unwrap().material_groups = Some([
+                bg_state,
+                bg_topo,
+                bg_out,
+                bg_uniforms[0].clone(),
+                bg_shapes,
+                bg_tets,
+            ]);
+        }
+
+        if residual_only {
+            self.force_samples_ready = mode == DispatchMode::ForceResidual;
+            return Ok(());
+        }
+
+        state_out.particle_q.mark_device_dirty();
+        state_out.particle_qd.mark_device_dirty();
+        if tet_count_u > 0 {
+            state_out.tet_f_plastic.mark_device_dirty();
+            state_out.tet_plastic_strain.mark_device_dirty();
+            state_out.tet_back_stress.mark_device_dirty();
+        }
+        Ok(())
+    }
+
+    /// Last enqueued force evaluation: inertial displacement targets in xyz, speed residual in w.
+    /// Callers must wait for device completion; any later solve invalidates these samples.
+    pub fn force_samples(&self) -> Option<&wgpu::Buffer> {
+        if self.force_samples_ready {
+            self.inertia_y.device_buffer()
+        } else {
+            None
+        }
+    }
+
+    /// Device-projected spring stiffness table, with one padding entry for a spring-free model.
+    pub fn spring_stiffness_buffer(&self) -> &wgpu::Buffer {
+        self.spring_stiffness.device_buffer().unwrap()
+    }
+
+    pub fn particle_count(&self) -> u32 {
+        self.particle_count
+    }
+    pub fn spring_count(&self) -> u32 {
+        self.spring_count
+    }
+}
+
+fn gradient_scratch_bytes(particles: usize, tets: usize, limit: u64) -> Result<u64> {
+    let slots = tets
+        .checked_mul(6)
+        .and_then(|tet_slots| particles.checked_add(tet_slots))
+        .filter(|slots| *slots <= u32::MAX as usize)
+        .ok_or_else(|| Error::Gpu("VBD gradient scratch index overflow".into()))?;
+    let bytes = (slots.max(1) as u64) * 16;
+    if bytes > limit {
+        return Err(Error::Gpu(
+            "VBD gradient scratch exceeds device binding limit".into(),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn buffer_entry<'a>(
+    binding: u32,
+    buf: Option<&'a wgpu::Buffer>,
+) -> Result<wgpu::BindGroupEntry<'a>> {
+    let buf =
+        buf.ok_or_else(|| Error::Gpu(format!("vbd_cloth binding {binding}: no device mirror")))?;
+    Ok(wgpu::BindGroupEntry {
+        binding,
+        resource: buf.as_entire_binding(),
+    })
+}
+
+fn storage_entries(count: u32, read_only: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
+    (0..count)
+        .map(|i| wgpu::BindGroupLayoutEntry {
+            binding: i,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod gradient_scratch_tests {
+    use super::gradient_scratch_bytes;
+
+    #[test]
+    fn checks_binding_capacity_and_shader_indices() {
+        assert_eq!(gradient_scratch_bytes(0, 0, 16).unwrap(), 16);
+        assert_eq!(
+            gradient_scratch_bytes(29_568, 102_144, 16 << 20).unwrap(),
+            10_278_912
+        );
+        assert_eq!(gradient_scratch_bytes(4, 1, 160).unwrap(), 160);
+        assert!(gradient_scratch_bytes(4, 1, 159).is_err());
+        assert!(gradient_scratch_bytes(usize::MAX, 1, u64::MAX).is_err());
+        assert!(gradient_scratch_bytes(1, usize::MAX, u64::MAX).is_err());
+        assert!(gradient_scratch_bytes(u32::MAX as usize, 1, u64::MAX).is_err());
+    }
+}

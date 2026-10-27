@@ -11,11 +11,9 @@ that toggle a single line of code instead of an architectural surgery.
                 ┌─────────────────────────────────────────┐
                 │  adapters    molla_viewer (Bevy ECS)    │
                 ├─────────────────────────────────────────┤
-                │  importers   URDF · MJCF · USD · Gmsh   │
-                ├─────────────────────────────────────────┤
                 │  solvers     SemiImplicit · XPBD ·      │
                 │              Featherstone · VBD · MPM · │
-                │              MuJoCo · FEM steppers      │
+                │              FEM steppers               │
                 ├─────────────────────────────────────────┤
                 │  sim         Model · State · Control ·  │
                 │              Contacts · ModelBuilder    │
@@ -73,28 +71,22 @@ the real adapter. The engine is constructed once (via `pollster` for
 the sync API) and threaded into every solver / sensor that needs a
 device.
 
-### `kernels` — compute dispatchers
+### `kernels` and functionality-owned GPU dispatchers
 
-Each kernel is a triple:
+GPU dispatchers are split by ownership instead of by CPU/GPU:
 
-1. A WGSL source file at `crates/molla/shaders/<name>.wgsl`.
-2. A Rust dispatcher at `crates/molla/src/kernels/<name>.rs` that
-   owns the `wgpu::ComputePipeline`, the bind-group layouts, and a
-   `dispatch_blocking` method that takes typed `Buffer`s.
-3. A CPU reference implementation in the same Rust module (private
-   `fn ..._cpu(...)`) that produces the same output and is used as
-   the oracle in parity tests.
+1. Shared dispatch wrappers and WGSL sources live in
+   `crates/molla-kernels/`.
+2. Functionality-specific dispatchers live next to their owner crate; for
+   example GJK/EPA/MPR, LBVH, and mesh-BVH raycast live in
+   `crates/molla-geometry/`, FEM GPU kernels live in `crates/molla-fem/`, and
+   tiled/radix primitives live in `crates/molla-compute-primitives/`.
+3. `crates/molla/src/kernels/` is now a compatibility surface for
+   `molla::kernels::*`, not the source of ownership.
 
-There are 58 such kernels at present, covering integration,
-constraint projection, contact reduction, narrow-phase (GJK / EPA /
-MPR), broad-phase (LBVH), sensors (raycast / camera / IMU / contact /
-frame transform), actuators (PD / PID / DC motor / muscle / delay /
-neural MLP / neural LSTM), FEM (assembly / CG / PCG / elasticity /
-Stokes / Navier-Stokes / wave / DG SWE flux), sparse BSR
-(matvec / axpy / transpose / SpGEMM), splats (forward + backward),
-optimizers (Adam / SGD), and primitive utilities (scan / radix sort /
-FFT / SVD3 / QR3 / eig3 / dense Cholesky / tile matmul / tile
-convolution / tile stream compaction / tile MCGP).
+Each dispatcher still follows the same pattern: a WGSL source file, a Rust type
+that owns the `wgpu::ComputePipeline` and bind-group layouts, and CPU/oracle
+coverage in the owning crate's tests where applicable.
 
 ### `geometry`, `sensors`, `actuators`, `fem`, `autograd`, `optim`
 
@@ -111,7 +103,7 @@ time-varying positions / velocities / forces. [`sim::Control`] is
 the user input (joint targets, applied wrenches).
 [`sim::Contacts`] is the collision-pipeline output that solvers
 consume each step. [`sim::ModelBuilder`] is the fluent authoring
-API every importer ends up calling.
+API used by procedural scene/test builders.
 
 ### `solvers` — the step functions
 
@@ -124,22 +116,14 @@ Solver kinds in `prelude`:
 - `FeatherstoneSolver` — reduced-coordinate articulated rigid (ABA).
 - `VbdSolver` — Vertex Block Descent for cloth + cable + tets +
   jelly.
-- `MuJoCoSolver` — gated behind the `mujoco` Cargo feature; wraps
-  the upstream MuJoCo C library.
-
 There is no FEM solver in this list — FEM steppers live in `fem` and
 are wired into specific scenes via state structs.
 
-### Importers + adapters
+### Adapters
 
-[`utils::urdf`](./../importers/urdf.md) parses URDF into a
-`ModelBuilder` via `urdf-rs`. `fem::FemMesh::from_gmsh*` parses MSH
-files via `mshio`. The MJCF writer lives inside the
-`solvers::mujoco` module (only used by the MuJoCo wrapper). USD
-support is documented in [`importers/usd.md`](./../importers/usd.md) —
-currently routed through the upstream `bevy_openusd` adapter.
-
-The Bevy adapter is the `molla_viewer` crate.
+The Bevy adapter is the `molla_viewer` crate. The engine roadmap is
+physics-only: no importer/exporter, MJCF/USD/URDF/Gmsh path, or external FFI
+solver wrapper is part of the supported architecture.
 
 ## The CPU↔GPU rule
 
@@ -156,10 +140,13 @@ Concretely:
   still compile and run.
 - With `gpu` on, every `XxxSolver::new_cpu()` / `new_gpu(&engine)`
   pair gives the user a runtime choice.
-- Parity tests (in `crates/molla/tests/*_gpu.rs`) take the same
-  input, run both backends, and assert that the trajectories agree
-  to within the documented tolerance (1e-4 for f32-narrowing,
-  1e-3 for adjoint-vs-FD checks).
+- Parity tests live with the crate that owns the functionality
+  (`crates/molla-solvers/tests/*_gpu.rs`,
+  `crates/molla-kernels/tests/*_gpu.rs`, etc.) unless they are
+  facade/product compatibility coverage in `crates/molla/tests/`.
+  They take the same input, run both backends, and assert that the
+  trajectories agree to within the documented tolerance (1e-4 for
+  f32-narrowing, 1e-3 for adjoint-vs-FD checks).
 
 The viewer's UI has a `[CPU] / [GPU]` radio button — flipping it
 rebuilds the active solver from scratch and continues simulating. No

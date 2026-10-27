@@ -1,0 +1,1049 @@
+//! Rust dispatch wrapper for the GPU soft-on-soft VT contact pipeline
+//! — Stage 33.2.
+//!
+//! Five compute pipelines built from `shaders/soft_vt_contact.wgsl`:
+//!   - `compute_tri_aabbs` — writes per-tri AABBs into a buffer the
+//!     LBVH consumes (refit input).
+//!   - `gather_vt_aabbs`   — writes per-vert inflated AABBs (book-
+//!     keeping for v1; the gather pass walks the BVH directly).
+//!   - `gather_vt`         — DFS-walks the LBVH per particle, emits
+//!     `VtContactGpu` records into the output buffer.
+//!   - `apply_vt_penalty`  — atomically accumulates per-particle
+//!     position deltas into `particle_dq` (a scratch buffer of the
+//!     same size as `particle_q`).
+//!   - `commit_dq`         — adds `particle_dq` into `particle_q` and
+//!     zeroes `particle_dq` for the next round.
+//!
+//! Caller responsibility (orchestrated from `solvers/vbd.rs::step`):
+//!   1. `kernel.dispatch_compute_tri_aabbs(...)` — populates
+//!      `soft_bvh.lbvh().primitive_aabb_buffer()`.
+//!   2. `soft_bvh.refit(model)` — runs the LBVH refit on those AABBs.
+//!   3. `kernel.dispatch_gather_and_apply(...)` — runs gather → apply
+//!      → commit_dq end-to-end with no host bounce.
+//!
+//! All entry points share the same set of bind groups so a single
+//! pipeline layout serves them all.
+
+use std::sync::Arc;
+
+use molla_core::{Error, Result};
+use molla_sim::{Model, State};
+
+use super::{LbvhBroadPhase, SoftBvhGpu};
+
+/// Per-dispatch uniforms — must match the `Uniforms` struct in
+/// `shaders/soft_vt_contact.wgsl`.
+///
+/// Stage 33.2.1 — added `dt` (substep length, seconds) so the friction
+/// kernel can compute the Dahl smoothing factor `tanh(|dq_t| /
+/// (v_eps · dt))`.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Uniforms {
+    particle_count: u32,
+    tri_count: u32,
+    surface_count: u32,
+    contact_count: u32,
+    margin: f32,
+    k_contact: f32,
+    out_capacity: u32,
+    primitive_count: u32,
+    /// Substep length (s). Used by the position-form Coulomb friction
+    /// path in `apply_vt_penalty` for the Dahl smoothing factor.
+    dt: f32,
+    /// `1` on the very first sweep of a substep (so position-form
+    /// friction kicks in only on sweep 0, mirroring the CPU code in
+    /// `vbd_soft_contact::project_vt_contacts`); `0` afterwards.
+    is_first_sweep: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+/// One emitted VT contact (GPU mirror of [`crate::solvers::VtContact`]).
+/// 48 bytes — `(u32, u32, u32, u32) + vec4<f32> + vec4<f32>`.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct VtContactGpu {
+    pub vertex_global_id: u32,
+    pub vertex_surface: u32,
+    pub tri_global_id: u32,
+    pub tri_surface: u32,
+    /// `(b0, b1, b2, depth)` — barycentric weights + penetration depth.
+    pub bary: [f32; 4],
+    /// `(nx, ny, nz, _pad)` — outward contact normal.
+    pub normal: [f32; 4],
+}
+
+/// Stats surfaced after a [`SoftVtContactKernel::dispatch_gather_and_apply`]
+/// run. Mirrors the diagnostics the CPU `project_vt_contacts` returns.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct SoftVtContactStats {
+    /// Number of contacts emitted by `gather_vt` (clamped to
+    /// `out_capacity` if the buffer overflowed).
+    pub contact_count: u32,
+    /// `true` if the contact buffer was too small. Caller should
+    /// resize for the next dispatch.
+    pub overflowed: bool,
+}
+
+const WORKGROUP_SIZE: u32 = 64;
+
+/// GPU dispatch driver for the soft-VT contact pipeline.
+pub struct SoftVtContactKernel {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+
+    pipe_compute_tri_aabbs: wgpu::ComputePipeline,
+    /// `gather_vt_aabbs` writes per-vertex inflated AABBs into
+    /// `vert_aabbs`. v1 doesn't dispatch this — the gather pass walks
+    /// the BVH directly with the live position. Kept around so
+    /// downstream batched-query work (Stage 33.3 self-collision) can
+    /// reuse the per-vert AABBs without re-introducing the entry
+    /// point.
+    #[allow(dead_code)]
+    pipe_gather_vt_aabbs: wgpu::ComputePipeline,
+    pipe_gather_vt: wgpu::ComputePipeline,
+    pipe_apply_vt_penalty: wgpu::ComputePipeline,
+    pipe_commit_dq: wgpu::ComputePipeline,
+    /// Stage 33.2.1 — restitution-aware velocity recovery + Coulomb
+    /// tangential damping. Runs ONCE per substep, after the last sweep,
+    /// using the per-vertex friction/restitution maxes scattered by
+    /// `apply_vt_penalty`.
+    pipe_commit_velocity_recovery: wgpu::ComputePipeline,
+
+    layout_state: wgpu::BindGroupLayout,
+    layout_topo: wgpu::BindGroupLayout,
+    layout_aabbs: wgpu::BindGroupLayout,
+    layout_bvh: wgpu::BindGroupLayout,
+    layout_contacts: wgpu::BindGroupLayout,
+    /// Stage 33.2.1 — friction state (pre-step snapshot + per-vertex
+    /// scatter scratches).
+    layout_friction: wgpu::BindGroupLayout,
+
+    /// `particle_dq` scratch — atomic-add accumulator. Same layout as
+    /// `particle_q` (`vec4<f32>` per particle, 16 bytes); bound as
+    /// `array<atomic<u32>>` from the WGSL side.
+    particle_dq: wgpu::Buffer,
+    /// Per-vertex inflated AABBs (point ± margin). `particle_count`
+    /// `Aabb` slots.
+    vert_aabbs: wgpu::Buffer,
+    /// VT contact output. Sized for `vertex_count * 8` worst-case.
+    out_contacts: wgpu::Buffer,
+    /// Atomic contact-emit counter. Slot 0 is the high-water mark.
+    out_contact_count: wgpu::Buffer,
+    /// Stage 33.2.1 — pre-substep `particle_q` snapshot, captured by
+    /// [`Self::dispatch_snapshot_pre_step`] before the per-substep
+    /// gather/apply loop. Friction's tangential drift is computed
+    /// against this baseline. `vec4<f32>` per particle.
+    pre_step_q: wgpu::Buffer,
+    /// Stage 33.2.1 — pre-substep `particle_qd` snapshot. Used by
+    /// `commit_velocity_recovery` to compute the inbound normal
+    /// velocity `vn_pre` for the restitution-aware bounce target.
+    pre_step_qd: wgpu::Buffer,
+    /// Stage 33.2.1 — per-vertex MAX friction across all contacts that
+    /// touched the vertex this substep. Updated by `apply_vt_penalty`
+    /// via a CAS-loop atomic-max on the bit-cast f32. Read by
+    /// `commit_velocity_recovery`. `array<atomic<u32>>`.
+    friction_per_v: wgpu::Buffer,
+    /// Stage 33.2.1 — per-vertex MAX restitution across all contacts
+    /// that touched the vertex this substep. Same CAS-loop atomic-max
+    /// scheme as `friction_per_v`. `array<atomic<u32>>`.
+    restitution_per_v: wgpu::Buffer,
+    /// Stage 33.2.1 — per-vertex contact-normal sum. Vertex side adds
+    /// `+n`, tri side adds `-n` per contact. `commit_velocity_recovery`
+    /// uses the normalised sum as the contact normal for
+    /// restitution + friction. `vec4<f32>` per particle, bound as
+    /// `array<atomic<u32>>`.
+    contact_normal_sum: wgpu::Buffer,
+
+    /// Sized arrays for buffer-presence checks.
+    particle_count: u32,
+    out_capacity: u32,
+    /// Cached uniform buffer — re-uploaded per dispatch.
+    uniforms: wgpu::Buffer,
+}
+
+impl SoftVtContactKernel {
+    /// Build the kernel for a fixed model topology. Allocates the
+    /// per-particle scratch + per-particle AABB + contact output
+    /// buffers; reuses across substeps.
+    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>, model: &Model) -> Result<Self> {
+        let particle_count = model.particle_count as u32;
+        // Worst-case contact density: 8 contacts per particle (the CPU
+        // dedup keeps at most one per other-surface and v1 caps
+        // surface_count at 8). Bumped to a hard floor of 1024 so even
+        // tiny models have a meaningful output buffer.
+        let out_capacity = (particle_count.saturating_mul(8)).max(1024);
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("molla::soft_vt_contact"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../shaders/soft_vt_contact.wgsl").into(),
+            ),
+        });
+
+        // ── Bind-group layouts ─────────────────────────────────────
+        // Group 0: particle_q (rw), particle_inv_mass (ro), particle_dq
+        // (rw atomic), particle_qd (rw — for commit_dq velocity damping).
+        let layout_state = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::soft_vt_contact state"),
+            entries: &[rw_storage(0), ro_storage(1), rw_storage(2), rw_storage(3)],
+        });
+        // Group 1: soft_surface_tris (ro), soft_surfaces (ro)
+        let layout_topo = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::soft_vt_contact topo"),
+            entries: &[ro_storage(0), ro_storage(1)],
+        });
+        // Group 2: tri_aabbs (rw), vert_aabbs (rw)
+        let layout_aabbs = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::soft_vt_contact aabbs"),
+            entries: &[rw_storage(0), rw_storage(1)],
+        });
+        // Group 3: bvh_nodes (ro), bvh_sorted_idx (ro), bvh_pair_count (ro)
+        let layout_bvh = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::soft_vt_contact bvh"),
+            entries: &[ro_storage(0), ro_storage(1), ro_storage(2)],
+        });
+        // Group 4: out_contacts (rw), out_contact_count (rw atomic), uniforms
+        let layout_contacts = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::soft_vt_contact out"),
+            entries: &[
+                rw_storage(0),
+                rw_storage(1),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        // Group 5 (Stage 33.2.1): friction state — pre-step snapshot
+        // (read), per-vertex friction/restitution/contact_normal_sum
+        // atomic scratches (read_write).
+        let layout_friction = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("molla::soft_vt_contact friction"),
+            entries: &[
+                ro_storage(0), // pre_step_q
+                ro_storage(1), // pre_step_qd
+                rw_storage(2), // friction_per_v (atomic u32 max)
+                rw_storage(3), // restitution_per_v (atomic u32 max)
+                rw_storage(4), // contact_normal_sum (atomic u32 add via CAS, vec4 layout)
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("molla::soft_vt_contact layout"),
+            bind_group_layouts: &[
+                Some(&layout_state),
+                Some(&layout_topo),
+                Some(&layout_aabbs),
+                Some(&layout_bvh),
+                Some(&layout_contacts),
+                Some(&layout_friction),
+            ],
+            immediate_size: 0,
+        });
+
+        let make = |entry: &str| -> wgpu::ComputePipeline {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("molla::soft_vt_contact"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some(entry),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            })
+        };
+
+        let pipe_compute_tri_aabbs = make("compute_tri_aabbs");
+        let pipe_gather_vt_aabbs = make("gather_vt_aabbs");
+        let pipe_gather_vt = make("gather_vt");
+        let pipe_apply_vt_penalty = make("apply_vt_penalty");
+        let pipe_commit_dq = make("commit_dq");
+        let pipe_commit_velocity_recovery = make("commit_velocity_recovery");
+
+        // ── Owned scratch buffers ──────────────────────────────────
+        let dq_bytes = (particle_count as u64).max(1) * 16;
+        let particle_dq = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact particle_dq"),
+                size: dq_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        // Zero-init dq so the first commit_dq pass is a no-op.
+        molla_core::gpu_write_buffer!(queue, &particle_dq, 0, &vec![0u8; dq_bytes as usize]);
+
+        let vert_aabbs_bytes = (particle_count as u64).max(1) * 32;
+        let vert_aabbs = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact vert_aabbs"),
+                size: vert_aabbs_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+
+        let out_contacts_bytes = out_capacity as u64 * core::mem::size_of::<VtContactGpu>() as u64;
+        let out_contacts = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact out_contacts"),
+                size: out_contacts_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let out_contact_count = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact out_contact_count"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let uniforms = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact uniforms"),
+                size: core::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+
+        // Stage 33.2.1 — pre-substep snapshot buffers + per-vertex
+        // friction scratches. q + qd snapshots: vec4<f32> per particle
+        // (16 B). friction/restitution: f32 per particle (4 B, bit-cast
+        // into atomic<u32>). contact_normal_sum: vec4<f32> per particle
+        // (16 B, bit-cast into atomic<u32>).
+        let pq_bytes = (particle_count as u64).max(1) * 16;
+        let pre_step_q = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact pre_step_q"),
+                size: pq_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let pre_step_qd = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact pre_step_qd"),
+                size: pq_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let scalar_bytes = (particle_count as u64).max(1) * 4;
+        let friction_per_v = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact friction_per_v"),
+                size: scalar_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let restitution_per_v = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact restitution_per_v"),
+                size: scalar_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        let contact_normal_sum = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact contact_normal_sum"),
+                size: pq_bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }
+        );
+        // Zero-init the scratches so the first dispatch sees a clean
+        // baseline (and the snapshot buffers, so commit_velocity_recovery
+        // doesn't read garbage if the caller forgot to snapshot).
+        let zeros_pq = vec![0u8; pq_bytes as usize];
+        let zeros_scalar = vec![0u8; scalar_bytes as usize];
+        molla_core::gpu_write_buffer!(queue, &pre_step_q, 0, &zeros_pq);
+        molla_core::gpu_write_buffer!(queue, &pre_step_qd, 0, &zeros_pq);
+        molla_core::gpu_write_buffer!(queue, &friction_per_v, 0, &zeros_scalar);
+        molla_core::gpu_write_buffer!(queue, &restitution_per_v, 0, &zeros_scalar);
+        molla_core::gpu_write_buffer!(queue, &contact_normal_sum, 0, &zeros_pq);
+
+        Ok(Self {
+            device,
+            queue,
+            pipe_compute_tri_aabbs,
+            pipe_gather_vt_aabbs,
+            pipe_gather_vt,
+            pipe_apply_vt_penalty,
+            pipe_commit_dq,
+            pipe_commit_velocity_recovery,
+            layout_state,
+            layout_topo,
+            layout_aabbs,
+            layout_bvh,
+            layout_contacts,
+            layout_friction,
+            particle_dq,
+            vert_aabbs,
+            out_contacts,
+            out_contact_count,
+            pre_step_q,
+            pre_step_qd,
+            friction_per_v,
+            restitution_per_v,
+            contact_normal_sum,
+            particle_count,
+            out_capacity,
+            uniforms,
+        })
+    }
+
+    /// Borrow the per-particle delta scratch buffer. Useful for tests
+    /// that want to read it back after `apply_vt_penalty`.
+    pub fn particle_dq_buffer(&self) -> &wgpu::Buffer {
+        &self.particle_dq
+    }
+
+    /// Borrow the GPU contact output buffer.
+    pub fn out_contacts_buffer(&self) -> &wgpu::Buffer {
+        &self.out_contacts
+    }
+
+    /// Borrow the atomic contact-emit counter buffer (slot 0 = count).
+    pub fn out_contact_count_buffer(&self) -> &wgpu::Buffer {
+        &self.out_contact_count
+    }
+
+    /// Worst-case output contact buffer capacity.
+    pub fn out_capacity(&self) -> u32 {
+        self.out_capacity
+    }
+
+    /// Run the per-substep `compute_tri_aabbs` pass. Writes per-tri
+    /// AABBs into `soft_bvh.lbvh().primitive_aabb_buffer()` so the
+    /// LBVH refit can consume them without a host bounce.
+    pub fn dispatch_compute_tri_aabbs(
+        &self,
+        model: &Model,
+        state: &State,
+        soft_bvh: &SoftBvhGpu,
+    ) -> Result<()> {
+        if model.soft_surface_tris.is_empty() {
+            return Ok(());
+        }
+        let tri_count = soft_bvh.tri_count() as u32;
+        if tri_count == 0 {
+            return Ok(());
+        }
+        // Uniforms — only the tri_count is used by this entry point.
+        self.write_uniforms(model, 0.0, 0.0, tri_count, 0.0, 0)?;
+
+        // The `compute_tri_aabbs` shader writes to bind-group-2 binding
+        // 0 (`tri_aabbs`); bind that to the LBVH's primitive_aabb so
+        // the next refit consumes it directly.
+        let bg_state = self.bind_state(model, state)?;
+        let bg_topo = self.bind_topo(model)?;
+        let bg_aabbs = self.bind_aabbs_with_lbvh(soft_bvh.lbvh());
+        let bg_bvh = self.bind_bvh(soft_bvh.lbvh());
+        let bg_contacts = self.bind_contacts();
+        let bg_friction = self.bind_friction();
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::soft_vt_contact compute_tri_aabbs encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::soft_vt_contact::compute_tri_aabbs"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipe_compute_tri_aabbs);
+            pass.set_bind_group(0, &bg_state, &[]);
+            pass.set_bind_group(1, &bg_topo, &[]);
+            pass.set_bind_group(2, &bg_aabbs, &[]);
+            pass.set_bind_group(3, &bg_bvh, &[]);
+            pass.set_bind_group(4, &bg_contacts, &[]);
+            pass.set_bind_group(5, &bg_friction, &[]);
+            let groups = tri_count.div_ceil(WORKGROUP_SIZE).max(1);
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
+    }
+
+    /// Stage 33.2.1 — capture the pre-substep `particle_q` +
+    /// `particle_qd` snapshots into the kernel's owned buffers. Must
+    /// be called ONCE per substep, BEFORE the per-sweep gather/apply
+    /// loop runs (so the snapshot reflects the state going INTO the
+    /// substep, not the post-elastic-step intermediate state).
+    ///
+    /// `state_in` is the substep's incoming state — the same buffer
+    /// the VBD elastic kernel reads from. We do a pure GPU
+    /// `copy_buffer_to_buffer` (one per buffer) so there's no host
+    /// bounce.
+    ///
+    /// Also resets the per-vertex friction / restitution / contact-
+    /// normal-sum scratches to zero so the substep's contact gather
+    /// starts from a clean baseline.
+    pub fn dispatch_snapshot_pre_step(&self, state_in: &State) -> Result<()> {
+        if self.particle_count == 0 {
+            return Ok(());
+        }
+        let q = state_in.particle_q.device_buffer().ok_or_else(|| {
+            Error::Gpu(
+                "soft_vt_contact: state_in.particle_q has no device mirror — \
+                 call upload_to_device first"
+                    .into(),
+            )
+        })?;
+        let qd = state_in.particle_qd.device_buffer().ok_or_else(|| {
+            Error::Gpu(
+                "soft_vt_contact: state_in.particle_qd has no device mirror — \
+                 call upload_to_device first"
+                    .into(),
+            )
+        })?;
+        let pq_bytes = (self.particle_count as u64) * 16;
+        let scalar_bytes = (self.particle_count as u64) * 4;
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::soft_vt_contact snapshot encoder"),
+            });
+        encoder.copy_buffer_to_buffer(q, 0, &self.pre_step_q, 0, pq_bytes);
+        encoder.copy_buffer_to_buffer(qd, 0, &self.pre_step_qd, 0, pq_bytes);
+        // Zero the per-vertex friction + restitution + contact-normal
+        // scratches via clear_buffer (cheaper than a queue.write_buffer
+        // round trip). All four buffers live entirely on the device so
+        // we can flatten everything into a single command encoder.
+        encoder.clear_buffer(&self.friction_per_v, 0, Some(scalar_bytes));
+        encoder.clear_buffer(&self.restitution_per_v, 0, Some(scalar_bytes));
+        encoder.clear_buffer(&self.contact_normal_sum, 0, Some(pq_bytes));
+        self.queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
+    }
+
+    /// Run the gather → apply → commit_dq pipeline end-to-end. Writes
+    /// the contact response into `state.particle_q` via `particle_dq`
+    /// (no host bounce on `particle_q`). Returns the emitted contact
+    /// count.
+    ///
+    /// One small device→host sync between `gather_vt` and the
+    /// `apply` dispatch is unavoidable: we need to know how many
+    /// contacts to dispatch `apply_vt_penalty` over. The 4-byte
+    /// readback is the only host bounce per substep — orders of
+    /// magnitude cheaper than the Stage 20.4
+    /// `particle_q.download → upload` we replaced.
+    ///
+    /// Caller must dispatch [`Self::dispatch_compute_tri_aabbs`] +
+    /// [`SoftBvhGpu::refit`] FIRST so the LBVH is up to date.
+    ///
+    /// Stage 33.2.1 — added `dt` (substep length) + `is_first_sweep`
+    /// args. The position-form Coulomb friction in `apply_vt_penalty`
+    /// uses `dt` for the Dahl smoothing factor and is gated on
+    /// `is_first_sweep == 1` (mirroring CPU
+    /// `vbd_soft_contact::project_vt_contacts` which only runs the
+    /// position-form friction on sweep 0).
+    pub fn dispatch_gather_and_apply(
+        &self,
+        model: &Model,
+        state: &State,
+        soft_bvh: &SoftBvhGpu,
+        margin: f64,
+        k_contact: f64,
+        dt: f64,
+        is_first_sweep: bool,
+    ) -> Result<SoftVtContactStats> {
+        if model.soft_surface_tris.is_empty() || model.soft_surfaces.is_empty() {
+            return Ok(SoftVtContactStats::default());
+        }
+        let tri_count = soft_bvh.tri_count() as u32;
+        if tri_count == 0 || self.particle_count == 0 {
+            return Ok(SoftVtContactStats::default());
+        }
+
+        // Reset out_contact_count[0] to zero before gather.
+        molla_core::gpu_write_buffer!(
+            self.queue,
+            &self.out_contact_count,
+            0,
+            bytemuck::cast_slice(&[0u32; 4])
+        );
+
+        let bg_state = self.bind_state(model, state)?;
+        let bg_topo = self.bind_topo(model)?;
+        let bg_aabbs = self.bind_aabbs_with_lbvh(soft_bvh.lbvh());
+        let bg_bvh = self.bind_bvh(soft_bvh.lbvh());
+        let bg_contacts = self.bind_contacts();
+        let bg_friction = self.bind_friction();
+
+        let particle_groups = self.particle_count.div_ceil(WORKGROUP_SIZE).max(1);
+
+        // ── Pass 1: gather_vt → out_contacts ───────────────────────
+        // Uniforms — gather only consults `particle_count`, `margin`,
+        // `surface_count`, `out_capacity`, `primitive_count`.
+        let u_gather = Uniforms {
+            particle_count: self.particle_count,
+            tri_count,
+            surface_count: model.soft_surfaces.len() as u32,
+            contact_count: 0,
+            margin: margin as f32,
+            k_contact: k_contact as f32,
+            out_capacity: self.out_capacity,
+            primitive_count: tri_count,
+            dt: dt as f32,
+            is_first_sweep: u32::from(is_first_sweep),
+            _pad0: 0,
+            _pad1: 0,
+        };
+        molla_core::gpu_write_buffer!(self.queue, &self.uniforms, 0, bytemuck::bytes_of(&u_gather));
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::soft_vt_contact gather encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::soft_vt_contact::gather_vt"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipe_gather_vt);
+            pass.set_bind_group(0, &bg_state, &[]);
+            pass.set_bind_group(1, &bg_topo, &[]);
+            pass.set_bind_group(2, &bg_aabbs, &[]);
+            pass.set_bind_group(3, &bg_bvh, &[]);
+            pass.set_bind_group(4, &bg_contacts, &[]);
+            pass.set_bind_group(5, &bg_friction, &[]);
+            pass.dispatch_workgroups(particle_groups, 1, 1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        // 4-byte readback — the only per-substep host bounce.
+        let count_raw = self.read_contact_count()?;
+        let overflowed = count_raw > self.out_capacity;
+        let count = count_raw.min(self.out_capacity);
+        if count == 0 {
+            return Ok(SoftVtContactStats {
+                contact_count: 0,
+                overflowed,
+            });
+        }
+
+        // ── Pass 2 + 3: apply_vt_penalty + commit_dq ───────────────
+        let u_apply = Uniforms {
+            particle_count: self.particle_count,
+            tri_count,
+            surface_count: model.soft_surfaces.len() as u32,
+            contact_count: count,
+            margin: margin as f32,
+            k_contact: k_contact as f32,
+            out_capacity: self.out_capacity,
+            primitive_count: tri_count,
+            dt: dt as f32,
+            is_first_sweep: u32::from(is_first_sweep),
+            _pad0: 0,
+            _pad1: 0,
+        };
+        molla_core::gpu_write_buffer!(self.queue, &self.uniforms, 0, bytemuck::bytes_of(&u_apply));
+        let apply_groups = count.div_ceil(WORKGROUP_SIZE).max(1);
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::soft_vt_contact apply encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::soft_vt_contact::apply_vt_penalty"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipe_apply_vt_penalty);
+            pass.set_bind_group(0, &bg_state, &[]);
+            pass.set_bind_group(1, &bg_topo, &[]);
+            pass.set_bind_group(2, &bg_aabbs, &[]);
+            pass.set_bind_group(3, &bg_bvh, &[]);
+            pass.set_bind_group(4, &bg_contacts, &[]);
+            pass.set_bind_group(5, &bg_friction, &[]);
+            pass.dispatch_workgroups(apply_groups, 1, 1);
+        }
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::soft_vt_contact::commit_dq"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipe_commit_dq);
+            pass.set_bind_group(0, &bg_state, &[]);
+            pass.set_bind_group(1, &bg_topo, &[]);
+            pass.set_bind_group(2, &bg_aabbs, &[]);
+            pass.set_bind_group(3, &bg_bvh, &[]);
+            pass.set_bind_group(4, &bg_contacts, &[]);
+            pass.set_bind_group(5, &bg_friction, &[]);
+            pass.dispatch_workgroups(particle_groups, 1, 1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        // particle_q is now device-dirty (commit_dq mutated it). The
+        // `state.particle_q` Buffer<Vec3> wrapper doesn't track this
+        // here — caller must `mark_device_dirty` if any subsequent
+        // host read is expected. (The vbd.rs caller does this.)
+
+        Ok(SoftVtContactStats {
+            contact_count: count,
+            overflowed,
+        })
+    }
+
+    /// Stage 33.2.1 — restitution-aware velocity recovery + Coulomb
+    /// tangential damping. Mirrors the post-sweep velocity-recovery
+    /// block in `vbd_soft_contact::project_vt_contacts`. Must be called
+    /// ONCE per substep, AFTER all sweeps complete.
+    ///
+    /// Reads:
+    ///   - `pre_step_qd` (snapshot)         — for `vn_pre = qd_pre · n`
+    ///   - `friction_per_v`, `restitution_per_v`, `contact_normal_sum`
+    ///     (scattered by `apply_vt_penalty` across all sweeps)
+    ///     Writes:
+    ///   - `state.particle_qd` in place
+    pub fn dispatch_commit_velocity_recovery(
+        &self,
+        model: &Model,
+        state: &State,
+        soft_bvh: &SoftBvhGpu,
+        margin: f64,
+        k_contact: f64,
+        dt: f64,
+    ) -> Result<()> {
+        if model.soft_surface_tris.is_empty() || model.soft_surfaces.is_empty() {
+            return Ok(());
+        }
+        let tri_count = soft_bvh.tri_count() as u32;
+        if tri_count == 0 || self.particle_count == 0 {
+            return Ok(());
+        }
+        let u = Uniforms {
+            particle_count: self.particle_count,
+            tri_count,
+            surface_count: model.soft_surfaces.len() as u32,
+            contact_count: 0,
+            margin: margin as f32,
+            k_contact: k_contact as f32,
+            out_capacity: self.out_capacity,
+            primitive_count: tri_count,
+            dt: dt as f32,
+            is_first_sweep: 0,
+            _pad0: 0,
+            _pad1: 0,
+        };
+        molla_core::gpu_write_buffer!(self.queue, &self.uniforms, 0, bytemuck::bytes_of(&u));
+
+        let bg_state = self.bind_state(model, state)?;
+        let bg_topo = self.bind_topo(model)?;
+        let bg_aabbs = self.bind_aabbs_with_lbvh(soft_bvh.lbvh());
+        let bg_bvh = self.bind_bvh(soft_bvh.lbvh());
+        let bg_contacts = self.bind_contacts();
+        let bg_friction = self.bind_friction();
+        let particle_groups = self.particle_count.div_ceil(WORKGROUP_SIZE).max(1);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::soft_vt_contact commit_velocity_recovery encoder"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("molla::soft_vt_contact::commit_velocity_recovery"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipe_commit_velocity_recovery);
+            pass.set_bind_group(0, &bg_state, &[]);
+            pass.set_bind_group(1, &bg_topo, &[]);
+            pass.set_bind_group(2, &bg_aabbs, &[]);
+            pass.set_bind_group(3, &bg_bvh, &[]);
+            pass.set_bind_group(4, &bg_contacts, &[]);
+            pass.set_bind_group(5, &bg_friction, &[]);
+            pass.dispatch_workgroups(particle_groups, 1, 1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
+    }
+
+    fn write_uniforms(
+        &self,
+        model: &Model,
+        margin: f32,
+        k_contact: f32,
+        tri_count: u32,
+        dt: f32,
+        is_first_sweep: u32,
+    ) -> Result<()> {
+        let u = Uniforms {
+            particle_count: self.particle_count,
+            tri_count,
+            surface_count: model.soft_surfaces.len() as u32,
+            contact_count: 0,
+            margin,
+            k_contact,
+            out_capacity: self.out_capacity,
+            primitive_count: tri_count,
+            dt,
+            is_first_sweep,
+            _pad0: 0,
+            _pad1: 0,
+        };
+        molla_core::gpu_write_buffer!(self.queue, &self.uniforms, 0, bytemuck::bytes_of(&u));
+        Ok(())
+    }
+
+    fn bind_state(&self, model: &Model, state: &State) -> Result<wgpu::BindGroup> {
+        let q = state.particle_q.device_buffer().ok_or_else(|| {
+            Error::Gpu("soft_vt_contact: state.particle_q has no device mirror".into())
+        })?;
+        let inv_mass = model.particle_inv_mass.device_buffer().ok_or_else(|| {
+            Error::Gpu("soft_vt_contact: model.particle_inv_mass has no device mirror".into())
+        })?;
+        let qd = state.particle_qd.device_buffer().ok_or_else(|| {
+            Error::Gpu("soft_vt_contact: state.particle_qd has no device mirror".into())
+        })?;
+        Ok(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::soft_vt_contact state bg"),
+            layout: &self.layout_state,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: q.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: inv_mass.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.particle_dq.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: qd.as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
+    fn bind_topo(&self, model: &Model) -> Result<wgpu::BindGroup> {
+        let tris = model.soft_surface_tris_gpu.as_ref().ok_or_else(|| {
+            Error::Gpu(
+                "soft_vt_contact: model.soft_surface_tris_gpu is missing — \
+                 call Model::upload_to_device first"
+                    .into(),
+            )
+        })?;
+        let surfs = model.soft_surfaces_gpu.as_ref().ok_or_else(|| {
+            Error::Gpu(
+                "soft_vt_contact: model.soft_surfaces_gpu is missing — \
+                 call Model::upload_to_device first"
+                    .into(),
+            )
+        })?;
+        Ok(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::soft_vt_contact topo bg"),
+            layout: &self.layout_topo,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: tris.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: surfs.as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
+    fn bind_aabbs_with_lbvh(&self, lbvh: &LbvhBroadPhase) -> wgpu::BindGroup {
+        // tri_aabbs binding is wired to the LBVH's primitive_aabb so
+        // `compute_tri_aabbs` writes directly into the buffer the
+        // LBVH refit will read.
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::soft_vt_contact aabbs bg"),
+            layout: &self.layout_aabbs,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: lbvh.primitive_aabb_buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.vert_aabbs.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    fn bind_bvh(&self, lbvh: &LbvhBroadPhase) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::soft_vt_contact bvh bg"),
+            layout: &self.layout_bvh,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: lbvh.nodes_buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: lbvh.sorted_idx_buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: lbvh.pair_count_buffer().as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    fn bind_contacts(&self) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::soft_vt_contact out bg"),
+            layout: &self.layout_contacts,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.out_contacts.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.out_contact_count.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.uniforms.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    fn bind_friction(&self) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("molla::soft_vt_contact friction bg"),
+            layout: &self.layout_friction,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.pre_step_q.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.pre_step_qd.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.friction_per_v.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.restitution_per_v.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.contact_normal_sum.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    fn read_contact_count(&self) -> Result<u32> {
+        let staging = molla_core::gpu_create_buffer!(
+            self.device,
+            &wgpu::BufferDescriptor {
+                label: Some("molla::soft_vt_contact count staging"),
+                size: 4,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }
+        );
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("molla::soft_vt_contact count readback"),
+            });
+        encoder.copy_buffer_to_buffer(&self.out_contact_count, 0, &staging, 0, 4);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| Error::Gpu(format!("device poll: {e:?}")))?;
+        rx.recv()
+            .map_err(|e| Error::Gpu(format!("recv: {e}")))?
+            .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
+        let mapped = molla_core::gpu_readback!(slice);
+        let words: &[u32] = bytemuck::cast_slice(&mapped);
+        let count = words[0];
+        drop(mapped);
+        staging.unmap();
+        Ok(count)
+    }
+}
+
+fn ro_storage(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn rw_storage(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: false },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}

@@ -138,7 +138,7 @@ Bingham configurations.
 ### Stage 40 v2: GPU port of the colored-GS sweep
 
 The host-side colored-GS sweep was ported to a WGSL kernel
-([`implicit_mpm.wgsl`](https://github.com/molla/molla/blob/main/crates/molla/shaders/implicit_mpm.wgsl)).
+([`implicit_mpm.wgsl`](https://github.com/molla/molla/blob/main/crates/molla-kernels/shaders/implicit_mpm.wgsl)).
 One workgroup per colour class, parallel within colour. The
 `implicit_mpm_step_with_solver` hook exposes a closure
 `(GridSystem, &mut [Vec3], HessianStencil) -> (iters, residual)`

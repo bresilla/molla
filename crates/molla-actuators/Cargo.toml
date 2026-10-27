@@ -1,0 +1,37 @@
+[package]
+name = "molla-actuators"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Actuator models and host-side actuator utilities for molla."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+gpu = [
+    "dep:wgpu",
+    "molla-compute/gpu",
+    "molla-core/gpu",
+    "molla-kernels/gpu",
+    "molla-sim/gpu",
+    "molla-storage/gpu",
+]
+
+[dependencies]
+molla-compute = { path = "../molla-compute", default-features = false, optional = true }
+molla-core = { path = "../molla-core", default-features = false }
+molla-kernels = { path = "../molla-kernels", default-features = false, optional = true }
+molla-math = { path = "../molla-math" }
+molla-sim = { path = "../molla-sim", default-features = false }
+molla-storage = { path = "../molla-storage", default-features = false, optional = true }
+wgpu = { version = "29", optional = true, default-features = false, features = [
+    "wgsl",
+    "vulkan",
+    "metal",
+    "dx12",
+    "std",
+] }

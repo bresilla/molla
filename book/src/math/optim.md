@@ -9,7 +9,7 @@ these are the shared primitives that everyone depends on.
 
 The shape mirrors Warp's `wp.optim.{Adam, SGD}`
 (`xtra/warp/warp/_src/optim/{adam,sgd}.py`). On the GPU side, the
-fused-update kernels live in `crates/molla/shaders/optim_{adam,sgd}.wgsl`
+fused-update kernels live in `crates/molla-kernels/shaders/optim_{adam,sgd}.wgsl`
 and are dispatched by `crate::kernels::{optim_adam, optim_sgd}`.
 
 ## CPU + GPU precision
@@ -71,7 +71,7 @@ For positive-only parameters (Young's modulus, density, mass, viscosity)
 that may span orders of magnitude, Adam's scale-invariance breaks down:
 a fixed `lr` either oscillates wildly when the parameter is small or
 stalls when it's large. The pattern used across the parameter-ID tests
-in `crates/molla/tests/fem_diff_optim.rs` is to **optimise in
+in `crates/molla-fem/tests/fem_diff_optim.rs` is to **optimise in
 log-space**:
 
 ```rust
@@ -122,8 +122,7 @@ impl SgdState {
 }
 ```
 
-The semantics match PyTorch's `torch.optim.SGD` and Warp's
-`sgd_step_kernel`:
+The semantics match molla's GPU `sgd_step_kernel`:
 
 ```text
 g̃   = g + wd · θ
@@ -163,7 +162,7 @@ The `crate::kernels::optim_{adam,sgd}` Rust dispatch wrappers handle
 the `f64 → f32` conversion, pipeline + bind-group setup, and the
 single dispatch per call. Stage 38c parity tests pin CPU and GPU
 within `f32` tolerance after many steps; finite-difference gradient
-checks (`crates/molla/tests/optim_gpu_parity.rs`) catch shader
+checks (`crates/molla-kernels/tests/optim_gpu_parity.rs`) catch shader
 regressions early.
 
 ## Cross-references

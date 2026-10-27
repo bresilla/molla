@@ -26,8 +26,7 @@ pub enum ShapeGeometry {
 ```
 
 `Capsule` / `Cylinder` / `Cone` are oriented along the shape-local
-`+Y` axis (URDF/MJCF convention). The body's `Transform` rotates them
-into world frame.
+`+Y` axis. The body's `Transform` rotates them into world frame.
 
 ## Support functions
 
@@ -143,3 +142,17 @@ the routing would otherwise feed a broken support into GJK.
 * `Sdf` → ball-marches against the SDF gradient (analytic SDFs only;
   `SdfGrid` voxelised fields go through the
   [hydroelastic](./hydroelastic.md) path).
+
+
+## Helical thread SDF
+
+`SdfShape::HelicalThread { major, minor, pitch, half_height }` — a circle
+of radius `minor` swept along the helix of radius `major` with pitch
+`pitch`, capped to `|y| ≤ half_height`. Distance is evaluated in the
+wrapped screw-profile plane `(r − major, y − pitch·θ/τ mod pitch)` — the
+standard swept-circle screw SDF, exact in the profile plane. The oracle
+that distinguishes it from a torus-ring stack is **screw symmetry**:
+rotating by α about +Y while translating by `pitch·α/τ` leaves the
+distance field invariant (checked to 1e-9 over 24 angles in
+`heightfield_and_sdf.rs`) — rings have no axial coupling, so a bolt can
+never *thread* through them.

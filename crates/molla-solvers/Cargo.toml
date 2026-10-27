@@ -1,0 +1,223 @@
+[package]
+name = "molla-solvers"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Solver and dynamics utilities for molla."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+batched-soil-projection = ["gpu"]
+ordered-sticking-nodes = ["gpu"]
+lazy-paired-drift = ["gpu", "molla-kernels/lazy-paired-drift"]
+native-geometry-drift = ["gpu", "molla-kernels/native-geometry-drift"]
+native-lazy-geometry-drift = ["native-geometry-drift", "lazy-paired-drift", "molla-kernels/native-lazy-geometry-drift"]
+resource-counters = ["gpu", "wgpu/counters", "molla-core/gpu-metrics"]
+protected-newton = ["gpu", "dep:naga", "dep:spirv-tools"]
+wide-newton = ["protected-newton"]
+cached-newton = ["wide-newton"]
+parallel-newton = ["cached-newton"]
+volatile-newton = ["parallel-newton"]
+schur-newton = ["volatile-newton"]
+norm-tree-newton = ["schur-newton"]
+active-publication-newton = ["norm-tree-newton"]
+publication-products-newton = ["active-publication-newton"]
+retained-local-newton = ["publication-products-newton"]
+conditioned-projection-cache-newton = ["retained-local-newton"]
+shared-conditioned-core-newton = ["conditioned-projection-cache-newton"]
+stream-block-newton = ["shared-conditioned-core-newton"]
+stagnant-branch-newton = ["stream-block-newton"]
+grouped-sum-newton = ["stagnant-branch-newton"]
+grouped-eight-newton = ["grouped-sum-newton"]
+parallel-indices-newton = ["grouped-eight-newton"]
+soa-scratch-newton = ["parallel-indices-newton"]
+zero-term-newton-preparation = ["gpu"]
+zero-residual-newton-preparation = ["zero-term-newton-preparation"]
+axis-parallel-newton-preparation = ["zero-residual-newton-preparation"]
+row-parallel-newton-preparation = ["axis-parallel-newton-preparation"]
+strict-rounding-newton-preparation = ["axis-parallel-newton-preparation", "protected-newton"]
+parallel-candidate-index = ["gpu"]
+deferred-native-drift = ["gpu"]
+warm-newton = ["gpu"]
+adjacent-newton = ["warm-newton"]
+autograd = ["dep:molla-autograd"]
+gpu = [
+    "dep:molla-compute",
+    "dep:molla-kernels",
+    "dep:wgpu",
+    "molla-actuators/gpu",
+    "molla-compute/gpu",
+    "molla-kernels/gpu",
+    "molla-geometry/gpu",
+    "molla-sim/gpu",
+]
+
+[dependencies]
+blake3 = "1.8"
+bytemuck = "1.18"
+glam = "0.30"
+molla-actuators = { path = "../molla-actuators", default-features = false }
+molla-autograd = { path = "../molla-autograd", optional = true }
+molla-core = { path = "../molla-core", default-features = false }
+molla-math = { path = "../molla-math" }
+molla-sim = { path = "../molla-sim", default-features = false }
+molla-compute = { path = "../molla-compute", default-features = false, optional = true }
+molla-geometry = { path = "../molla-geometry", default-features = false }
+molla-kernels = { path = "../molla-kernels", default-features = false, optional = true }
+molla-storage = { path = "../molla-storage", default-features = false }
+molla-vehicle = { path = "../molla-vehicle" }
+tracing = "0.1"
+wgpu = { version = "29", optional = true, default-features = false, features = [
+    "wgsl",
+    "vulkan",
+    "metal",
+    "dx12",
+    "std",
+] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+naga = { version = "=29.0.4", features = ["wgsl-in", "spv-out"], optional = true }
+spirv-tools = { version = "=0.13.3", default-features = false, features = ["use-compiled-tools"], optional = true }
+
+[dev-dependencies]
+ash = "0.38"
+naga = { version = "29", features = ["wgsl-in", "spv-out"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+molla-optim = { path = "../molla-optim" }
+
+[[example]]
+name = "soil_pipeline_statistics"
+required-features = ["protected-newton"]
+
+[[example]]
+name = "soil_tractor_resident"
+required-features = ["gpu"]
+
+[[example]]
+name = "check_primitives_shaders"
+required-features = ["gpu"]
+
+[[example]]
+name = "prepare_primitives_gpu"
+required-features = ["gpu"]
+
+[[example]]
+name = "soil_tractor_benchmark"
+required-features = ["resource-counters"]
+
+[[bench]]
+name = "runtime_primitives"
+harness = false
+required-features = ["resource-counters"]
+
+[[bench]]
+name = "bench_featherstone_chain"
+harness = false
+
+[[bench]]
+name = "bench_featherstone_tree"
+harness = false
+
+[[bench]]
+name = "bench_ik"
+harness = false
+
+[[bench]]
+name = "bench_mpm_explicit"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_mpm_implicit"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_vbd_cloth"
+harness = false
+
+[[bench]]
+name = "bench_vbd_tets"
+harness = false
+
+[[bench]]
+name = "bench_soft_vt_contact_cpu"
+harness = false
+
+[[bench]]
+name = "bench_soft_ee_contact"
+harness = false
+
+[[bench]]
+name = "bench_soft_self_collision"
+harness = false
+
+[[bench]]
+name = "bench_soft_friction"
+harness = false
+
+[[bench]]
+name = "featherstone_cpu_vs_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_vbd_cloth_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_vbd_tets_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_vbd_cloth_cpu_vs_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_vbd_tets_cpu_vs_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_soft_vt_contact_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_xpbd_chain"
+harness = false
+
+[[bench]]
+name = "bench_xpbd_cloth"
+harness = false
+
+[[bench]]
+name = "bench_cable_drop"
+harness = false
+
+[[bench]]
+name = "bench_xpbd_pile"
+harness = false
+
+[[bench]]
+name = "bench_xpbd_stacking"
+harness = false
+
+[[bench]]
+name = "bench_xpbd_pile_gpu"
+harness = false
+required-features = ["gpu"]
+
+[[bench]]
+name = "bench_xpbd_pile_cpu_vs_gpu"
+harness = false
+required-features = ["gpu"]

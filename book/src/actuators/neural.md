@@ -59,8 +59,8 @@ Row-major layout:
 | w3   | `[output_dim × hidden_dim]` | `O · H` elements   |
 | b3   | `[output_dim]`              | `O` elements       |
 
-`controller.expected_weight_dims()` returns the exact tuple so
-exporters can size their tensors without re-deriving the math.
+`controller.expected_weight_dims()` returns the exact tuple so callers can size
+their tensors without re-deriving the math.
 
 ### Per-step contract
 
@@ -148,15 +148,13 @@ for episode in 0..n_episodes {
 
 Both controllers expect row-major weight slabs and validate the
 total length at `set_weights` time. The mismatch error includes both
-the expected and actual lengths so an exporter mismatch shows up at
-load rather than at the first frame of inference.
+the expected and actual lengths so a bad weight slab shows up at load rather
+than at the first frame of inference.
 
-Reasonable PyTorch / JAX export conventions:
+Weight slabs are row-major:
 
-- PyTorch `nn.Linear(I, H)` ships `w` as `[H, I]` already — flatten
-  with `w.detach().cpu().numpy().flatten()` and pass straight into
-  the slab.
-- JAX / Flax flax-linen uses `(I, H)` — transpose before flattening.
+- Dense layer weights use `[out, in]` order and flatten row-major.
+- Recurrent matrices use the gate order documented on `LstmWeights`.
 - Recurrent state should always be initialised by the controller
   itself (`new` zeros `h_state` and `c_state`); don't try to load it
   from a checkpoint.
@@ -175,5 +173,4 @@ uniqueness; a duplicate produces a `Solver` error.
 - [`PD / PID controllers`](./pd_pid.md) — same per-step contract,
   hand-tuned gains instead of learned weights.
 - [`Differentiable physics / Tape-based autograd`](../autograd/tape.md)
-  — train policies inside molla using the autograd tape (vs. PyTorch
-  + export route).
+  — train or tune policies inside molla using the autograd tape.

@@ -1,9 +1,9 @@
 # Gaussian splats
 
-`crates/molla/src/geometry/gaussian_splat.rs` defines the 3D
+`crates/molla-geometry/src/gaussian_splat.rs` defines the 3D
 Gaussian splat primitives that feed the differentiable raytrace
-renderer (`crates/molla/src/sensors/splat_raytracer.rs`) and the
-forward / backward WGSL kernels in `crates/molla/shaders/splat_raytrace*.wgsl`.
+renderer and the
+forward / backward WGSL kernels in `crates/molla-kernels/shaders/splat_raytrace*.wgsl`.
 
 Stage 44 evolved through four revisions, each adding shading
 fidelity while keeping the core geometry pipeline byte-identical:
@@ -201,7 +201,7 @@ pub struct GaussianSplatShBand3d {
 pub struct GaussianSplatShDiffuseView3d {
     pub position: Vec3, pub scale: Vec3, pub rotation: Quat,
     pub diffuse:  Vec3,                       // band-0 contribution
-    pub view:     [Vec3; SH_VIEW_DEP_COUNT],  // bands 1..=3
+    pub sh_view:  [Vec3; SH_VIEW_DEP_COUNT],  // bands 1..=3
     pub opacity:  Real,
 }
 ```
@@ -213,13 +213,21 @@ view-dependent ones — Kerbl 2023 finds this gives faster
 convergence and avoids the diffuse term getting absorbed into
 spurious specular highlights.
 
-Sibling WGSL forward + backward kernels:
+Sibling WGSL kernels:
 `splat_raytrace_sh.wgsl` / `splat_raytrace_sh_backward.wgsl`
 (band 0..=2), `splat_raytrace_sh_band3.wgsl` /
-`splat_raytrace_sh_band3_backward.wgsl` (band 0..=3), and a
-diffuse/view variant pair. All four share the same α-composite
-inner loop — the only differences are the SH coefficient count
-and the view-direction evaluation formula.
+`splat_raytrace_sh_band3_backward.wgsl` (band 0..=3), and
+`splat_raytrace_sh_diffuse_view.wgsl` for Stage 44 v5 diffuse/view
+forward. The diffuse/view GPU path is exposed as
+`molla_kernels::SplatRaytraceKernel::dispatch_sh_diffuse_view`; it
+binds `splat_diffuse` separately from the flat `splat_sh_view`
+buffer (`splat_count * 15` `Vec3`s) and evaluates
+`diffuse + Σ sh_view[k] · Y[k+1](ray_dir)` per pixel on the GPU.
+That avoids CPU-baking the split parameterisation into full 16-slot
+band-3 SH buffers during iterative differentiable-splat workflows.
+All variants share the same α-composite inner loop — the only
+differences are the SH coefficient count and the view-direction
+evaluation formula.
 
 ## CPU oracle coverage
 
@@ -231,6 +239,9 @@ The parity tests
 * GPU forward agrees with CPU forward to within `1e-5` for diffuse
   splats and `1e-4` for SH splats (single-precision `f32` causes
   the slightly looser SH bound).
+* GPU diffuse/view forward agrees with
+  `composite_sh_diffuse_view_rgb_cpu` in the ignored
+  `diffuse_view_gpu_forward_matches_cpu` adapter test.
 * GPU backward agrees with CPU finite-difference gradient to within
   `1e-3` on random splat configurations.
 

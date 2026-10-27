@@ -1,13 +1,18 @@
 # Contact sensor
 
+`encode` supports [direct leased outputs](device_results.md) and mixed sensor
+command batches without collection. Nonempty input arrays and CSR must have
+canonical device ownership. Empty-contact frames clear all active body readings;
+zero-body frames contain empty channels. Existing `dispatch`/`update` remain available.
+
 `ContactSensor` reduces the per-frame `Contacts` buffer into one
 per-body summary: count, max depth, summed normals, mean point. It
 mirrors Newton's `SensorContact` and is the primitive that "foot is
 on the ground", "robot tipped over", and proximity-shielding
 controllers consume.
 
-Source: `crates/molla/src/sensors/contact.rs`. Shader:
-`crates/molla/shaders/contact_aggregate.wgsl` (one GPU thread per
+Source: `crates/molla-sensors/src/contact.rs`. Shader:
+`crates/molla-kernels/shaders/contact_aggregate.wgsl` (one GPU thread per
 body, walks the contact CSR).
 
 ## Reading
@@ -21,9 +26,9 @@ pub struct BodyContactReading {
 }
 ```
 
-The sign in `normal_sum` is flipped when the body is the *b*-side
-of a contact, so the resulting vector always points along the
-direction the contact force is pushing *this* body. Zero `count`
+The sign in `normal_sum` is flipped when the body is the *a*-side
+of a contact, and kept positive on the b-side. This is an unweighted
+geometric normal sum, not the direction or magnitude of net force. Zero `count`
 contacts ⇒ `max_depth = 0`, both vectors are zero.
 
 ## What it does not measure
@@ -36,12 +41,11 @@ sensor channel is its own piece of solver work; for the v1 contract
 the common cases:
 
 - *Foot in contact?* — `count > 0`.
-- *Foot pressed how hard?* — `max_depth` is a proxy for normal
-  force, since XPBD penetration depth scales linearly with reaction
-  impulse via the compliance term `α = 1/k·dt²`.
-- *Which direction is the body being pushed?* — `normal_sum`
-  (un-normalised, so its magnitude reflects the spread + count).
-- *Where, on the body, is the push concentrated?* — `centroid`.
+- *How deep is the overlap?* — `max_depth`, in meters; it does not
+  determine force without solver-specific impulse/force information.
+- *Which geometric directions oppose overlap?* — `normal_sum`,
+  unweighted by actual contact forces.
+- *Where are the contacts?* — `centroid`, the mean world-space point.
 
 ## API
 
@@ -57,7 +61,7 @@ let readings = sensor.update(&engine, &contacts)?;
 for (body_idx, r) in readings.iter().enumerate() {
     if r.count > 0 {
         println!(
-            "body {body_idx}: {} contacts, depth={:.4} m, push direction={:?}",
+            "body {body_idx}: {} contacts, depth={:.4} m, signed normals={:?}",
             r.count, r.max_depth, r.normal_sum,
         );
     }
@@ -69,17 +73,59 @@ the model — i.e. the output vector always has length
 `model.body_count`. Bodies with no contacts this frame land at a
 zeroed reading; callers typically filter by `count > 0`.
 
-The sensor is reusable across many steps. The output buffers stay
-on the device between calls and only get downloaded inside
-`update()`; if you want to consume the readings device-side, pull
-the buffers off `ContactSensor` (Stage 18.1 internal API) instead
-of paying the readback cost.
+The four retained output arrays share a default 1 GiB host/device payload cap,
+checked before allocation. `new_with_limits(engine, model, SensorArrayLimits)`
+overrides it; `storage_usage()` reports the checked estimate. Contact/CSR inputs,
+collection and leased output pools are not included. An empty model allocates no
+output array payload and accepts a zero-byte cap. See
+[fixed-array storage budgets](imu.md#fixed-array-storage-budgets).
+
+`dispatch(engine, contacts)` returns `ContactDeviceReadings`: borrowed
+`DeviceBuffer` channels named `count`, `max_depth`, `normal_sum` and
+`centroid`. It submits GPU aggregation without downloads or CPU waits.
+Use each channel's `readback_source(range)` with a caller-owned
+[`ReadbackRing`](readback.md) for selected asynchronous collection, or
+submit a GPU consumer directly. Submit consumers/copies before the next
+dispatch; merely recording an unsubmitted command does not lease outputs.
+
+The synchronous `update()` wraps dispatch and one grouped collection of
+40 bytes per body, reusing one staging slot after first use. Its wait is
+bounded to 30 seconds; errors are returned rather than hidden. An empty
+model returns empty readings without collection. `readback_stats()` counts
+only the sensor's own synchronous collection, not external rings.
+
+Inputs must belong to the same engine and have current GPU mirrors. The
+contact producer must supply a valid per-body CSR consistent with active
+contacts; buffer lengths and authority are checked, but device CSR contents
+are not downloaded for CPU validation. `Contacts::clear()` resets outputs
+to zero even if old CSR data remains allocated. Recreate the sensor after
+body remapping/count changes; raw indices are not stable application handles.
+`dispatch_stats()` records kernel dispatches, submissions, clear batches and
+binding preparations. The sensor retains two least-recently-used input buffer
+variants, including CSR/output identities: alternating two stable producers
+does not recreate uniforms or bind groups after warm-up. Replacing a bound
+buffer prepares a new set; changing contents in place does not. A clear needs
+no bindings. Each preparation creates one uniform and three bind groups.
+Command encoders and driver upload staging are not counted as preparations.
+
+`ContactAggregateKernel::prepare` / `encode_prepared` support lower-level
+shared command streams without submission or authority bookkeeping. Validate
+the CSR/active ranges and mark output buffers device-authoritative yourself.
+Submit before changing a reused parameter buffer; distinct pending parameter
+sets require separate prepared bindings. Public `encode` supports mixed producer
+batches and leased output slots, including explicit clearing on empty contacts.
+
+Viewer example 07 asynchronously collects the four displayed aggregate channels.
+Reset discards old displayed/pending results and waits for a new physics step;
+it does not reinterpret stale collision data as a sample of the reset scene.
+The arrows display signed geometric normal sums, not forces. See
+[viewer integration and acceptance status](viewer.md).
 
 ## Performance
 
 The kernel is launched with one thread per body. Each thread walks
 that body's slice of the contact CSR
-(`contacts.body_offsets[body]..body_offsets[body+1]`) — typically
+(`contacts.body_contact_offsets[body]..body_contact_offsets[body+1]`) — typically
 very short (4–8 contacts for an articulation foot, often 0). The
 CSR layout matches the rest of the contact pipeline so no
 permutation step is needed.

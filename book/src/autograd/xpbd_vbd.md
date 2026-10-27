@@ -10,7 +10,7 @@ math.
 
 Source: `crates/molla/src/autograd/xpbd_adjoint.rs` (XPBD), plus
 the VBD adjoint scaffolding in the same module. Shader (partial
-GPU XPBD adjoint): `crates/molla/shaders/xpbd_equality.wgsl` gives
+GPU XPBD adjoint): `crates/molla-kernels/shaders/xpbd_equality.wgsl` gives
 the equality-constraint forward; the adjoint counterpart is
 host-only in v1.
 

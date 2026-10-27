@@ -2,7 +2,7 @@
 
 Every assembled matrix needs boundary data folded into the linear
 system before CG / GMRES will produce a meaningful answer. Molla's BC
-machinery lives in `crates/molla/src/fem/bc.rs` and supports five
+machinery lives in `crates/molla-fem/src/bc.rs` and supports five
 variants under a single enum:
 
 ```rust

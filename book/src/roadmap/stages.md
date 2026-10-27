@@ -19,7 +19,7 @@ the human-readable index.
 | Stage | Title                                              | Commit       |
 |-------|----------------------------------------------------|--------------|
 | 3.0   | Joint data model + FK                              | `c76cb60`    |
-| 3     | Featherstone CPU+GPU + URDF importer               | `a564b53`    |
+| 3     | Featherstone CPU+GPU                               | `a564b53`    |
 | 4.0   | XPBD + sphere/plane contacts                       | `49550ee`    |
 | 4     | Boxes — SAT, SAP, jacobi XPBD                      | `421e4c0`    |
 | 5     | Joint limits, drives, multi-articulation, substeps | `bb0772a`    |
@@ -29,13 +29,13 @@ the human-readable index.
 | 7     | Joint types, equality + mimic constraints, jacobian | `348ba33`   |
 | 7     | Humanoid ball-joint demo via CONNECT               | `42d7e83`    |
 
-## Family B — USD bridge (Stage 8, 29; now retired)
+## Family B — retired external-format experiments
 
 | Stage | Title                                              | Commit       |
 |-------|----------------------------------------------------|--------------|
-| 5–8   | `usd_molla` scaffold + UsdPhysics round-trip       | `5e5b033`, `152bc6f` |
-| 29    | Multi-schema resolvers (PhysX + MJC)               | `36f305c`, `43b5524` |
-| —     | Remove `usd_molla` crate (use bevy_openusd later)  | `8c81b13`    |
+| 5–8   | Retired scene-format bridge scaffold               | `5e5b033`, `152bc6f` |
+| 29    | Retired multi-schema resolver experiments          | `36f305c`, `43b5524` |
+| —     | Remove external-format bridge crate                | `8c81b13`    |
 
 ## Family C — distance constraints + cloth (Stage 12)
 
@@ -92,11 +92,10 @@ the human-readable index.
 | 21      | Decimate / SDF bake / marching cubes / hull      | `MeshTools scene` |
 | 21.1    | Rayon-parallel mesh-utility tools (Cargo dep)    | —            |
 
-## Family I — MuJoCo + hydroelastic (Stage 22, 22.1)
+## Family I — hydroelastic (Stage 22.1)
 
 | Stage   | Title                                              | Commit       |
 |---------|----------------------------------------------------|--------------|
-| 22      | MuJoCo wrapper (libmujoco + MjcfWriter)            | `MuJoCo scene` |
 | 22.1    | Hydroelastic contact (CPU + GPU)                   | `f3febbe`    |
 
 ## Family J — autograd (Stage 23, 23.1)
@@ -156,7 +155,6 @@ the human-readable index.
 | 36.3    | P2 (quadratic-nodal) elements                      | `FemHeatP2 scene` |
 | 36.4    | Adjoint FEM solver + grad helpers                  | `FemDiffBeam scene` |
 | 36.5    | GPU FEM v1 (assembly + CSR matvec + resident CG)   | `697b85a`, `85c1345` |
-| 36.6    | Gmsh import via `mshio`                            | `b94a8d4`    |
 | 36.7    | Direct solver scaffolding (russell feature)        | `65f90ec`    |
 
 ## Family P — Stage 37 (Phase 2 Warp engine work)
@@ -269,9 +267,9 @@ the human-readable index.
 
 Each row is a single brick on the wall. The total count is **597
 commits** on `main` at the time of this snapshot, spanning Stage 0
-through Stage 51. Approximately ~100 viewer scenes correspond to a
-subset of these stages (some stages don't add a scene, e.g. infra
-work).
+through Stage 51. 132 viewer scenes (numbered through #124, plus
+unnumbered extras) correspond to a subset of these stages (some
+stages don't add a scene, e.g. infra work).
 
 For the chronological commit log run:
 

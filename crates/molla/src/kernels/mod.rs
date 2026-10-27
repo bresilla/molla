@@ -1,33 +1,9 @@
 //! WGSL compute kernels and their Rust dispatch wrappers.
 
 #[cfg(feature = "gpu")]
-mod actuator_delay;
-#[cfg(feature = "gpu")]
-mod actuator_pd;
-#[cfg(feature = "gpu")]
-mod actuator_pid;
-#[cfg(feature = "gpu")]
-mod actuator_neural_lstm;
-#[cfg(feature = "gpu")]
-mod actuator_neural_mlp;
-#[cfg(feature = "gpu")]
-mod actuator_pipeline_pd;
-#[cfg(feature = "gpu")]
-mod actuator_pipeline_pid;
-#[cfg(feature = "gpu")]
-mod clamping_dc_motor;
-#[cfg(feature = "gpu")]
-mod clamping_max_effort;
-#[cfg(feature = "gpu")]
-mod clamping_position_based;
-#[cfg(feature = "gpu")]
-mod contact_sensor;
-#[cfg(feature = "gpu")]
 mod crba;
 #[cfg(feature = "gpu")]
-mod dense3;
-#[cfg(feature = "gpu")]
-mod epa;
+mod dg_swe_flux;
 #[cfg(feature = "gpu")]
 mod featherstone;
 #[cfg(feature = "gpu")]
@@ -41,11 +17,9 @@ mod fem_ns_advect;
 #[cfg(feature = "gpu")]
 mod fem_ns_rhs_assemble;
 #[cfg(feature = "gpu")]
-mod fem_stokes;
-#[cfg(feature = "gpu")]
 mod fem_step_ops;
 #[cfg(feature = "gpu")]
-mod dg_swe_flux;
+mod fem_stokes;
 // Adjoint dispatcher is feature-gated separately — it does not (yet)
 // require GPU and is needed by the autograd CPU path + viewer
 // regardless of the `gpu` feature.
@@ -57,22 +31,6 @@ mod featherstone_adjoint_gpu;
 #[cfg(feature = "gpu")]
 mod fft;
 #[cfg(feature = "gpu")]
-mod gjk;
-#[cfg(feature = "gpu")]
-mod hydroelastic;
-#[cfg(feature = "gpu")]
-mod mpr;
-#[cfg(feature = "gpu")]
-mod muscle;
-#[cfg(feature = "gpu")]
-mod contact_reduction;
-#[cfg(feature = "gpu")]
-mod mesh_bvh_raycast;
-#[cfg(feature = "gpu")]
-mod frame_transform;
-#[cfg(feature = "gpu")]
-mod imu;
-#[cfg(feature = "gpu")]
 mod implicit_mpm;
 #[cfg(feature = "gpu")]
 mod integrate_bodies;
@@ -81,25 +39,11 @@ mod jacobian;
 #[cfg(feature = "gpu")]
 mod lbvh;
 #[cfg(feature = "gpu")]
+mod rnea;
+#[cfg(feature = "gpu")]
 mod soft_bvh_gpu;
 #[cfg(feature = "gpu")]
 mod soft_vt_contact;
-#[cfg(feature = "gpu")]
-mod radix_sort;
-#[cfg(feature = "gpu")]
-mod raycast;
-#[cfg(feature = "gpu")]
-mod scan;
-#[cfg(feature = "gpu")]
-mod splat_raytrace;
-#[cfg(feature = "gpu")]
-pub(crate) mod optim_adam;
-#[cfg(feature = "gpu")]
-mod optim_sgd;
-#[cfg(feature = "gpu")]
-mod robust_loss;
-#[cfg(feature = "gpu")]
-mod rnea;
 #[cfg(feature = "gpu")]
 mod sparse_grid;
 #[cfg(feature = "gpu")]
@@ -107,51 +51,34 @@ mod sparse_grid_delete;
 #[cfg(feature = "gpu")]
 pub(crate) mod sparse_grid_insert;
 #[cfg(feature = "gpu")]
-mod tiled_camera;
+mod splat_raytrace;
+#[cfg(feature = "gpu")]
+mod vbd_cloth;
 #[cfg(feature = "gpu")]
 mod xpbd;
 #[cfg(feature = "gpu")]
 mod xpbd_equality;
 #[cfg(feature = "gpu")]
 mod xpbd_particles;
-#[cfg(feature = "gpu")]
-mod vbd_cloth;
-#[cfg(feature = "gpu")]
-mod dahl_friction;
 
-#[cfg(feature = "gpu")]
-pub use actuator_delay::ActuatorDelayKernel;
-#[cfg(feature = "gpu")]
-pub use actuator_pd::ActuatorPdKernel;
-#[cfg(feature = "gpu")]
-pub use actuator_pid::ActuatorPidKernel;
-#[cfg(feature = "gpu")]
-pub use actuator_neural_lstm::ActuatorNeuralLstmKernel;
-#[cfg(feature = "gpu")]
-pub use actuator_neural_mlp::ActuatorNeuralMlpKernel;
-#[cfg(feature = "gpu")]
-pub use actuator_pipeline_pd::ActuatorPipelinePdKernel;
-#[cfg(feature = "gpu")]
-pub use actuator_pipeline_pid::ActuatorPipelinePidKernel;
-#[cfg(feature = "gpu")]
-pub use clamping_dc_motor::ClampingDcMotorKernel;
-#[cfg(feature = "gpu")]
-pub use clamping_max_effort::ClampingMaxEffortKernel;
-#[cfg(feature = "gpu")]
-pub use clamping_position_based::ClampingPositionBasedKernel;
-#[cfg(feature = "gpu")]
-pub use contact_sensor::ContactAggregateKernel;
 #[cfg(feature = "gpu")]
 pub use crba::MassMatrixKernel;
 #[cfg(feature = "gpu")]
-pub use dense3::{Dense3Kernel, Dense3Op, Dense3Result};
-#[cfg(feature = "gpu")]
-pub use epa::{
-    decode_epa_out, EpaKernel, EpaPairResult, EPA_OUT_STRIDE, EPA_STATUS_FALLBACK, EPA_STATUS_NONE,
-    EPA_STATUS_OK,
+pub use dg_swe_flux::{
+    DG_SWE_COMPONENTS, DG_SWE_FACE_STRIDE, DG_SWE_NODES_PER_CELL, DgSweFace, DgSweFluxKernel,
+    DgSweFluxVariant,
 };
 #[cfg(feature = "gpu")]
-pub use featherstone::FeatherstoneKernel;
+pub use featherstone::{FeatherstoneExecution, FeatherstoneKernel, FeatherstoneRounding};
+pub use featherstone_adjoint::{
+    AdjointBackend, AdjointResult, FeatherstoneAdjointDispatcher, MultiAdjointBatch,
+    MultiAdjointInput, MultiAdjointOutput, time_forward_us,
+};
+#[cfg(feature = "gpu")]
+pub use featherstone_adjoint_gpu::{
+    FeatherstoneAdjointGpuKernel, GpuChainInput, GpuChainJacobian, MAX_LINKS as ADJ_MAX_LINKS,
+    OUT_STRIDE as ADJ_OUT_STRIDE,
+};
 #[cfg(feature = "gpu")]
 pub use fem::FemGpuKernel;
 #[cfg(feature = "gpu")]
@@ -163,50 +90,15 @@ pub use fem_ns_advect::FemNsAdvectKernel;
 #[cfg(feature = "gpu")]
 pub use fem_ns_rhs_assemble::{FemNsRhsAssembleKernel, NsRhsMode};
 #[cfg(feature = "gpu")]
-pub use fem_stokes::{FemStokesGpuKernel, StokesEntry};
-#[cfg(feature = "gpu")]
 pub use fem_step_ops::{TransientStepOpsKernel, WaveStepOpsKernel};
 #[cfg(feature = "gpu")]
-pub use dg_swe_flux::{
-    DgSweFace, DgSweFluxKernel, DgSweFluxVariant, DG_SWE_COMPONENTS, DG_SWE_FACE_STRIDE,
-    DG_SWE_NODES_PER_CELL,
-};
-pub use featherstone_adjoint::{
-    time_forward_us, AdjointBackend, AdjointResult, FeatherstoneAdjointDispatcher,
-    MultiAdjointBatch, MultiAdjointInput, MultiAdjointOutput,
-};
-#[cfg(feature = "gpu")]
-pub use featherstone_adjoint_gpu::{
-    FeatherstoneAdjointGpuKernel, GpuChainInput, GpuChainJacobian, MAX_LINKS as ADJ_MAX_LINKS,
-    OUT_STRIDE as ADJ_OUT_STRIDE,
-};
+pub use fem_stokes::{FemStokesGpuKernel, StokesEntry};
 #[cfg(feature = "gpu")]
 pub use fft::{Complex32, FftKernel};
 #[cfg(feature = "gpu")]
-pub use gjk::{GjkKernel, GJK_SIMPLEX_STRIDE};
-#[cfg(feature = "gpu")]
-pub use hydroelastic::HydroelasticKernel;
-#[cfg(feature = "gpu")]
-pub use mpr::{
-    decode_mpr_out, MprKernel, MprPairResult, MPR_DEFAULT_TOLERANCE, MPR_OUT_STRIDE,
-    MPR_STATUS_FALLBACK, MPR_STATUS_NONE, MPR_STATUS_OK,
-};
-#[cfg(feature = "gpu")]
-pub use muscle::MuscleKernel;
-#[cfg(feature = "gpu")]
-pub use contact_reduction::{
-    pack_groups_host, unpack_output_host, ContactReductionKernel, CONTACT_STRIDE,
-    MAX_OUT_PER_GROUP, MAX_PER_GROUP,
-};
-#[cfg(feature = "gpu")]
-pub use mesh_bvh_raycast::{MeshBvhGpu, MeshBvhRaycastKernel};
-#[cfg(feature = "gpu")]
-pub use frame_transform::FrameTransformKernel;
-#[cfg(feature = "gpu")]
-pub use imu::ImuKernel;
-#[cfg(feature = "gpu")]
 pub use implicit_mpm::{
-    readback_flat_f32 as implicit_mpm_readback_flat_f32,
+    GpuStepState as ImplicitMpmGpuStepState, ImplicitMpmKernel,
+    StepUniforms as ImplicitMpmStepUniforms, readback_flat_f32 as implicit_mpm_readback_flat_f32,
     readback_g_mass_f32 as implicit_mpm_readback_g_mass_f32,
     readback_g_momentum_f32 as implicit_mpm_readback_g_momentum_f32,
     readback_v_grid_f32 as implicit_mpm_readback_v_grid_f32,
@@ -214,57 +106,123 @@ pub use implicit_mpm::{
     readback_vec3_f32 as implicit_mpm_readback_vec3_f32,
     readback_vec3_real as implicit_mpm_readback_vec3_real,
     upload_storage_f32 as implicit_mpm_upload_storage_f32,
-    upload_storage_vec3_f32 as implicit_mpm_upload_storage_vec3_f32, GpuStepState as ImplicitMpmGpuStepState,
-    ImplicitMpmKernel, StepUniforms as ImplicitMpmStepUniforms,
+    upload_storage_vec3_f32 as implicit_mpm_upload_storage_vec3_f32,
 };
 #[cfg(feature = "gpu")]
 pub use integrate_bodies::IntegrateBodiesKernel;
 #[cfg(feature = "gpu")]
-pub use jacobian::{jacobian_gpu, JacobianKernel, JacobianRequest};
+pub use jacobian::{JacobianKernel, JacobianRequest, jacobian_gpu};
 #[cfg(feature = "gpu")]
-pub use lbvh::{collect_shape_aabbs, LbvhBroadPhase, LbvhPairs};
+pub use lbvh::{LbvhBroadPhase, LbvhPairs, collect_shape_aabbs};
+#[cfg(feature = "gpu")]
+pub use molla_kernels::{
+    ActuatorDelayKernel, ActuatorNeuralLstmKernel, ActuatorNeuralMlpKernel, ActuatorPdKernel,
+    ActuatorPidKernel, ActuatorPipelinePdKernel, ActuatorPipelinePidKernel, AdamGpuKernel,
+    BrushTerrain, BrushTerrainGpu, BrushWheelInput, BrushWheelOutput, BsrAlgebraKernel, BsrGpu,
+    CONTACT_STRIDE, CameraRaysKernel, CameraTraceKernel, ClampingDcMotorKernel,
+    ClampingMaxEffortKernel, ClampingPositionBasedKernel, ContactAggregateKernel,
+    ContactReductionKernel, DahlConfig, DahlFrictionKernel, Dense3Kernel, Dense3Op, Dense3Result,
+    EPA_OUT_STRIDE, EPA_STATUS_FALLBACK, EPA_STATUS_NONE, EPA_STATUS_OK, EpaKernel, EpaPairResult,
+    FrameTransformKernel, GJK_SIMPLEX_STRIDE, GjkKernel, HydroelasticKernel, ImuKernel, LossPair,
+    MAX_OUT_PER_GROUP, MAX_PER_GROUP, MPR_DEFAULT_TOLERANCE, MPR_OUT_STRIDE, MPR_STATUS_FALLBACK,
+    MPR_STATUS_NONE, MPR_STATUS_OK, MeshBvhGpu, MeshBvhRaycastKernel, MprKernel, MprPairResult,
+    MuscleKernel, PreparedSoilSurface, PreparedSoilTerrainQueries, PreparedTireBrushTerrain,
+    PreparedTireDemRaster, PreparedTireFemCavity, PreparedTireFemTerrainFeedback,
+    PreparedTireMpmCompactionReadback, PreparedTireMpmFeedback, PreparedTireMpmRaster,
+    PreparedTireMpmTerrainReadback, PreparedTireVehicleChassisStep, PreparedTireVehicleFemReadback,
+    PreparedTireVehicleFemStep, RadixSortKernel, RadixSortKernel64, RaycastKernel,
+    RobustLossKernel, SPGEMM_GPU_SYMBOLIC_CUTOVER, ScanKernel, SgdGpuKernel, SoilSurfaceConfig,
+    SoilSurfaceObservation, SoilSurfaceSnapshot, SoilTerrainSample, TireBekkerContactCell,
+    TireBekkerFemTerrainOwner, TireBekkerGpuInput, TireBekkerGpuKernel, TireBekkerGpuOutput,
+    TireBekkerGpuResidentTerrain, TireBekkerResidentOutput, TireBrushGpuBatch, TireBrushGpuKernel,
+    TireBrushResidentOutput, TireDemContactAudit, TireDemContactCell, TireDemFemTerrainOwner,
+    TireDemFemTerrainStepReport, TireDemGpuBuiltGridStepInput, TireDemGpuInput, TireDemGpuKernel,
+    TireDemGpuLbvhLeafRows, TireDemGpuLbvhTreeRows, TireDemGpuMortonOrder, TireDemGpuOutput,
+    TireDemGpuRadixGridStepInput, TireDemGridStepGpuInput, TireDemLbvhDispatchPlan,
+    TireDemLbvhNode, TireDemLbvhStepGpuInput, TireDemResidentFemTerrainOwner, TireDemResidentLbvh,
+    TireDemResidentOutput, TireDemResidentState, TireDemResidentTerrainOutput,
+    TireDemResidentTerrainParams, TireDemResidentTerrainReadback, TireDemSparseLbvh,
+    TireDemStepGpuInput, TireDemStepParams, TireDemSurfaceVelocityMap, TireDemTopologyStats,
+    TireDemUnboundedSortedGrid, TireFemContactFeedbackGpuTerrain, TireFemContactFeedbackInput,
+    TireFemContactFeedbackKernel, TireFemContactFeedbackOutput, TireFemContactFeedbackParams,
+    TireFemContactFeedbackPatchAccounting, TireFemContactFeedbackResidentOutput,
+    TireFemContactReductionGpuTerrain, TireFemContactReductionInput, TireFemContactReductionKernel,
+    TireFemContactReductionOutput, TireFemContactReductionParams, TireFemContactSdfPrimitive,
+    TireFemContactTerrain, TireFemContactTriangle, TireFemGpuAtlasBatch,
+    TireFemGpuAtlasHubParamRow, TireFemGpuBatchAtlasBuffers, TireFemGpuBatchDispatchPlan,
+    TireFemGpuInput, TireFemGpuKernel, TireFemGpuOutput, TireFemGpuParams, TireFemHubParams,
+    TireFemPersistentMesh, TireFemTransientFeedbackCommand, TireMpmCompactionObservation,
+    TireMpmCompactionReadbackStats, TireMpmCompactionSummary, TireMpmContactCell,
+    TireMpmFemTerrainOwner, TireMpmGpuInPlaceParams, TireMpmGpuInput, TireMpmGpuKernel,
+    TireMpmGpuOutput, TireMpmResidentFeedback, TireMpmTerrainRasterGpuOutput,
+    TireMpmTerrainRasterParams, TireMpmTerrainSnapshot, TireResidentVehicleFemAtlasOwner,
+    TireThermalGpuBatch, TireThermalGpuInput, TireThermalGpuKernel, TireThermalGpuOutput,
+    TireThermalGpuState, TireThermalRigReplayBatch, TireTransientGpuBatch, TireTransientGpuInput,
+    TireTransientGpuKernel, TireTransientGpuOutput, TireTransientGpuState,
+    TireVehicleBrushRowsFromSpinGpuInput, TireVehicleBrushRowsGpuInput,
+    TireVehicleBrushRowsGpuOutput, TireVehicleBrushRowsResidentOutput, TireVehicleFemFrame,
+    TireVehiclePlanarFromBrushGpuInput, TireVehiclePlanarGpuInput, TireVehiclePlanarGpuOutput,
+    TireVehiclePlanarResidentState, TireVehicleResidentBrushOwner,
+    TireVehicleResidentChassisBrushOwner, TireVehicleSuspensionGpuInput,
+    TireVehicleSuspensionGpuOutput, TireVehicleSuspensionResidentBatch,
+    TireVehicleVerticalGpuInput, TireVehicleVerticalGpuOutput, TireVehicleVerticalResidentState,
+    TireVehicleWheelKinematicsFromSpinGpuInput, TireVehicleWheelKinematicsGpuInput,
+    TireVehicleWheelKinematicsGpuOutput, TireVehicleWheelSpinGpuInput,
+    TireVehicleWheelSpinGpuOutput, TireVehicleWheelSpinResidentBatch,
+    TireVehicleWheelSpinStateGpuOutput, TireVehicleYawGpuInput, TireVehicleYawGpuKernel,
+    TireVehicleYawGpuOutput, dahl_oracle_step, decode_epa_out, decode_mpr_out, pack_groups_host,
+    radix_sort_pairs, radix_sort_pairs_u64, tire_bekker_reference_writeback,
+    tire_dem_build_grid_step_input, tire_dem_build_sparse_lbvh,
+    tire_dem_build_sparse_lbvh_leaf_rows_gpu_radix,
+    tire_dem_build_sparse_lbvh_morton_order_gpu_radix, tire_dem_build_sparse_lbvh_step_input,
+    tire_dem_build_sparse_lbvh_tree_rows_gpu_radix,
+    tire_dem_build_unbounded_sorted_grid_step_input,
+    tire_dem_build_unbounded_sorted_grid_step_input_gpu_radix, tire_dem_raster_surface_height_map,
+    tire_dem_raster_surface_velocity_map, tire_dem_reference_grid_step,
+    tire_dem_reference_impulses, tire_dem_reference_sparse_lbvh_step, tire_dem_reference_step,
+    tire_dem_sparse_lbvh_dispatch_plan, tire_dem_sparse_lbvh_gpu_rows,
+    tire_fem_contact_terrain_with_dem_surface_velocity,
+    tire_fem_contact_terrain_with_transient_surface_velocity,
+    tire_fem_feedback_params_with_transient, tire_fem_gpu_batch_dispatch_plan,
+    tire_fem_hub_params_with_brush_outputs, tire_fem_hub_params_with_contact_reduction,
+    tire_fem_hub_params_with_feedback_output, tire_fem_transient_feedback_command,
+    tire_mpm_reference_feedback, tire_thermal_build_rig_replay_batch,
+    tire_thermal_input_from_rig_snapshot, tire_thermal_reference_rig_replay_batch,
+    tire_thermal_reference_step, tire_thermal_state_from_rig_snapshot,
+    tire_transient_reference_step, tire_vehicle_brush_rows_from_spin_reference,
+    tire_vehicle_brush_rows_from_spin_suspension_reference, tire_vehicle_brush_rows_reference,
+    tire_vehicle_planar_from_brush_reference,
+    tire_vehicle_planar_from_contact_reduction_rows_reference,
+    tire_vehicle_planar_from_feedback_output_reference, tire_vehicle_planar_reference,
+    tire_vehicle_suspension_reference, tire_vehicle_vertical_from_suspension_reference,
+    tire_vehicle_wheel_kinematics_from_spin_reference, tire_vehicle_wheel_kinematics_reference,
+    tire_vehicle_wheel_spin_reference, tire_vehicle_wheel_spin_state_reference,
+    tire_vehicle_yaw_reference, unpack_output_host,
+};
+#[cfg(feature = "gpu")]
+pub use rnea::{InverseDynamicsKernel, inverse_dynamics_gpu};
 #[cfg(feature = "gpu")]
 pub use soft_bvh_gpu::SoftBvhGpu;
 #[cfg(feature = "gpu")]
 pub use soft_vt_contact::{SoftVtContactKernel, SoftVtContactStats, VtContactGpu};
 #[cfg(feature = "gpu")]
-pub use radix_sort::{
-    radix_sort_pairs, radix_sort_pairs_u64, RadixSortKernel, RadixSortKernel64,
+pub use sparse_grid::SparseGridKernel;
+#[cfg(feature = "gpu")]
+pub use sparse_grid_delete::SparseGridDeleteKernel;
+#[cfg(feature = "gpu")]
+pub use sparse_grid_insert::{
+    SparseGridInsertKernel, SparseGridStorage, SparseGridStorageStats, Value, ValueF16, ValueVec3,
+    read_storage_to_pairs,
 };
-#[cfg(feature = "gpu")]
-pub use raycast::RaycastKernel;
-#[cfg(feature = "gpu")]
-pub use scan::ScanKernel;
 #[cfg(feature = "gpu")]
 pub use splat_raytrace::{
     SplatGradients, SplatRaytraceKernel, SplatShBand3Gradients, SplatShGradients,
 };
 #[cfg(feature = "gpu")]
-pub use optim_adam::AdamGpuKernel;
-#[cfg(feature = "gpu")]
-pub use optim_sgd::SgdGpuKernel;
-#[cfg(feature = "gpu")]
-pub use robust_loss::{LossPair, RobustLossKernel};
-#[cfg(feature = "gpu")]
-pub use rnea::{inverse_dynamics_gpu, InverseDynamicsKernel};
-#[cfg(feature = "gpu")]
-pub use sparse_grid::SparseGridKernel;
-#[cfg(feature = "gpu")]
-pub use sparse_grid_insert::{
-    read_storage_to_pairs, SparseGridInsertKernel, SparseGridStorage, SparseGridStorageStats,
-    Value, ValueF16, ValueVec3,
-};
-#[cfg(feature = "gpu")]
-pub use sparse_grid_delete::SparseGridDeleteKernel;
-#[cfg(feature = "gpu")]
-pub use tiled_camera::{CameraRaysKernel, CameraTraceKernel};
+pub use vbd_cloth::VbdClothKernel;
 #[cfg(feature = "gpu")]
 pub use xpbd::XpbdKernel;
 #[cfg(feature = "gpu")]
 pub use xpbd_equality::XpbdEqualityKernel;
 #[cfg(feature = "gpu")]
 pub use xpbd_particles::XpbdParticlesKernel;
-#[cfg(feature = "gpu")]
-pub use vbd_cloth::VbdClothKernel;
-#[cfg(feature = "gpu")]
-pub use dahl_friction::{dahl_oracle_step, DahlConfig, DahlFrictionKernel};

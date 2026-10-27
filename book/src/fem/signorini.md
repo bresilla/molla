@@ -3,7 +3,7 @@
 Stage 49 added **exact** non-penetration contact via Lagrange
 multipliers, replacing the penalty-spring approximation of
 [Stage 47 nonconforming penalty contact](./nonconforming.md). It
-lives in `crates/molla/src/fem/signorini.rs`.
+lives in `crates/molla-fem/src/signorini.rs`.
 
 ## Why Lagrange multipliers?
 
@@ -171,10 +171,10 @@ Once Uzawa converges, you have:
   is a **candidate for active-set release** — it has no contact force
   and may have separated from the master.
 
-## Stage 51 — active-set update loop (planned)
+## Stage 51 — active-set update loop
 
-The natural follow-up is the **active-set update** loop — the
-"primal-dual active-set" (PDAS) algorithm:
+The active-set update loop is a "primal-dual active-set" (PDAS)
+algorithm:
 
 1. Initialise active set from a contact-detection pass.
 2. Solve the augmented system on the current active set (Stage 49).
@@ -187,10 +187,24 @@ The natural follow-up is the **active-set update** loop — the
 
 This is the LCP variant of the Uzawa-Lagrange method and is what
 Wriggers (*Computational Contact Mechanics*, §6.3) calls the standard
-"semi-smooth Newton" formulation. Status: **planned** — the code for
-the active-set update logic hasn't landed yet; the Stage 49 v1
-solver returns the multipliers and primal residual that the v2 / v3
-update would key off.
+"semi-smooth Newton" formulation.
+
+Stage 51 v2 adds anti-cycling hardening: the solver records previously
+seen active sets, and if a proposed add/release update would revisit one
+of them it switches to a Bland-style least-slave-DoF single pivot. The
+trace exposes `cycle_breaks` on `ActiveSetTrace` and the selected
+`bland_pivot` on each `ActiveSetIteration`.
+
+## Self-contact candidate path
+
+`molla-geometry::detect_vertex_triangle_self_contacts` emits CPU
+vertex-triangle self-contact candidates for non-adjacent surface
+features. `signorini_candidates_from_self_contacts` converts those into
+the active-set candidate interface by keeping the deepest shell
+penetration per slave vertex and building a fixed gap plane from the
+closest triangle point and contact normal. This gives the Signorini
+PDAS and coupled-friction solvers a first self-contact input path
+without changing the solver loop.
 
 ## References
 

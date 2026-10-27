@@ -1,6 +1,6 @@
 # Top-level solvers
 
-`crates/molla/src/fem/solver.rs` strings the pieces together. Every
+`crates/molla-fem/src/solver.rs` strings the pieces together. Every
 top-level solver in this chapter follows the same pattern:
 
 1. Clone the assembled matrix.
@@ -83,10 +83,23 @@ walks both triplet lists and reuses
 matvec of `M` against `u_old`. Dirichlet BCs are then applied in
 tandem on `(A, b)` before CG.
 
-`solve_transient_pcg` is the Jacobi-preconditioned variant. The PCG
-variants are recommended whenever you run more than ~50 steps of the
-same problem — the diagonal extraction is `O(n)` and amortises away
-to nothing across that many iterations.
+`solve_transient_pcg` is the Jacobi-preconditioned variant. For repeated
+steps with the same left-hand side, `solve_transient_pcg_restarted`
+adds a recycled-Krylov initial guess:
+
+```rust
+pub struct KrylovRestartCache { /* bounded recent correction vectors */ }
+
+pub fn solve_transient_pcg_restarted(
+    m, k, f, u_old, dt, bcs, x0, cache, max_iters, tol,
+) -> CgResult;
+```
+
+The cache stores recent PCG correction directions. Before each solve,
+the restarted path computes a tiny minimum-residual projection in
+`x0 + span(cache)` and uses that projected vector as the PCG initial
+guess, then stores the new correction for the next step. This is the
+CPU oracle for Krylov restart/recycling in transient FEM steppers.
 
 ## Wave equation — Newmark-β
 
@@ -167,7 +180,7 @@ classical Newton iteration:
    bail-out — emits a `tracing::warn!`).
 
 v1 has no line search; small problems only. The hyperelasticity
-contract tests in `crates/molla/tests/` use this driver against the
+contract tests in `crates/molla-fem/tests/` use this driver against the
 SVK kernel from [elements](./elements.md#st-venant-kirchhoff-hyperelastic-stress).
 
 ## Newton on distortion energy

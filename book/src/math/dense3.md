@@ -18,7 +18,7 @@ Callers:
 - **Per-particle inertia eigendecomposition** for MPM plasticity
   (Stage 24d).
 
-The matching WGSL kernel lives in `crates/molla/shaders/dense3_svd.wgsl`
+The matching WGSL kernel lives in `crates/molla-kernels/shaders/dense3_svd.wgsl`
 and is dispatched by `crate::kernels::Dense3Kernel`.
 
 ## Algorithm choices — Jacobi vs Householder vs Givens
