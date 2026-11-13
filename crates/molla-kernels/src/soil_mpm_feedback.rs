@@ -206,7 +206,7 @@ impl TireMpmGpuKernel {
         );
         uniforms
             .slice(..)
-            .get_mapped_range_mut()
+            .get_mapped_range_mut().expect("mapped GPU buffer range")
             .copy_from_slice(bytemuck::bytes_of(&uniform(params, contact_count)));
         uniforms.unmap();
         Ok(PreparedTireMpmFeedback {

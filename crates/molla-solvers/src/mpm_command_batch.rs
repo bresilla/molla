@@ -135,7 +135,7 @@ impl MpmSimulation {
         );
         source
             .slice(..)
-            .get_mapped_range_mut()
+            .get_mapped_range_mut().expect("mapped GPU buffer range")
             .copy_from_slice(&bytes);
         source.unmap();
         let jacobi_iters = match self.cfg.time_step {

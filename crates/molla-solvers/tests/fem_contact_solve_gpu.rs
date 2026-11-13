@@ -31,7 +31,7 @@ fn read<T: bytemuck::Pod>(engine: &Engine, buffer: &wgpu::Buffer, count: usize) 
     });
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    bytemuck::cast_slice(&staging.slice(..).get_mapped_range()).to_vec()
+    bytemuck::cast_slice(&staging.slice(..).get_mapped_range().expect("mapped GPU buffer range")).to_vec()
 }
 
 fn rigid_model() -> (Model, State) {

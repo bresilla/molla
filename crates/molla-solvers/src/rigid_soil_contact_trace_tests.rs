@@ -104,7 +104,7 @@ impl Probe {
         rx.recv_timeout(std::time::Duration::from_secs(10))
             .unwrap()
             .unwrap();
-        let mapped = self.staging.slice(..).get_mapped_range();
+        let mapped = self.staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
         let words: &[u32] = bytemuck::cast_slice(&mapped);
         let mut start = 0;
         let data: Vec<&[u32]> = buffers
@@ -423,7 +423,7 @@ fn membership_probe() {
         rx.recv_timeout(std::time::Duration::from_secs(10))
             .unwrap()
             .unwrap();
-        let mapped = staging.slice(..).get_mapped_range();
+        let mapped = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
         let actual: &[f32] = bytemuck::cast_slice(&mapped);
         assert!(actual.iter().all(|x| x.is_finite()));
         let occupied = record["nodes"]

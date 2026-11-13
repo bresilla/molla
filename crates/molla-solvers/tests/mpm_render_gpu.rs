@@ -159,7 +159,7 @@ impl Renderer {
             })
             .unwrap();
         rx.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
-        let pixels = self.staging.slice(..).get_mapped_range().to_vec();
+        let pixels = self.staging.slice(..).get_mapped_range().expect("mapped GPU buffer range").to_vec();
         self.staging.unmap();
         if let Some(root) = std::env::var_os("MOLLA_PARTICLE_RENDER_ARTIFACTS") {
             let mut file = std::fs::OpenOptions::new()

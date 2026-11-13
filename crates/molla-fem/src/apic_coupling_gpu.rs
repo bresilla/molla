@@ -824,7 +824,7 @@ impl ApicGpuState {
             .map_err(|e| Error::Gpu(format!("apic pos poll: {e:?}")))?;
         rx.recv()
             .map_err(|e| Error::Gpu(format!("apic pos recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range().expect("mapped GPU buffer range");
         let raw: Vec<[f32; 4]> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         self.stage_pos.unmap();
@@ -859,7 +859,7 @@ impl ApicGpuState {
             .map_err(|e| Error::Gpu(format!("apic vel poll: {e:?}")))?;
         rx.recv()
             .map_err(|e| Error::Gpu(format!("apic vel recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range().expect("mapped GPU buffer range");
         let raw: Vec<[f32; 4]> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         self.stage_vel.unmap();
@@ -895,7 +895,7 @@ impl ApicGpuState {
             .map_err(|e| Error::Gpu(format!("apic c poll: {e:?}")))?;
         rx.recv()
             .map_err(|e| Error::Gpu(format!("apic c recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range().expect("mapped GPU buffer range");
         let raw: Vec<[f32; 4]> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         self.stage_c.unmap();

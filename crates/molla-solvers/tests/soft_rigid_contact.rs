@@ -459,7 +459,7 @@ fn gpu_gathers_contacts_from_resident_fem_state() {
     });
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let mapping = staging.slice(..).get_mapped_range();
+    let mapping = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
     let rows: &[SoftRigidContactGpu] = bytemuck::cast_slice(&mapping);
     state.particle_q.download(device, queue).unwrap();
     let cpu =

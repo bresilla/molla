@@ -37,7 +37,7 @@ fn read(engine: &Engine, source: &wgpu::Buffer) -> Vec<u8> {
     rx.recv_timeout(std::time::Duration::from_secs(5))
         .unwrap()
         .unwrap();
-    let bytes = stage.slice(..).get_mapped_range().to_vec();
+    let bytes = stage.slice(..).get_mapped_range().expect("mapped GPU buffer range").to_vec();
     stage.unmap();
     bytes
 }

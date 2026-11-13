@@ -4153,7 +4153,7 @@ fn read_vec4(device: &wgpu::Device, stage: &wgpu::Buffer, label: &str) -> Result
     receiver
         .recv()
         .map_err(|e| Error::Gpu(format!("{label} recv: {e:?}")))??;
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().expect("mapped GPU buffer range");
     let out = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     stage.unmap();

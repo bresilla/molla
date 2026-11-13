@@ -370,7 +370,7 @@ pub(crate) fn read_many(engine: &Engine, buffers: &[&wgpu::Buffer]) -> Vec<Vec<u
     rx.recv_timeout(std::time::Duration::from_secs(15))
         .unwrap()
         .unwrap();
-    let mapped = staging.slice(..).get_mapped_range();
+    let mapped = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
     let bytes = ranges
         .iter()
         .map(|range| mapped[range.start as usize..range.end as usize].to_vec())

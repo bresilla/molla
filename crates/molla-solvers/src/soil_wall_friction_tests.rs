@@ -154,7 +154,7 @@ fn run(engine: &Engine, solver: &ExperimentalSoilWallFrictionGpu) -> Vec<SoilWal
         .unwrap()
         .unwrap();
     let result =
-        bytemuck::cast_slice::<u8, SoilWallFrictionOutput>(&staging.slice(..).get_mapped_range())
+        bytemuck::cast_slice::<u8, SoilWallFrictionOutput>(&staging.slice(..).get_mapped_range().expect("mapped GPU buffer range"))
             .to_vec();
     staging.unmap();
     result

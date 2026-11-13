@@ -765,7 +765,7 @@ impl MpmSimulation {
             return Ok(None);
         }
         let mut words: Vec<u32> =
-            bytemuck::cast_slice(&query.staging.slice(..pending.bytes).get_mapped_range()).to_vec();
+            bytemuck::cast_slice(&query.staging.slice(..pending.bytes).get_mapped_range().expect("mapped GPU buffer range")).to_vec();
         query.staging.unmap();
         if words[2] != 0 {
             return Err(Error::Solver("faulted soil support snapshot".into()));

@@ -197,7 +197,7 @@ fn readback_vec(
     });
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
     let mut v: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&mapped).to_vec();
     drop(mapped);
     staging.unmap();

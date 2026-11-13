@@ -249,7 +249,7 @@ impl Probe {
         rx.recv_timeout(std::time::Duration::from_secs(10))
             .unwrap()
             .unwrap();
-        let bytes = slice.get_mapped_range();
+        let bytes = slice.get_mapped_range().expect("mapped GPU buffer range");
         let words: &[u32] = bytemuck::cast_slice(&bytes);
         let mut offset = 0;
         let mut mismatches = Vec::new();
@@ -400,7 +400,7 @@ fn dynamics_probe_copies_storage_only_delta_bits() {
     rx.recv_timeout(std::time::Duration::from_secs(5))
         .unwrap()
         .unwrap();
-    let bytes = staging.slice(..).get_mapped_range();
+    let bytes = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
     assert_eq!(bytemuck::cast_slice::<u8, u32>(&bytes), values);
     drop(bytes);
     staging.unmap();

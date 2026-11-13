@@ -535,7 +535,7 @@ pub(super) fn words(device: &wgpu::Device, queue: &wgpu::Queue, source: &wgpu::B
     rx.recv_timeout(std::time::Duration::from_secs(5))
         .unwrap()
         .unwrap();
-    let result = bytemuck::cast_slice(&staging.slice(..).get_mapped_range()).to_vec();
+    let result = bytemuck::cast_slice(&staging.slice(..).get_mapped_range().expect("mapped GPU buffer range")).to_vec();
     staging.unmap();
     result
 }

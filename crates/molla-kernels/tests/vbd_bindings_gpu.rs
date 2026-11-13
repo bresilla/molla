@@ -216,7 +216,7 @@ fn cached_bindings_preserve_identity_and_pending_commands() {
         });
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     recv.recv().unwrap().unwrap();
-    let mapped = readback.slice(..).get_mapped_range();
+    let mapped = readback.slice(..).get_mapped_range().expect("mapped GPU buffer range");
     assert_eq!(bytemuck::cast_slice::<u8, u32>(&mapped), expected);
     drop(mapped);
     readback.unmap();

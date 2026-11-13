@@ -78,7 +78,7 @@ fn run(
     rx.recv_timeout(std::time::Duration::from_secs(10))
         .unwrap()
         .unwrap();
-    let mapped = staging.slice(..).get_mapped_range();
+    let mapped = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
     let rates = bytemuck::cast_slice::<u8, f32>(&mapped[..4 * n]).to_vec();
     let contacts = bytemuck::cast_slice::<u8, [f32; 4]>(&mapped[4 * n..4 * n + 16 * c]).to_vec();
     let normal_offset = 4 * n + 16 * c.max(1);
@@ -541,7 +541,7 @@ fn paired_timing(
             rx.recv_timeout(std::time::Duration::from_secs(10))
                 .unwrap()
                 .unwrap();
-            let mapped = staging.slice(..).get_mapped_range();
+            let mapped = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
             let ticks: &[u64] = bytemuck::cast_slice(&mapped);
             let ms = (ticks[1].checked_sub(ticks[0]).unwrap()) as f64
                 * f64::from(queue.get_timestamp_period())

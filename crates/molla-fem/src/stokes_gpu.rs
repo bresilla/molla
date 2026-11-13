@@ -685,7 +685,7 @@ fn read_f32_buf(
     rx.recv()
         .map_err(|e| Error::Gpu(format!("stokes_gpu readback recv: {e}")))?
         .map_err(|e| Error::Gpu(format!("stokes_gpu readback map: {e:?}")))?;
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
     let mut v: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&mapped).to_vec();
     drop(mapped);
     staging.unmap();

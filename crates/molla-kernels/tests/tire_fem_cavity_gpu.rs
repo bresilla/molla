@@ -33,7 +33,7 @@ fn read(engine: &Engine, buffer: &wgpu::Buffer) -> [f32; 4] {
         .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let row = bytemuck::pod_read_unaligned(&stage.slice(..).get_mapped_range());
+    let row = bytemuck::pod_read_unaligned(&stage.slice(..).get_mapped_range().expect("mapped GPU buffer range"));
     stage.unmap();
     row
 }

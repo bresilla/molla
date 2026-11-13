@@ -109,7 +109,7 @@ fn read(device: &wgpu::Device, queue: &wgpu::Queue, source: &wgpu::Buffer) -> Ve
         });
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let result = bytemuck::cast_slice(&stage.slice(..).get_mapped_range()).to_vec();
+    let result = bytemuck::cast_slice(&stage.slice(..).get_mapped_range().expect("mapped GPU buffer range")).to_vec();
     stage.unmap();
     result
 }

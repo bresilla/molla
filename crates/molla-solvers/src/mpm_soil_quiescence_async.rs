@@ -140,7 +140,7 @@ impl MpmSimulation {
             observer.staging.unmap();
             return Ok(None);
         };
-        let mapped = observer.staging.slice(..pending.bytes).get_mapped_range();
+        let mapped = observer.staging.slice(..pending.bytes).get_mapped_range().expect("mapped GPU buffer range");
         let words: &[u32] = bytemuck::cast_slice(&mapped);
         let faulted = words[2] != 0;
         if !faulted {

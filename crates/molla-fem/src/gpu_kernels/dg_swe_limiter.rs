@@ -402,7 +402,7 @@ fn read_storage_buffer_f32(
     rx.recv()
         .map_err(|e| Error::Gpu(format!("dg_swe_limiter readback recv: {e}")))?
         .map_err(|e| Error::Gpu(format!("dg_swe_limiter readback map: {e:?}")))?;
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
     let mut out: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&mapped).to_vec();
     drop(mapped);
     staging.unmap();

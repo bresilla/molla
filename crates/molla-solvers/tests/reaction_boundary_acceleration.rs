@@ -263,7 +263,7 @@ mod gpu {
             .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
-        let bytes = staging.slice(..).get_mapped_range();
+        let bytes = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
         let result = bytes
             .chunks_exact(std::mem::size_of::<T>())
             .map(bytemuck::pod_read_unaligned)

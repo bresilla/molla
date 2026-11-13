@@ -184,7 +184,7 @@ fn device_words(engine: &Engine, buffers: &[&wgpu::Buffer]) -> Vec<Vec<u32>> {
     rx.recv_timeout(std::time::Duration::from_secs(5))
         .unwrap()
         .unwrap();
-    let data = staging.slice(..).get_mapped_range();
+    let data = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
     let mut offset = 0;
     let result = buffers
         .iter()

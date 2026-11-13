@@ -71,7 +71,7 @@ fn run(
     rx.recv_timeout(std::time::Duration::from_secs(10))
         .unwrap()
         .unwrap();
-    let mapped = staging.slice(..).get_mapped_range();
+    let mapped = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
     let rates = bytemuck::cast_slice::<u8, f32>(&mapped[..4 * n]).to_vec();
     let contacts = bytemuck::cast_slice::<u8, [f32; 4]>(&mapped[4 * n..4 * n + 16 * c]).to_vec();
     let status = *bytemuck::from_bytes::<[u32; 4]>(&mapped[size as usize - 16..]);

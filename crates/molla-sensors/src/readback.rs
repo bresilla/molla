@@ -514,7 +514,7 @@ impl ReadbackRing {
             Vec::new()
         } else {
             let mapped_bytes = (pending.bytes as u64).div_ceil(8) * 8;
-            let view = slot.staging.slice(0..mapped_bytes).get_mapped_range();
+            let view = slot.staging.slice(0..mapped_bytes).get_mapped_range().expect("mapped GPU buffer range");
             let bytes = view[..pending.bytes].to_vec();
             drop(view);
             slot.staging.unmap();

@@ -160,7 +160,7 @@ impl Fixture {
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         recv.recv().unwrap().unwrap();
         let ms = start.elapsed().as_secs_f64() * 1000.;
-        let words = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+        let words = bytemuck::cast_slice(&slice.get_mapped_range().expect("mapped GPU buffer range")).to_vec();
         self.staging.unmap();
         (words, ms)
     }

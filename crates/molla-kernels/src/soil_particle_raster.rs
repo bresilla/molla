@@ -237,7 +237,7 @@ impl ParticleRasterKernel {
                 );
                 uniform
                     .slice(..)
-                    .get_mapped_range_mut()
+                    .get_mapped_range_mut().expect("mapped GPU buffer range")
                     .copy_from_slice(bytemuck::bytes_of(&data));
                 uniform.unmap();
                 let group = device.create_bind_group(&wgpu::BindGroupDescriptor {

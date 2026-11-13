@@ -41,7 +41,7 @@ molla-storage = { path = "../molla-storage", default-features = false }
 molla-vehicle = { path = "../molla-vehicle", optional = true }
 bytemuck = { version = "1.18", features = ["derive"] }
 rayon = "1.10"
-wgpu = { version = "29", optional = true, default-features = false, features = [
+wgpu = { version = "30", optional = true, default-features = false, features = [
     "wgsl",
     "vulkan",
     "metal",
@@ -50,7 +50,7 @@ wgpu = { version = "29", optional = true, default-features = false, features = [
 ] }
 
 [dev-dependencies]
-naga = { version = "29", features = ["wgsl-in", "spv-out"] }
+naga = { version = "30", features = ["wgsl-in", "spv-out"] }
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
 glam = "0.30"
 rustfft = "6"

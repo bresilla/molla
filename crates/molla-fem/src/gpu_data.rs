@@ -225,7 +225,7 @@ impl FemGpuData {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("fem gpu_data recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("fem gpu_data map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
         let v: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&mapped).to_vec();
         drop(mapped);
         staging.unmap();

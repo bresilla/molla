@@ -1514,7 +1514,7 @@ impl FemCgGpuKernel {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("fem_cg readback recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("fem_cg readback map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
         let mut out: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&mapped).to_vec();
         drop(mapped);
         staging.unmap();
@@ -1922,7 +1922,7 @@ impl CgWorkspace {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("fem_cg ws dot recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("fem_cg ws dot map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
         let parts: &[f32] = bytemuck::cast_slice(&mapped);
         let mut sum: f32 = 0.0;
         for v in parts.iter().take(self.n_groups as usize) {
@@ -2522,7 +2522,7 @@ impl LazyCgWorkspace {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("fem_cg lazy setup dot recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("fem_cg lazy setup dot map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
         let parts: &[f32] = bytemuck::cast_slice(&mapped);
         let mut sum: f32 = 0.0;
         for v in parts.iter().take(self.n_groups as usize) {
@@ -2765,7 +2765,7 @@ impl LazyCgWorkspace {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("fem_cg lazy scalar recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("fem_cg lazy scalar map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
         let parts: &[f32] = bytemuck::cast_slice(&mapped);
         let v = parts[0];
         drop(mapped);
@@ -3293,7 +3293,7 @@ impl FusedCgWorkspace {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("fem_cg fused dot recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("fem_cg fused dot map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
         let parts: &[f32] = bytemuck::cast_slice(&mapped);
         let mut sum: f32 = 0.0;
         for v in parts.iter().take(self.n_groups as usize) {
@@ -3355,7 +3355,7 @@ impl FusedCgWorkspace {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("fem_cg fused scalar recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("fem_cg fused scalar map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
         let parts: &[f32] = bytemuck::cast_slice(&mapped);
         let v = parts[0];
         drop(mapped);
@@ -3812,7 +3812,7 @@ impl PcgWorkspace {
         rx.recv()
             .map_err(|e| Error::Gpu(format!("fem_cg pcg ws dot recv: {e}")))?
             .map_err(|e| Error::Gpu(format!("fem_cg pcg ws dot map: {e:?}")))?;
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
         let parts: &[f32] = bytemuck::cast_slice(&mapped);
         let mut sum: f32 = 0.0;
         for v in parts.iter().take(self.n_groups as usize) {

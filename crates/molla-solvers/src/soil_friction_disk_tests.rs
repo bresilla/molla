@@ -68,7 +68,7 @@ fn run(engine: &Engine, solver: &ExperimentalSoilFrictionDiskGpu) -> Vec<SoilFri
         .unwrap()
         .unwrap();
     let values =
-        bytemuck::cast_slice::<u8, SoilFrictionDiskOutput>(&staging.slice(..).get_mapped_range())
+        bytemuck::cast_slice::<u8, SoilFrictionDiskOutput>(&staging.slice(..).get_mapped_range().expect("mapped GPU buffer range"))
             .to_vec();
     staging.unmap();
     values.into_iter().take(solver.count as usize).collect()

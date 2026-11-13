@@ -798,7 +798,7 @@ fn wall_runtime_read(engine: &Engine, buffer: &wgpu::Buffer) -> Vec<u8> {
     rx.recv_timeout(std::time::Duration::from_secs(15))
         .unwrap()
         .unwrap();
-    let bytes = staging.slice(..).get_mapped_range().to_vec();
+    let bytes = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range").to_vec();
     staging.unmap();
     bytes
 }

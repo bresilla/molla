@@ -88,7 +88,7 @@ fn run(engine: &Engine, reader: &ContactMotionGpu) -> Result<Vec<SoilContactMoti
     rx.recv_timeout(std::time::Duration::from_secs(10))
         .unwrap()
         .unwrap();
-    let result = reader.decode(&reader.staging().slice(..).get_mapped_range());
+    let result = reader.decode(&reader.staging().slice(..).get_mapped_range().expect("mapped GPU buffer range"));
     reader.staging().unmap();
     result
 }

@@ -20,7 +20,7 @@ pub(super) fn read(engine: &Engine, buffer: &wgpu::Buffer) -> Vec<u8> {
         .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let bytes = stage.slice(..).get_mapped_range().to_vec();
+    let bytes = stage.slice(..).get_mapped_range().expect("mapped GPU buffer range").to_vec();
     stage.unmap();
     bytes
 }

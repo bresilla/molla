@@ -265,7 +265,7 @@ fn read_u32_buf(
     rx.recv()
         .map_err(|e| Error::Gpu(format!("recv: {e}")))?
         .map_err(|e| Error::Gpu(format!("map: {e:?}")))?;
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
     let out = bytemuck::cast_slice::<u8, u32>(&mapped).to_vec();
     drop(mapped);
     staging.unmap();

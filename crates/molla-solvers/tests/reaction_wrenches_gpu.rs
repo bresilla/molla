@@ -185,7 +185,7 @@ fn read<T: bytemuck::Pod>(engine: &Engine, source: &wgpu::Buffer, count: usize) 
         });
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let data = staging.slice(..).get_mapped_range();
+    let data = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
     let result = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     staging.unmap();

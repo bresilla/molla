@@ -638,7 +638,7 @@ fn mpm_terrain_raster_refreshes_cached_outputs_after_reset() {
         });
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
         let rows: &[[f32; 4]] = bytemuck::cast_slice(&mapped);
         assert_eq!(
             rows[0],

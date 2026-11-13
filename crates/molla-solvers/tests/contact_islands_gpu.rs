@@ -37,7 +37,7 @@ fn read(device: &wgpu::Device, b: &wgpu::Buffer) -> Vec<u32> {
         .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let result = bytemuck::cast_slice(&b.slice(..).get_mapped_range()).to_vec();
+    let result = bytemuck::cast_slice(&b.slice(..).get_mapped_range().expect("mapped GPU buffer range")).to_vec();
     b.unmap();
     result
 }

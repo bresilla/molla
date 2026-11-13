@@ -207,7 +207,7 @@ fn retained_fk_pairs_match_all_joint_kinds_and_prescribed_boundaries() {
             });
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
-        let output = staging.slice(..).get_mapped_range().to_vec();
+        let output = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range").to_vec();
         staging.unmap();
         output
     };
@@ -370,7 +370,7 @@ fn unjointed_and_fixed_only_models_use_current_pose_without_coordinate_storage()
             });
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
-        let mapped = staging.slice(..).get_mapped_range();
+        let mapped = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
         assert_eq!(&mapped[32..], &[0; 4]);
         let pair = bytemuck::pod_read_unaligned::<GpuQuaternionPair>(&mapped[..32]);
         let actual = Quat::from_array(std::array::from_fn(|lane| {

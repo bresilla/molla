@@ -419,7 +419,7 @@ fn mapped(engine: &Engine, buffer: &wgpu::Buffer) -> Vec<u8> {
         })
         .unwrap();
     rx.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
-    let bytes = buffer.slice(..).get_mapped_range().to_vec();
+    let bytes = buffer.slice(..).get_mapped_range().expect("mapped GPU buffer range").to_vec();
     buffer.unmap();
     bytes
 }

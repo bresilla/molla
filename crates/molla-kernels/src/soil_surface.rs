@@ -147,7 +147,7 @@ impl PreparedSoilSurface {
         );
         edges
             .slice(..)
-            .get_mapped_range_mut()
+            .get_mapped_range_mut().expect("mapped GPU buffer range")
             .copy_from_slice(bytemuck::cast_slice(&edge_values));
         edges.unmap();
         let allocate = |label, size, usage| {

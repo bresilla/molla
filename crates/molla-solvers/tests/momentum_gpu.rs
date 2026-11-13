@@ -133,6 +133,6 @@ fn gpu_momentum_diagnostics_preserve_phase_deltas() {
         .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let mapped = staging.slice(..).get_mapped_range();
+    let mapped = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
     assert_eq!(bytemuck::cast_slice::<u8, [f32; 4]>(&mapped), &expected);
 }

@@ -43,7 +43,7 @@ fn read(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Ve
         .map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    staging.slice(..).get_mapped_range().to_vec()
+    staging.slice(..).get_mapped_range().expect("mapped GPU buffer range").to_vec()
 }
 
 #[test]

@@ -82,7 +82,7 @@ mod hardware {
         slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
         let values = bytemuck::cast_slice(&mapped).to_vec();
         drop(mapped);
         stage.unmap();

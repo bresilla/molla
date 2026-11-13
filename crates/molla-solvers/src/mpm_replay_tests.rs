@@ -673,7 +673,7 @@ pub(super) fn read_words(
     });
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let words = bytemuck::cast_slice::<u8, u32>(&slice.get_mapped_range()).to_vec();
+    let words = bytemuck::cast_slice::<u8, u32>(&slice.get_mapped_range().expect("mapped GPU buffer range")).to_vec();
     stage.unmap();
     words
 }

@@ -6173,7 +6173,7 @@ impl TireFemGpuKernel {
         receiver
             .recv()
             .map_err(|e| Error::Gpu(format!("hub readback recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range().expect("mapped GPU buffer range");
         let v: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         let out: [f32; 8] = [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]];
         drop(data);
@@ -6226,7 +6226,7 @@ impl TireFemGpuKernel {
         receiver
             .recv()
             .map_err(|e| Error::Gpu(format!("atlas hub readback recv: {e:?}")))??;
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range().expect("mapped GPU buffer range");
         let v: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         let out: [f32; 8] = [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]];
         drop(data);
@@ -10431,7 +10431,7 @@ fn read_vec4(device: &wgpu::Device, buf: &wgpu::Buffer, label: &str) -> Result<V
     receiver
         .recv()
         .map_err(|e| Error::Gpu(format!("{label} readback recv: {e:?}")))??;
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().expect("mapped GPU buffer range");
     let out: Vec<[f32; 4]> = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     buf.unmap();

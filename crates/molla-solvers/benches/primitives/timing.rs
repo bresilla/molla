@@ -65,7 +65,7 @@ impl Timer {
             timeout: Some(std::time::Duration::from_secs(120)),
         })?;
         rx.recv()??;
-        let view = self.readback.slice(..).get_mapped_range();
+        let view = self.readback.slice(..).get_mapped_range().expect("mapped GPU buffer range");
         let words: &[u64] = bytemuck::cast_slice(&view);
         let elapsed = words[1]
             .checked_sub(words[0])

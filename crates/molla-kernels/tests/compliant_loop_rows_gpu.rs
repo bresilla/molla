@@ -280,7 +280,7 @@ fn compliant_loop_rows_match_coordinate_derivatives_and_feedback_in_retained_bat
             });
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
-        let mapped = staging.slice(..).get_mapped_range();
+        let mapped = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
         assert_eq!(&mapped[row_bytes as usize..], &[0; 4]);
         if !previous.is_empty() {
             assert_eq!(previous, mapped[..row_bytes as usize]);
@@ -422,7 +422,7 @@ fn compliant_loop_rows_match_coordinate_derivatives_and_feedback_in_retained_bat
         });
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let mapped = staging.slice(..).get_mapped_range();
+    let mapped = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
     assert!(mapped[..row_bytes as usize].iter().all(|&byte| byte == 0));
     assert_eq!(
         &mapped[row_bytes as usize..],

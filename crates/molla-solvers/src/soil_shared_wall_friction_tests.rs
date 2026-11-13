@@ -292,7 +292,7 @@ fn run(
     rx.recv_timeout(std::time::Duration::from_secs(15))
         .unwrap()
         .unwrap();
-    let data = staging.slice(..).get_mapped_range();
+    let data = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
     let rates = bytemuck::cast_slice::<u8, f32>(&data[..4 * n]).to_vec();
     let outputs =
         bytemuck::cast_slice::<u8, SoilWallFrictionOutput>(&data[4 * n..4 * n + 80 * c]).to_vec();
@@ -1365,7 +1365,7 @@ fn conditional_input(
     rx.recv_timeout(std::time::Duration::from_secs(15))
         .unwrap()
         .unwrap();
-    let input = bytemuck::pod_read_unaligned(&staging.slice(..).get_mapped_range());
+    let input = bytemuck::pod_read_unaligned(&staging.slice(..).get_mapped_range().expect("mapped GPU buffer range"));
     staging.unmap();
     input
 }
@@ -2154,7 +2154,7 @@ fn paired_schedule_timing(mode: u32) {
             rx.recv_timeout(std::time::Duration::from_secs(15))
                 .unwrap()
                 .unwrap();
-            let mapped = staging.slice(..).get_mapped_range();
+            let mapped = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
             let status = bytemuck::pod_read_unaligned::<[u32; 8]>(&mapped[bytes as usize..]);
             assert_eq!(status, expected[variant].2);
             let ticks: &[u64] = bytemuck::cast_slice(&mapped[..8 * used as usize]);

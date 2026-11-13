@@ -57,7 +57,7 @@ fn words(engine: &Engine, source: &wgpu::Buffer) -> Vec<u32> {
     rx.recv_timeout(std::time::Duration::from_secs(5))
         .unwrap()
         .unwrap();
-    let data = bytemuck::cast_slice(&buffer.slice(..).get_mapped_range()).to_vec();
+    let data = bytemuck::cast_slice(&buffer.slice(..).get_mapped_range().expect("mapped GPU buffer range")).to_vec();
     buffer.unmap();
     data
 }

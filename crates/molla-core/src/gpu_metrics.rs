@@ -377,7 +377,7 @@ macro_rules! gpu_write_buffer {
 #[macro_export]
 macro_rules! gpu_readback {
     ($slice:expr) => {{
-        let view = ($slice).get_mapped_range();
+        let view = ($slice).get_mapped_range().expect("mapped GPU readback range");
         $crate::gpu_metrics::record_readback(view.len() as u64);
         view
     }};
@@ -387,7 +387,7 @@ macro_rules! gpu_readback {
 #[macro_export]
 macro_rules! gpu_mapped_upload {
     ($slice:expr) => {{
-        let view = ($slice).get_mapped_range_mut();
+        let view = ($slice).get_mapped_range_mut().expect("mapped GPU upload range");
         $crate::gpu_metrics::record_upload(view.len() as u64);
         view
     }};

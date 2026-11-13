@@ -341,6 +341,7 @@ fn init_gpu(backends: wgpu::Backends, features: wgpu::Features) -> Result<Engine
     });
 
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        apply_limit_buckets: false,
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
         force_fallback_adapter: false,

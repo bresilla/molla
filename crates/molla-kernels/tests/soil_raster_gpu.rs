@@ -554,7 +554,7 @@ fn soil_mpm_prepared_raster_reuses_scratch_and_rejects_invalid_inputs() {
     });
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("mapped GPU buffer range");
     let floats: &[f32] = bytemuck::cast_slice(&mapped);
     assert_eq!(&floats[..cells as usize], &floats[cells as usize..]);
     drop(mapped);

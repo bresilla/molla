@@ -65,6 +65,7 @@ fn runtime_gpu_setup_capacity_rejection_preserves_world_and_can_resume() {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .unwrap();
     let info = molla_compute::AdapterInfo::from_wgpu(adapter.get_info());

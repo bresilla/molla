@@ -456,7 +456,7 @@ fn replay_inputs(profile: bool, iterations: u32, inputs: Vec<Vec<u8>>) {
             .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
-        staging.slice(..).get_mapped_range().to_vec()
+        staging.slice(..).get_mapped_range().expect("mapped GPU buffer range").to_vec()
     };
     assert_eq!(read(kernel.status()), 0u32.to_le_bytes());
     let bytes = read(kernel.row_state());

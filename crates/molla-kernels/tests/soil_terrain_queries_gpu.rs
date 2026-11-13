@@ -57,7 +57,7 @@ fn read(engine: &Engine, source: &wgpu::Buffer) -> Vec<SoilTerrainSample> {
         })
         .unwrap();
     rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
-    let result = bytemuck::cast_slice(&stage.slice(..).get_mapped_range()).to_vec();
+    let result = bytemuck::cast_slice(&stage.slice(..).get_mapped_range().expect("mapped GPU buffer range")).to_vec();
     stage.unmap();
     result
 }

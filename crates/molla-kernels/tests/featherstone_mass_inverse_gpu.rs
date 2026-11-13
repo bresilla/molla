@@ -126,7 +126,7 @@ fn evaluate(@builtin(global_invocation_id) id: vec3<u32>) {
             });
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
-        let mapped = staging.slice(..).get_mapped_range();
+        let mapped = staging.slice(..).get_mapped_range().expect("mapped GPU buffer range");
         if !previous.is_empty() {
             assert_eq!(previous, mapped[..]);
         }
