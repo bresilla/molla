@@ -144,13 +144,28 @@ test:
 .PHONY: test-ppf-geometry
 .PHONY: test-ppf-publication
 .PHONY: test-ppf-materials test-ppf-materials-gpu bench-ppf-materials
+.PHONY: test-ppf-material-solver-gpu bench-ppf-material-solver bench-ppf-material-replay
 test-ppf-materials:
+	@$(MAKE) test APP_TARGET='-p molla-storage --lib buffer::tests'
+	@$(MAKE) test APP_TARGET='-p molla-sim --lib elastic_element_set'
 	@$(MAKE) test APP_TARGET='-p molla-math --test constitutive'
 	@$(MAKE) test APP_TARGET='-p molla-solvers --test barrier_materials'
 	@$(MAKE) test APP_TARGET='-p molla-kernels --features resource-counters --test constitutive_gpu shader_parses_and_validates'
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features resource-counters --lib barrier_newton::materials::tests'
 
 test-ppf-materials-gpu:
 	@$(MAKE) test-gpu P=molla-kernels T=constitutive_gpu GPU_FEATURES=resource-counters A='--nocapture --test-threads=1 --skip resident_tangent_resource_profile'
+
+test-ppf-material-solver-gpu:
+	@$(RUN_WITH) $(CARGO) test -p molla-kernels --features resource-counters --lib barrier_newton::materials::gpu_tests -- --ignored --nocapture --test-threads=1
+	@$(MAKE) test-gpu P=molla-solvers T=barrier_materials_gpu GPU_FEATURES=resource-counters A='--nocapture --test-threads=1 --skip resident_material_solver_resource_profile'
+
+bench-ppf-material-solver:
+	@$(MAKE) test-gpu P=molla-solvers T=barrier_materials_gpu GPU_FEATURES=resource-counters RELEASE=1 A='--nocapture --test-threads=1 resident_material_solver_resource_profile'
+
+bench-ppf-material-replay:
+	@test -x '$(PPF_BENCH_BINARY)' || { echo 'Set PPF_BENCH_BINARY to a release material-solver test binary'; exit 1; }
+	@$(RUN_WITH) '$(PPF_BENCH_BINARY)' --ignored --nocapture --test-threads=1 resident_material_solver_resource_profile
 
 bench-ppf-materials:
 	@$(MAKE) test-gpu P=molla-kernels T=constitutive_gpu GPU_FEATURES=resource-counters RELEASE=1 A='--nocapture --test-threads=1 resident_tangent_resource_profile'

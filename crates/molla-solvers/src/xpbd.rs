@@ -223,6 +223,7 @@ impl Solver for XpbdSolver {
         dt: Real,
         state_out: &mut State,
     ) -> Result<()> {
+        crate::require_no_elastic_elements(model)?;
         if state_in.body_q.len() != model.body_count || state_out.body_q.len() != model.body_count {
             return Err(Error::Solver(format!(
                 "state size mismatch: model has {} bodies, state_in has {}, state_out has {}",

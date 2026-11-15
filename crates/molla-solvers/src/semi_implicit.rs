@@ -131,6 +131,7 @@ impl Solver for SemiImplicitSolver {
         dt: Real,
         state_out: &mut State,
     ) -> Result<()> {
+        crate::require_no_elastic_elements(model)?;
         match &mut self.backend {
             SemiImplicitBackend::Cpu => cpu_step(model, state_in, control, contacts, dt, state_out),
             #[cfg(feature = "gpu")]

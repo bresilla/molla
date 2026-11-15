@@ -172,14 +172,37 @@ enum SyncState {
     DeviceDirty,
 }
 
-/// A homogeneous array, mirrored across host and device.
-///
-/// `ensure_device`, `upload`, `download` are all functional under the
-/// `gpu` feature; without it only the host half exists.
+/// Buffer identity and content generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BufferRevision {
+    identity: u64,
+    generation: u64,
+}
+
+impl BufferRevision {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            identity: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            generation: 0,
+        }
+    }
+
+    fn advance(&mut self) {
+        if let Some(next) = self.generation.checked_add(1) {
+            self.generation = next;
+        } else {
+            *self = Self::new();
+        }
+    }
+}
+
+/// A homogeneous array mirrored across host and device.
 pub struct Buffer<T: BufferElement> {
     host: Vec<T>,
     usage: BufferUsage,
     state: SyncState,
+    revision: BufferRevision,
     #[cfg(feature = "gpu")]
     device: Option<wgpu::Buffer>,
     #[cfg(feature = "gpu")]
@@ -195,6 +218,7 @@ impl<T: BufferElement> Buffer<T> {
             host,
             usage,
             state: SyncState::HostOnly,
+            revision: BufferRevision::new(),
             #[cfg(feature = "gpu")]
             device: None,
             #[cfg(feature = "gpu")]
@@ -235,6 +259,11 @@ impl<T: BufferElement> Buffer<T> {
         self.usage
     }
 
+    /// Identity and content generation; changes on mutable access or device writes.
+    pub fn revision(&self) -> BufferRevision {
+        self.revision
+    }
+
     /// Read-only access to the host buffer.
     ///
     /// If the device is the authoritative copy, returns an error — call
@@ -255,6 +284,7 @@ impl<T: BufferElement> Buffer<T> {
                 "host copy is stale; call download() before mutating".into(),
             ));
         }
+        self.revision.advance();
         self.state = match self.state {
             SyncState::HostOnly => SyncState::HostOnly,
             _ => SyncState::HostDirty,
@@ -413,6 +443,7 @@ impl<T: BufferElement> Buffer<T> {
         for (host, gpu) in self.host.iter_mut().zip(gpu_slice.iter()) {
             *host = T::from_gpu(gpu);
         }
+        self.revision.advance();
         drop(mapped);
         staging.unmap();
 
@@ -464,6 +495,7 @@ impl<T: BufferElement> Buffer<T> {
     /// trigger an error until [`Self::download`] is invoked.
     #[cfg(feature = "gpu")]
     pub fn mark_device_dirty(&mut self) {
+        self.revision.advance();
         self.state = SyncState::DeviceDirty;
     }
 }
@@ -495,6 +527,22 @@ mod tests {
         let mut b: Buffer<u32> = Buffer::from_vec(vec![0; 3], BufferUsage::StorageReadWrite);
         b.host_mut().unwrap()[0] = 42;
         assert_eq!(b.host().unwrap()[0], 42);
+    }
+
+    #[test]
+    fn revisions_track_identity_and_mutation_not_reads() {
+        let mut b = Buffer::from_vec(vec![1u32], BufferUsage::StorageReadWrite);
+        let first = b.revision();
+        assert_eq!(b.host().unwrap(), &[1]);
+        assert_eq!(b.revision(), first);
+        let other = Buffer::from_vec(vec![1u32], BufferUsage::StorageReadWrite);
+        assert_ne!(other.revision(), first);
+        b.host_mut().unwrap()[0] = 2;
+        assert_ne!(b.revision(), first);
+        let changed = b.revision();
+        b.state = SyncState::DeviceDirty;
+        assert!(b.host_mut().is_err());
+        assert_eq!(b.revision(), changed);
     }
 
     #[test]

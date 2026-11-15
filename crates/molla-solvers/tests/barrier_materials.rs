@@ -5,6 +5,69 @@ use molla_math::{
 use molla_sim::ElasticElement;
 use molla_solvers::barrier_contact::{BarrierObstacle, BarrierParams, BarrierShell};
 
+#[test]
+fn model_authored_materials_match_direct_shell_from_deformed_state() {
+    use molla_core::WorldId;
+    use molla_sim::{Contacts, ModelBuilder};
+    use molla_solvers::{BarrierSolver, Solver};
+
+    for kind in models() {
+        for n in [2, 3] {
+            if n == 3 && kind == ElasticModel::BaraffWitkin {
+                continue;
+            }
+            let rest = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z];
+            let mut builder = ModelBuilder::new();
+            for p in &rest[..n + 1] {
+                builder.add_particle(*p, 1.0, 0.01, WorldId(0));
+            }
+            if n == 2 {
+                builder
+                    .add_elastic_membranes(&[[0, 1, 2]], 0.03, material(kind))
+                    .unwrap();
+            } else {
+                builder
+                    .add_elastic_tetrahedra(&[[0, 1, 2, 3]], material(kind))
+                    .unwrap();
+            }
+            let model = builder.build().unwrap();
+            let mut input = model.state().unwrap();
+            input.particle_q.host_mut().unwrap()[1].x = 1.2;
+            let params = BarrierParams {
+                gravity: Vec3::ZERO,
+                ..Default::default()
+            };
+            let mut direct = BarrierShell::new(
+                input.particle_q.host().unwrap().to_vec(),
+                vec![1.0; n + 1],
+                vec![],
+                vec![],
+                params,
+            )
+            .unwrap()
+            .with_elastic_elements(model.elastic_elements().as_slice().to_vec())
+            .unwrap()
+            .with_triangles(model.elastic_elements().triangles().to_vec());
+            let mut solver = BarrierSolver::new().with_params(params);
+            let mut output = model.state().unwrap();
+            solver
+                .step(
+                    &model,
+                    &input,
+                    &model.control(),
+                    &Contacts::with_capacity(0),
+                    1.0 / 240.0,
+                    &mut output,
+                )
+                .unwrap();
+            direct.step(1.0 / 240.0).unwrap();
+            assert_eq!(output.particle_q.host().unwrap(), direct.positions);
+            assert_eq!(output.particle_qd.host().unwrap(), direct.velocities);
+            assert!(output.particle_q.host().unwrap()[1].x < 1.2);
+        }
+    }
+}
+
 fn material(model: ElasticModel) -> ElasticMaterial {
     ElasticMaterial {
         model,

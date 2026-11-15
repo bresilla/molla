@@ -20,6 +20,58 @@ fn invalid(detail: &str) -> Error {
 }
 
 impl ElasticElement {
+    /// Authored inverse rest basis and reference-volume energy weight.
+    pub fn from_rest_coordinates(
+        vertices: &[u32],
+        inverse_rest: Mat3,
+        measure: Real,
+        material: ElasticMaterial,
+    ) -> Result<Self> {
+        if !(3..=4).contains(&vertices.len())
+            || vertices
+                .iter()
+                .enumerate()
+                .any(|(i, v)| vertices[..i].contains(v))
+            || !inverse_rest.is_finite()
+            || !measure.is_finite()
+            || measure <= 0.0
+        {
+            return Err(invalid("rest coordinates"));
+        }
+        let dimensions = vertices.len() - 1;
+        material.validate(dimensions)?;
+        let determinant = if dimensions == 3 {
+            inverse_rest.determinant()
+        } else {
+            if inverse_rest.z_axis != Vec3::ZERO
+                || inverse_rest.x_axis.z != 0.0
+                || inverse_rest.y_axis.z != 0.0
+            {
+                return Err(invalid("membrane rest basis"));
+            }
+            inverse_rest.x_axis.x * inverse_rest.y_axis.y
+                - inverse_rest.x_axis.y * inverse_rest.y_axis.x
+        };
+        if !determinant.is_finite() || determinant == 0.0 {
+            return Err(invalid("singular rest basis"));
+        }
+        let mut ids = [0; 4];
+        ids[..vertices.len()].copy_from_slice(vertices);
+        Ok(Self {
+            vertices: ids,
+            dimensions,
+            inverse_rest,
+            measure,
+            material,
+        })
+    }
+
+    pub fn with_material(mut self, material: ElasticMaterial) -> Result<Self> {
+        material.validate(self.dimensions)?;
+        self.material = material;
+        Ok(self)
+    }
+
     /// Rest-area times thickness weights the membrane energy density.
     pub fn membrane(
         rest: &[Vec3],

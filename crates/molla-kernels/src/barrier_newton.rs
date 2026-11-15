@@ -12,6 +12,7 @@ use molla_core::{Error, Result};
 use wgpu::util::DeviceExt;
 
 mod geometry;
+mod materials;
 mod validation;
 
 #[repr(C)]
@@ -152,6 +153,7 @@ pub struct BarrierNewtonGpu {
     scalar_stage: wgpu::Buffer,
     has_zero_rest_springs: bool,
     geometry: geometry::GeometryValidator,
+    materials: Option<materials::Materials>,
     /// Whether committed positions passed contact validation.
     committed_contacts_valid: bool,
     vertex_count: u32,
@@ -283,12 +285,43 @@ impl BarrierNewtonGpu {
         pinned_idx: &[u32],
         params: BarrierGpuParams,
     ) -> Result<Self> {
+        Self::new_with_elastic_elements(
+            device,
+            queue,
+            positions,
+            masses,
+            springs,
+            obstacles,
+            triangles,
+            tets,
+            pinned_idx,
+            &[],
+            params,
+        )
+    }
+
+    /// Construct contact geometry and resident membrane/solid material elements.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_elastic_elements(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        positions: &[[f32; 3]],
+        masses: &[f32],
+        springs: &[BarrierGpuSpring],
+        obstacles: &[BarrierGpuObstacle],
+        triangles: &[[u32; 3]],
+        tets: &[([u32; 4], f32)],
+        pinned_idx: &[u32],
+        elements: &[molla_sim::ElasticElement],
+        params: BarrierGpuParams,
+    ) -> Result<Self> {
         params.validate()?;
         validation::mesh(
             positions, masses, springs, obstacles, triangles, tets, pinned_idx,
         )?;
         let has_zero_rest_springs = springs.iter().any(|s| s.rest == 0.0);
         validation::strain_limit(&params, has_zero_rest_springs)?;
+        let prepared_materials = materials::Prepared::new(device, positions, elements)?;
         let n = positions.len();
         // Spring CSR.
         let mut counts = vec![0u32; n + 1];
@@ -782,6 +815,16 @@ impl BarrierNewtonGpu {
                 &tet_kv_buf,
             ],
         )?;
+        let materials = prepared_materials.map(|prepared| {
+            materials::Materials::new(
+                device,
+                prepared,
+                &uniform_buf,
+                &pinned_buf,
+                [&x_iter, &x_try, &cg_d, &p_dir],
+                [&grad, &cg_hd, &part, &scalars],
+            )
+        });
         Ok(Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -799,6 +842,7 @@ impl BarrierNewtonGpu {
             scalar_stage,
             has_zero_rest_springs,
             geometry,
+            materials,
             committed_contacts_valid: false,
             vertex_count: n as u32,
             spring_count: springs.len() as u32,
@@ -871,6 +915,14 @@ impl BarrierNewtonGpu {
                 pass.set_pipeline(&self.pipes[name]);
                 molla_core::gpu_metrics::record_dispatch();
                 pass.dispatch_workgroups(groups, 1, 1);
+                if let Some(materials) = &self.materials
+                    && materials.encode_after(&mut pass, name)
+                {
+                    pass.set_bind_group(0, &self.bg_uniforms, &[]);
+                    pass.set_bind_group(1, &self.bg_topology, &[]);
+                    pass.set_bind_group(2, &self.bg_state, &[]);
+                    pass.set_bind_group(3, &self.bg_work, &[]);
+                }
             }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -1110,6 +1162,7 @@ impl BarrierNewtonGpu {
             self.run(&[("gradient", gv)]);
             self.eval_trial(h, 0.0);
             let s = self.read_scalars()?;
+            materials::Materials::check(s[13])?;
             let (e0, gap0, g_inf) = (s[7], s[8], s[9]);
             if !e0.is_finite() || !gap0.is_finite() || !g_inf.is_finite() {
                 return Err(Error::Solver(
@@ -1168,6 +1221,7 @@ impl BarrierNewtonGpu {
                 self.run(&cg_plan);
                 done += iters;
                 let sc = self.read_scalars()?;
+                materials::Materials::check(sc[13])?;
                 if !sc[4].is_finite() || !sc[5].is_finite() {
                     return Err(Error::Solver(
                         "barrier_newton: nonfinite CG residual".into(),
@@ -1184,6 +1238,7 @@ impl BarrierNewtonGpu {
             // CCD cap + slope, then Armijo backtracking.
             self.run(&[("ccd_alpha", 1), ("dot_grad_p", 1)]);
             let s2 = self.read_scalars()?;
+            materials::Materials::check(s2[13])?;
             let alpha_max = s2[6];
             let slope = s2[1];
             if !alpha_max.is_finite() || !slope.is_finite() {
@@ -1254,8 +1309,13 @@ impl BarrierNewtonGpu {
                 || (self.params.reject_intersecting_start && !self.committed_contacts_valid),
             &self.scalars,
         )?;
+        if let Some(materials) = &self.materials {
+            materials.validate(&mut encoder, &self.scalars);
+        }
         self.queue.submit([encoder.finish()]);
-        geometry::GeometryValidator::check(self.read_scalars()?[12].to_bits(), final_state)
+        let status = self.read_scalars()?;
+        geometry::GeometryValidator::check(status[12].to_bits(), final_state)?;
+        materials::Materials::check(status[13])
     }
 
     fn read_vec3(&self, buf: &wgpu::Buffer) -> Result<Vec<[f32; 3]>> {

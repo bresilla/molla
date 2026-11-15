@@ -10,6 +10,100 @@ use molla_storage::{Buffer, BufferUsage};
 
 #[test]
 #[ignore = "requires GPU; run via make test-ppf-publication"]
+fn authored_and_legacy_materials_follow_external_state_edits() {
+    use molla_math::constitutive::{ElasticMaterial, ElasticModel};
+    let engine = Engine::new_gpu().unwrap();
+    for legacy in [false, true] {
+        let mut b = ModelBuilder::new();
+        for p in [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z] {
+            b.add_particle(p, 1.0, 0.01, WorldId(0));
+        }
+        if legacy {
+            b.add_tet_mesh(&[[0, 1, 2, 3]], 1000.0, 0.3, Some(&[0.2]))
+                .unwrap();
+        } else {
+            b.add_elastic_tetrahedra(
+                &[[0, 1, 2, 3]],
+                ElasticMaterial {
+                    model: ElasticModel::StableNeoHookean,
+                    mu: 1000.0,
+                    lambda: 1000.0,
+                },
+            )
+            .unwrap();
+        }
+        let mut m = b.build().unwrap();
+        let mut input = m.state().unwrap();
+        input.particle_q.host_mut().unwrap()[1].x = 1.2;
+        let mut solver = BarrierSolver::new_gpu(&engine).unwrap();
+        solver.params.gravity = Vec3::ZERO;
+        let mut output = m.state().unwrap();
+        solver
+            .step(
+                &m,
+                &input,
+                &m.control(),
+                &Contacts::with_capacity(0),
+                1.0 / 240.0,
+                &mut output,
+            )
+            .unwrap();
+        assert!(output.particle_q.host().unwrap()[1].x < 1.2);
+        for edit_material in [false, true] {
+            if edit_material {
+                if legacy {
+                    m.tet_mu.host_mut().unwrap()[0] *= 2.0;
+                } else {
+                    let e = m.elastic_elements().as_slice()[0].clone();
+                    let mut material = e.material();
+                    material.mu *= 2.0;
+                    m.set_elastic_elements(vec![e.with_material(material).unwrap()])
+                        .unwrap();
+                }
+            } else {
+                output.particle_q.host_mut().unwrap()[1].x = 1.3;
+                output.particle_qd.host_mut().unwrap()[2].y = 0.1;
+            }
+            let mut fresh = BarrierSolver::new_gpu(&engine)
+                .unwrap()
+                .with_params(solver.params);
+            let mut actual = m.state().unwrap();
+            let mut expected = m.state().unwrap();
+            solver
+                .step(
+                    &m,
+                    &output,
+                    &m.control(),
+                    &Contacts::with_capacity(0),
+                    1.0 / 240.0,
+                    &mut actual,
+                )
+                .unwrap();
+            fresh
+                .step(
+                    &m,
+                    &output,
+                    &m.control(),
+                    &Contacts::with_capacity(0),
+                    1.0 / 240.0,
+                    &mut expected,
+                )
+                .unwrap();
+            assert_eq!(
+                actual.particle_q.host().unwrap(),
+                expected.particle_q.host().unwrap()
+            );
+            assert_eq!(
+                actual.particle_qd.host().unwrap(),
+                expected.particle_qd.host().unwrap()
+            );
+            output = actual;
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires GPU; run via make test-ppf-publication"]
 fn staged_state_matches_direct_commit_including_pins_and_velocity() {
     let engine = Engine::new_gpu().unwrap();
     let new = || {

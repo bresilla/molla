@@ -4,8 +4,9 @@
 //! collision triangles. The CPU backend couples analytic plane/sphere
 //! obstacles to bodies through reaction wrenches and dynamic boxes through
 //! affine-body degrees of freedom. The GPU backend retains its trajectory
-//! and supports world-attached planes/spheres. Unsupported collider and
-//! Model tet material requests return errors at backend construction.
+//! and supports world-attached planes/spheres. Legacy elastic Neo-Hookean
+//! tets and authored material elements share the CPU/GPU constitutive path.
+//! Unsupported collider, viscosity and plasticity requests fail.
 //!
 //! Motion outputs and diagnostics publish after validation. CPU failures
 //! restore the cached shell; GPU candidate readbacks precede its commit.
@@ -16,6 +17,8 @@ use crate::core::Result;
 use crate::math::{Real, Vec3};
 use molla_sim::{Contacts, Control, Model, ShapeGeometry, State};
 
+mod lifecycle;
+mod model_elements;
 mod validation;
 
 /// One obstacle's provenance: which body owns it (−1 = world/static)
@@ -43,10 +46,13 @@ struct GpuBackend {
     device: std::sync::Arc<wgpu::Device>,
     queue: std::sync::Arc<wgpu::Queue>,
     sim: Option<molla_kernels::BarrierNewtonGpu>,
+    continuation: Option<[molla_storage::BufferRevision; 2]>,
 }
 
 /// Barrier-Newton deformable solver (see module docs).
 pub struct BarrierSolver {
+    built_key: Option<lifecycle::ModelKey>,
+    tet_states: lifecycle::TetStates,
     /// Topology-carrying shell, built lazily from the `Model` on the
     /// first step (positions/velocities are streamed per step).
     shell: Option<BarrierShell>,
@@ -86,6 +92,8 @@ impl Default for BarrierSolver {
 impl BarrierSolver {
     pub fn new() -> Self {
         Self {
+            built_key: None,
+            tet_states: lifecycle::TetStates::default(),
             shell: None,
             #[cfg(feature = "gpu")]
             gpu: None,
@@ -103,6 +111,25 @@ impl BarrierSolver {
     pub fn with_params(mut self, params: BarrierParams) -> Self {
         self.params = params;
         self
+    }
+
+    /// Discard cached topology and trajectory. Required after edits to raw
+    /// shape-geometry or soft-surface vectors that retain their lengths.
+    pub fn reset(&mut self) {
+        self.shell = None;
+        self.built_key = None;
+        self.tet_states = lifecycle::TetStates::default();
+        self.bindings.clear();
+        self.abd_bodies.clear();
+        self.built_particles = usize::MAX;
+        self.built_bodies = usize::MAX;
+        self.last_newton_iters = 0;
+        self.last_min_gap = Real::INFINITY;
+        #[cfg(feature = "gpu")]
+        if let Some(gpu) = &mut self.gpu {
+            gpu.sim = None;
+            gpu.continuation = None;
+        }
     }
 
     /// GPU-backed variant: the f32 `BarrierNewtonGpu` kernel owns the
@@ -125,6 +152,7 @@ impl BarrierSolver {
             device,
             queue,
             sim: None,
+            continuation: None,
         });
         Ok(s)
     }
@@ -157,6 +185,7 @@ impl BarrierSolver {
     #[cfg(feature = "gpu")]
     fn build_gpu(&self, model: &Model, state: &State) -> Result<molla_kernels::BarrierNewtonGpu> {
         validation::model(model, true, self.springs_as_collision_edges)?;
+        let (elements, triangles) = model_elements::extract(model)?;
         if model.spring_tension_only.host()?.iter().any(|&v| v != 0) {
             return Err(molla_core::Error::Solver(
                 "barrier solver does not support tension-only elements".into(),
@@ -248,9 +277,8 @@ impl BarrierSolver {
                 _ => {}
             }
         }
-        let triangles: Vec<[u32; 3]> = model.soft_surface_tris.clone();
         let gpu = self.gpu.as_ref().expect("gpu backend present");
-        let sim = BarrierNewtonGpu::new_with_mesh(
+        let sim = BarrierNewtonGpu::new_with_elastic_elements(
             &gpu.device,
             &gpu.queue,
             &positions,
@@ -258,7 +286,9 @@ impl BarrierSolver {
             &springs,
             &obstacles,
             &triangles,
+            &[],
             &pinned,
+            elements.as_slice(),
             self.gpu_params(),
         )?;
         let velocities: Vec<[f32; 3]> = state
@@ -274,6 +304,7 @@ impl BarrierSolver {
     /// Build the shell topology from the model + initial state.
     fn build_shell(&mut self, model: &Model, state: &State) -> Result<BarrierShell> {
         validation::model(model, false, self.springs_as_collision_edges)?;
+        let (elements, triangles) = model_elements::extract(model)?;
         if model.spring_tension_only.host()?.iter().any(|&v| v != 0) {
             return Err(molla_core::Error::Solver(
                 "barrier solver does not support tension-only elements".into(),
@@ -350,9 +381,6 @@ impl BarrierSolver {
             }
         }
 
-        // Self-collision triangles from every soft surface.
-        let triangles: Vec<[u32; 3]> = model.soft_surface_tris.clone();
-
         let mut masses_pos = masses.clone();
         // BarrierShell requires strictly positive masses; pinned
         // particles (inv_mass = 0) become true DoF removals below and
@@ -369,7 +397,8 @@ impl BarrierSolver {
             }
         }
 
-        let mut shell = BarrierShell::new(positions, masses_pos, springs, obstacles, self.params)?;
+        let mut shell = BarrierShell::new(positions, masses_pos, springs, obstacles, self.params)?
+            .with_elastic_elements(elements.as_slice().to_vec())?;
         shell.velocities = velocities;
         if !triangles.is_empty() {
             shell = shell.with_triangles(triangles);
@@ -477,32 +506,43 @@ impl BarrierSolver {
         state_in: &State,
         dt: Real,
         state_out: &mut State,
+        key: &lifecycle::ModelKey,
     ) -> Result<()> {
-        // Particle/body count changes invalidate the cached CPU topology.
         let n_particles = state_in.particle_q.host()?.len();
+        let changed = self.built_key.as_ref().is_none_or(|old| !old.matches(key));
+        let mut previous = None;
         if self.shell.is_some()
-            && (self.built_particles != n_particles || self.built_bodies != model.body_count)
+            && (changed
+                || self.built_particles != n_particles
+                || self.built_bodies != model.body_count)
         {
-            self.shell = None;
+            let shell = self.shell.take();
+            if self
+                .built_key
+                .as_ref()
+                .is_some_and(|old| old.same_affine_definition(key))
+            {
+                previous = shell.map(|s| (s, self.abd_bodies.clone()));
+            }
         }
         #[cfg(feature = "gpu")]
         if self.gpu.is_some() {
-            let stale = self
-                .gpu
-                .as_ref()
-                .and_then(|g| g.sim.as_ref())
-                .is_some_and(|s| s.vertex_count() != n_particles);
-            if stale && let Some(g) = self.gpu.as_mut() {
-                g.sim = None;
-            }
-            if self.gpu.as_ref().is_some_and(|g| g.sim.is_none()) {
-                let sim = self.build_gpu(model, state_in)?;
-                if let Some(g) = self.gpu.as_mut() {
-                    g.sim = Some(sim);
-                }
-            }
+            let input_key = lifecycle::motion_key(state_in);
+            let stale = changed
+                || self
+                    .gpu
+                    .as_ref()
+                    .is_some_and(|g| g.sim.is_none() || g.continuation != Some(input_key));
+            let mut replacement = if stale {
+                Some(self.build_gpu(model, state_in)?)
+            } else {
+                None
+            };
             let gp = self.gpu_params();
-            let Some(sim) = self.gpu.as_mut().and_then(|g| g.sim.as_mut()) else {
+            let Some(sim) = replacement
+                .as_mut()
+                .or_else(|| self.gpu.as_mut().and_then(|g| g.sim.as_mut()))
+            else {
                 unreachable!("built above");
             };
             sim.params = gp;
@@ -531,14 +571,38 @@ impl BarrierSolver {
                 bq_out.copy_from_slice(q_in);
                 bqd_out.copy_from_slice(qd_in);
             }
+            let gpu = self.gpu.as_mut().expect("gpu backend present");
+            if let Some(sim) = replacement {
+                gpu.sim = Some(sim);
+            }
+            gpu.continuation = Some(lifecycle::motion_key(state_out));
+            self.built_key = Some(key.clone());
             self.last_newton_iters = stats.newton_iters;
             self.last_min_gap = Real::from(stats.min_gap);
             return Ok(());
         }
         if self.shell.is_none() {
-            self.shell = Some(self.build_shell(model, state_in)?);
+            let mut shell = self.build_shell(model, state_in)?;
+            if let Some((old, bodies)) = previous {
+                for ((body, index), (old_body, old_index)) in self.abd_bodies.iter().zip(bodies) {
+                    let before = &old.affine_bodies[old_index];
+                    let after = &mut shell.affine_bodies[*index];
+                    if *body == old_body
+                        && before.proxy_start == after.proxy_start
+                        && before.proxy_count == after.proxy_count
+                    {
+                        let range = before.proxy_start..before.proxy_start + before.proxy_count;
+                        shell.positions[range.clone()]
+                            .copy_from_slice(&old.positions[range.clone()]);
+                        shell.velocities[range.clone()].copy_from_slice(&old.velocities[range]);
+                        *after = before.clone();
+                    }
+                }
+            }
+            self.shell = Some(shell);
             self.built_particles = n_particles;
             self.built_bodies = model.body_count;
+            self.built_key = Some(key.clone());
         }
         let shell = self.shell.as_mut().expect("shell built above");
         shell.params = self.params;
@@ -729,14 +793,18 @@ impl Solver for BarrierSolver {
         self.params.validate()?;
         super::barrier_contact::validate_timestep(dt)?;
         validation::preflight(model, state_in, state_out)?;
+        self.tet_states.validate(model.tet_count, state_in)?;
+        self.tet_states.validate(model.tet_count, state_out)?;
+        let key = lifecycle::ModelKey::new(model, self.springs_as_collision_edges);
         let backup = (
             self.shell.clone(),
             self.bindings.clone(),
             self.abd_bodies.clone(),
             self.built_particles,
             self.built_bodies,
+            self.built_key.clone(),
         );
-        let result = self.step_inner(model, state_in, dt, state_out);
+        let result = self.step_inner(model, state_in, dt, state_out, &key);
         if result.is_err() {
             (
                 self.shell,
@@ -744,6 +812,7 @@ impl Solver for BarrierSolver {
                 self.abd_bodies,
                 self.built_particles,
                 self.built_bodies,
+                self.built_key,
             ) = backup;
         }
         result

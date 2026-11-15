@@ -160,6 +160,31 @@ fn post_solve_body_overflow_rolls_back_affine_state_and_all_output() {
 }
 
 #[test]
+fn material_registry_rebuild_preserves_affine_trajectory() {
+    let mut b = ModelBuilder::new();
+    let cube = b.add_body(BodyParams::new().with_mass(1.0));
+    b.add_shape_box(cube, Vec3::splat(0.1), Transform::IDENTITY)
+        .unwrap();
+    let mut m = b.build().unwrap();
+    let old = m.elastic_elements().clone();
+    let mut initial = m.state().unwrap();
+    initial.body_qd.host_mut().unwrap()[0].angular = Vec3::new(1.0, 2.0, 3.0);
+    let mut solver = BarrierSolver::new();
+    let mut reference = BarrierSolver::new();
+    let mut input = m.state().unwrap();
+    let mut ref_input = m.state().unwrap();
+    step(&mut solver, &m, &initial, &mut input).unwrap();
+    step(&mut reference, &m, &initial, &mut ref_input).unwrap();
+    m.set_elastic_elements(vec![]).unwrap();
+    let mut output = m.state().unwrap();
+    step(&mut solver, &m, &input, &mut output).unwrap();
+    m.elastic_elements = old;
+    let mut expected = m.state().unwrap();
+    step(&mut reference, &m, &ref_input, &mut expected).unwrap();
+    assert_eq!(snapshot(&output), snapshot(&expected));
+}
+
+#[test]
 fn removing_an_affine_body_rebuilds_the_cached_backend() {
     let mut b = ModelBuilder::new();
     b.add_particle(Vec3::Y, 1.0, 0.01, WorldId(0));

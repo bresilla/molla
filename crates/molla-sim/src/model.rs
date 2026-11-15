@@ -287,6 +287,8 @@ impl TriMesh {
 /// and shared across many [`State`](super::State) instances.
 #[derive(Debug)]
 pub struct Model {
+    /// Additive material elements and derived surfaces; requires a supporting solver.
+    pub elastic_elements: crate::ElasticElementSet,
     // ── Particles ───────────────────────────────────────────────────
     /// Number of particles.
     pub particle_count: usize,
@@ -916,6 +918,18 @@ pub struct Model {
 }
 
 impl Model {
+    /// Authored membrane/solid energies consumed by the barrier solver.
+    pub fn elastic_elements(&self) -> &crate::ElasticElementSet {
+        &self.elastic_elements
+    }
+
+    /// Replace material elements and derived collision triangles atomically.
+    pub fn set_elastic_elements(&mut self, elements: Vec<crate::ElasticElement>) -> Result<()> {
+        let replacement = crate::ElasticElementSet::new(self.initial_particle_q.host()?, elements)?;
+        self.elastic_elements = replacement;
+        Ok(())
+    }
+
     #[cfg(feature = "gpu")]
     fn refresh_joint_motion_flags(&mut self) -> Result<()> {
         if self.joint_motion_flags.len() != self.joint_count {
@@ -1091,6 +1105,7 @@ impl Model {
     pub fn empty() -> Self {
         let s = BufferUsage::Storage;
         Self {
+            elastic_elements: crate::ElasticElementSet::default(),
             particle_count: 0,
             particle_mass: Buffer::from_vec(Vec::new(), s),
             particle_inv_mass: Buffer::from_vec(Vec::new(), s),

@@ -890,6 +890,7 @@ impl Solver for FeatherstoneSolver {
         dt: Real,
         state_out: &mut State,
     ) -> Result<()> {
+        crate::require_no_elastic_elements(model)?;
         self.contact_forces.clear();
         if !dt.is_finite() || dt <= 0.0 {
             return Err(crate::core::Error::Solver(

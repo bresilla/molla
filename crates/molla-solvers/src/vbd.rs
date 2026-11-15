@@ -510,6 +510,7 @@ impl Solver for VbdSolver {
         dt: Real,
         state_out: &mut State,
     ) -> Result<()> {
+        crate::require_no_elastic_elements(model)?;
         // VBD operates on particles + springs only in v1. Bodies pass
         // through untouched (the demo scenes use kinematic-rigid
         // shapes, which the soft-contact pass reads via the model

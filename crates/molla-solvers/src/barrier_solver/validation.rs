@@ -178,11 +178,6 @@ pub(super) fn model(model: &Model, gpu: bool, rod_edges: bool) -> Result<()> {
             return Err(invalid("shape geometry"));
         }
     }
-    if model.tet_count > 0 {
-        return Err(Error::Solver(
-            "barrier solver: Model tet materials are not integrated".into(),
-        ));
-    }
     if gpu && rod_edges {
         return Err(Error::Solver(
             "barrier gpu: explicit rod collision edges are not integrated".into(),

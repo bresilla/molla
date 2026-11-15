@@ -223,6 +223,16 @@ use molla_core::Result;
 use molla_math::Real;
 use molla_sim::{Contacts, Control, Model, State};
 
+fn require_no_elastic_elements(model: &Model) -> Result<()> {
+    if model.elastic_elements().is_empty() {
+        Ok(())
+    } else {
+        Err(molla_core::Error::Solver(
+            "this solver does not implement Model elastic elements; use BarrierSolver".into(),
+        ))
+    }
+}
+
 /// Common interface for every time-integration scheme.
 ///
 /// A solver advances a [`State`] by one timestep `dt`, possibly using the

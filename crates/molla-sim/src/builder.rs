@@ -333,6 +333,7 @@ impl TetMeshId {
 /// finalises into typed [`Buffer`]s in [`ModelBuilder::build`].
 #[derive(Debug, Default)]
 pub struct ModelBuilder {
+    elastic_elements: Vec<crate::ElasticElement>,
     // Particle arrays.
     particle_mass: Vec<Real>,
     particle_inv_mass: Vec<Real>,
@@ -837,6 +838,42 @@ impl ModelBuilder {
         let materials = [MaterialNeoHookean::elastic(youngs_modulus, poisson_ratio)];
         let material_idx: Vec<u32> = vec![0; tets.len()];
         self.add_tet_mesh_per_material(tets, &materials, &material_idx, rest_volume)
+    }
+
+    /// Add material elements without replacing existing spring or tet energies.
+    pub fn add_elastic_elements(&mut self, elements: Vec<crate::ElasticElement>) -> Result<()> {
+        for element in &elements {
+            element.validate(&self.particle_q0)?;
+        }
+        self.elastic_elements.extend(elements);
+        Ok(())
+    }
+
+    /// Add spring-free membranes with rest coordinates from the authored particles.
+    pub fn add_elastic_membranes(
+        &mut self,
+        triangles: &[[u32; 3]],
+        thickness: Real,
+        material: molla_math::constitutive::ElasticMaterial,
+    ) -> Result<()> {
+        let elements = triangles
+            .iter()
+            .map(|t| crate::ElasticElement::membrane(&self.particle_q0, *t, thickness, material))
+            .collect::<Result<Vec<_>>>()?;
+        self.add_elastic_elements(elements)
+    }
+
+    /// Add solid material elements independently of the legacy Neo-Hookean registry.
+    pub fn add_elastic_tetrahedra(
+        &mut self,
+        tets: &[[u32; 4]],
+        material: molla_math::constitutive::ElasticMaterial,
+    ) -> Result<()> {
+        let elements = tets
+            .iter()
+            .map(|t| crate::ElasticElement::tetrahedron(&self.particle_q0, *t, material))
+            .collect::<Result<Vec<_>>>()?;
+        self.add_elastic_elements(elements)
     }
 
     /// Multi-material extension of [`Self::add_tet_mesh`] (Stage 20.3).
@@ -2716,6 +2753,10 @@ impl ModelBuilder {
 
     /// Finalise into a [`Model`].
     pub fn build(mut self) -> Result<Model> {
+        let elastic_elements = crate::ElasticElementSet::new(
+            &self.particle_q0,
+            std::mem::take(&mut self.elastic_elements),
+        )?;
         if self.body_flags.iter().any(|flags| {
             flags & BodyFlags::KINEMATIC_DRIVEN != 0
                 && flags & BodyFlags::IMMOVABLE != BodyFlags::KINEMATIC
@@ -3033,6 +3074,7 @@ impl ModelBuilder {
         };
 
         Ok(Model {
+            elastic_elements,
             particle_count,
             particle_mass: Buffer::from_vec(self.particle_mass, s),
             particle_inv_mass: Buffer::from_vec(self.particle_inv_mass, s),

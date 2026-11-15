@@ -19,7 +19,7 @@ integration, correctness, resource, and performance evidence is recorded.
 |---|---|---|---|
 | P0 | Runnable native CPU/GPU verification and measured baseline | Make targets; real adapter identity; repeated elapsed and allocation/readback measurements on fixed workloads | In progress |
 | P1 | Robust input and accepted-state contracts | CPU/GPU refuse invalid configuration, nonfinite state, intersecting starts and invalid accepted geometry; rejected steps do not publish state; adversarial tests | In progress: CPU/GPU geometry gates and transactional host/readback publication; broader geometry, lifecycle and device-loss qualification open |
-| P2 | Material-complete barrier solve | Shell membrane and bending, tet constitutive energies, damping and relevant plasticity integrated with contact; analytical derivatives checked against finite differences; WGSL parity | In progress: CPU membrane/tet integration and standalone WGSL constitutive parity; GPU mesh-solver integration, bending, damping and plasticity open |
+| P2 | Material-complete barrier solve | Shell membrane and bending, tet constitutive energies, damping and relevant plasticity integrated with contact; analytical derivatives checked against finite differences; WGSL parity | In progress: CPU/GPU membrane/tet contact, initial Model authoring and coupled-operator parity; broader authoring qualification, bending, damping and plasticity open |
 | P3 | Triangle principal-stretch limiting | Deformation-gradient singular-value limits, matching barrier derivatives and CCD/line-search constraints; shear/directional/rotated tests, not just edge length tests | Open |
 | P4 | PPF dynamic stiffness | Local material Hessian projection and gap-dependent inertia; CPU oracle, WGSL implementation and stiff-contact tests | Open |
 | P5 | Complete mixed GPU integration | Explicit rod edges/bending and relevant rod models, GPU rigid/deformable coupling, supported collider geometries and moving boundary controls; Model/State integration, no silently skipped shapes | Open |
@@ -464,12 +464,190 @@ Evidence: `/tmp/molla-ppf-precommit-focused-checks.log` (through the main GPU
 regressions) and `/tmp/molla-ppf-precommit-gpu-final.log` (remaining hardware
 lanes). These remain focused checks, not whole-workspace or PPF acceptance.
 
+### Resident GPU material integration checkpoint
+
+Implementation continues from `70b3ad6c` and is not yet committed.
+`BarrierNewtonGpu::new_with_elastic_elements` accepts authored
+`molla_sim::ElasticElement` rest coordinates alongside collision geometry.
+Spring and legacy volume terms remain available independently; an empty
+element list allocates no material buffers and dispatches no material work.
+
+- Setup validates element indices, rest coordinates, f32 coefficient range,
+  dispatch limits and storage capacities before allocating solver buffers.
+  Element records and vertex-to-element CSR adjacency are uploaded once.
+- WGSL assembles the material gradient, coupled matrix-free Hessian products,
+  energy and rank-preserving step limits inside the existing Newton/PCG and
+  Armijo sequence. Vertex gathers avoid floating-point atomic force sums.
+- Projected tangents and minimum principal stretch are cached per element
+  once per Newton iterate. PCG products do not recompute SVDs or tangents.
+  Each element retains a 96-byte record, 400-byte tangent response and
+  48-byte shared scratch, plus CSR storage.
+- GPU energy-only evaluation avoids tangent construction during backtracking.
+  Corotated/quartic energy uses the shared SVD helper; stable Neo-Hookean and
+  Baraff-Witkin energy use direct expressions.
+- Initial and final element geometry checks precede publication. Material
+  error bits share the existing 64-byte scalar readback; there are no added
+  material-sized host transfers or per-element CPU loops during stepping.
+  This does not remove the pre-existing optional LBVH host AABB path.
+- The cached minimum singular value bounds the Newton segment away from
+  rank loss. Positive endpoint determinant alone is insufficient: a segment
+  can cross two inversions before reaching another positive determinant.
+  This bound is not P3's upper principal-stretch barrier.
+
+The hardware assembly test compares a mixed seven-element membrane/solid
+mesh, shared vertices and pinned rows against the independent f64 oracle.
+It checks energy, gradient, coupled Hessian-vector products, step bounds,
+invalid trials and geometry-status clearing. The assembly dispatch window
+creates zero instrumented buffers and performs no uploads or readbacks.
+
+The integrated solver tests cover all seven supported model/dimension
+combinations without springs, 60-step CPU/GPU trajectories, fixed anchors,
+material relaxation, an actual tetrahedron drop into plane contact, and
+transactional failure/retry after a material tangent overflows.
+With matching 40-iteration Newton budgets, observed worst trajectory error
+was `3.333e-4` metres on the metre-scale fixtures. The first comparison used
+the different CPU/GPU defaults (40 versus 12 iterations) and diverged under
+the mesh travel cap; it was corrected to compare equal budgets, not by
+weakening CCD. Production defaults remain unchanged.
+
+Required commands:
+
+```
+make test-ppf-materials
+make test-ppf-materials-gpu
+make test-ppf-material-solver-gpu
+make bench-ppf-material-solver
+```
+
+The resource workload uses spring-free stable Neo-Hookean membrane triangles
+with thickness 0.01, mu/lambda 10,000, a plane and sphere, hash-grid contact,
+48 warmup steps, 16 measured steps and three fresh runs per size at dt=1/240.
+Setup and queue-completed step latency are measured separately. Final
+positions are independently checked against both obstacles and each
+element's deformation domain. This is not a rendered or cross-device test.
+
+#### Material product staging decision
+
+Retained a two-dispatch Hessian product: one stress product per element,
+then a CSR vertex gather. A tested single-dispatch variant recomputed that
+product at each incident vertex. Its assembly outputs matched the staged
+fixture, and all seven trajectory metrics, Newton totals and capped-step
+counts matched, but it was slower despite fewer dispatches.
+
+An A/B/B/A replay used saved release binaries on RTX 4080/Vulkan/595.112.07,
+with the same workload and no GPU clock/power changes. Values below are
+medians of six per-run percentiles, not percentiles of pooled samples:
+
+| Vertices / elements | Staged p50 (ms) | Fused p50 (ms) | Staged p95 (ms) | Fused p95 (ms) |
+|---|---|---|---|---|
+| 64 / 98 | 45.975 | 63.713 | 85.128 | 92.520 |
+| 256 / 450 | 72.303 | 107.529 | 121.685 | 147.332 |
+
+Fusing reduced measured-window dispatches from 30,863 to 26,948 and 43,555
+to 38,088, but worsened median latency. The fused production path was
+removed. This comparison supports that local implementation choice only;
+these step times are still costly and **do not establish P6 performance
+acceptance or a speedup over the earlier spring-only solver**.
+
+Both variants allocated zero instrumented buffers during stepping and had
+identical logical traffic: 43,456/66,368 readback bytes and 43,272/67,496
+upload bytes per 16 measured steps. Resident buffer totals were
+10,252,992/39,784,160 bytes. Newton totals were 90/97, with no capped steps.
+Cold setup was approximately 0.98 seconds; later setup was generally
+19–48 ms. Shader/pipeline setup is not included in step latency.
+
+Local replay artifacts (temporary, not project dependencies):
+
+- `/tmp/molla-ppf-material-ab.OSkevV/{1-staged,2-fused,3-fused,4-staged}.log`.
+- Staged binary `staged`, SHA-256
+  `2925de8785d540c3a7613a1ddac9f9e44dcdf385ddb7c386e381583cf1187e28`.
+- Fused binary `fused`, SHA-256
+  `418afdc3b70789e9b1ae0e0621e567c6f2bf49ca3122364bc2c029c939b877f2`.
+- Candidate sources `fused.rs`, `fused.wgsl` and both source-hash manifests
+  are in the same directory. Replay with
+  `make bench-ppf-material-replay PPF_BENCH_BINARY=/absolute/path/to/binary`.
+- Initial integration and candidate checks:
+  `/tmp/molla-ppf-material-solver-qualification.log` and
+  `/tmp/molla-ppf-material-fused-first.log`.
+
+This checkpoint does not close P2: the public Model/State facade still needs
+material authoring and parameter mapping, and bending, damping and plastic
+state are absent from the new element path. P3/P4 and the mixed/rod/rigid,
+scaling and scene-fidelity requirements P5-P7 remain open.
+
+Final focused gates on the retained staged implementation passed:
+
+- 15 non-hardware checks: 4 constitutive, 4 CPU element/contact, 2 WGSL
+  validation and 5 input-validation tests.
+- 30 hardware checks: 2 constitutive, 1 coupled element assembly, 3 material
+  solver, 11 existing barrier regressions, 9 geometry/BVH and 4 publication.
+  The assembly test also checks a positive-endpoint double-inversion path;
+  the GPU bound stays below its first singularity. The seven trajectory
+  cases enforce a 0.001-metre maximum error gate with matched budgets.
+- Both release resource workloads passed. The no-material path retains its
+  prior buffer, transfer, dispatch, Newton and capped-step totals; material
+  stepping also creates zero instrumented GPU buffers.
+- Evidence: `/tmp/molla-ppf-material-final-gates.log`. The final material
+  timing cohort reported p50 ranges of 15.625–18.745 ms (64 vertices) and
+  30.347–35.083 ms (256 vertices). These are later, unmatched cohorts with
+  substantial timing variation, **not** proof of a speedup over the A/B/B/A
+  measurements. No whole-workspace, rendered or cross-platform acceptance
+  is claimed.
+
+Current constitutive WGSL SHA-256:
+`726c087ddf9d6cf8c7c69a47f7ec63fa9897d4c80d23360018891171d0e97e5e`.
+Current material-assembly WGSL SHA-256:
+`22620bd97631919686223c5fb3b5de3a232283df36408973a573c7bc3456302e`.
+
+### Model authoring and lifecycle checkpoint
+
+The public Model/State path now accepts immutable `ElasticElementSet`
+snapshots. Builder methods add membranes, tetrahedra or authored inverse
+rest coordinates without replacing existing spring/tet energies. Boundary
+triangles omit shared tet faces and deduplicate geometry, not material
+energy contributions. `Model::set_elastic_elements` validates a replacement
+before publishing it.
+
+Purely elastic legacy Model tets retain their inverse rest matrices and
+rest-volume overrides. Their Stable Neo-Hookean mapping uses the stored
+`mu` and `lambda + mu`, matching the existing VBD elastic formula. Legacy
+viscosity, plastic parameters and nonidentity plastic state are explicitly
+refused; the new material registry is also refused by the other solver
+implementations rather than silently ignored. This does not establish PPF
+scene-parameter equivalence or material calibration.
+
+Buffer identity/generation stamps and immutable registry snapshots detect
+same-count material changes without per-element hashing every step. The
+GPU facade rebuilds a candidate from caller State after external motion
+edits and publishes that candidate only after successful validation and
+readback. Material-only CPU rebuilds preserve cached affine-body motion;
+inverse inertia is consumed live for body reactions. Same-length edits to
+raw shape-geometry and soft-surface vectors still require
+`BarrierSolver::reset()`. Full lifecycle/device-loss qualification remains
+open, and the facade still allocates its two vector readback buffers.
+
+Focused regression coverage includes buffer revision semantics, boundary
+deduplication, all seven authored CPU material/dimension combinations
+against the direct shell from a deformed first State, affine trajectory
+preservation across registry replacement, and authored/legacy GPU material
+steps with external State and same-count material edits. Broader authoring
+failure cases, plastic-state cache invalidation, CPU body-pose resets and
+steady-state facade resource qualification remain to be expanded.
+
+Pre-commit checks passed on RTX 4080/Vulkan/595.112.07: the CPU PPF,
+constitutive and input lanes; the new storage, registry and CPU publication
+tests; GPU constitutive, coupled material, publication and all 11 existing
+barrier regressions. Formatting and `git diff --check` passed. Evidence is
+in `/tmp/molla-precommit-cpu.log`, `/tmp/molla-precommit-updated.log` and
+`/tmp/molla-precommit-format-check.log`. These are focused checks, not
+whole-workspace, rendered, cross-platform or renewed performance acceptance.
+
 ### Next required work
 
 1. Resolve the measured staging latency/setup tradeoff during P6 qualification;
    retain the baseline and do not infer speed from allocation counts.
-2. Integrate the constitutive kernels into the resident GPU mesh/contact
-   solve, then continue P2-P4 with bending, damping, plasticity,
+2. Extend Model/State authoring and lifecycle qualification, then continue
+   P2-P4 with bending, damping, plasticity,
    principal-stretch limits and directional dynamic stiffness.
    Keep remaining P1 geometry/lifecycle/device-loss qualification explicit.
 3. Qualify validator overhead on larger/deformed/dense workloads and other

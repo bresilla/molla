@@ -3,9 +3,12 @@ struct MaterialResponse {
     gradient: mat3x3<f32>,
     hessian: array<f32, 81>,
     valid: u32,
+    minimum_stretch: f32,
 }
 
 struct MaterialProjection { h: array<f32, 81>, valid: u32 }
+struct MaterialSvd { u: mat3x3<f32>, v: mat3x3<f32>, sigma: vec3<f32>, valid: u32 }
+struct MaterialEnergy { energy: f32, valid: u32 }
 
 fn material_finite(x: f32) -> bool {
     return (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u;
@@ -97,8 +100,8 @@ fn material_baraff(f: mat3x3<f32>, mu: f32, lambda: f32, project: bool) -> Mater
     return result;
 }
 
-fn material_spectral(f: mat3x3<f32>, scale: f32, n: u32, model: u32, mu: f32, lambda: f32, project: bool) -> MaterialResponse {
-    var result: MaterialResponse;
+fn material_svd(f: mat3x3<f32>, scale: f32, n: u32) -> MaterialSvd {
+    var result: MaterialSvd;
     var b = mat3x3<f32>(f[0]/scale,f[1]/scale,f[2]/scale);
     var v = mat3x3<f32>(1.0,0.0,0.0, 0.0,1.0,0.0, 0.0,0.0,1.0);
     for (var sweep = 0u; sweep < 32u; sweep++) {
@@ -132,6 +135,18 @@ fn material_spectral(f: mat3x3<f32>, scale: f32, n: u32, model: u32, mu: f32, la
     for (var i = 0u; i < n; i++) {
         for (var k = i+1u; k < n; k++) { if (abs(dot(u[i],u[k])) > 2.0e-5) { return result; } }
     }
+    return MaterialSvd(u, v, sigma, 1u);
+}
+
+fn material_spectral(f: mat3x3<f32>, scale: f32, n: u32, model: u32, mu: f32, lambda: f32, project: bool) -> MaterialResponse {
+    var result: MaterialResponse;
+    let svd = material_svd(f, scale, n);
+    if (svd.valid == 0u) { return result; }
+    let u = svd.u;
+    let v = svd.v;
+    let sigma = svd.sigma;
+    result.minimum_stretch = min(sigma[0], sigma[1]);
+    if (n == 3u) { result.minimum_stretch = min(result.minimum_stretch, sigma[2]); }
     var jacobian = 1.0;
     var trace = 0.0;
     for (var i = 0u; i < n; i++) { jacobian *= sigma[i]; trace += sigma[i]-1.0; }
@@ -208,25 +223,71 @@ fn material_spectral(f: mat3x3<f32>, scale: f32, n: u32, model: u32, mu: f32, la
     return result;
 }
 
+fn material_scale(f: mat3x3<f32>, n: u32) -> f32 {
+    var scale = 0.0;
+    for (var c = 0u; c < n; c++) {
+        for (var r = 0u; r < 3u; r++) {
+            if (!material_finite(f[c][r])) { return 0.0; }
+            scale = max(scale,abs(f[c][r]));
+        }
+    }
+    if (scale == 0.0) { return 0.0; }
+    let normalized = mat3x3<f32>(f[0]/scale,f[1]/scale,f[2]/scale);
+    if ((n == 3u && determinant(normalized) <= 0.0) || (n == 2u && dot(cross(normalized[0],normalized[1]),cross(normalized[0],normalized[1])) == 0.0)) { return 0.0; }
+    return scale;
+}
+
 fn material_evaluate(deformation: mat3x3<f32>, n: u32, model: u32, mu: f32, lambda: f32, project: bool) -> MaterialResponse {
     var result: MaterialResponse;
     if ((n != 2u && n != 3u) || model > 3u || (model == 3u && n != 2u) || !material_finite(mu) || mu < 0.0 || !material_finite(lambda)) { return result; }
     var f = deformation;
     if (n == 2u) { f[2] = vec3<f32>(0.0); }
-    var scale = 0.0;
-    for (var c = 0u; c < n; c++) {
-        for (var r = 0u; r < 3u; r++) {
-            if (!material_finite(f[c][r])) { return result; }
-            scale = max(scale,abs(f[c][r]));
-        }
-    }
+    let scale = material_scale(f, n);
     if (scale == 0.0) { return result; }
-    let normalized = mat3x3<f32>(f[0]/scale,f[1]/scale,f[2]/scale);
-    if ((n == 3u && determinant(normalized) <= 0.0) || (n == 2u && dot(cross(normalized[0],normalized[1]),cross(normalized[0],normalized[1])) == 0.0)) { return result; }
-    if (model == 3u) { result = material_baraff(f,mu,lambda,project); }
+    if (model == 3u) {
+        result = material_baraff(f,mu,lambda,project);
+        let a = f[0]/scale; let b = f[1]/scale;
+        let aa = dot(a,a); let bb = dot(b,b); let ab = dot(a,b);
+        let maximum = sqrt(0.5*(aa+bb+sqrt((aa-bb)*(aa-bb)+4.0*ab*ab)));
+        result.minimum_stretch = length(cross(a,b))/maximum*scale;
+    }
     else { result = material_spectral(f,scale,n,model,mu,lambda,project); }
     if (!material_finite(result.energy)) { result.valid = 0u; }
     for (var c = 0u; c < n; c++) { for (var r = 0u; r < 3u; r++) { if (!material_finite(result.gradient[c][r])) { result.valid = 0u; } } }
     for (var i = 0u; i < 81u; i++) { if (!material_finite(result.hessian[i])) { result.valid = 0u; } }
+    if (!material_finite(result.minimum_stretch) || !(result.minimum_stretch > 0.0)) { result.valid = 0u; }
+    return result;
+}
+
+fn material_energy(deformation: mat3x3<f32>, n: u32, model: u32, mu: f32, lambda: f32) -> MaterialEnergy {
+    var result: MaterialEnergy;
+    if ((n != 2u && n != 3u) || model > 3u || (model == 3u && n != 2u) || !material_finite(mu) || mu < 0.0 || !material_finite(lambda)) { return result; }
+    var f = deformation;
+    if (n == 2u) { f[2] = vec3<f32>(0.0); }
+    let scale = material_scale(f,n);
+    if (scale == 0.0) { return result; }
+    if (model == 3u) {
+        let lengths = vec2<f32>(length(f[0]),length(f[1]))-vec2<f32>(1.0);
+        let shear = dot(f[0],f[1]);
+        result.energy = 0.5*mu*dot(lengths,lengths)+0.5*lambda*shear*shear;
+    } else if (model == 2u) {
+        var j = determinant(f);
+        if (n == 2u) { j = length(cross(f[0],f[1])); }
+        let norm2 = dot(f[0],f[0])+dot(f[1],f[1])+dot(f[2],f[2]);
+        result.energy = 0.5*mu*(norm2-f32(n))-mu*(j-1.0)+0.5*lambda*(j-1.0)*(j-1.0);
+    } else {
+        let svd = material_svd(f,scale,n);
+        if (svd.valid == 0u) { return result; }
+        var trace = 0.0; var j = 1.0;
+        for (var i = 0u; i < n; i++) {
+            let a = svd.sigma[i]-1.0;
+            trace += a; j *= svd.sigma[i];
+            if (model == 0u) { result.energy += mu*a*a; }
+            else { result.energy += 0.25*mu*a*a*a*a; }
+        }
+        if (model == 0u) { result.energy += 0.5*lambda*trace*trace; }
+        else { result.energy += 0.5*lambda*(j-1.0)*(j-1.0); }
+    }
+    result.valid = select(0u,1u,material_finite(result.energy));
     return result;
 }

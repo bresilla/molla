@@ -6,4 +6,4 @@ mod buffer;
 
 #[cfg(feature = "gpu")]
 pub use buffer::BufferDevice;
-pub use buffer::{Buffer, BufferElement, BufferUsage};
+pub use buffer::{Buffer, BufferElement, BufferRevision, BufferUsage};
