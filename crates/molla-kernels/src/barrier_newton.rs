@@ -3,13 +3,16 @@
 //!
 //! f32 port of `molla-solvers::barrier_contact` (the f64 oracle and
 //! parity reference). The host drives the outer Newton loop and the
-//! CCD-truncated Armijo backtracking with 4-byte scalar readbacks;
+//! CCD-truncated Armijo backtracking with 64-byte scalar readbacks;
 //! gradient, Hessian-vector products, the full PCG (with the f32
 //! convergence freeze), the conservative TOI min-reduction, trial
 //! energies, and the min-gap invariant scan all run on device.
 
 use molla_core::{Error, Result};
 use wgpu::util::DeviceExt;
+
+mod geometry;
+mod validation;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -92,10 +95,12 @@ pub struct BarrierGpuParams {
     /// (r = −g − H·p_prev). Near-converged steps then exit after one
     /// block.
     pub warm_start: bool,
-    /// CG runs in blocks of this many iterations with a 4-byte
+    /// CG runs in blocks of this many iterations with a 64-byte
     /// residual readback between blocks — converged solves stop
     /// dispatching instead of running frozen no-ops.
     pub cg_block: usize,
+    /// Reject intersecting input; completed steps always require valid geometry.
+    pub reject_intersecting_start: bool,
 }
 
 impl Default for BarrierGpuParams {
@@ -116,6 +121,7 @@ impl Default for BarrierGpuParams {
             use_lbvh: false,
             warm_start: true,
             cg_block: 15,
+            reject_intersecting_start: true,
         }
     }
 }
@@ -140,7 +146,14 @@ pub struct BarrierNewtonGpu {
     uniform_buf: wgpu::Buffer,
     x_pos: wgpu::Buffer,
     vel: wgpu::Buffer,
+    x_iter: wgpu::Buffer,
+    cg_hd: wgpu::Buffer,
     scalars: wgpu::Buffer,
+    scalar_stage: wgpu::Buffer,
+    has_zero_rest_springs: bool,
+    geometry: geometry::GeometryValidator,
+    /// Whether committed positions passed contact validation.
+    committed_contacts_valid: bool,
     vertex_count: u32,
     spring_count: u32,
     obstacle_count: u32,
@@ -199,6 +212,7 @@ const ENTRIES: &[&str] = &[
     "energy_spring",
     "reduce_energy_gap",
     "accept_trial",
+    "stage_velocities",
     "commit",
 ];
 
@@ -269,10 +283,13 @@ impl BarrierNewtonGpu {
         pinned_idx: &[u32],
         params: BarrierGpuParams,
     ) -> Result<Self> {
+        params.validate()?;
+        validation::mesh(
+            positions, masses, springs, obstacles, triangles, tets, pinned_idx,
+        )?;
+        let has_zero_rest_springs = springs.iter().any(|s| s.rest == 0.0);
+        validation::strain_limit(&params, has_zero_rest_springs)?;
         let n = positions.len();
-        if masses.len() != n {
-            return Err(Error::Solver("barrier_newton: mass length".into()));
-        }
         // Spring CSR.
         let mut counts = vec![0u32; n + 1];
         for s in springs {
@@ -550,6 +567,15 @@ impl BarrierNewtonGpu {
             ((n + springs.len() + pair_capacity as usize).max(1) * 4) as u64,
         );
         let scalars = mk("bn.scalars", 64);
+        let scalar_stage = molla_core::gpu_create_buffer!(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("bn.scalar_stage"),
+                size: 64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }
+        );
         let pair_meta = mk("bn.pair_meta", u64::from(pair_capacity) * 16);
         let pair_wts = mk("bn.pair_wts", u64::from(pair_capacity) * 16);
         let pair_count_buf = mk("bn.pair_count", 16);
@@ -728,6 +754,34 @@ impl BarrierNewtonGpu {
             ],
         });
 
+        let geometry = geometry::GeometryValidator::new(
+            device,
+            queue,
+            positions,
+            triangles,
+            [
+                edge_rows.len() as u32,
+                springs.len() as u32,
+                tets.len() as u32,
+                obstacles.len() as u32,
+            ],
+            [
+                &x_iter,
+                &x_pos,
+                &vel,
+                &x_tilde,
+                &grad,
+                &tri_buf,
+                &edge_buf,
+                &pinned_buf,
+                &ob_buf,
+                &spring_a,
+                &spring_b,
+                &rest_buf,
+                &tet_ids_buf,
+                &tet_kv_buf,
+            ],
+        )?;
         Ok(Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -739,7 +793,13 @@ impl BarrierNewtonGpu {
             uniform_buf,
             x_pos,
             vel,
+            x_iter,
+            cg_hd,
             scalars,
+            scalar_stage,
+            has_zero_rest_springs,
+            geometry,
+            committed_contacts_valid: false,
             vertex_count: n as u32,
             spring_count: springs.len() as u32,
             obstacle_count: obstacles.len() as u32,
@@ -809,6 +869,7 @@ impl BarrierNewtonGpu {
             pass.set_bind_group(3, &self.bg_work, &[]);
             for &(name, groups) in names {
                 pass.set_pipeline(&self.pipes[name]);
+                molla_core::gpu_metrics::record_dispatch();
                 pass.dispatch_workgroups(groups, 1, 1);
             }
         }
@@ -816,38 +877,30 @@ impl BarrierNewtonGpu {
     }
 
     fn read_scalars(&self) -> Result<[f32; 16]> {
-        let stage = molla_core::gpu_create_buffer!(
-            self.device,
-            &wgpu::BufferDescriptor {
-                label: Some("bn.stage"),
-                size: 64,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            }
-        );
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        encoder.copy_buffer_to_buffer(&self.scalars, 0, &stage, 0, 64);
+        encoder.copy_buffer_to_buffer(&self.scalars, 0, &self.scalar_stage, 0, 64);
         self.queue.submit(std::iter::once(encoder.finish()));
-        let slice = stage.slice(..);
+        let slice = self.scalar_stage.slice(..);
         let (tx, rx) = std::sync::mpsc::channel::<Result<()>>();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             tx.send(r.map_err(|e| Error::Gpu(format!("bn map: {e:?}"))))
                 .ok();
         });
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| Error::Gpu(format!("bn poll: {e:?}")))?;
-        rx.recv()
-            .map_err(|e| Error::Gpu(format!("bn recv: {e:?}")))??;
-        let data = molla_core::gpu_readback!(slice);
-        let v: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
-        drop(data);
-        stage.unmap();
-        let mut out = [0.0f32; 16];
-        out.copy_from_slice(&v[..16]);
-        Ok(out)
+        let result = (|| {
+            self.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|e| Error::Gpu(format!("bn poll: {e:?}")))?;
+            rx.recv()
+                .map_err(|e| Error::Gpu(format!("bn recv: {e:?}")))??;
+            let data = molla_core::gpu_readback!(slice);
+            let mut out = [0.0f32; 16];
+            out.copy_from_slice(bytemuck::cast_slice(&data));
+            Ok(out)
+        })();
+        self.scalar_stage.unmap();
+        result
     }
 
     /// Evaluate energy + min-gap + grad_inf of `x_iter + alpha·p` into
@@ -868,11 +921,54 @@ impl BarrierNewtonGpu {
         self.run(&plan);
     }
 
-    /// One implicit step. Mirrors `BarrierShell::step`.
+    /// One implicit step with input and final-geometry validation.
     pub fn step(&mut self, h: f32) -> Result<BarrierGpuStats> {
+        let result = self.step_inner(h);
+        if result.is_err() {
+            self.warmed = false;
+        } else {
+            self.commit_step(h);
+        }
+        result
+    }
+
+    /// Solve and read the candidate state before committing either GPU array.
+    pub fn step_with_readback(
+        &mut self,
+        h: f32,
+    ) -> Result<(BarrierGpuStats, Vec<[f32; 3]>, Vec<[f32; 3]>)> {
+        self.step_readback(h, Self::read_vec3)
+    }
+
+    fn step_readback(
+        &mut self,
+        h: f32,
+        mut read: impl FnMut(&Self, &wgpu::Buffer) -> Result<Vec<[f32; 3]>>,
+    ) -> Result<(BarrierGpuStats, Vec<[f32; 3]>, Vec<[f32; 3]>)> {
+        let result = (|| {
+            let stats = self.step_inner(h)?;
+            self.write_uniforms(h, 0.0);
+            self.run(&[("stage_velocities", self.vertex_count.div_ceil(WG).max(1))]);
+            let positions = read(self, &self.x_iter)?;
+            let velocities = read(self, &self.cg_hd)?;
+            Ok((stats, positions, velocities))
+        })();
+        if result.is_err() {
+            self.warmed = false;
+        } else {
+            self.commit_step(h);
+        }
+        result
+    }
+
+    fn step_inner(&mut self, h: f32) -> Result<BarrierGpuStats> {
+        self.params.validate()?;
+        validation::timestep(h)?;
+        validation::strain_limit(&self.params, self.has_zero_rest_springs)?;
         let gv = self.vertex_count.div_ceil(WG).max(1);
         self.write_uniforms(h, 0.0);
         self.run(&[("predict", gv)]);
+        self.validate_geometry(h, false)?;
         if self.params.friction_mu > 0.0 && self.obstacle_count > 0 {
             let gf = (self.vertex_count * self.obstacle_count)
                 .div_ceil(WG)
@@ -1015,6 +1111,11 @@ impl BarrierNewtonGpu {
             self.eval_trial(h, 0.0);
             let s = self.read_scalars()?;
             let (e0, gap0, g_inf) = (s[7], s[8], s[9]);
+            if !e0.is_finite() || !gap0.is_finite() || !g_inf.is_finite() {
+                return Err(Error::Solver(
+                    "barrier_newton: nonfinite Newton evaluation".into(),
+                ));
+            }
             if s[10] != 0.0 {
                 return Err(Error::Solver(
                     "barrier_newton: self-pair buffer overflow — raise pair capacity".into(),
@@ -1067,6 +1168,11 @@ impl BarrierNewtonGpu {
                 self.run(&cg_plan);
                 done += iters;
                 let sc = self.read_scalars()?;
+                if !sc[4].is_finite() || !sc[5].is_finite() {
+                    return Err(Error::Solver(
+                        "barrier_newton: nonfinite CG residual".into(),
+                    ));
+                }
                 // rz vs the solve's initial ‖r‖² — same scale the
                 // freeze uses.
                 if sc[4] <= 1.0e-10 * sc[5].max(1.0e-30) {
@@ -1080,6 +1186,11 @@ impl BarrierNewtonGpu {
             let s2 = self.read_scalars()?;
             let alpha_max = s2[6];
             let slope = s2[1];
+            if !alpha_max.is_finite() || !slope.is_finite() {
+                return Err(Error::Solver(
+                    "barrier_newton: nonfinite line search".into(),
+                ));
+            }
             let mut alpha = alpha_max;
             let mut accepted = false;
             let mut e_new = e0;
@@ -1116,10 +1227,35 @@ impl BarrierNewtonGpu {
     }
 
     fn finish_step(&self, h: f32, stats: BarrierGpuStats) -> Result<BarrierGpuStats> {
+        self.validate_geometry(h, true)?;
+        Ok(stats)
+    }
+
+    fn commit_step(&mut self, h: f32) {
         self.write_uniforms(h, 0.0);
         let gv = self.vertex_count.div_ceil(WG).max(1);
         self.run(&[("commit", gv)]);
-        Ok(stats)
+        self.committed_contacts_valid = true;
+    }
+
+    fn validate_geometry(&self, h: f32, final_state: bool) -> Result<()> {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("bn.geometry.encoder"),
+            });
+        self.geometry.encode(
+            &self.queue,
+            &mut encoder,
+            h,
+            self.params.strain_limit,
+            final_state,
+            final_state
+                || (self.params.reject_intersecting_start && !self.committed_contacts_valid),
+            &self.scalars,
+        )?;
+        self.queue.submit([encoder.finish()]);
+        geometry::GeometryValidator::check(self.read_scalars()?[12].to_bits(), final_state)
     }
 
     fn read_vec3(&self, buf: &wgpu::Buffer) -> Result<Vec<[f32; 3]>> {
@@ -1174,8 +1310,14 @@ impl BarrierNewtonGpu {
         if v.len() != self.vertex_count as usize {
             return Err(Error::Solver("barrier_newton: velocity length".into()));
         }
+        if !v.iter().flatten().all(|value| value.is_finite()) {
+            return Err(Error::Solver("barrier_newton: nonfinite velocity".into()));
+        }
         let rows: Vec<[f32; 4]> = v.iter().map(|v| [v[0], v[1], v[2], 0.0]).collect();
         molla_core::gpu_write_buffer!(self.queue, &self.vel, 0, bytemuck::cast_slice(&rows));
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "resource-counters"))]
+mod publication_tests;

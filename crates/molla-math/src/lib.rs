@@ -5,6 +5,7 @@
 //! exactly once, at the buffer boundary in the storage layer.
 
 pub mod coloring;
+pub mod constitutive;
 pub mod dense3;
 pub mod dense_solve;
 pub mod gpu;

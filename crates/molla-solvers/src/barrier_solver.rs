@@ -1,36 +1,22 @@
-//! C0 integration — the barrier-Newton contact backend as a
-//! first-class engine [`Solver`], peer to `VbdSolver`/`XpbdSolver`.
+//! Barrier-Newton contact through the engine [`Solver`] interface.
 //!
-//! Reads the same `Model` deformable data VBD does (particles, XPBD
-//! springs with compliance→stiffness, `SoftSurface` triangles for
-//! self-collision, static Plane/Sphere shapes as analytic obstacles)
-//! and drives the `barrier_contact::BarrierShell` oracle per step:
-//! penetration is impossible at every Newton iterate, hard strain
-//! limits and μ_s/μ_k friction come along for free.
+//! Consumes Model particles, compliance-based springs and soft-surface
+//! collision triangles. The CPU backend couples analytic plane/sphere
+//! obstacles to bodies through reaction wrenches and dynamic boxes through
+//! affine-body degrees of freedom. The GPU backend retains its trajectory
+//! and supports world-attached planes/spheres. Unsupported collider and
+//! Model tet material requests return errors at backend construction.
 //!
-//! Rigid coupling (v1.5, weak/explicit): obstacles attached to
-//! DYNAMIC bodies follow their body's live pose each step, and the
-//! reaction wrench the shell reports at the converged state (implicit
-//! Euler gives the shell exactly `h·F(x_new)` of impulse, so sampling
-//! the same forces makes the exchange third-law-exact to Newton
-//! tolerance) integrates the body semi-implicitly. Bodies not owning
-//! barrier obstacles pass through. Strong (monolithic ABD-style)
-//! coupling is the eventual upgrade; the weak scheme is conditionally
-//! stable — heavy cloth on a light body wants smaller h.
-//!
-//! v1 scope (documented, honest):
-//! * cloth/shell surfaces (`SoftSurface` triangles); Model tets use
-//!   VBD's Neo-Hookean material and are NOT consumed here (the
-//!   barrier backend's own `BarrierTet` volume energy is a different
-//!   material — wire when a scene needs it);
-//! * CPU f64. The GPU `BarrierNewtonGpu` shares topology and can slot
-//!   behind the same interface once a scene needs the scale.
+//! Motion outputs and diagnostics publish after validation. CPU failures
+//! restore the cached shell; GPU candidate readbacks precede its commit.
 
 use crate::Solver;
 use crate::barrier_contact::{BarrierObstacle, BarrierParams, BarrierShell, BarrierSpring};
 use crate::core::Result;
 use crate::math::{Real, Vec3};
 use molla_sim::{Contacts, Control, Model, ShapeGeometry, State};
+
+mod validation;
 
 /// One obstacle's provenance: which body owns it (−1 = world/static)
 /// and the shape's body-local geometry, so poses can be refreshed and
@@ -88,6 +74,7 @@ pub struct BarrierSolver {
     /// MORE vertices — ABD proxies — so topology-change detection
     /// must compare against this, not `positions.len()`).
     built_particles: usize,
+    built_bodies: usize,
 }
 
 impl Default for BarrierSolver {
@@ -109,6 +96,7 @@ impl BarrierSolver {
             springs_as_collision_edges: false,
             abd_bodies: Vec::new(),
             built_particles: usize::MAX,
+            built_bodies: usize::MAX,
         }
     }
 
@@ -159,6 +147,7 @@ impl BarrierSolver {
             strain_limit: self.params.strain_limit.unwrap_or(0.0) as f32,
             strain_barrier_scale: self.params.strain_barrier_scale as f32,
             elasticity_inclusive_kappa: self.params.elasticity_inclusive_kappa,
+            reject_intersecting_start: self.params.reject_intersecting_start,
             ..Default::default()
         }
     }
@@ -167,6 +156,7 @@ impl BarrierSolver {
     /// uses.
     #[cfg(feature = "gpu")]
     fn build_gpu(&self, model: &Model, state: &State) -> Result<molla_kernels::BarrierNewtonGpu> {
+        validation::model(model, true, self.springs_as_collision_edges)?;
         if model.spring_tension_only.host()?.iter().any(|&v| v != 0) {
             return Err(molla_core::Error::Solver(
                 "barrier solver does not support tension-only elements".into(),
@@ -283,6 +273,7 @@ impl BarrierSolver {
 
     /// Build the shell topology from the model + initial state.
     fn build_shell(&mut self, model: &Model, state: &State) -> Result<BarrierShell> {
+        validation::model(model, false, self.springs_as_collision_edges)?;
         if model.spring_tension_only.host()?.iter().any(|&v| v != 0) {
             return Err(molla_core::Error::Solver(
                 "barrier solver does not support tension-only elements".into(),
@@ -479,21 +470,19 @@ impl BarrierSolver {
     }
 }
 
-impl Solver for BarrierSolver {
-    fn step(
+impl BarrierSolver {
+    fn step_inner(
         &mut self,
         model: &Model,
         state_in: &State,
-        _control: &Control,
-        _contacts: &Contacts,
         dt: Real,
         state_out: &mut State,
     ) -> Result<()> {
-        // Topology change (particle count) invalidates the lazily
-        // built backends — rebuild instead of panicking on a length
-        // mismatch (scene edits / model swaps).
+        // Particle/body count changes invalidate the cached CPU topology.
         let n_particles = state_in.particle_q.host()?.len();
-        if self.shell.is_some() && self.built_particles != n_particles {
+        if self.shell.is_some()
+            && (self.built_particles != n_particles || self.built_bodies != model.body_count)
+        {
             self.shell = None;
         }
         #[cfg(feature = "gpu")]
@@ -517,13 +506,14 @@ impl Solver for BarrierSolver {
                 unreachable!("built above");
             };
             sim.params = gp;
-            let stats = sim.step(dt as f32)?;
-            self.last_newton_iters = stats.newton_iters;
-            self.last_min_gap = Real::from(stats.min_gap);
-            let p = sim.read_positions()?;
-            let v = sim.read_velocities()?;
+            let q_in = state_in.body_q.host()?;
+            let qd_in = state_in.body_qd.host()?;
+            let (stats, p, v) = sim.step_with_readback(dt as f32)?;
             {
                 let q_out = state_out.particle_q.host_mut()?;
+                let qd_out = state_out.particle_qd.host_mut()?;
+                let bq_out = state_out.body_q.host_mut()?;
+                let bqd_out = state_out.body_qd.host_mut()?;
                 for (dst, src) in q_out.iter_mut().zip(p.iter()) {
                     *dst = crate::math::Vec3::new(
                         Real::from(src[0]),
@@ -531,7 +521,6 @@ impl Solver for BarrierSolver {
                         Real::from(src[2]),
                     );
                 }
-                let qd_out = state_out.particle_qd.host_mut()?;
                 for (dst, src) in qd_out.iter_mut().zip(v.iter()) {
                     *dst = crate::math::Vec3::new(
                         Real::from(src[0]),
@@ -539,16 +528,17 @@ impl Solver for BarrierSolver {
                         Real::from(src[2]),
                     );
                 }
+                bq_out.copy_from_slice(q_in);
+                bqd_out.copy_from_slice(qd_in);
             }
-            let q_in = state_in.body_q.host()?.to_vec();
-            let qd_in = state_in.body_qd.host()?.to_vec();
-            state_out.body_q.host_mut()?.copy_from_slice(&q_in);
-            state_out.body_qd.host_mut()?.copy_from_slice(&qd_in);
+            self.last_newton_iters = stats.newton_iters;
+            self.last_min_gap = Real::from(stats.min_gap);
             return Ok(());
         }
         if self.shell.is_none() {
             self.shell = Some(self.build_shell(model, state_in)?);
             self.built_particles = n_particles;
+            self.built_bodies = model.body_count;
         }
         let shell = self.shell.as_mut().expect("shell built above");
         shell.params = self.params;
@@ -654,16 +644,6 @@ impl Solver for BarrierSolver {
         }
 
         let stats = shell.step(dt)?;
-        self.last_newton_iters = stats.newton_iters;
-        self.last_min_gap = stats.min_gap;
-
-        {
-            let q_out = state_out.particle_q.host_mut()?;
-            let np = q_out.len();
-            q_out.copy_from_slice(&shell.positions[..np]);
-            let qd_out = state_out.particle_qd.host_mut()?;
-            qd_out.copy_from_slice(&shell.velocities[..np]);
-        }
 
         // Reaction wrench (third-law-exact — see `obstacle_reactions`)
         // → velocity update; position already advanced by the capped
@@ -721,8 +701,51 @@ impl Solver for BarrierSolver {
                 q[i].rotation = (dq * q[i].rotation).normalize();
             }
         }
-        state_out.body_q.host_mut()?.copy_from_slice(&q);
-        state_out.body_qd.host_mut()?.copy_from_slice(&qd);
+        validation::motion(&q, &qd)?;
+        let q_out = state_out.particle_q.host_mut()?;
+        let qd_out = state_out.particle_qd.host_mut()?;
+        let bq_out = state_out.body_q.host_mut()?;
+        let bqd_out = state_out.body_qd.host_mut()?;
+        q_out.copy_from_slice(&shell.positions[..n_particles]);
+        qd_out.copy_from_slice(&shell.velocities[..n_particles]);
+        bq_out.copy_from_slice(&q);
+        bqd_out.copy_from_slice(&qd);
+        self.last_newton_iters = stats.newton_iters;
+        self.last_min_gap = stats.min_gap;
         Ok(())
+    }
+}
+
+impl Solver for BarrierSolver {
+    fn step(
+        &mut self,
+        model: &Model,
+        state_in: &State,
+        _control: &Control,
+        _contacts: &Contacts,
+        dt: Real,
+        state_out: &mut State,
+    ) -> Result<()> {
+        self.params.validate()?;
+        super::barrier_contact::validate_timestep(dt)?;
+        validation::preflight(model, state_in, state_out)?;
+        let backup = (
+            self.shell.clone(),
+            self.bindings.clone(),
+            self.abd_bodies.clone(),
+            self.built_particles,
+            self.built_bodies,
+        );
+        let result = self.step_inner(model, state_in, dt, state_out);
+        if result.is_err() {
+            (
+                self.shell,
+                self.bindings,
+                self.abd_bodies,
+                self.built_particles,
+                self.built_bodies,
+            ) = backup;
+        }
+        result
     }
 }

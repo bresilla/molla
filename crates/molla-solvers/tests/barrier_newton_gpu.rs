@@ -21,6 +21,141 @@ use molla_solvers::barrier_contact::{BarrierObstacle, BarrierParams, BarrierShel
 use molla_kernels::{BarrierGpuObstacle, BarrierGpuParams, BarrierGpuSpring, BarrierNewtonGpu};
 
 #[test]
+#[ignore = "requires GPU; run via make test-ppf-gpu"]
+fn gpu_invalid_inputs_are_refused_before_allocation() {
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    #[cfg(feature = "resource-counters")]
+    let scope = molla_core::gpu_metrics::DeviceScope::start().unwrap();
+    let spring = BarrierGpuSpring {
+        a: 99,
+        b: 0,
+        rest: 1.0,
+        k: 1.0,
+    };
+    assert!(
+        BarrierNewtonGpu::new(
+            device,
+            queue,
+            &[[0.0; 3]],
+            &[1.0],
+            &[spring],
+            &[],
+            BarrierGpuParams::default()
+        )
+        .is_err()
+    );
+    assert!(
+        BarrierNewtonGpu::new(
+            device,
+            queue,
+            &[[0.0; 3]],
+            &[1.0],
+            &[],
+            &[],
+            BarrierGpuParams {
+                gravity: [f32::NAN; 3],
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        BarrierNewtonGpu::new_with_mesh(
+            device,
+            queue,
+            &[[0.0; 3]],
+            &[1.0],
+            &[],
+            &[],
+            &[[0, 1, 2]],
+            &[],
+            BarrierGpuParams::default()
+        )
+        .is_err()
+    );
+    #[cfg(feature = "resource-counters")]
+    assert_eq!(scope.finish().observations, 0);
+}
+
+#[test]
+#[ignore = "requires GPU; run via make test-ppf-gpu"]
+fn gpu_invalid_updates_do_not_publish_state() {
+    let engine = Engine::new_gpu().unwrap();
+    let mut gpu = BarrierNewtonGpu::new(
+        engine.device().unwrap(),
+        engine.queue().unwrap(),
+        &[[0.0, 1.0, 0.0]],
+        &[1.0],
+        &[],
+        &[],
+        BarrierGpuParams::default(),
+    )
+    .unwrap();
+    gpu.set_velocities(&[[1.0, 0.0, 0.0]]).unwrap();
+    gpu.step(1.0 / 240.0).unwrap();
+    let initial = (
+        gpu.read_positions().unwrap(),
+        gpu.read_velocities().unwrap(),
+    );
+    for h in [
+        0.0,
+        -1.0,
+        f32::NAN,
+        f32::INFINITY,
+        f32::MAX,
+        f32::MIN_POSITIVE,
+    ] {
+        assert!(gpu.step(h).is_err());
+        assert_eq!(gpu.read_positions().unwrap(), initial.0);
+        assert_eq!(gpu.read_velocities().unwrap(), initial.1);
+    }
+    gpu.params.friction_mu = f32::NAN;
+    assert!(gpu.step(1.0 / 240.0).is_err());
+    gpu.params = BarrierGpuParams::default();
+    for v in [vec![], vec![[f32::NAN; 3]], vec![[f32::INFINITY; 3]]] {
+        assert!(gpu.set_velocities(&v).is_err());
+        assert_eq!(gpu.read_positions().unwrap(), initial.0);
+        assert_eq!(gpu.read_velocities().unwrap(), initial.1);
+    }
+    gpu.step(1.0 / 240.0).unwrap();
+    assert!(gpu.read_positions().unwrap()[0][0] > initial.0[0][0]);
+}
+
+#[test]
+#[ignore = "requires GPU; run via make test-ppf-gpu"]
+fn gpu_zero_rest_spring_rejects_strain_limit_changes() {
+    let engine = Engine::new_gpu().unwrap();
+    let mut gpu = BarrierNewtonGpu::new(
+        engine.device().unwrap(),
+        engine.queue().unwrap(),
+        &[[0.0, 1.0, 0.0], [1.0, 1.0, 0.0]],
+        &[1.0; 2],
+        &[BarrierGpuSpring {
+            a: 0,
+            b: 1,
+            rest: 0.0,
+            k: 1.0,
+        }],
+        &[],
+        BarrierGpuParams::default(),
+    )
+    .unwrap();
+    gpu.step(1.0 / 240.0).unwrap();
+    let initial = (
+        gpu.read_positions().unwrap(),
+        gpu.read_velocities().unwrap(),
+    );
+    gpu.params.strain_limit = 1.1;
+    assert!(gpu.step(1.0 / 240.0).is_err());
+    assert_eq!(gpu.read_positions().unwrap(), initial.0);
+    assert_eq!(gpu.read_velocities().unwrap(), initial.1);
+    gpu.params.strain_limit = 0.0;
+    gpu.step(1.0 / 240.0).unwrap();
+}
+
+#[test]
 #[ignore = "requires GPU; run via make test-gpu"]
 fn lbvh_candidate_overflow_fails_closed() {
     let engine = Engine::new_gpu().unwrap();

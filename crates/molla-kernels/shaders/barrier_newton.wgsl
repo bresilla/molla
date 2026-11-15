@@ -1389,13 +1389,23 @@ fn accept_trial(@builtin(global_invocation_id) gid: vec3<u32>) {
     x_iter[i] = x_try[i];
 }
 
+fn candidate_velocity(i: u32) -> vec4<f32> {
+    if (pinned[i] != 0u) { return vec4<f32>(0.0); }
+    return vec4<f32>((x_iter[i].xyz - x_pos[i].xyz) / u.h, 0.0);
+}
+
+@compute @workgroup_size(WG)
+fn stage_velocities(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= u.vertex_count) { return; }
+    cg_hd[i] = candidate_velocity(i);
+}
+
 // Commit the step: v ← (x_iter − x)/h ; x ← x_iter.
 @compute @workgroup_size(WG)
 fn commit(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if (i >= u.vertex_count) { return; }
-    var v = (x_iter[i].xyz - x_pos[i].xyz) / u.h;
-    if (pinned[i] != 0u) { v = vec3<f32>(0.0); }
-    vel[i] = vec4<f32>(v, 0.0);
+    vel[i] = candidate_velocity(i);
     x_pos[i] = x_iter[i];
 }

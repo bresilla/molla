@@ -11,7 +11,10 @@ fn read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<u32> {
     });
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let mapped = buffer.slice(..).get_mapped_range().expect("mapped GPU buffer range");
+    let mapped = buffer
+        .slice(..)
+        .get_mapped_range()
+        .expect("mapped GPU buffer range");
     let result = bytemuck::cast_slice(&mapped).to_vec();
     drop(mapped);
     buffer.unmap();
@@ -25,6 +28,62 @@ fn staging(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
+}
+
+#[test]
+#[ignore = "requires GPU; run via make test-gpu"]
+fn bounds_only_build_and_refit_preserve_tree_without_emitting_pairs() {
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let mut tree = LbvhBroadPhase::new(device.clone(), queue.clone(), 130, 64).unwrap();
+    let dense = vec![(Vec3::ZERO, Vec3::ONE); 130];
+    let mut encoder = device.create_command_encoder(&Default::default());
+    assert!(tree.encode_refit_bounds(&mut encoder, 130).is_err());
+    tree.build_bounds(&dense).unwrap();
+    let diagnostics = tree.diagnostics();
+    assert_eq!(diagnostics.pair_readbacks, 0);
+    let output = staging(device, 16 + 259 * 48);
+    let moved: Vec<[f32; 4]> = (0..130)
+        .flat_map(|_| [[7.0, 8.0, 9.0, 0.0], [10.0, 11.0, 12.0, 0.0]])
+        .collect();
+    queue.write_buffer(
+        tree.primitive_aabb_buffer(),
+        0,
+        bytemuck::cast_slice(&moved),
+    );
+    assert!(tree.encode_refit_bounds(&mut encoder, 129).is_err());
+    tree.encode_refit_bounds(&mut encoder, 130).unwrap();
+    encoder.copy_buffer_to_buffer(tree.pair_count_buffer(), 0, &output, 0, 16);
+    encoder.copy_buffer_to_buffer(tree.nodes_buffer(), 0, &output, 16, 259 * 48);
+    queue.submit([encoder.finish()]);
+    let words = read(device, &output);
+    assert_eq!(words[0], 0);
+    let root = words[1] as usize;
+    assert!((130..259).contains(&root));
+    let node = &words[4 + root * 12..][..12];
+    assert_eq!(
+        [
+            f32::from_bits(node[0]),
+            f32::from_bits(node[1]),
+            f32::from_bits(node[2])
+        ],
+        [7.0, 8.0, 9.0]
+    );
+    assert_eq!(
+        [
+            f32::from_bits(node[4]),
+            f32::from_bits(node[5]),
+            f32::from_bits(node[6])
+        ],
+        [10.0, 11.0, 12.0]
+    );
+    assert_eq!(tree.diagnostics(), diagnostics);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    tree.encode_refit(&mut encoder, 130).unwrap();
+    encoder.copy_buffer_to_buffer(tree.pair_count_buffer(), 0, &output, 0, 16);
+    queue.submit([encoder.finish()]);
+    assert_eq!(read(device, &output)[0], 130 * 129 / 2);
 }
 
 #[test]

@@ -692,6 +692,15 @@ impl LbvhBroadPhase {
     /// Output capacity remains fixed; consumers must clamp the emitted
     /// count to `pair_capacity` and treat larger counts as overflow.
     pub fn dispatch_no_readback(&mut self, prim_aabbs: &[(Vec3, Vec3)]) -> Result<()> {
+        self.build_no_readback(prim_aabbs, true)
+    }
+
+    /// Upload AABBs and build a traversal tree without generating pairs.
+    pub fn build_bounds(&mut self, prim_aabbs: &[(Vec3, Vec3)]) -> Result<()> {
+        self.build_no_readback(prim_aabbs, false)
+    }
+
+    fn build_no_readback(&mut self, prim_aabbs: &[(Vec3, Vec3)], pairs: bool) -> Result<()> {
         self.prepare_build(prim_aabbs)?;
         let n = prim_aabbs.len();
         if n == 0 {
@@ -702,7 +711,7 @@ impl LbvhBroadPhase {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("molla::lbvh build"),
             });
-        self.encode_kernels(&mut encoder, n as u32, true);
+        self.encode_kernels(&mut encoder, n as u32, true, pairs);
         self.queue.submit([encoder.finish()]);
         Ok(())
     }
@@ -745,6 +754,19 @@ impl LbvhBroadPhase {
     /// Submit it before resizing or rebuilding this LBVH. Overflow is
     /// reported by `pair_count[0] > pair_capacity`, never silently resized.
     pub fn encode_refit(&self, encoder: &mut wgpu::CommandEncoder, n: u32) -> Result<()> {
+        self.validate_refit(n)?;
+        self.encode_kernels(encoder, n, false, true);
+        Ok(())
+    }
+
+    /// Refit live GPU AABBs without pair generation, allocation or submission.
+    pub fn encode_refit_bounds(&self, encoder: &mut wgpu::CommandEncoder, n: u32) -> Result<()> {
+        self.validate_refit(n)?;
+        self.encode_kernels(encoder, n, false, false);
+        Ok(())
+    }
+
+    fn validate_refit(&self, n: u32) -> Result<()> {
         let cache = self.cached_topology.as_ref().ok_or_else(|| {
             Error::Gpu(
                 "LbvhBroadPhase::encode_refit: no cached topology — \
@@ -764,7 +786,6 @@ impl LbvhBroadPhase {
                 "LBVH bindings need preparation after capacity growth".into(),
             ));
         }
-        self.encode_kernels(encoder, n, false);
         Ok(())
     }
 
@@ -796,12 +817,18 @@ impl LbvhBroadPhase {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("molla::lbvh encoder"),
             });
-        self.encode_kernels(&mut encoder, n, do_build);
+        self.encode_kernels(&mut encoder, n, do_build, true);
         self.queue.submit([encoder.finish()]);
         self.collect_pairs()
     }
 
-    fn encode_kernels(&self, encoder: &mut wgpu::CommandEncoder, n: u32, do_build: bool) {
+    fn encode_kernels(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        n: u32,
+        do_build: bool,
+        pairs: bool,
+    ) {
         let [bg_tree, bg_uniforms, bg_pairs] = self.bindings.as_ref().unwrap();
         encoder.clear_buffer(&self.pair_count, 0, Some(4));
         encoder.clear_buffer(&self.pair_count, 8, Some(8));
@@ -829,7 +856,7 @@ impl LbvhBroadPhase {
             pass.dispatch_workgroups(groups, 1, 1);
             molla_core::gpu_metrics::record_dispatch();
         }
-        {
+        if pairs {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("molla::lbvh::find_pairs"),
                 timestamp_writes: None,

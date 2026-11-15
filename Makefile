@@ -140,6 +140,46 @@ r: run
 test:
 	@$(CARGO) test $(APP_TARGET)
 
+.PHONY: test-ppf test-ppf-inputs test-ppf-gpu bench-ppf-gpu bench-ppf-replay
+.PHONY: test-ppf-geometry
+.PHONY: test-ppf-publication
+.PHONY: test-ppf-materials test-ppf-materials-gpu bench-ppf-materials
+test-ppf-materials:
+	@$(MAKE) test APP_TARGET='-p molla-math --test constitutive'
+	@$(MAKE) test APP_TARGET='-p molla-solvers --test barrier_materials'
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features resource-counters --test constitutive_gpu shader_parses_and_validates'
+
+test-ppf-materials-gpu:
+	@$(MAKE) test-gpu P=molla-kernels T=constitutive_gpu GPU_FEATURES=resource-counters A='--nocapture --test-threads=1 --skip resident_tangent_resource_profile'
+
+bench-ppf-materials:
+	@$(MAKE) test-gpu P=molla-kernels T=constitutive_gpu GPU_FEATURES=resource-counters RELEASE=1 A='--nocapture --test-threads=1 resident_tangent_resource_profile'
+
+test-ppf-publication:
+	@$(RUN_WITH) $(CARGO) test -p molla-kernels --features resource-counters --lib barrier_newton::publication_tests -- --ignored --nocapture --test-threads=1
+	@$(MAKE) test-gpu P=molla-solvers T=barrier_publication_gpu GPU_FEATURES=resource-counters A='--nocapture --test-threads=1'
+
+test-ppf-geometry:
+	@$(RUN_WITH) $(CARGO) test -p molla-kernels --features resource-counters --lib barrier_newton::geometry::tests -- --ignored --nocapture --test-threads=1
+	@$(MAKE) test-gpu P=molla-geometry T=lbvh_resident_gpu GPU_FEATURES=gpu A='--nocapture --test-threads=1'
+	@$(MAKE) test-gpu P=molla-solvers T=barrier_geometry_gpu GPU_FEATURES=resource-counters A='--nocapture --test-threads=1'
+
+test-ppf:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --test barrier_contact --test barrier_fail_examples --test barrier_self_contact --test barrier_engine --test barrier_tet_strain --test barrier_abd --test barrier_friction --test barrier_geometry_cpu --test barrier_publication_cpu --test barrier_materials'
+
+test-ppf-inputs:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features resource-counters --lib barrier_newton::validation::tests'
+
+test-ppf-gpu:
+	@$(MAKE) test-gpu P=molla-solvers T=barrier_newton_gpu A='--nocapture --test-threads=1'
+
+bench-ppf-gpu:
+	@$(MAKE) test-gpu P=molla-solvers T=barrier_resources_gpu GPU_FEATURES=resource-counters RELEASE=1 A='--nocapture --test-threads=1'
+
+bench-ppf-replay:
+	@test -x '$(PPF_BENCH_BINARY)' || { echo 'Set PPF_BENCH_BINARY to a release resource-profile test binary'; exit 1; }
+	@$(RUN_WITH) '$(PPF_BENCH_BINARY)' --ignored --nocapture --test-threads=1
+
 .PHONY: test-soil-particle-render
 .PHONY: render-soil-tractor-resident
 render-soil-tractor-resident:

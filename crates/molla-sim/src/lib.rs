@@ -34,9 +34,11 @@ mod tet_viscosity;
 
 pub use articulation::{eval_body_velocities, eval_fk};
 pub use builder::{BodyParams, MaterialNeoHookean, ModelBuilder, ShapeGeometry, TetMeshId};
+mod elastic_element;
 pub use contact_material::{CoefficientCombineRule, ContactMaterial, FrictionCoefficients};
 pub use contacts::Contacts;
 pub use control::Control;
+pub use elastic_element::ElasticElement;
 pub use flags::{BodyFlags, ParticleFlags, ShapeFlags};
 pub use joint::{EqualityType, JointTargetMode, JointType};
 pub use joint_frame_reference::JointFrameReference;

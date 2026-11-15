@@ -179,6 +179,170 @@ fn assertion_bad_params_are_refused() {
 }
 
 #[test]
+fn nonfinite_coefficients_and_empty_budgets_are_refused() {
+    let default = BarrierParams::default();
+    for value in [Real::NAN, Real::INFINITY, Real::NEG_INFINITY] {
+        for params in [
+            BarrierParams {
+                dhat: value,
+                ..default
+            },
+            BarrierParams {
+                kappa_scale: value,
+                ..default
+            },
+            BarrierParams {
+                newton_tol: value,
+                ..default
+            },
+            BarrierParams {
+                cg_tol: value,
+                ..default
+            },
+            BarrierParams {
+                gravity: Vec3::splat(value),
+                ..default
+            },
+            BarrierParams {
+                strain_limit: Some(value),
+                ..default
+            },
+            BarrierParams {
+                strain_barrier_scale: value,
+                ..default
+            },
+            BarrierParams {
+                friction_mu: value,
+                ..default
+            },
+            BarrierParams {
+                friction_mu_s_scale: value,
+                ..default
+            },
+            BarrierParams {
+                friction_epsv: value,
+                ..default
+            },
+        ] {
+            assert!(params.validate().is_err(), "{params:?}");
+        }
+    }
+    for params in [
+        BarrierParams {
+            max_newton_iters: 0,
+            ..default
+        },
+        BarrierParams {
+            max_cg_iters: 0,
+            ..default
+        },
+        BarrierParams {
+            strain_limit: Some(1.0),
+            ..default
+        },
+        BarrierParams {
+            strain_barrier_scale: -1.0,
+            ..default
+        },
+    ] {
+        assert!(params.validate().is_err(), "{params:?}");
+    }
+}
+
+#[test]
+fn invalid_steps_leave_published_state_unchanged() {
+    let mut shell = BarrierShell::new(
+        vec![Vec3::Y],
+        vec![1.0],
+        vec![],
+        vec![],
+        BarrierParams::default(),
+    )
+    .unwrap();
+    shell.velocities[0] = Vec3::X;
+    let initial = (shell.positions.clone(), shell.velocities.clone());
+    for h in [
+        0.0,
+        -1.0,
+        Real::NAN,
+        Real::INFINITY,
+        Real::MAX,
+        Real::MIN_POSITIVE,
+    ] {
+        assert!(shell.step(h).is_err());
+        assert_eq!(
+            (&shell.positions, &shell.velocities),
+            (&initial.0, &initial.1)
+        );
+    }
+    shell.params.gravity.x = Real::NAN;
+    assert!(shell.step(1.0 / 240.0).is_err());
+    assert_eq!(
+        (&shell.positions, &shell.velocities),
+        (&initial.0, &initial.1)
+    );
+    shell.params = BarrierParams::default();
+    shell.velocities[0].z = Real::INFINITY;
+    assert!(shell.step(1.0 / 240.0).is_err());
+    assert_eq!(shell.positions, initial.0);
+    shell.velocities = initial.1;
+    shell.step(1.0 / 240.0).unwrap();
+    assert!(shell.positions[0].x > 0.0);
+}
+
+#[test]
+fn constructor_refuses_invalid_springs_before_indexing() {
+    let good = BarrierSpring {
+        a: 0,
+        b: 1,
+        rest: 1.0,
+        k: 1.0,
+    };
+    for spring in [
+        BarrierSpring { a: 2, ..good },
+        BarrierSpring { b: 0, ..good },
+        BarrierSpring { rest: -1.0, ..good },
+        BarrierSpring {
+            k: Real::NAN,
+            ..good
+        },
+    ] {
+        assert!(
+            BarrierShell::new(
+                vec![Vec3::ZERO, Vec3::X],
+                vec![1.0; 2],
+                vec![spring],
+                vec![],
+                BarrierParams::default()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn zero_rest_spring_requires_disabled_strain_limit() {
+    let mut shell = BarrierShell::new(
+        vec![Vec3::ZERO, Vec3::X],
+        vec![1.0; 2],
+        vec![BarrierSpring {
+            a: 0,
+            b: 1,
+            rest: 0.0,
+            k: 1.0,
+        }],
+        vec![],
+        BarrierParams::default(),
+    )
+    .unwrap();
+    shell.step(1.0 / 240.0).unwrap();
+    let initial = shell.positions.clone();
+    shell.params.strain_limit = Some(1.1);
+    assert!(shell.step(1.0 / 240.0).is_err());
+    assert_eq!(shell.positions, initial);
+}
+
+#[test]
 fn opt_out_recovers_instead_of_refusing() {
     let (pos, springs, _) = flat_patch(4, 0.0);
     let mut shell = BarrierShell::new(

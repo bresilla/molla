@@ -1,5 +1,8 @@
 //! WGSL compute kernel dispatch wrappers.
 
+#[cfg(feature = "gpu")]
+pub mod constitutive;
+
 pub use molla_autograd as autograd;
 #[cfg(feature = "gpu")]
 pub use molla_compute as compute;

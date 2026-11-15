@@ -7,3 +7,7 @@ Cargo.lock.bak
 assets/.molla_session_*.usda
 assets/.molla_tmp_*.usda
 book/book
+
+!/plans/
+/plans/*
+!/plans/PPF.md

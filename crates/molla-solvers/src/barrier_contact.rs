@@ -1,47 +1,31 @@
-//! C0 phase 1 (roadmap Tier-C) — barrier-Newton contact, CPU f64 oracle.
-//!
-//! The incremental-potential formulation that makes interpenetration
-//! impossible at EVERY iterate, not just at convergence:
+//! CPU f64 barrier-Newton reference solver.
 //!
 //! ```text
 //!   E(x) = ½‖x − x̃‖²_M + h²·[ elastic(x) + Σ_c barrier(d_c(x)) ]
 //!   x̃    = x_prev + h·v + h²·g
 //! ```
 //!
-//! minimized by damped Newton where the line search is truncated at a
-//! conservative time-of-impact BEFORE the Armijo backtracking — so no
-//! trial state, accepted or rejected, ever crosses a surface. This is
-//! the IPC recipe (Li et al.) with the cubic compact-support barrier
-//! (Ando, ACM TOG 43.6 family):
+//! Damped Newton uses matrix-free PCG, a CCD-truncated Armijo line search,
+//! and the compact-support cubic contact barrier:
 //!
 //! ```text
 //!   b(d) = κ·(d̂ − d)³ / (3·d̂²)      for d < d̂,   0 otherwise
 //! ```
 //!
-//! C² at `d̂` (b = b' = b'' = 0 there), convex on (0, d̂], and — unlike
-//! the IPC log barrier — zero outside the activation band, so distant
-//! geometry contributes nothing. Phase-1 κ is the mass-consistent
-//! placeholder `κ_c = kappa_scale · m_c / h²` (per contact); the
-//! elasticity-inclusive eigen-stiffness scheme of the paper replaces
-//! this in a later phase — the plumbing is per-contact from day one so
-//! that upgrade is local.
-//!
-//! Phase-1 scope (deliberately minimal, correctness-anchored):
-//! * elastic model: stretch springs (the same J as the XPBD/cloth-diff
-//!   spring Jacobian, compression-clamped for SPD);
-//! * contacts: vertices vs ANALYTIC obstacles (half-space + sphere) —
-//!   the full Newton/barrier/CCD structure without VT/EE pair
-//!   management, which arrives in phase 3 over the LBVH;
-//! * solve: matrix-free PCG on the (PD) Newton system with a block
-//!   mass-diagonal preconditioner;
-//! * invariant: `min_gap()` is exposed and the tests assert it stays
-//!   positive after EVERY step, plus FD-validate ∇E and ∇²E·v.
-//!
-//! Everything is f64: this module is the parity oracle the GPU port
-//! (phase 2) will be measured against.
+//! Supports stretch springs, volume-preservation tets, spring strain limits,
+//! affine bodies, analytic obstacles, vertex-triangle/edge-edge contact and
+//! lagged friction. Stiffness uses mass and optional incident spring sums.
+//! Initial/final geometry and numerical validation precede publication.
+//! Surface predicates use finite-precision arithmetic and do not test closed
+//! solid containment; they are not an exact geometric certificate.
 
 use crate::core::{Error, Result};
 use crate::math::{Mat3, Real, Vec3};
+
+mod validation;
+use molla_math::constitutive::MaterialResponse;
+use molla_sim::ElasticElement;
+use validation::{finite_scalars, finite_vectors};
 
 /// Analytic obstacle for phase 1 (static, infinite mass).
 #[derive(Copy, Clone, Debug)]
@@ -156,19 +140,13 @@ pub struct BarrierParams {
     /// displacement well is e = ε_v·h. Smaller ⇒ less creep,
     /// stiffer friction Hessian.
     pub friction_epsv: Real,
-    /// Refuse to step from an INTERSECTING initial state (the
-    /// ppf-contact-solver contract, their `fail-examples/`): barrier
-    /// methods guarantee "never crosses", not "recovers from inside" —
-    /// starting inside is a modelling error and silently pushing out
-    /// would hide it. Opt out only for deliberate recovery workflows.
+    /// Reject intersecting initial geometry. When disabled, recovery is
+    /// attempted, but intersecting accepted geometry is still rejected.
     pub reject_intersecting_start: bool,
-    /// Elasticity-inclusive dynamic stiffness (the TOG 43.6 scheme):
+    /// Spring-based approximation to elasticity-inclusive stiffness:
     /// κ_c = scale·(m_c + h²·k_local)/h², where k_local is the Σ of
-    /// incident spring stiffnesses — an upper bound on the local
-    /// elastic eigen-stiffness. A stiff material then meets a
-    /// proportionally stiff barrier instead of pressing through the
-    /// activation band under its own elastic forces. `false` falls
-    /// back to the mass-consistent κ = scale·m/h².
+    /// incident spring stiffnesses, not a directional material-Hessian
+    /// projection. `false` uses the mass-consistent κ = scale·m/h².
     pub elasticity_inclusive_kappa: bool,
 }
 
@@ -194,28 +172,62 @@ impl Default for BarrierParams {
 }
 
 impl BarrierParams {
-    /// Parameter validation (their `assertion.ipynb` analogue): the
-    /// solver refuses nonsense configuration up front.
+    /// Validate solver coefficients and iteration budgets.
     pub fn validate(&self) -> Result<()> {
-        if !self.dhat.is_finite() || self.dhat <= 0.0 {
-            return Err(Error::Solver(format!(
-                "barrier: dhat must be finite and > 0, got {}",
-                self.dhat
-            )));
+        for (name, value) in [
+            ("dhat", self.dhat),
+            ("kappa_scale", self.kappa_scale),
+            ("newton_tol", self.newton_tol),
+            ("cg_tol", self.cg_tol),
+            ("friction_epsv", self.friction_epsv),
+        ] {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(Error::Solver(format!(
+                    "barrier: {name} must be finite and > 0"
+                )));
+            }
         }
-        if !self.kappa_scale.is_finite() || self.kappa_scale <= 0.0 {
-            return Err(Error::Solver(format!(
-                "barrier: kappa_scale must be finite and > 0, got {}",
-                self.kappa_scale
-            )));
+        for (name, value) in [
+            ("friction_mu", self.friction_mu),
+            ("strain_barrier_scale", self.strain_barrier_scale),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(Error::Solver(format!(
+                    "barrier: {name} must be finite and >= 0"
+                )));
+            }
         }
-        if self.friction_mu < 0.0 || self.friction_mu_s_scale < 1.0 || self.friction_epsv <= 0.0 {
+        if !self.friction_mu_s_scale.is_finite() || self.friction_mu_s_scale < 1.0 {
             return Err(Error::Solver(
-                "barrier: friction params require μ ≥ 0, μ_s/μ_k ≥ 1, ε_v > 0".into(),
+                "barrier: friction_mu_s_scale must be finite and >= 1".into(),
+            ));
+        }
+        if !self.gravity.is_finite() {
+            return Err(Error::Solver("barrier: gravity must be finite".into()));
+        }
+        if self
+            .strain_limit
+            .is_some_and(|v| !v.is_finite() || v <= 1.0)
+        {
+            return Err(Error::Solver(
+                "barrier: strain_limit must be finite and > 1 when enabled".into(),
+            ));
+        }
+        if self.max_newton_iters == 0 || self.max_cg_iters == 0 {
+            return Err(Error::Solver(
+                "barrier: iteration budgets must be positive".into(),
             ));
         }
         Ok(())
     }
+}
+
+pub(crate) fn validate_timestep(h: Real) -> Result<()> {
+    let h2 = h * h;
+    if !h.is_finite() || h <= 0.0 || !h2.is_finite() || !h2.recip().is_finite() {
+        return Err(Error::Solver("barrier: invalid timestep".into()));
+    }
+    Ok(())
 }
 
 /// Per-step diagnostics.
@@ -232,6 +244,7 @@ pub struct BarrierStepStats {
 }
 
 /// CPU f64 barrier-Newton shell (phase-1 oracle).
+#[derive(Clone)]
 pub struct BarrierShell {
     pub positions: Vec<Vec3>,
     pub velocities: Vec<Vec3>,
@@ -253,6 +266,8 @@ pub struct BarrierShell {
     pub tets: Vec<BarrierTet>,
     /// Rest volumes, measured by [`Self::with_tets`].
     pub tet_v0: Vec<Real>,
+    /// Constitutive membrane/tet elements; collision topology is separate.
+    pub elastic_elements: Vec<ElasticElement>,
     /// Lagged friction contacts, rebuilt at each step start from the
     /// committed positions (IPC semi-implicit friction: the normal
     /// force λ and the contact frame are FROZEN for the whole step's
@@ -343,8 +358,21 @@ impl BarrierShell {
             ));
         }
         let n = positions.len();
+        if positions.iter().any(|p| !p.is_finite()) {
+            return Err(Error::Solver("barrier_contact: nonfinite position".into()));
+        }
         let mut vertex_ksum = vec![0.0; n];
         for s in &springs {
+            if s.a as usize >= n
+                || s.b as usize >= n
+                || s.a == s.b
+                || !s.rest.is_finite()
+                || s.rest < 0.0
+                || !s.k.is_finite()
+                || s.k < 0.0
+            {
+                return Err(Error::Solver("barrier_contact: invalid spring".into()));
+            }
             vertex_ksum[s.a as usize] += s.k;
             vertex_ksum[s.b as usize] += s.k;
         }
@@ -359,6 +387,7 @@ impl BarrierShell {
             edge_run: Vec::new(),
             tets: Vec::new(),
             tet_v0: Vec::new(),
+            elastic_elements: Vec::new(),
             lagged_friction: Vec::new(),
             lagged_pair_friction: Vec::new(),
             vertex_ksum,
@@ -367,6 +396,15 @@ impl BarrierShell {
             pinned: vec![false; n],
             params,
         })
+    }
+
+    /// Attach constitutive elements with their existing material coordinates.
+    pub fn with_elastic_elements(mut self, elements: Vec<ElasticElement>) -> Result<Self> {
+        for element in &elements {
+            element.validate(&self.positions)?;
+        }
+        self.elastic_elements = elements;
+        Ok(self)
     }
 
     /// Attach volumetric tets; rest volumes measured from the
@@ -855,6 +893,12 @@ impl BarrierShell {
             let dv = Self::tet_volume(x, t.ids) - v0;
             e += h2 * 0.5 * t.kv * dv * dv;
         }
+        for element in &self.elastic_elements {
+            let Ok(energy) = element.energy(x) else {
+                return Real::INFINITY;
+            };
+            e += h2 * energy;
+        }
         for (i, xi) in x.iter().enumerate() {
             if self.pinned[i] {
                 continue; // pinned = boundary condition, not a contact
@@ -926,6 +970,16 @@ impl BarrierShell {
                 }
             }
         }
+        for element in &self.elastic_elements {
+            let Ok(response) = element.response(x, false) else {
+                out.fill(Vec3::splat(Real::NAN));
+                return;
+            };
+            let weights = element.shape_gradients();
+            for (i, &id) in element.vertices().iter().enumerate() {
+                out[id as usize] += response.gradient * weights[i] * h2;
+            }
+        }
         for (i, xi) in x.iter().enumerate() {
             if self.pinned[i] {
                 continue;
@@ -981,6 +1035,18 @@ impl BarrierShell {
     /// projections (compression-clamped spring blocks, convex-only
     /// barrier blocks) — the operator PCG solves against.
     fn hessian_mul(&self, x: &[Vec3], h: Real, pairs: &[SelfPair], v: &[Vec3], y: &mut [Vec3]) {
+        self.hessian_mul_materials(x, h, pairs, v, y, None);
+    }
+
+    fn hessian_mul_materials(
+        &self,
+        x: &[Vec3],
+        h: Real,
+        pairs: &[SelfPair],
+        v: &[Vec3],
+        y: &mut [Vec3],
+        tangents: Option<&[MaterialResponse]>,
+    ) {
         for yi in y.iter_mut() {
             *yi = Vec3::ZERO;
         }
@@ -1024,6 +1090,33 @@ impl BarrierShell {
             }
             for (k, gk) in g.iter().enumerate() {
                 y[t.ids[k] as usize] += *gk * (h2 * t.kv * s_acc);
+            }
+        }
+        for (index, element) in self.elastic_elements.iter().enumerate() {
+            let computed;
+            let response = if let Some(tangents) = tangents {
+                &tangents[index]
+            } else {
+                let Ok(r) = element.response(x, true) else {
+                    y.fill(Vec3::splat(Real::NAN));
+                    return;
+                };
+                computed = r;
+                &computed
+            };
+            let weights = element.shape_gradients();
+            let mut df = Mat3::ZERO;
+            for (i, &id) in element.vertices().iter().enumerate() {
+                let d = if self.pinned[id as usize] {
+                    Vec3::ZERO
+                } else {
+                    v[id as usize]
+                };
+                df += Mat3::from_cols(d * weights[i].x, d * weights[i].y, d * weights[i].z);
+            }
+            let stress = response.hessian_mul(df);
+            for (i, &id) in element.vertices().iter().enumerate() {
+                y[id as usize] += stress * weights[i] * h2;
             }
         }
         for (i, xi) in x.iter().enumerate() {
@@ -1189,7 +1282,11 @@ impl BarrierShell {
                 }
             }
         }
-        alpha.clamp(1.0e-12, 1.0)
+        alpha = alpha.clamp(1.0e-12, 1.0);
+        for element in &self.elastic_elements {
+            alpha = alpha.min(element.step_bound(x, p).unwrap_or(0.0));
+        }
+        alpha
     }
 
     /// Test probes — thin public wrappers so the FD contract tests can
@@ -1384,50 +1481,10 @@ impl BarrierShell {
             .fold(0.0, Real::max)
     }
 
-    /// TRUE if any collision edge PIERCES any non-adjacent triangle
-    /// (segment–triangle intersection, Möller–Trumbore). The distance
-    /// metric cannot see topological crossings — two pierced sheets
-    /// report a positive closest distance — so the intersecting-start
-    /// refusal needs this scan. O(E·T), oracle-grade.
+    /// Check non-adjacent edges and vertices against triangle surfaces,
+    /// including coplanar overlap. Invalid input is reported as intersecting.
     pub fn has_intersections(&self) -> bool {
-        let x = &self.positions;
-        for (ei, e) in self.collision_edges.iter().enumerate() {
-            let p0 = x[e[0] as usize];
-            let dir = x[e[1] as usize] - p0;
-            for tri in &self.triangles {
-                if tri.contains(&e[0]) || tri.contains(&e[1]) {
-                    continue;
-                }
-                if self.same_body(e[0], tri[0]) && self.proxy_of[e[0] as usize].is_some() {
-                    continue;
-                }
-                let a = x[tri[0] as usize];
-                let ab = x[tri[1] as usize] - a;
-                let ac = x[tri[2] as usize] - a;
-                let pvec = dir.cross(ac);
-                let det = ab.dot(pvec);
-                if det.abs() < 1.0e-14 {
-                    continue; // parallel
-                }
-                let inv = 1.0 / det;
-                let tvec = p0 - a;
-                let u = tvec.dot(pvec) * inv;
-                if !(0.0..=1.0).contains(&u) {
-                    continue;
-                }
-                let qvec = tvec.cross(ab);
-                let v = dir.dot(qvec) * inv;
-                if v < 0.0 || u + v > 1.0 {
-                    continue;
-                }
-                let t = ac.dot(qvec) * inv;
-                if (0.0..=1.0).contains(&t) {
-                    let _ = ei;
-                    return true;
-                }
-            }
-        }
-        false
+        self.validate_inputs().is_err() || self.has_intersections_at(&self.positions)
     }
 
     /// Smallest gap between any vertex and any obstacle — THE
@@ -1541,15 +1598,13 @@ impl BarrierShell {
     /// One implicit step of size `h`.
     pub fn step(&mut self, h: Real) -> Result<BarrierStepStats> {
         self.params.validate()?;
-        if self.params.reject_intersecting_start {
-            let g = self.min_gap();
-            if g <= 0.0 || self.has_intersections() {
-                return Err(Error::Solver(format!(
-                    "barrier: initial state INTERSECTS (min gap {g:.3e}, pierced: {}) —                      barrier methods require penetration-free input (set                      reject_intersecting_start = false only for deliberate recovery)",
-                    self.has_intersections()
-                )));
-            }
-        }
+        validate_timestep(h)?;
+        self.vertex_ksum = self.validate_inputs()?;
+        self.validate_geometry(
+            &self.positions,
+            "initial",
+            self.params.reject_intersecting_start,
+        )?;
         if !self.affine_bodies.is_empty() {
             return self.step_abd(h);
         }
@@ -1577,6 +1632,8 @@ impl BarrierShell {
         // inertia term of moving one dhat.
         let m_max = self.masses.iter().cloned().fold(0.0, Real::max);
         let tol = self.params.newton_tol * (m_max * self.params.dhat).max(1.0e-30);
+        finite_vectors(&x_tilde, "predicted positions")?;
+        finite_scalars(&[tol], "Newton tolerance")?;
 
         for it in 0..self.params.max_newton_iters {
             // Fresh candidate set every iterate (IPC-style active set;
@@ -1584,6 +1641,7 @@ impl BarrierShell {
             // safe).
             let pairs = self.self_candidates(&x);
             self.gradient(&x, &x_tilde, h, &pairs, &mut grad);
+            finite_vectors(&grad, "Newton gradient")?;
             let g_inf = grad
                 .iter()
                 .map(|g| g.x.abs().max(g.y.abs()).max(g.z.abs()))
@@ -1601,12 +1659,13 @@ impl BarrierShell {
             let alpha_max = self.ccd_alpha(&x, &p, &pairs);
             let e0 = self.energy(&x, &x_tilde, h, &pairs);
             let slope: Real = grad.iter().zip(p.iter()).map(|(g, d)| g.dot(*d)).sum();
+            finite_scalars(&[alpha_max, e0, slope], "line search scalars")?;
             let mut alpha = alpha_max;
             let mut accepted = false;
             for _ in 0..30 {
                 let x_try: Vec<Vec3> = (0..n).map(|i| x[i] + p[i] * alpha).collect();
                 let e_try = self.energy(&x_try, &x_tilde, h, &pairs);
-                if e_try <= e0 + 1.0e-4 * alpha * slope {
+                if e_try.is_finite() && e_try <= e0 + 1.0e-4 * alpha * slope {
                     x = x_try;
                     accepted = true;
                     break;
@@ -1640,19 +1699,21 @@ impl BarrierShell {
         }
 
         stats.energy = self.energy(&x, &x_tilde, h, &self.self_candidates(&x));
-        for i in 0..n {
-            self.velocities[i] = if self.pinned[i] {
-                Vec3::ZERO
-            } else {
-                (x[i] - x_prev[i]) / h
-            };
-        }
+        finite_scalars(&[stats.energy], "accepted energy")?;
+        self.validate_geometry(&x, "accepted", true)?;
+        let velocities = self.candidate_velocities(&x, h)?;
+        self.velocities = velocities;
         self.positions = x;
         Ok(stats)
     }
 
     /// Matrix-free PCG for `H p = −g` (H is PD: mass + PSD projections).
     fn pcg(&self, x: &[Vec3], h: Real, pairs: &[SelfPair], grad: &[Vec3]) -> Result<Vec<Vec3>> {
+        let tangents: Vec<_> = self
+            .elastic_elements
+            .iter()
+            .map(|e| e.response(x, true))
+            .collect::<Result<_>>()?;
         let n = x.len();
         let mut p_out = vec![Vec3::ZERO; n];
         let mut r: Vec<Vec3> = grad.iter().map(|g| -*g).collect();
@@ -1671,31 +1732,38 @@ impl BarrierShell {
         };
         let mut rz = dot(&r, &z);
         let r0: Real = dot(&r, &r);
+        finite_scalars(&[rz, r0], "CG residual")?;
         if r0 <= 0.0 {
             return Ok(p_out);
         }
         for _ in 0..self.params.max_cg_iters {
-            self.hessian_mul(x, h, pairs, &d, &mut hd);
+            self.hessian_mul_materials(x, h, pairs, &d, &mut hd, Some(&tangents));
             let dhd = dot(&d, &hd);
+            finite_scalars(&[dhd], "CG curvature")?;
             if dhd <= 0.0 {
                 break; // numerically flat — accept current iterate
             }
             let alpha = rz / dhd;
+            finite_scalars(&[alpha], "CG step")?;
             for i in 0..n {
                 p_out[i] += d[i] * alpha;
                 r[i] -= hd[i] * alpha;
             }
-            if dot(&r, &r) <= self.params.cg_tol * self.params.cg_tol * r0 {
+            let residual = dot(&r, &r);
+            finite_scalars(&[residual], "CG residual")?;
+            if residual <= self.params.cg_tol * self.params.cg_tol * r0 {
                 break;
             }
             precond(&r, &mut z);
             let rz_new = dot(&r, &z);
             let beta = rz_new / rz;
+            finite_scalars(&[rz_new, beta], "CG update")?;
             rz = rz_new;
             for i in 0..n {
                 d[i] = z[i] + d[i] * beta;
             }
         }
+        finite_vectors(&p_out, "CG direction")?;
         Ok(p_out)
     }
 
@@ -1742,6 +1810,14 @@ impl BarrierShell {
         let m_max = self.masses.iter().cloned().fold(0.0, Real::max);
         let tol = self.params.newton_tol * (m_max * self.params.dhat).max(1.0e-30);
         let nb = self.affine_bodies.len();
+        finite_vectors(&x_tilde, "predicted positions")?;
+        finite_scalars(&[tol], "Newton tolerance")?;
+        if body_tilde
+            .iter()
+            .any(|(p, a)| !p.is_finite() || !a.is_finite())
+        {
+            return Err(Error::Solver("barrier: nonfinite affine prediction".into()));
+        }
         let j_inv: Vec<Mat3> = self
             .affine_bodies
             .iter()
@@ -1769,6 +1845,10 @@ impl BarrierShell {
                 let (_, go) = Self::ortho_terms(a, body.kappa_ortho);
                 gbody[bi].1 += go * (h * h);
             }
+            finite_vectors(&grad, "Newton gradient")?;
+            if gbody.iter().any(|(p, a)| !p.is_finite() || !a.is_finite()) {
+                return Err(Error::Solver("barrier: nonfinite affine gradient".into()));
+            }
             let mut g_inf: Real = 0.0;
             for (i, g) in grad.iter().enumerate() {
                 if self.proxy_of[i].is_none() {
@@ -1788,6 +1868,11 @@ impl BarrierShell {
             }
             stats.newton_iters = it + 1;
 
+            let tangents: Vec<_> = self
+                .elastic_elements
+                .iter()
+                .map(|e| e.response(&x, true))
+                .collect::<Result<_>>()?;
             // ── composite PCG on H·d = −g.
             let mut dv = vec![Vec3::ZERO; n];
             let mut dbody = vec![(Vec3::ZERO, Mat3::ZERO); nb];
@@ -1840,6 +1925,7 @@ impl BarrierShell {
                 let mut d_b = z_b.clone();
                 let mut rz = dot(&r_v, &r_b, &z_v, &z_b);
                 let r0 = dot(&r_v, &r_b, &r_v, &r_b);
+                finite_scalars(&[rz, r0], "affine CG residual")?;
                 let mut full = vec![Vec3::ZERO; n];
                 let mut hy = vec![Vec3::ZERO; n];
                 if r0 > 0.0 {
@@ -1847,7 +1933,7 @@ impl BarrierShell {
                         // H·d: expand, per-vertex Hessian, reduce, add
                         // body inertia + ortho blocks.
                         self.abd_expand(&d_v, &d_b, &mut full);
-                        self.hessian_mul(&x, h, &pairs, &full, &mut hy);
+                        self.hessian_mul_materials(&x, h, &pairs, &full, &mut hy, Some(&tangents));
                         let mut hb = self.abd_reduce(&hy);
                         for bi in 0..nb {
                             let body = &self.affine_bodies[bi];
@@ -1869,10 +1955,12 @@ impl BarrierShell {
                             })
                             .collect();
                         let dhd = dot(&d_v, &d_b, &hv, &hb);
+                        finite_scalars(&[dhd], "affine CG curvature")?;
                         if dhd <= 0.0 {
                             break;
                         }
                         let alpha = rz / dhd;
+                        finite_scalars(&[alpha], "affine CG step")?;
                         for i in 0..n {
                             dv[i] += d_v[i] * alpha;
                             r_v[i] -= hv[i] * alpha;
@@ -1883,9 +1971,9 @@ impl BarrierShell {
                             r_b[bi].0 -= hb[bi].0 * alpha;
                             r_b[bi].1 -= hb[bi].1 * alpha;
                         }
-                        if dot(&r_v, &r_b, &r_v, &r_b)
-                            <= self.params.cg_tol * self.params.cg_tol * r0
-                        {
+                        let residual = dot(&r_v, &r_b, &r_v, &r_b);
+                        finite_scalars(&[residual], "affine CG residual")?;
+                        if residual <= self.params.cg_tol * self.params.cg_tol * r0 {
                             break;
                         }
                         let (z2v, z2b) = prec(&r_v, &r_b);
@@ -1893,6 +1981,7 @@ impl BarrierShell {
                         z_b = z2b;
                         let rz_new = dot(&r_v, &r_b, &z_v, &z_b);
                         let beta = rz_new / rz;
+                        finite_scalars(&[rz_new, beta], "affine CG update")?;
                         rz = rz_new;
                         for i in 0..n {
                             d_v[i] = z_v[i] + d_v[i] * beta;
@@ -1924,6 +2013,7 @@ impl BarrierShell {
                         gp.dot(*dp) + (0..3).map(|c| ga.col(c).dot(da.col(c))).sum::<Real>()
                     })
                     .sum::<Real>();
+            finite_scalars(&[alpha_max, e0, slope], "affine line search scalars")?;
             let mut alpha = alpha_max;
             let mut accepted = false;
             for _ in 0..30 {
@@ -1935,7 +2025,7 @@ impl BarrierShell {
                     .collect();
                 let e_try = self.energy(&x_try, &x_tilde, h, &pairs)
                     + self.abd_energy(&poses_try, &body_tilde, h);
-                if e_try <= e0 + 1.0e-4 * alpha * slope {
+                if e_try.is_finite() && e_try <= e0 + 1.0e-4 * alpha * slope {
                     x = x_try;
                     poses = poses_try;
                     accepted = true;
@@ -1967,18 +2057,27 @@ impl BarrierShell {
 
         stats.energy = self.energy(&x, &x_tilde, h, &self.self_candidates(&x))
             + self.abd_energy(&poses, &body_tilde, h);
-        for i in 0..n {
-            self.velocities[i] = if self.pinned[i] {
-                Vec3::ZERO
-            } else {
-                (x[i] - x_prev[i]) / h
-            };
+        finite_scalars(&[stats.energy], "accepted affine energy")?;
+        self.validate_geometry(&x, "accepted", true)?;
+        let velocities = self.candidate_velocities(&x, h)?;
+        let body_velocities: Vec<_> = poses
+            .iter()
+            .zip(&bodies_prev)
+            .map(|((p, a), (pp, ap))| ((*p - *pp) / h, (*a - *ap) * (1.0 / h)))
+            .collect();
+        if poses
+            .iter()
+            .chain(&body_velocities)
+            .any(|(p, a)| !p.is_finite() || !a.is_finite())
+        {
+            return Err(Error::Solver(
+                "barrier: nonfinite accepted affine state".into(),
+            ));
         }
+        self.velocities = velocities;
         for (bi, body) in self.affine_bodies.iter_mut().enumerate() {
             let (p, a) = poses[bi];
-            let (pp, ap) = bodies_prev[bi];
-            body.v_p = (p - pp) / h;
-            body.v_a = (a - ap) * (1.0 / h);
+            (body.v_p, body.v_a) = body_velocities[bi];
             body.p = p;
             body.a_mat = a;
         }
