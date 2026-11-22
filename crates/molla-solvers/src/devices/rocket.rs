@@ -33,7 +33,73 @@ use super::space_env::{SolarActivity, nrlmsise_density_kg_m3};
 
 const AIR_R: Real = 287.052_87;
 const AIR_GAMMA: Real = 1.4;
+const MARS_R: Real = 192.1; // 95.3% CO2 + 2.7% N2 + 1.6% Ar
+const MARS_GAMMA: Real = 1.294;
 const BESSEL_XI11: Real = 1.841_183_781; // First root of J_1'(x) = 0 (cylindrical tank fundamental slosh mode)
+
+/// Standard surface gravity on Mars (m/s²).
+pub const MARS_GRAVITY: Real = 3.720_76;
+/// Standard surface gravity on Earth's Moon (m/s²).
+pub const MOON_GRAVITY: Real = 1.625;
+/// Mars sidereal rotation rate `Ω_Mars` (rad/s, 24h 37m 22s).
+pub const MARS_OMEGA_RAD_S: Real = 7.088_218e-5;
+
+/// Planetary atmospheric model used by [`RocketPropulsion`] and [`super::RocketAero`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlanetAtmosphere {
+    /// Earth US Standard Atmosphere 1976 (0–86 km) blended into NRLMSISE-00 (> 86 km).
+    #[default]
+    EarthUs76,
+    /// Mars NASA Glenn / COSPAR CO₂ atmosphere (`P₀ ≈ 699 Pa`, `ρ₀ ≈ 0.015 kg/m³`, `a₀ ≈ 245 m/s`).
+    MarsCospar,
+    /// Airless vacuum body (Earth's Moon, asteroids, deep space: `P = 0`, `ρ = 0`).
+    Vacuum,
+}
+
+impl PlanetAtmosphere {
+    pub fn evaluate(self, altitude_m: Real) -> AtmosphereState {
+        match self {
+            Self::EarthUs76 => us76_atmosphere(altitude_m),
+            Self::MarsCospar => mars_atmosphere(altitude_m),
+            Self::Vacuum => AtmosphereState {
+                altitude_m: altitude_m.max(0.0),
+                temperature_k: 2.725,
+                pressure_pa: 0.0,
+                density_kg_m3: 0.0,
+                speed_of_sound_mps: 0.0,
+            },
+        }
+    }
+
+    /// Molecular mean-free-path constant `k_λ` (`λ = k_λ / ρ`, m·kg/m³) for Knudsen bridging.
+    pub fn mean_free_path_const(self) -> Real {
+        match self {
+            Self::EarthUs76 => 8.4e-8,
+            Self::MarsCospar => 5.4e-8, // CO2 molecular cross-section
+            Self::Vacuum => 0.0,
+        }
+    }
+}
+
+/// Evaluates the NASA Glenn / COSPAR Martian CO₂ reference atmosphere at geometric altitude `h` (m).
+pub fn mars_atmosphere(altitude_m: Real) -> AtmosphereState {
+    let h = altitude_m.max(0.0);
+    let temp = if h <= 7_000.0 {
+        (242.15 - 0.000_998 * h).max(140.0)
+    } else {
+        (249.75 - 0.002_22 * h).max(135.0)
+    };
+    let pressure = 699.0 * (-0.000_09 * h).exp();
+    let density = pressure / (MARS_R * temp);
+    let speed_of_sound = (MARS_GAMMA * MARS_R * temp).sqrt();
+    AtmosphereState {
+        altitude_m: h,
+        temperature_k: temp,
+        pressure_pa: pressure,
+        density_kg_m3: density,
+        speed_of_sound_mps: speed_of_sound,
+    }
+}
 
 /// Atmospheric thermodynamic state at geometric altitude `h` (m).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -143,8 +209,13 @@ pub const EARTH_OMEGA_RAD_S: Real = 7.292_115_9e-5;
 /// Computes Earth's angular velocity vector in a local Y-up, +X-East, -Z-North launch frame
 /// at geodetic latitude `latitude_deg` (e.g. `25.997°` for Starbase Boca Chica).
 pub fn earth_rotation_at_latitude(latitude_deg: Real) -> Vec3 {
+    planet_rotation_at_latitude(EARTH_OMEGA_RAD_S, latitude_deg)
+}
+
+/// Computes a planet's angular velocity vector in a local Y-up, +X-East, -Z-North surface frame.
+pub fn planet_rotation_at_latitude(omega_rad_s: Real, latitude_deg: Real) -> Vec3 {
     let lat = latitude_deg.to_radians();
-    Vec3::new(0.0, EARTH_OMEGA_RAD_S * lat.sin(), -EARTH_OMEGA_RAD_S * lat.cos())
+    Vec3::new(0.0, omega_rad_s * lat.sin(), -omega_rad_s * lat.cos())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -282,6 +353,39 @@ impl RocketEngineSpec {
         }
     }
 
+    /// SpaceX HLS Lunar mid-body hot-gas methalox landing thruster pod (`220 kN` vac, 335 s vac Isp, ±12° TVC)
+    /// mounted high on the fuselage to avoid regolith cratering & satisfy 1/6 g hover throttle authority.
+    pub fn hls_lunar_landing_thruster(
+        body: BodyHandle,
+        frame: Transform,
+        lox_tank: Option<TankId>,
+        ch4_tank: Option<TankId>,
+    ) -> Self {
+        Self {
+            body,
+            tank: lox_tank,
+            secondary_tank: ch4_tank,
+            primary_mass_fraction: 0.782,
+            frame,
+            vacuum_thrust_n: 220_000.0,
+            vacuum_isp_s: 335.0,
+            chamber_pressure_pa: 12_000_000.0,
+            exit_diameter_m: 0.52,
+            exhaust_gamma: 1.22,
+            exit_mach: 3.8,
+            exit_pressure_pa: 6_000.0,
+            min_throttle: 0.10,
+            startup_tau_s: 0.08,
+            shutdown_tau_s: 0.06,
+            max_gimbal_rad: 12.0_f64.to_radians(),
+            max_gimbal_rate_rad_s: 2.2,
+            gimbal_actuator_omega: 45.0,
+            engine_mass_kg: 190.0,
+            engine_cg_aft_m: 0.35,
+            engine_inertia_kgm2: 95.0,
+        }
+    }
+
     pub fn exit_area_m2(&self) -> Real {
         0.25 * std::f64::consts::PI * self.exit_diameter_m * self.exit_diameter_m
     }
@@ -390,6 +494,8 @@ pub struct RocketPropulsion {
     /// Optional spherical planet `(center, radius)` for orbital altitude calculation
     /// (overrides flat `pos.y` when `Some`).
     planet: Option<(Vec3, Real)>,
+    /// Planetary atmospheric model (`EarthUs76` by default, `MarsCospar`, or `Vacuum` for Moon).
+    atmosphere: PlanetAtmosphere,
     /// Optional planetary rotation vector `Ω` in world frame (rad/s) for exact Coriolis `-2 m (Ω × v)`.
     planet_omega_world: Vec3,
     dry_masses: BTreeMap<BodyHandle, BodyDryMass>,
@@ -424,6 +530,19 @@ impl RocketPropulsion {
     /// Enables rotating-planet Coriolis force `-2 m (Ω × v)` on all registered rocket stages.
     pub fn set_earth_rotation(&mut self, omega_world: Vec3) {
         self.planet_omega_world = omega_world;
+    }
+
+    /// Selects the planetary atmospheric model (`EarthUs76`, `MarsCospar`, or `Vacuum`).
+    pub fn set_atmosphere(&mut self, atmosphere: PlanetAtmosphere) {
+        self.atmosphere = atmosphere;
+    }
+
+    pub fn atmosphere(&self) -> PlanetAtmosphere {
+        self.atmosphere
+    }
+
+    pub fn atmosphere_at(&self, pos_world: Vec3) -> AtmosphereState {
+        self.atmosphere.evaluate(self.altitude_at(pos_world))
     }
 
     /// Configures a tank's autogenous ullage pressure target, propellant vapor pressure,
@@ -788,6 +907,7 @@ impl RocketPropulsion {
         let planet = self.planet;
         let ground_y = self.ground_y;
         let altitude_offset_m = self.altitude_offset_m;
+        let atmosphere = self.atmosphere;
         let alt_fn = |pos_world: Vec3| -> Real {
             if let Some((center, r_p)) = planet {
                 ((pos_world - center).length() - r_p).max(0.0)
@@ -802,7 +922,7 @@ impl RocketPropulsion {
                 continue;
             };
             let alt_m = alt_fn(pose.position);
-            let atmo = us76_atmosphere(alt_m);
+            let atmo = atmosphere.evaluate(alt_m);
 
             // 1. 2-Axis TVC electric actuator second-order dynamics (angle & rate limited).
             let max_g = eng.spec.max_gimbal_rad;

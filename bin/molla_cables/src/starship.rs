@@ -78,7 +78,9 @@ fn default_camera(scenario: StarshipScenario) -> draw::Camera {
             yaw: 0.52,
             pitch: 0.14,
         },
-        StarshipScenario::ShipFlipLanding => draw::Camera {
+        StarshipScenario::ShipFlipLanding
+        | StarshipScenario::MarsSrpLanding
+        | StarshipScenario::LunarHlsDescent => draw::Camera {
             target: Vec3::ZERO,
             distance: 7.5,
             yaw: 0.35,
@@ -164,7 +166,9 @@ impl App {
         let sp = self.ship_world_pos();
         match self.focus {
             FocusTarget::ActiveVehicle => match self.sim.scenario {
-                StarshipScenario::ShipFlipLanding => sp,
+                StarshipScenario::ShipFlipLanding
+                | StarshipScenario::MarsSrpLanding
+                | StarshipScenario::LunarHlsDescent => sp,
                 StarshipScenario::BoosterCatch => bp,
                 StarshipScenario::FullStackMission | StarshipScenario::HotStaging => {
                     if self.sim.interstage_latched {
@@ -264,7 +268,7 @@ fn paint_viewport(
         }
     }
 
-    starship_mesh::paint_sky_backdrop(&painter, rect, camera, render_origin.y);
+    starship_mesh::paint_sky_backdrop(&painter, rect, camera, render_origin.y, sim.atmosphere);
     if let Ok(tris) = starship_mesh::build_scene_mesh(sim, render_origin) {
         studio::paint_space_slot(&painter, camera, rect, tris, slot);
     }
@@ -436,7 +440,7 @@ fn paint_hud(
                     );
                     ui.add_space(4.0);
                     ui.label(
-                        RichText::new("[1] Full Stack  [2] Hot-Stage  [3] Mechazilla Catch  [4] Ship Belly-Flop & Flip")
+                        RichText::new("[1] Stack  [2] Hot-Stage  [3] Catch  [4] Earth Flip  [5] Mars SRP  [6] Lunar HLS")
                             .size(10.0)
                             .color(Color32::from_rgb(255, 210, 120)),
                     );
@@ -472,6 +476,12 @@ impl eframe::App for App {
             }
             if i.key_pressed(egui::Key::Num4) {
                 self.load_scenario(StarshipScenario::ShipFlipLanding);
+            }
+            if i.key_pressed(egui::Key::Num5) {
+                self.load_scenario(StarshipScenario::MarsSrpLanding);
+            }
+            if i.key_pressed(egui::Key::Num6) {
+                self.load_scenario(StarshipScenario::LunarHlsDescent);
             }
             if i.key_pressed(egui::Key::V) {
                 self.focus = self.focus.next();
@@ -640,39 +650,80 @@ fn run_validation() -> video_capture::Result<()> {
     }
     let t_ship = sim_ship.telemetry()?;
 
+    // 4. Mars Supersonic Entry (699 Pa CO2, 3.72 m/s²) -> SRP Flip-and-Burn Touchdown!
+    let mut sim_mars = StarshipSim::new(StarshipScenario::MarsSrpLanding)?;
+    let mut mars_peak_mach = 0.0_f64;
+    let mut mars_min_srp = 1.0_f64;
+    for _ in 0..(105.0 / SIM_DT).ceil() as usize {
+        sim_mars.step(SIM_DT)?;
+        if let Some(ar) = sim_mars.world.devices.rocket_aero.body_reading(sim_mars.ship_aero) {
+            mars_peak_mach = mars_peak_mach.max(ar.mach);
+            mars_min_srp = mars_min_srp.min(ar.srp_drag_factor);
+        }
+        if sim_mars.ever_ship_landed {
+            break;
+        }
+    }
+    let t_mars = sim_mars.telemetry()?;
+
+    // 5. Lunar HLS Powered Descent (0 Pa Vacuum, 1.625 m/s²): Main Vacuum Raptors -> 4 Mid-Body HLS Thrusters!
+    let mut sim_lunar = StarshipSim::new(StarshipScenario::LunarHlsDescent)?;
+    for _ in 0..(95.0 / SIM_DT).ceil() as usize {
+        sim_lunar.step(SIM_DT)?;
+        if sim_lunar.ever_ship_landed {
+            break;
+        }
+    }
+    let t_lunar = sim_lunar.telemetry()?;
+
     let report = serde_json::json!({
-        "stack_lifted_off": sim_stack.ever_lifted_off,
-        "stack_hot_staged": sim_stack.ever_hot_staged,
-        "stack_max_q_kpa": sim_stack.peak_max_q_kpa,
-        "stack_interstage_blast_mn": sim_stack.peak_interstage_blast_mn,
-        "stack_peak_twd_knm": sim_stack.peak_twd_knm,
-        "stack_booster_alt_m": t_stack.booster_alt_m,
-        "stack_ship_alt_m": t_stack.ship_alt_m,
-        "booster_caught": sim_catch.ever_booster_caught,
-        "booster_catch_time_s": sim_catch.time_s,
-        "booster_catch_speed_mps": sim_catch.booster_catch_speed_mps,
-        "booster_catch_offset_m": sim_catch.booster_catch_offset_m,
-        "booster_catch_final_phase": t_catch.booster_phase.label(),
-        "booster_catch_final_alt_m": t_catch.booster_alt_m,
-        "booster_catch_final_dx_m": t_catch.booster_dist_tower_m,
-        "booster_catch_final_vy_mps": t_catch.booster_vy_mps,
-        "booster_catch_final_tilt_deg": t_catch.booster_tilt_deg,
-        "booster_catch_final_prop_t": t_catch.booster_prop_t,
-        "booster_catch_final_thrust_mn": t_catch.booster_thrust_mn,
-        "ship_bellyflop": sim_ship.ever_ship_bellyflop,
-        "ship_flipped": sim_ship.ever_ship_flipped,
-        "ship_landed": sim_ship.ever_ship_landed,
-        "ship_landing_time_s": sim_ship.time_s,
-        "ship_touchdown_speed_mps": sim_ship.ship_touchdown_speed_mps,
-        "ship_touchdown_tilt_deg": sim_ship.ship_touchdown_tilt_deg,
-        "ship_final_phase": t_ship.ship_phase.label(),
-        "ship_final_alt_m": t_ship.ship_alt_m,
-        "ship_final_pad_dx_m": t_ship.ship_dist_pad_m,
-        "ship_final_vy_mps": t_ship.ship_vy_mps,
-        "ship_final_speed_mps": t_ship.ship_speed_mps,
-        "ship_final_tilt_deg": t_ship.ship_tilt_deg,
-        "ship_final_header_t": t_ship.ship_header_t,
-        "ship_final_thrust_mn": t_ship.ship_thrust_mn,
+        "earth_stack": {
+            "lifted_off": sim_stack.ever_lifted_off,
+            "hot_staged": sim_stack.ever_hot_staged,
+            "max_q_kpa": sim_stack.peak_max_q_kpa,
+            "interstage_blast_mn": sim_stack.peak_interstage_blast_mn,
+            "peak_twd_knm": sim_stack.peak_twd_knm,
+            "booster_alt_m": t_stack.booster_alt_m,
+            "ship_alt_m": t_stack.ship_alt_m,
+        },
+        "earth_catch": {
+            "caught": sim_catch.ever_booster_caught,
+            "time_s": sim_catch.time_s,
+            "speed_mps": sim_catch.booster_catch_speed_mps,
+            "offset_m": sim_catch.booster_catch_offset_m,
+            "tilt_deg": t_catch.booster_tilt_deg,
+            "phase": t_catch.booster_phase.label(),
+        },
+        "earth_ship": {
+            "bellyflop": sim_ship.ever_ship_bellyflop,
+            "flipped": sim_ship.ever_ship_flipped,
+            "landed": sim_ship.ever_ship_landed,
+            "time_s": sim_ship.time_s,
+            "touchdown_speed_mps": sim_ship.ship_touchdown_speed_mps,
+            "touchdown_tilt_deg": sim_ship.ship_touchdown_tilt_deg,
+            "pad_dx_m": t_ship.ship_dist_pad_m,
+            "phase": t_ship.ship_phase.label(),
+        },
+        "mars_srp": {
+            "landed": sim_mars.ever_ship_landed,
+            "time_s": sim_mars.time_s,
+            "peak_mach": mars_peak_mach,
+            "min_srp_factor": mars_min_srp,
+            "touchdown_speed_mps": sim_mars.ship_touchdown_speed_mps,
+            "touchdown_tilt_deg": sim_mars.ship_touchdown_tilt_deg,
+            "pad_dx_m": t_mars.ship_dist_pad_m,
+            "alt_m": t_mars.ship_alt_m,
+            "phase": t_mars.ship_phase.label(),
+        },
+        "lunar_hls": {
+            "landed": sim_lunar.ever_ship_landed,
+            "time_s": sim_lunar.time_s,
+            "touchdown_speed_mps": sim_lunar.ship_touchdown_speed_mps,
+            "touchdown_tilt_deg": sim_lunar.ship_touchdown_tilt_deg,
+            "pad_dx_m": t_lunar.ship_dist_pad_m,
+            "alt_m": t_lunar.ship_alt_m,
+            "phase": t_lunar.ship_phase.label(),
+        },
     });
     println!("{}", serde_json::to_string_pretty(&report)?);
 
@@ -687,6 +738,15 @@ fn run_validation() -> video_capture::Result<()> {
         || sim_ship.ship_touchdown_speed_mps > 4.5
         || sim_ship.ship_touchdown_tilt_deg > 8.0
         || t_ship.ship_dist_pad_m > 25.0
+        || !sim_mars.ever_ship_landed
+        || mars_peak_mach < 1.15
+        || sim_mars.ship_touchdown_speed_mps > 4.5
+        || sim_mars.ship_touchdown_tilt_deg > 8.0
+        || t_mars.ship_dist_pad_m > 30.0
+        || !sim_lunar.ever_ship_landed
+        || sim_lunar.ship_touchdown_speed_mps > 3.5
+        || sim_lunar.ship_touchdown_tilt_deg > 8.0
+        || t_lunar.ship_dist_pad_m > 25.0
     {
         return Err("Starship full-stack physics validation failed".into());
     }
@@ -704,6 +764,10 @@ fn main() -> video_capture::Result<()> {
         StarshipScenario::ShipFlipLanding
     } else if args.iter().any(|a| a == "--hotstage") {
         StarshipScenario::HotStaging
+    } else if args.iter().any(|a| a == "--mars") {
+        StarshipScenario::MarsSrpLanding
+    } else if args.iter().any(|a| a == "--lunar") {
+        StarshipScenario::LunarHlsDescent
     } else {
         StarshipScenario::FullStackMission
     };

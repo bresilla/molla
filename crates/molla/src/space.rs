@@ -31,12 +31,13 @@ pub mod orbital {
 
 pub mod propulsion {
     pub use molla_solvers::devices::{
-        AtmosphereState, EARTH_OMEGA_RAD_S, GimbalSpec, ImbalanceSpec, PropellantTankReading,
+        AtmosphereState, EARTH_OMEGA_RAD_S, GimbalSpec, ImbalanceSpec, MARS_GRAVITY,
+        MARS_OMEGA_RAD_S, MOON_GRAVITY, PlanetAtmosphere, PropellantTankReading,
         PropellantTankSpec, ReactionWheelCommand, ReactionWheelId, ReactionWheelReading,
         ReactionWheelSpec, ReactionWheels, RocketEngineCommand, RocketEngineId,
         RocketEngineReading, RocketEngineSpec, RocketPropulsion, TankId, ThrusterId,
         ThrusterModulation, ThrusterReading, ThrusterSpec, Thrusters, earth_rotation_at_latitude,
-        us76_atmosphere,
+        mars_atmosphere, planet_rotation_at_latitude, us76_atmosphere,
     };
 }
 

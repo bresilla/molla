@@ -24,7 +24,7 @@ use molla_math::{Real, SpatialVector, Vec3};
 use molla_sim::State;
 use molla_sim::runtime::{BodyHandle, BodyKind, RigidScene};
 
-use super::rocket::{RocketPropulsion, us76_atmosphere};
+use super::rocket::RocketPropulsion;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AeroBodyId(pub u64);
@@ -464,11 +464,13 @@ impl RocketAero {
             let bv = vels[i];
             let com_w = bp.transform_point(coms[i]);
             let alt_m = rockets.altitude_at(com_w);
-            let atmo = us76_atmosphere(alt_m);
+            let atmo = rockets.atmosphere_at(com_w);
             if atmo.density_kg_m3 < 1e-10 {
                 ab.reading.dynamic_pressure_pa = 0.0;
                 ab.reading.mach = 0.0;
                 ab.reading.srp_drag_factor = 1.0;
+                ab.reading.knudsen_number = 0.0;
+                ab.reading.pifs_cp_shift_m = 0.0;
                 continue;
             }
             let mut wind_w = self.wind.wind_at(com_w, alt_m, self.time_s);
@@ -494,8 +496,9 @@ impl RocketAero {
             let sin_a = aoa.sin();
             let m_cross = mach * sin_a;
 
-            // Rarefied-to-Continuum Knudsen Bridging (`Kn = λ / D`, `λ ≈ 8.4e-8 / ρ` for air)!
-            let mean_free_path = 8.4e-8 / atmo.density_kg_m3.max(1e-16);
+            // Rarefied-to-Continuum Knudsen Bridging (`Kn = λ / D`, `λ = k_λ / ρ` for Earth air or Mars CO₂)!
+            let mean_free_path =
+                rockets.atmosphere().mean_free_path_const() / atmo.density_kg_m3.max(1e-16);
             let kn = mean_free_path / ab.spec.diameter_m.max(0.1);
             let fm_blend = if kn > 1e-3 {
                 let k12 = kn.powf(1.2);
@@ -629,7 +632,7 @@ impl RocketAero {
             let com_w = bp.transform_point(coms[i]);
             let pt_w = bp.transform_point(surf.spec.center_local);
             let alt_m = rockets.altitude_at(pt_w);
-            let atmo = us76_atmosphere(alt_m);
+            let atmo = rockets.atmosphere_at(pt_w);
             if atmo.density_kg_m3 < 1e-10 {
                 continue;
             }

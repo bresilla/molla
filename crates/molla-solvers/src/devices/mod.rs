@@ -46,9 +46,10 @@ pub use reaction_wheels::{
     ReactionWheelSpec, ReactionWheels,
 };
 pub use rocket::{
-    AtmosphereState, EARTH_OMEGA_RAD_S, PropellantTankReading, PropellantTankSpec,
-    RocketEngineCommand, RocketEngineId, RocketEngineReading, RocketEngineSpec, RocketPropulsion,
-    TankId, earth_rotation_at_latitude, us76_atmosphere,
+    AtmosphereState, EARTH_OMEGA_RAD_S, MARS_GRAVITY, MARS_OMEGA_RAD_S, MOON_GRAVITY,
+    PlanetAtmosphere, PropellantTankReading, PropellantTankSpec, RocketEngineCommand,
+    RocketEngineId, RocketEngineReading, RocketEngineSpec, RocketPropulsion, TankId,
+    earth_rotation_at_latitude, mars_atmosphere, planet_rotation_at_latitude, us76_atmosphere,
 };
 pub use rocket_aero::{
     AeroBodyId, AeroBodyReading, AeroBodySpec, AeroSurfaceId, AeroSurfaceKind, AeroSurfaceReading,

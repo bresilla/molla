@@ -5,8 +5,9 @@ use molla_sim::runtime::BodyDesc;
 use molla_sim::{BodyParams, MassProperties};
 use molla_solvers::devices::{
     AeroBodySpec, AeroSurfaceKind, AeroSurfaceSpec, BiquadNotchFilter, FlexBodySpec, ImuSpec,
-    PropellantTankSpec, RocketEngineCommand, RocketEngineSpec, WindField,
-    earth_rotation_at_latitude, free_free_beam_mode, us76_atmosphere,
+    MARS_GRAVITY, MOON_GRAVITY, PlanetAtmosphere, PropellantTankSpec, RocketEngineCommand,
+    RocketEngineSpec, WindField, earth_rotation_at_latitude, free_free_beam_mode, mars_atmosphere,
+    us76_atmosphere,
 };
 use molla_solvers::rigid_world::RigidWorld;
 
@@ -704,4 +705,82 @@ fn pifs_cp_shift_transonic_buffet_dryden_turbulence_and_knudsen_bridging() {
         "105 km flight must enter rarefied Knudsen transition regime: Kn={:.5}",
         r_kn.knudsen_number
     );
+}
+
+#[test]
+fn mars_co2_atmosphere_and_lunar_vacuum_propulsion_and_aero() {
+    let m0 = mars_atmosphere(0.0);
+    assert!((m0.pressure_pa - 699.0).abs() < 1.0);
+    assert!(m0.density_kg_m3 > 0.012 && m0.density_kg_m3 < 0.018);
+    assert!(m0.speed_of_sound_mps > 220.0 && m0.speed_of_sound_mps < 260.0);
+
+    // 1. Mars surface RVac firing: ambient pressure is only 699 Pa -> NO Schmucker flow separation!
+    let mut wm = RigidWorld::new().unwrap();
+    wm.scene.set_gravity(Vec3::new(0.0, -MARS_GRAVITY, 0.0)).unwrap();
+    wm.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+    wm.devices.rockets.set_atmosphere(PlanetAtmosphere::MarsCospar);
+    let ship_m = dynamic_stage(&mut wm, Vec3::new(0.0, 200.0, 0.0), 120_000.0, Vec3::splat(2e7));
+    let up_frame = Transform::new(Vec3::new(0.0, -24.0, 0.0), Quat::from_rotation_z(FRAC_PI_2));
+    let rvac = wm
+        .devices
+        .rockets
+        .insert_engine(&wm.scene, RocketEngineSpec::raptor3_vacuum(ship_m, up_frame, None, None))
+        .unwrap();
+    wm.devices
+        .rockets
+        .command_engine(rvac, RocketEngineCommand { ignited: true, throttle: 1.0, gimbal_rad: [0.0, 0.0] })
+        .unwrap();
+    for _ in 0..150 {
+        wm.step(0.01).unwrap();
+    }
+    let rm = wm.devices.rockets.engine_reading(rvac).unwrap();
+    assert!(!rm.flow_separated, "RVac must NOT flow-separate in thin 699 Pa Mars CO2!");
+    assert!(rm.effective_isp_s > 378.0, "RVac on Mars should retain near-vacuum Isp: {:.1}", rm.effective_isp_s);
+
+    // 2. Lunar Vacuum: zero aero drag & pure vacuum Isp for HLS landing thruster!
+    let mut wl = RigidWorld::new().unwrap();
+    wl.scene.set_gravity(Vec3::new(0.0, -MOON_GRAVITY, 0.0)).unwrap();
+    wl.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+    wl.devices.rockets.set_atmosphere(PlanetAtmosphere::Vacuum);
+    let ship_l = dynamic_stage(&mut wl, Vec3::new(0.0, 500.0, 0.0), 120_000.0, Vec3::splat(2e7));
+    wl.scene
+        .set_body_velocity(ship_l, SpatialVector::new(Vec3::new(0.0, -200.0, 0.0), Vec3::ZERO))
+        .unwrap();
+    let ab_l = wl
+        .devices
+        .rocket_aero
+        .insert_body(
+            &wl.scene,
+            AeroBodySpec {
+                body: ship_l,
+                axis_local: Vec3::Y,
+                diameter_m: 9.0,
+                length_m: 50.0,
+                cd_axial_nose: 0.30,
+                cd_axial_tail: 0.90,
+                cd_crossflow_subsonic: 1.2,
+                cd_crossflow_supersonic: 1.5,
+                cp_crossflow_local: 0.0,
+                cp_axial_shift_m: -4.0,
+                rot_damping_scale: 1.0,
+                srp_drag_loss_gain: 0.0,
+            },
+        )
+        .unwrap();
+    let hls_thr = wl
+        .devices
+        .rockets
+        .insert_engine(&wl.scene, RocketEngineSpec::hls_lunar_landing_thruster(ship_l, up_frame, None, None))
+        .unwrap();
+    wl.devices
+        .rockets
+        .command_engine(hls_thr, RocketEngineCommand { ignited: true, throttle: 0.5, gimbal_rad: [0.0, 0.0] })
+        .unwrap();
+    for _ in 0..100 {
+        wl.step(0.01).unwrap();
+    }
+    let ra_l = wl.devices.rocket_aero.body_reading(ab_l).unwrap();
+    let rt_l = wl.devices.rockets.engine_reading(hls_thr).unwrap();
+    assert!(ra_l.world_force.length() < 1e-9, "Lunar vacuum must produce strictly zero aero drag");
+    assert!((rt_l.effective_isp_s - 335.0).abs() < 0.5, "HLS thruster must run at full 335 s vacuum Isp");
 }

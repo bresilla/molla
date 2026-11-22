@@ -14,14 +14,16 @@ use molla_math::{Quat, Transform, Vec3};
 use crate::draw::{Camera, Triangle};
 use crate::starship_sim::{
     BOOSTER_CATCH_PIN_LOCAL_Y, BOOSTER_HALF_LEN, CHOPSTICK_CATCH_Y, HOTSTAGE_RING_H, OLM_DECK_Y,
-    SHIP_HALF_LEN, SHIP_PAD_X, SHIP_PAD_Z, StarshipSim,
+    SHIP_HALF_LEN, SHIP_PAD_X, SHIP_PAD_Z, StarshipScenario, StarshipSim,
 };
+use molla_solvers::devices::PlanetAtmosphere;
 use crate::studio::PlumeBillboard;
 
 /// Visual world scale (`1 m SI = 0.04 studio units` -> 121 m stack = 4.84 units).
 pub const RENDER_SCALE: f64 = 0.04;
 
 const STEEL_304L: Color32 = Color32::from_rgb(206, 214, 224);
+const HLS_WHITE: Color32 = Color32::from_rgb(232, 236, 242);
 const STEEL_RING: Color32 = Color32::from_rgb(168, 178, 192);
 const TPS_BLACK: Color32 = Color32::from_rgb(24, 27, 33);
 const TITANIUM_FIN: Color32 = Color32::from_rgb(108, 114, 124);
@@ -29,6 +31,10 @@ const TOWER_STEEL: Color32 = Color32::from_rgb(84, 92, 102);
 const TOWER_RED: Color32 = Color32::from_rgb(165, 58, 42);
 const CONCRETE_PAD: Color32 = Color32::from_rgb(122, 124, 120);
 const COAST_SAND: Color32 = Color32::from_rgb(112, 108, 92);
+const MARS_REGOLITH: Color32 = Color32::from_rgb(154, 78, 48);
+const MARS_PAD: Color32 = Color32::from_rgb(116, 62, 42);
+const LUNAR_REGOLITH: Color32 = Color32::from_rgb(104, 106, 110);
+const LUNAR_PAD: Color32 = Color32::from_rgb(78, 82, 88);
 const RAPTOR_BELL: Color32 = Color32::from_rgb(56, 60, 68);
 const RAPTOR_GLOW: Color32 = Color32::from_rgb(185, 205, 255);
 const PIN_GOLD: Color32 = Color32::from_rgb(228, 182, 74);
@@ -289,7 +295,10 @@ fn build_booster_mesh(out: &mut Vec<Triangle>, sim: &StarshipSim, pose: Transfor
 }
 
 fn build_ship_mesh(out: &mut Vec<Triangle>, sim: &StarshipSim, pose: Transform, origin: Vec3) {
-    // Cylindrical 9 m barrel (-25..+7 m) + ogive nosecone (+7..+25 m) with black TPS heatshield on -X!
+    let is_lunar = sim.scenario == StarshipScenario::LunarHlsDescent;
+    let hull_col = if is_lunar { HLS_WHITE } else { STEEL_304L };
+    let belly_col = if is_lunar { HLS_WHITE } else { TPS_BLACK };
+    // Cylindrical 9 m barrel (-25..+7 m) + ogive nosecone (+7..+25 m) with black TPS heatshield on -X (or white HLS on Moon)!
     push_frustum_y(
         out,
         pose,
@@ -299,8 +308,8 @@ fn build_ship_mesh(out: &mut Vec<Triangle>, sim: &StarshipSim, pose: Transform, 
         4.5,
         28,
         origin,
-        STEEL_304L,
-        TPS_BLACK,
+        hull_col,
+        belly_col,
         12.0,
         true,
         false,
@@ -359,22 +368,72 @@ fn build_ship_mesh(out: &mut Vec<Triangle>, sim: &StarshipSim, pose: Transform, 
         );
     }
 
-    // 6 Ship Raptor Bells (3 SL + 3 huge RVac bells!)
+    // 6 Ship Raptor Bells (3 SL + 3 huge RVac bells!) + 4 Mid-Body HLS Lunar Thrusters on Lunar scenario!
     build_raptor_bells(out, sim, pose, &sim.ship_engines, origin);
+    if sim.scenario == StarshipScenario::LunarHlsDescent {
+        build_raptor_bells(out, sim, pose, &sim.ship_hls_thrusters, origin);
+    }
 }
 
 fn build_starbase_tower_and_pad(out: &mut Vec<Triangle>, sim: &StarshipSim, origin: Vec3) {
-    // Coastal ground plane & Concrete Pad A (OLM) + Pad B (Ship landing pad at x = 260 m)!
     let ground_pose = Transform::IDENTITY;
+    let ground_col = match sim.scenario {
+        StarshipScenario::MarsSrpLanding => MARS_REGOLITH,
+        StarshipScenario::LunarHlsDescent => LUNAR_REGOLITH,
+        _ => COAST_SAND,
+    };
+    let pad_col = match sim.scenario {
+        StarshipScenario::MarsSrpLanding => MARS_PAD,
+        StarshipScenario::LunarHlsDescent => LUNAR_PAD,
+        _ => CONCRETE_PAD,
+    };
+    let ring_col = match sim.scenario {
+        StarshipScenario::LunarHlsDescent => PIN_GOLD,
+        _ => TOWER_RED,
+    };
     push_box(
         out,
         ground_pose,
         Vec3::new(110.0, -1.5, 0.0),
-        Vec3::new(650.0, 1.5, 650.0),
+        Vec3::new(1_200.0, 1.5, 1_200.0),
         origin,
-        COAST_SAND,
+        ground_col,
         11.0,
     );
+    // Starship Landing Zone Pad (`x = 260 m, z = 0 m`) with target bullseye ring!
+    push_frustum_y(
+        out,
+        Transform::from_translation(Vec3::new(SHIP_PAD_X, 0.0, SHIP_PAD_Z)),
+        0.0,
+        0.55,
+        36.0,
+        35.0,
+        24,
+        origin,
+        pad_col,
+        pad_col,
+        11.0,
+        false,
+        true,
+    );
+    push_frustum_y(
+        out,
+        Transform::from_translation(Vec3::new(SHIP_PAD_X, 0.56, SHIP_PAD_Z)),
+        0.0,
+        0.10,
+        14.0,
+        14.0,
+        20,
+        origin,
+        ring_col,
+        ring_col,
+        11.0,
+        false,
+        true,
+    );
+    if !sim.scenario.is_earth() {
+        return;
+    }
     // OLM Concrete Apron & 20 m Orbital Launch Mount table (6 legs + ring deck).
     push_box(
         out,
@@ -414,37 +473,6 @@ fn build_starbase_tower_and_pad(out: &mut Vec<Triangle>, sim: &StarshipSim, orig
             11.0,
         );
     }
-    // Starship Landing Pad B (`x = 260 m, z = 0 m`) with SpaceX target ring!
-    push_frustum_y(
-        out,
-        Transform::from_translation(Vec3::new(SHIP_PAD_X, 0.0, SHIP_PAD_Z)),
-        0.0,
-        0.55,
-        36.0,
-        35.0,
-        24,
-        origin,
-        CONCRETE_PAD,
-        CONCRETE_PAD,
-        11.0,
-        false,
-        true,
-    );
-    push_frustum_y(
-        out,
-        Transform::from_translation(Vec3::new(SHIP_PAD_X, 0.56, SHIP_PAD_Z)),
-        0.0,
-        0.10,
-        14.0,
-        14.0,
-        20,
-        origin,
-        TOWER_RED,
-        TOWER_RED,
-        11.0,
-        false,
-        true,
-    );
 
     // 140 m Mechazilla Steel Truss Tower at `x = -14 m, z = 0 m`!
     let tx = -14.0;
@@ -536,11 +564,13 @@ pub fn build_scene_mesh(sim: &StarshipSim, render_origin: Vec3) -> molla_core::R
     let bp = sim.world.scene.body_pose(sim.booster)?;
     let sp = sim.world.scene.body_pose(sim.ship)?;
 
-    // Only emit tower/pad geometry when within 1.8 km of render_origin so depth precision stays crisp.
-    if render_origin.y < 1_800.0 {
+    // Only emit tower/pad geometry when within 2.5 km of render_origin so depth precision stays crisp.
+    if render_origin.y < 2_500.0 {
         build_starbase_tower_and_pad(&mut tris, sim, render_origin);
     }
-    build_booster_mesh(&mut tris, sim, bp, render_origin);
+    if sim.scenario.is_earth() {
+        build_booster_mesh(&mut tris, sim, bp, render_origin);
+    }
     build_ship_mesh(&mut tris, sim, sp, render_origin);
     Ok(tris)
 }
@@ -566,28 +596,46 @@ pub fn build_plume_billboards(sim: &StarshipSim, render_origin: Vec3) -> Vec<Plu
         .collect()
 }
 
-/// Atmospheric sky backdrop transitioning continuously from Boca Chica coastal sky blue
-/// at sea level through deep indigo stratosphere (10 km) to starlit space (>35 km)!
-pub fn paint_sky_backdrop(painter: &egui::Painter, rect: Rect, camera: &Camera, altitude_m: f64) {
-    let space_frac = ((altitude_m - 2_000.0) / 28_000.0).clamp(0.0, 1.0) as f32;
+/// Planetary sky backdrop: Earth coastal-to-space blue, Mars butterscotch CO₂ dust sky,
+/// or pure starlit Lunar vacuum black!
+pub fn paint_sky_backdrop(
+    painter: &egui::Painter,
+    rect: Rect,
+    camera: &Camera,
+    altitude_m: f64,
+    atmosphere: PlanetAtmosphere,
+) {
+    let space_frac = match atmosphere {
+        PlanetAtmosphere::Vacuum => 1.0_f32,
+        PlanetAtmosphere::MarsCospar => ((altitude_m - 1_500.0) / 18_000.0).clamp(0.0, 1.0) as f32,
+        PlanetAtmosphere::EarthUs76 => ((altitude_m - 2_000.0) / 28_000.0).clamp(0.0, 1.0) as f32,
+    };
     let lerp_u8 = |a: f32, b: f32, t: f32| (a + (b - a) * t).clamp(0.0, 255.0) as u8;
     let bands = 14;
     for i in 0..bands {
         let t0 = i as f32 / bands as f32;
-        let t1 = (i + 1) as f32 / bands as f32;
         let y0 = rect.top() + t0 * rect.height();
-        let y1 = rect.top() + t1 * rect.height();
-        // Zenith -> Horizon gradient blended with space altitude darkness!
-        let r = lerp_u8(16.0 + 96.0 * t0.powf(1.6), 4.0 + 18.0 * t0.powf(2.0), space_frac);
-        let g = lerp_u8(48.0 + 115.0 * t0.powf(1.5), 7.0 + 26.0 * t0.powf(2.0), space_frac);
-        let b = lerp_u8(108.0 + 108.0 * t0.powf(1.4), 16.0 + 52.0 * t0.powf(1.8), space_frac);
+        let y1 = rect.top() + (i + 1) as f32 / bands as f32 * rect.height();
+        let (r, g, b) = match atmosphere {
+            PlanetAtmosphere::Vacuum => (3_u8, 4_u8, 8_u8),
+            PlanetAtmosphere::MarsCospar => (
+                lerp_u8(54.0 + 136.0 * t0.powf(1.4), 12.0 + 28.0 * t0.powf(1.8), space_frac),
+                lerp_u8(28.0 + 78.0 * t0.powf(1.5), 7.0 + 14.0 * t0.powf(1.8), space_frac),
+                lerp_u8(22.0 + 42.0 * t0.powf(1.6), 10.0 + 12.0 * t0.powf(1.8), space_frac),
+            ),
+            PlanetAtmosphere::EarthUs76 => (
+                lerp_u8(16.0 + 96.0 * t0.powf(1.6), 4.0 + 18.0 * t0.powf(2.0), space_frac),
+                lerp_u8(48.0 + 115.0 * t0.powf(1.5), 7.0 + 26.0 * t0.powf(2.0), space_frac),
+                lerp_u8(108.0 + 108.0 * t0.powf(1.4), 16.0 + 52.0 * t0.powf(1.8), space_frac),
+            ),
+        };
         painter.rect_filled(
             Rect::from_min_max(Pos2::new(rect.left(), y0), Pos2::new(rect.right(), y1 + 1.0)),
             0.0,
             Color32::from_rgb(r, g, b),
         );
     }
-    // Stars emerge above 6 km altitude!
+    // Stars emerge above 6 km on Earth/Mars, and shine bright at all altitudes on the Moon!
     if space_frac > 0.15 {
         let (eye, _) = camera.ray(rect.center(), rect);
         let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;

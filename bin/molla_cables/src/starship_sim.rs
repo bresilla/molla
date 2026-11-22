@@ -26,9 +26,10 @@ use molla_sim::runtime::{BodyDesc, BodyHandle, BodyKind, JointDesc, JointHandle}
 use molla_sim::{BodyParams, JointType, MassProperties};
 use molla_solvers::devices::{
     AeroBodyId, AeroBodySpec, AeroSurfaceId, AeroSurfaceKind, AeroSurfaceSpec, BiquadNotchFilter,
-    FlexBodyId, FlexBodySpec, ImuId, ImuSpec, MotorCommand, MotorLimits, MotorSpec,
-    PropellantTankSpec, RocketEngineCommand, RocketEngineId, RocketEngineSpec, TankId, WindField,
-    earth_rotation_at_latitude, us76_atmosphere,
+    FlexBodyId, FlexBodySpec, ImuId, ImuSpec, MARS_GRAVITY, MARS_OMEGA_RAD_S, MOON_GRAVITY,
+    MotorCommand, MotorLimits, MotorSpec, PlanetAtmosphere, PropellantTankSpec,
+    RocketEngineCommand, RocketEngineId, RocketEngineSpec, TankId, WindField,
+    earth_rotation_at_latitude, planet_rotation_at_latitude, us76_atmosphere,
 };
 use molla_solvers::rigid_world::RigidWorld;
 
@@ -53,16 +54,24 @@ pub enum StarshipScenario {
     HotStaging,
     BoosterCatch,
     ShipFlipLanding,
+    MarsSrpLanding,
+    LunarHlsDescent,
 }
 
 impl StarshipScenario {
     pub fn label(self) -> &'static str {
         match self {
-            Self::FullStackMission => "[1] FULL 2-STAGE STACK MISSION",
-            Self::HotStaging => "[2] HOT-STAGING SEPARATION",
-            Self::BoosterCatch => "[3] SUPER HEAVY MECHAZILLA CATCH",
-            Self::ShipFlipLanding => "[4] STARSHIP BELLY-FLOP & FLIP LANDING",
+            Self::FullStackMission => "[1] EARTH · FULL 2-STAGE MISSION",
+            Self::HotStaging => "[2] EARTH · HOT-STAGING SEPARATION",
+            Self::BoosterCatch => "[3] EARTH · SUPER HEAVY CATCH",
+            Self::ShipFlipLanding => "[4] EARTH · SHIP BELLY-FLOP & FLIP",
+            Self::MarsSrpLanding => "[5] MARS · SUPERSONIC SRP LANDING",
+            Self::LunarHlsDescent => "[6] MOON · LUNAR HLS DESCENT",
         }
+    }
+
+    pub fn is_earth(self) -> bool {
+        !matches!(self, Self::MarsSrpLanding | Self::LunarHlsDescent)
     }
 }
 
@@ -102,6 +111,8 @@ pub enum ShipPhase {
     BellyFlopSkydiving,
     FlipAndBurn3Engines,
     LandingBurn2To1,
+    LunarBrakingRaptors,
+    LunarHlsFinalLanding,
     LandedOnPad,
 }
 
@@ -113,9 +124,11 @@ impl ShipPhase {
             Self::ShipAscent6Engines => "SHIP ASCENT · 3 SL + 3 RVAC",
             Self::ApogeeCoastFlipToBelly => "HEADER TANKS · PITCH TO BELLY",
             Self::BellyFlopSkydiving => "90° BELLY-FLOP · 4 BODY FLAPS",
-            Self::FlipAndBurn3Engines => "FLIP MANEUVER · 3 SL RAPTORS",
+            Self::FlipAndBurn3Engines => "FLIP & SRP BURN · 3 RAPTORS",
             Self::LandingBurn2To1 => "FINAL TOUCHDOWN · 2→1 RAPTOR",
-            Self::LandedOnPad => "STARSHIP LANDED ON PAD B!",
+            Self::LunarBrakingRaptors => "LUNAR BRAKING · VAC RAPTORS",
+            Self::LunarHlsFinalLanding => "LUNAR HLS · 4 MID-BODY THRUSTERS",
+            Self::LandedOnPad => "STARSHIP TOUCHDOWN CONFIRMED!",
         }
     }
 }
@@ -266,11 +279,15 @@ pub struct StarshipSim {
     pub ship_hdr_lox: TankId,
     pub ship_hdr_ch4: TankId,
     pub ship_engines: Vec<RocketEngineId>,
+    /// 4 Mid-body HLS Lunar Landing Thrusters (mounted high at y = +8 m for 1/6 g soft touchdown).
+    pub ship_hls_thrusters: Vec<RocketEngineId>,
     pub ship_aero: AeroBodyId,
     pub ship_flaps: [AeroSurfaceId; 4], // [fwd_L(+Z), fwd_R(-Z), aft_L(+Z), aft_R(-Z)]
     pub ship_flex: FlexBodyId,
     pub ship_imu: ImuId,
     pub ship_using_headers: bool,
+    pub planet_gravity: f64,
+    pub atmosphere: PlanetAtmosphere,
 
     // Hardware-in-the-loop GNC state: adaptive bending notch + roll-off filters, wind observers & RCS yaw
     booster_notch: [BiquadNotchFilter; 2],
@@ -344,15 +361,40 @@ fn insert_stage_body(
 impl StarshipSim {
     pub fn new(scenario: StarshipScenario) -> Result<Self> {
         let mut world = RigidWorld::new()?;
-        world.scene.set_gravity(Vec3::new(0.0, -GRAVITY, 0.0))?;
+        let (planet_gravity, atmosphere, planet_omega, wind_preset, wind_field) = match scenario {
+            StarshipScenario::MarsSrpLanding => (
+                MARS_GRAVITY,
+                PlanetAtmosphere::MarsCospar,
+                planet_rotation_at_latitude(MARS_OMEGA_RAD_S, 18.4), // Jezero Crater latitude
+                WindPreset::Moderate,
+                WindField {
+                    surface_wind: Vec3::new(10.0, 0.0, -4.5),
+                    jet_stream_wind: Vec3::new(32.0, 0.0, 8.0),
+                    jet_altitude_m: 15_000.0,
+                    jet_sigma_m: 5_000.0,
+                    gust_amplitude_mps: 3.0,
+                },
+            ),
+            StarshipScenario::LunarHlsDescent => (
+                MOON_GRAVITY,
+                PlanetAtmosphere::Vacuum,
+                planet_rotation_at_latitude(2.6617e-6, -85.0), // Lunar South Pole Shackleton rim
+                WindPreset::Calm,
+                WindField::calm(),
+            ),
+            _ => (
+                GRAVITY,
+                PlanetAtmosphere::EarthUs76,
+                earth_rotation_at_latitude(25.997), // Starbase Boca Chica
+                WindPreset::Moderate,
+                WindPreset::Moderate.to_wind(),
+            ),
+        };
+        world.scene.set_gravity(Vec3::new(0.0, -planet_gravity, 0.0))?;
         world.devices.rockets.set_flat_ground(Some(0.0), 0.0);
-        // Starbase Boca Chica geodetic latitude (25.997° N) Earth rotation for exact Coriolis `-2 m (Ω × v)`.
-        world
-            .devices
-            .rockets
-            .set_earth_rotation(earth_rotation_at_latitude(25.997));
-        let wind_preset = WindPreset::Moderate;
-        world.devices.rocket_aero.set_wind(wind_preset.to_wind());
+        world.devices.rockets.set_atmosphere(atmosphere);
+        world.devices.rockets.set_earth_rotation(planet_omega);
+        world.devices.rocket_aero.set_wind(wind_field);
 
         // 1. Mechazilla 140 m Tower + 2 Articulated Featherstone Chopstick Arms!
         //    Tower sits at x = -14.0 m, z = 0.0 m; chopsticks reach forward to x = 0.0 m
@@ -521,6 +563,51 @@ impl StarshipSim {
                     true,
                 )
             }
+            StarshipScenario::MarsSrpLanding => {
+                // Loaded Mars Cargo Starship entering thin 699 Pa Martian CO2 at Mach 1.37 supersonic
+                // in 90° belly-flop, requiring high-altitude Supersonic Retropropulsion (SRP) flip-and-burn!
+                let rot_belly = (Quat::from_rotation_y(PI) * Quat::from_rotation_z(FRAC_PI_2)).normalize();
+                (
+                    Transform::from_translation(Vec3::new(-5_000.0, CHOPSTICK_CATCH_Y, 0.0)),
+                    SpatialVector::ZERO,
+                    12_000.0,
+                    4_000.0,
+                    Transform::new(Vec3::new(SHIP_PAD_X - 580.0, 5_800.0, 10.0), rot_belly),
+                    SpatialVector::new(Vec3::new(18.0, -305.0, -1.0), Vec3::new(0.02, -0.02, 0.03)),
+                    0.0,
+                    0.0,
+                    82_000.0,
+                    23_500.0,
+                    false,
+                    false,
+                    BoosterPhase::CaughtInChopsticks,
+                    ShipPhase::BellyFlopSkydiving,
+                    true,
+                )
+            }
+            StarshipScenario::LunarHlsDescent => {
+                // Artemis Lunar HLS Starship approaching South Pole landing site in pure vacuum (1/6 g):
+                // pitched ~48° retro-braking on main vacuum Raptors, then cutting Raptors and
+                // descending softly on 4 mid-body HLS Landing Thrusters right onto the South Pole pad!
+                let rot_brake = Quat::from_rotation_z(0.84);
+                (
+                    Transform::from_translation(Vec3::new(-5_000.0, CHOPSTICK_CATCH_Y, 0.0)),
+                    SpatialVector::ZERO,
+                    12_000.0,
+                    4_000.0,
+                    Transform::new(Vec3::new(SHIP_PAD_X - 245.0, 680.0, 10.0), rot_brake),
+                    SpatialVector::new(Vec3::new(62.0, -28.0, -1.0), Vec3::ZERO),
+                    0.0,
+                    0.0,
+                    56_000.0,
+                    16_000.0,
+                    false,
+                    false,
+                    BoosterPhase::CaughtInChopsticks,
+                    ShipPhase::LunarBrakingRaptors,
+                    true,
+                )
+            }
         };
 
         // 3. Super Heavy Booster Body, Dry Mass, LOX/CH4 Tanks, 33 Raptors, 4 Grid Fins & IMU!
@@ -657,9 +744,18 @@ impl StarshipSim {
             .rockets
             .set_tank_pressurization(booster_ch4, 480_000.0, 115_000.0, 14.0)?;
 
-        // 4. Starship Upper Stage Body, Dry Mass, Main + Header Tanks, 6 Raptors (3 SL + 3 RVac), 4 Body Flaps!
-        let ship_dry_mass = 120_000.0;
-        let ship_dry_inertia = Vec3::new(2.6e7, 1.5e6, 2.6e7);
+        // 4. Starship Upper Stage Body, Dry Mass, Main + Header Tanks, 6 Raptors (3 SL + 3 RVac), 4 HLS Thrusters, 4 Body Flaps!
+        // Mars Cargo Starship carries ~85 t payload (so 1 Raptor at ~31% throttle cleanly matches 3.72 m/s² Mars weight!).
+        let ship_dry_mass = if scenario == StarshipScenario::MarsSrpLanding {
+            205_000.0
+        } else {
+            120_000.0
+        };
+        let ship_dry_inertia = if scenario == StarshipScenario::MarsSrpLanding {
+            Vec3::new(4.1e7, 2.4e6, 4.1e7)
+        } else {
+            Vec3::new(2.6e7, 1.5e6, 2.6e7)
+        };
         let ship = insert_stage_body(&mut world, s_pose, s_vel, ship_dry_mass, ship_dry_inertia)?;
         world.devices.rockets.register_stage_dry_mass(
             &world.scene,
@@ -760,6 +856,24 @@ impl StarshipSim {
             ship_engines.push(world.devices.rockets.insert_engine(
                 &world.scene,
                 RocketEngineSpec::raptor3_vacuum(ship, frame, Some(ship_main_lox), Some(ship_main_ch4)),
+            )?);
+        }
+        // 4 Mid-Body HLS Lunar Landing Thrusters (y = +8.0 m, 220 kN vac each, 10:1 deep throttle, ±12° TVC)
+        let mut ship_hls_thrusters = Vec::with_capacity(4);
+        for k in 0..4 {
+            let a = (k as f64) * FRAC_PI_2;
+            let frame = Transform::new(
+                Vec3::new(4.75 * a.cos(), 8.0, 4.75 * a.sin()),
+                up_rot,
+            );
+            ship_hls_thrusters.push(world.devices.rockets.insert_engine(
+                &world.scene,
+                RocketEngineSpec::hls_lunar_landing_thruster(
+                    ship,
+                    frame,
+                    Some(ship_hdr_lox),
+                    Some(ship_hdr_ch4),
+                ),
             )?);
         }
 
@@ -887,11 +1001,14 @@ impl StarshipSim {
             ship_hdr_lox,
             ship_hdr_ch4,
             ship_engines,
+            ship_hls_thrusters,
             ship_aero,
             ship_flaps,
             ship_flex,
             ship_imu,
             ship_using_headers,
+            planet_gravity,
+            atmosphere,
             booster_notch: [
                 BiquadNotchFilter::new(2.2, 2.8, 1.0 / SIM_DT),
                 BiquadNotchFilter::new(2.2, 2.8, 1.0 / SIM_DT),
@@ -1103,11 +1220,18 @@ impl StarshipSim {
         let alpha_cmd = err_b * (omega_n * omega_n) - omega_b * (2.0 * zeta * omega_n);
         let ix = mp.inertia.x_axis.x.max(1.0e5);
         let iz = mp.inertia.z_axis.z.max(1.0e5);
-        let lever_m = (mp.local_com.y - engine_y_local).max(4.0);
-        let tvc_gain = (gimbal_thrust_n * lever_m).max(1.0e6);
+        // Signed lever arm (`> 0` for aft Raptors below COM, `< 0` for upper-ring Lunar HLS thrusters
+        // above COM) so TVC gimbal sign automatically inverts cleanly for upper-mounted thrusters!
+        let raw_lever = mp.local_com.y - engine_y_local;
+        let lever_m = if raw_lever >= 0.0 {
+            raw_lever.max(4.0)
+        } else {
+            raw_lever.min(-4.0)
+        };
+        let tvc_gain = gimbal_thrust_n.max(1.0e5) * lever_m;
         // Verified TVC signs:
-        //   +g0 (pitch_z) -> -tau_z  ==> g0 = -(I_z * alpha_z) / (T * L)
-        //   +g1 (yaw_y)   -> +tau_x  ==> g1 = +(I_x * alpha_x) / (T * L)
+        //   +g0 (pitch_z) -> -tau_z (when lever > 0) ==> g0 = -(I_z * alpha_z) / (T * lever)
+        //   +g1 (yaw_y)   -> +tau_x (when lever > 0) ==> g1 = +(I_x * alpha_x) / (T * lever)
         let g0 = (-(iz * alpha_cmd.z) / tvc_gain).clamp(-max_rad, max_rad);
         let g1 = ((ix * alpha_cmd.x) / tvc_gain).clamp(-max_rad, max_rad);
         let roll_cmd = (-omega_b.y * 0.45).clamp(-0.08, 0.08);
@@ -1205,6 +1329,39 @@ impl StarshipSim {
                     },
                 )?;
             }
+        }
+        Ok(())
+    }
+
+    fn command_ship_hls_thrusters(
+        &mut self,
+        lit: bool,
+        base_throttle: f64,
+        base_gimbal: [f64; 2],
+        diff_thr_xz: [f64; 2],
+        roll_bias: f64,
+    ) -> Result<()> {
+        for (idx, &eid) in self.ship_hls_thrusters.iter().enumerate() {
+            let a = (idx as f64) * FRAC_PI_2;
+            // k=0 (+X): +diff_z; k=1 (+Z): +diff_x; k=2 (-X): -diff_z; k=3 (-Z): -diff_x
+            let thr_off = diff_thr_xz[1] * a.cos() + diff_thr_xz[0] * a.sin();
+            let mut g = base_gimbal;
+            if lit && roll_bias.abs() > 1e-4 {
+                g[0] += roll_bias * a.sin();
+                g[1] += roll_bias * a.cos();
+            }
+            self.world.devices.rockets.command_engine(
+                eid,
+                RocketEngineCommand {
+                    ignited: lit && base_throttle > 0.01,
+                    throttle: if lit && base_throttle > 0.01 {
+                        (base_throttle + thr_off).clamp(0.10, 1.0)
+                    } else {
+                        0.0
+                    },
+                    gimbal_rad: g,
+                },
+            )?;
         }
         Ok(())
     }
@@ -1503,6 +1660,11 @@ impl StarshipSim {
 
         self.ship_rcs_yaw_nm = 0.0;
         let mut flap_cmds = [70.0_f64.to_radians(); 4]; // Folded flat during ascent!
+        let mut hls_active = false;
+        let is_mars = self.atmosphere == PlanetAtmosphere::MarsCospar;
+        let is_lunar = self.atmosphere == PlanetAtmosphere::Vacuum;
+        let g_local = self.planet_gravity;
+        let raptor_ref_n = if is_mars || is_lunar { 2_740_000.0 } else { 2_480_000.0 };
 
         match self.ship_phase {
             ShipPhase::StackedOnBooster => {
@@ -1572,10 +1734,13 @@ impl StarshipSim {
                 self.command_ship_cluster(0, 0.0, false, 0.0, [0.0, 0.0], 0.0)?;
 
                 // 4-Flap 6-DOF Skydiver Controller + Cold-Gas Nose Yaw Thruster!
-                // Aim ~145 m short of Pad B in X so the 3-Raptor 90°->0° flip lands Starship right over Pad B!
+                // On Earth, trigger flip at h = 600 m (~145 m lead); on Mars, thin 699 Pa CO2
+                // keeps Starship supersonic (~320 m/s), requiring high-altitude SRP flip at h = 3,900 m!
+                let flip_alt_m = if is_mars { 4_050.0 } else { 600.0 };
+                let flip_lead_x = if is_mars { 360.0 } else { 145.0 };
                 let v_down = (-sv.linear.y).max(20.0);
-                let t_go = ((alt_base - 600.0).max(25.0) / v_down).clamp(2.0, 30.0);
-                let zem_x = (com_w.x - (pad_pos.x - 145.0)) + sv.linear.x * t_go * 0.65;
+                let t_go = ((alt_base - flip_alt_m).max(25.0) / v_down).clamp(2.0, 30.0);
+                let zem_x = (com_w.x - (pad_pos.x - flip_lead_x)) + sv.linear.x * t_go * 0.65;
                 let zem_z = (com_w.z - pad_pos.z) + sv.linear.z * t_go * 0.65;
 
                 // World-frame glide tilt:
@@ -1598,7 +1763,7 @@ impl StarshipSim {
                     ev * 2.0
                 };
 
-                // Real Starship cold-gas N2 nose RCS keeps yaw aligned to Pad B flip plane against crosswinds!
+                // Real Starship cold-gas N2 nose RCS keeps yaw aligned to landing flip plane against crosswinds!
                 self.ship_rcs_yaw_nm =
                     (att_err_b.x * 2.2e6 - omega_b_filt.x * 3.2e6).clamp(-4.5e5, 4.5e5);
 
@@ -1614,15 +1779,14 @@ impl StarshipSim {
                 let d_ar = (nom_aft - u_pitch_z + u_roll_y).clamp(0.0, 75.0_f64.to_radians());
                 flap_cmds = [d_fl, d_fr, d_al, d_ar];
 
-                // Trigger the iconic Starship Flip-and-Burn at h ≈ 600 m!
-                if alt_base <= 600.0 && sv.linear.y < -25.0 {
+                if alt_base <= flip_alt_m && sv.linear.y < -25.0 {
                     self.ship_landing_sl_count = 3;
                     self.ship_phase = ShipPhase::FlipAndBurn3Engines;
                     self.ship_phase_start_s = self.time_s;
                 }
             }
             ShipPhase::FlipAndBurn3Engines => {
-                // Iconic Starship Flip Maneuver!
+                // Iconic Starship Flip (& Mars Supersonic Retropropulsion!) Maneuver!
                 flap_cmds = [
                     8.0_f64.to_radians(),
                     8.0_f64.to_radians(),
@@ -1630,19 +1794,23 @@ impl StarshipSim {
                     75.0_f64.to_radians(),
                 ];
                 let v_h = Vec3::new(sv.linear.x, 0.0, sv.linear.z);
-                let a_horiz = (-com_horiz_err * 0.065 - v_h * 0.50).clamp_length_max(4.0);
+                let a_horiz = if is_mars {
+                    (-com_horiz_err * 0.012 - v_h * 0.55).clamp_length_max(4.5)
+                } else {
+                    (-com_horiz_err * 0.065 - v_h * 0.50).clamp_length_max(4.0)
+                };
                 let des_up = Vec3::new(a_horiz.x, 12.0, a_horiz.z).normalize();
                 let v_down = (-sv.linear.y).max(0.0);
                 // Keep throttle low while horizontal (> 50° tilt) so Raptors whip Starship upright
-                // with minimal sideways drift, then ramp to 90% once upright to arrest descent!
+                // with minimal sideways drift, then ramp to 92% once upright for SRP braking!
                 let thr = if tilt_rad > 0.85 {
                     0.36
                 } else if v_down > 28.0 {
-                    0.90
+                    0.92
                 } else {
                     0.42
                 };
-                let t_gimbal = 3.0 * 2_480_000.0 * thr;
+                let t_gimbal = 3.0 * raptor_ref_n * thr;
                 let (g, r_b) = Self::compute_tvc_attitude_gimbal(
                     sp, omega_b_filt, mp, des_up, t_gimbal, eng_y, 1.32, 1.05, 0.26,
                 );
@@ -1658,21 +1826,39 @@ impl StarshipSim {
                 self.ever_ship_flipped = true;
                 flap_cmds = [72.0_f64.to_radians(); 4];
                 let v_h = Vec3::new(sv.linear.x, 0.0, sv.linear.z);
-                // Anti-windup online wind/disturbance observer: integrates only once settled near Pad B!
+                // Anti-windup online wind/disturbance observer: integrates only once settled near pad!
                 if com_horiz_err.length() < 8.0 && v_h.length() < 2.8 {
                     self.ship_wind_int = (self.ship_wind_int - com_horiz_err * (0.014 * SIM_DT))
                         .clamp_length_max(0.55);
                 }
                 let hold_h = ((com_horiz_err.length() - 3.8) * 1.1).clamp(0.0, 20.0);
                 let h_err = alt_base - hold_h;
+                let brake_a = if is_mars { 12.2 } else { 4.4 };
+                let v_cap = if is_mars { 320.0 } else { 45.0 };
                 let v_des = if h_err > 12.0 {
-                    -((2.0 * 4.4 * (h_err - 2.0)).sqrt()).clamp(2.5, 45.0)
+                    -((2.0 * brake_a * (h_err - 2.0)).sqrt()).clamp(2.5, v_cap)
                 } else {
                     (-h_err * 0.42 - if hold_h < 0.4 { 1.3 } else { 0.0 }).clamp(-3.8, 2.5)
                 };
-                let ay_cmd = (GRAVITY + (v_des - sv.linear.y) * 2.2).clamp(2.5, 26.0);
-                let a_horiz = (-com_horiz_err * 0.095 - v_h * 0.74 + self.ship_wind_int)
-                    .clamp_length_max(if alt_base < 16.0 { 1.8 } else { 4.4 });
+                let ay_cmd = (g_local + (v_des - sv.linear.y) * 2.2).clamp(g_local * 0.25, 28.0);
+                let a_horiz = if is_mars {
+                    // Cascade velocity-limited + tilt-angle-capped horizontal loop:
+                    // High-altitude SRP braking uses up to 22° tilt (6.5 m/s²) to cancel post-flip drift fast,
+                    // then tightens smoothly to 8.5° tilt for dead-center Martian touchdown!
+                    let (v_h_cap, max_tilt, max_a) = if alt_base > 60.0 {
+                        (24.0, 22.0_f64.to_radians(), 6.5)
+                    } else if com_horiz_err.length() > 16.0 {
+                        (10.0, 16.0_f64.to_radians(), 2.0)
+                    } else {
+                        (4.0, 8.5_f64.to_radians(), 1.2)
+                    };
+                    let v_h_des = (-com_horiz_err * 0.18).clamp_length_max(v_h_cap);
+                    ((v_h_des - v_h) * 0.72 + self.ship_wind_int)
+                        .clamp_length_max((ay_cmd * max_tilt.tan()).min(max_a))
+                } else {
+                    (-com_horiz_err * 0.095 - v_h * 0.74 + self.ship_wind_int)
+                        .clamp_length_max(if alt_base < 18.0 { 1.8 } else { 4.4 })
+                };
                 let a_vec = Vec3::new(a_horiz.x, ay_cmd, a_horiz.z);
                 let des_up = a_vec.normalize();
                 let f_req = a_vec.length() * mass;
@@ -1686,8 +1872,8 @@ impl StarshipSim {
                     n => n.clamp(1, 3),
                 };
                 let n_sl = self.ship_landing_sl_count;
-                let thr = (f_req / ((n_sl as f64) * 2_480_000.0)).clamp(0.28, 1.0);
-                let t_gimbal = (n_sl as f64) * 2_480_000.0 * thr;
+                let thr = (f_req / ((n_sl as f64) * raptor_ref_n)).clamp(0.28, 1.0);
+                let t_gimbal = (n_sl as f64) * raptor_ref_n * thr;
                 let (g, r_b) = Self::compute_tvc_attitude_gimbal(
                     sp, omega_b_filt, mp, des_up, t_gimbal, eng_y, 1.25, 1.14, 0.24,
                 );
@@ -1703,10 +1889,107 @@ impl StarshipSim {
                     self.ship_phase_start_s = self.time_s;
                 }
             }
+            ShipPhase::LunarBrakingRaptors => {
+                // Artemis Lunar HLS Powered Descent Braking in pure vacuum (1/6 g, zero aero)!
+                // Fires 1-2 vacuum-Isp SL Raptors to kill horizontal orbital speed (92 m/s -> < 15 m/s)
+                // and arrest initial sink rate, then cuts main Raptors (since 1 Raptor @ 28% min throttle
+                // is ~2.7x lunar weight!) and hands off to the 4 Mid-Body HLS Landing Thrusters!
+                flap_cmds = [72.0_f64.to_radians(); 4];
+                let v_h = Vec3::new(sv.linear.x, 0.0, sv.linear.z);
+                let ay_cmd = (g_local + (-18.0 - sv.linear.y) * 0.55).clamp(1.6, 8.0);
+                let a_horiz = (-com_horiz_err * 0.010 - v_h * 0.45).clamp_length_max(9.5);
+                let a_vec = Vec3::new(a_horiz.x, ay_cmd, a_horiz.z);
+                let des_up = a_vec.normalize();
+                let f_req = a_vec.length() * mass;
+                let (n_sl, thr) = if f_req > 2_450_000.0 {
+                    (2, (f_req / (2.0 * raptor_ref_n)).clamp(0.28, 1.0))
+                } else {
+                    (1, (f_req / raptor_ref_n).clamp(0.28, 1.0))
+                };
+                let t_gimbal = (n_sl as f64) * raptor_ref_n * thr;
+                let (g, r_b) = Self::compute_tvc_attitude_gimbal(
+                    sp, omega_b_filt, mp, des_up, t_gimbal, eng_y, 1.15, 1.15, 0.24,
+                );
+                self.command_ship_cluster(n_sl, thr, false, 0.0, g, r_b)?;
+
+                // Cut main Raptors as soon as horizontal orbital speed is killed (or upward bounce begins)!
+                if (v_h.length() < 9.5 && sv.linear.y > -22.0) || sv.linear.y > -2.5 || alt_base < 220.0 {
+                    self.ever_ship_flipped = true;
+                    self.ship_phase = ShipPhase::LunarHlsFinalLanding;
+                    self.ship_phase_start_s = self.time_s;
+                }
+            }
+            ShipPhase::LunarHlsFinalLanding => {
+                // Final Lunar South Pole Touchdown on 4 Mid-Body HLS Landing Thrusters (y = +8 m)!
+                // Main Raptors cut off to protect lunar regolith from cratering & satisfy 1/6 g throttle floor!
+                hls_active = true;
+                self.ever_ship_flipped = true;
+                flap_cmds = [72.0_f64.to_radians(); 4];
+                self.command_ship_cluster(0, 0.0, false, 0.0, [0.0, 0.0], 0.0)?;
+
+                let v_h = Vec3::new(sv.linear.x, 0.0, sv.linear.z);
+                let hold_h = ((com_horiz_err.length() - 4.0) * 0.75).clamp(0.0, 26.0);
+                let h_err = alt_base - hold_h;
+                let v_des = if h_err > 14.0 {
+                    -((2.0 * 0.90 * (h_err - 2.0)).sqrt()).clamp(2.2, 22.0)
+                } else {
+                    (-h_err * 0.36 - if hold_h < 0.5 { 1.1 } else { 0.0 }).clamp(-3.0, 2.0)
+                };
+                // Keep vertical thrust floor >= 1.15 m/s² (~0.24 throttle) so 4 HLS pods ALWAYS retain
+                // crisp differential throttling + TVC attitude authority throughout lunar descent!
+                let ay_cmd = (g_local + (v_des - sv.linear.y) * 1.85).clamp(1.15, 4.4);
+                // Cascade velocity-limited + tilt-angle-capped Lunar HLS horizontal loop (never exceeds 15° tilt!)
+                let v_h_des = (-com_horiz_err * 0.11)
+                    .clamp_length_max(if alt_base < 18.0 { 2.5 } else { 4.8 });
+                let max_tilt = if alt_base < 16.0 {
+                    8.0_f64.to_radians()
+                } else {
+                    15.0_f64.to_radians()
+                };
+                let a_horiz = ((v_h_des - v_h) * 0.60)
+                    .clamp_length_max((ay_cmd * max_tilt.tan()).min(0.95));
+                let a_vec = Vec3::new(a_horiz.x, ay_cmd, a_horiz.z);
+                let des_up = a_vec.normalize();
+                let f_req = a_vec.length() * mass;
+                // Keep base_thr inside [0.22, 0.88] so 10%-min-throttle HLS pods ALWAYS have full diff-throttle authority!
+                let base_thr = (f_req / (4.0 * 220_000.0)).clamp(0.22, 0.88);
+                let t_hls = 4.0 * 220_000.0 * base_thr;
+
+                // Full ±12° signed TVC (upper ring lever < 0) + strong differential throttling for crisp lunar damping!
+                let (g, r_b) = Self::compute_tvc_attitude_gimbal(
+                    sp, omega_b_filt, mp, des_up, t_hls, 8.0, 1.15, 1.25, 0.21,
+                );
+                let des_up_b = (sp.rotation.conjugate() * des_up).normalize_or_zero();
+                let cross_e = Vec3::Y.cross(des_up_b);
+                let ang_e = Vec3::Y.dot(des_up_b).clamp(-1.0, 1.0).acos();
+                let err_b = if cross_e.length_squared() > 1e-10 {
+                    cross_e.normalize() * ang_e
+                } else {
+                    Vec3::ZERO
+                };
+                let alpha_c = err_b * (1.15 * 1.15) - omega_b_filt * (2.0 * 1.25 * 1.15);
+                let denom_diff = 2.0 * 4.75 * 220_000.0;
+                let diff_z = (mp.inertia.z_axis.z * alpha_c.z / denom_diff).clamp(-0.42, 0.42);
+                let diff_x = (-mp.inertia.x_axis.x * alpha_c.x / denom_diff).clamp(-0.42, 0.42);
+                self.command_ship_hls_thrusters(true, base_thr, g, [diff_x, diff_z], r_b)?;
+
+                if alt_base < 0.85 && sv.linear.length() < 3.5 && tilt_rad < 0.12 {
+                    self.ship_landed = true;
+                    self.ever_ship_landed = true;
+                    self.ship_touchdown_speed_mps = sv.linear.length();
+                    self.ship_touchdown_tilt_deg = tilt_rad.to_degrees();
+                    self.command_ship_hls_thrusters(false, 0.0, [0.0, 0.0], [0.0, 0.0], 0.0)?;
+                    self.ship_phase = ShipPhase::LandedOnPad;
+                    self.ship_phase_start_s = self.time_s;
+                }
+            }
             ShipPhase::LandedOnPad => {
                 flap_cmds = [72.0_f64.to_radians(); 4];
                 self.command_ship_cluster(0, 0.0, false, 0.0, [0.0, 0.0], 0.0)?;
             }
+        }
+        if !hls_active {
+            self.command_ship_hls_thrusters(false, 0.0, [0.0, 0.0], [0.0, 0.0], 0.0)?;
         }
 
         for i in 0..4 {
@@ -1898,6 +2181,7 @@ impl StarshipSim {
         let b_stride = if b_lit > 14 { 3 } else { 1 };
         let b_ids = self.booster_engines.clone();
         let s_ids = self.ship_engines.clone();
+        let hls_ids = self.ship_hls_thrusters.clone();
 
         // Spawn supersonic methalox exhaust puffs (`kind = 2.0`) scaled by Prandtl–Pack pressure ratio!
         let mut emit_for = |ids: &[RocketEngineId], pose: Transform, vel: Vec3, stride: usize| {
@@ -1947,6 +2231,7 @@ impl StarshipSim {
 
         emit_for(&b_ids, bp, bv, b_stride);
         emit_for(&s_ids, sp, sv, 1);
+        emit_for(&hls_ids, sp, sv, 1);
 
         for p in &mut self.plumes {
             p.pos += p.vel * dt;
@@ -2010,6 +2295,14 @@ impl StarshipSim {
                 if i >= 3 && r.flow_separated {
                     rvac_sep = true;
                 }
+            }
+        }
+        for &e in &self.ship_hls_thrusters {
+            if let Some(r) = self.world.devices.rockets.engine_reading(e) {
+                if r.ignited {
+                    s_lit += 1;
+                }
+                s_thrust += r.thrust_n;
             }
         }
 
