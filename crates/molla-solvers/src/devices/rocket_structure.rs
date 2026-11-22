@@ -353,11 +353,10 @@ impl RocketStructure {
             let imu_bend_acc_b = e1 * (phi1_imu * fb.qdd[0] + phi2_imu * fb.qdd[2])
                 + e2 * (phi1_imu * fb.qdd[1] + phi2_imu * fb.qdd[3]);
 
-            // Subtle structural-coupling back-reaction on rigid body (conservation of elastic-rigid impulse).
-            let bend_react_b = (e1 * (phi1_eng * fb.qdd[0] * m_gen1 + phi2_eng * fb.qdd[2] * m_gen2)
-                + e2 * (phi1_eng * fb.qdd[1] * m_gen1 + phi2_eng * fb.qdd[3] * m_gen2))
-                * (-0.08);
-            wrenches[i].linear += bp.rotation * bend_react_b;
+            // Free-free Euler-Bernoulli modes satisfy `∫ ρ φ_i dx = 0` and `∫ ρ x φ_i dx = 0`,
+            // so elastic bending strictly conserves rigid-body linear & angular momentum in free flight
+            // and couples to the vehicle through real IMU elastic slope-rate / acceleration feedthrough!
+            let _ = (phi1_eng, phi2_eng, m_gen1, m_gen2);
 
             // NASA SP-8055 Longitudinal Pogo Coupled Structure-Propulsion Dynamics!
             let f_pogo = fb.spec.pogo_dry_hz * mass_scale;

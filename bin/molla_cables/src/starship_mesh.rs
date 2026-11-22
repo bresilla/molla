@@ -340,13 +340,13 @@ fn build_ship_mesh(out: &mut Vec<Triangle>, sim: &StarshipSim, pose: Transform, 
         );
     }
 
-    // 4 Real Actuated Body Flaps (visually pivoting live with aerodynamic deflection `δ`!)
+    // 4 Real Actuated Body Flaps (visually pivoting dorsally toward +X with live aerodynamic deflection `δ`!)
     // [fwd_L(+Z), fwd_R(-Z), aft_L(+Z), aft_R(-Z)]
     let flap_geom = [
-        (Vec3::new(0.0, 14.5, 3.65), Vec3::NEG_Y, Vec3::new(0.0, 0.0, 1.9), Vec3::new(0.18, 3.6, 1.9)),
-        (Vec3::new(0.0, 14.5, -3.65), Vec3::Y, Vec3::new(0.0, 0.0, -1.9), Vec3::new(0.18, 3.6, 1.9)),
-        (Vec3::new(0.0, -15.5, 4.45), Vec3::NEG_Y, Vec3::new(0.0, 0.0, 2.5), Vec3::new(0.22, 6.2, 2.5)),
-        (Vec3::new(0.0, -15.5, -4.45), Vec3::Y, Vec3::new(0.0, 0.0, -2.5), Vec3::new(0.22, 6.2, 2.5)),
+        (Vec3::new(0.0, 14.5, 3.65), Vec3::Y, Vec3::new(0.0, 0.0, 1.9), Vec3::new(0.18, 3.6, 1.9)),
+        (Vec3::new(0.0, 14.5, -3.65), Vec3::NEG_Y, Vec3::new(0.0, 0.0, -1.9), Vec3::new(0.18, 3.6, 1.9)),
+        (Vec3::new(0.0, -15.5, 4.45), Vec3::Y, Vec3::new(0.0, 0.0, 2.5), Vec3::new(0.22, 6.2, 2.5)),
+        (Vec3::new(0.0, -15.5, -4.45), Vec3::NEG_Y, Vec3::new(0.0, 0.0, -2.5), Vec3::new(0.22, 6.2, 2.5)),
     ];
     for (idx, &(hinge_pt, hinge_axis, span_off, half)) in flap_geom.iter().enumerate() {
         let defl = sim

@@ -441,7 +441,9 @@ pub struct RocketEngineCommand {
 struct BodyDryMass {
     dry: MassProperties,
     prev_vel_world: Option<Vec3>,
+    prev_ang_vel_world: Option<Vec3>,
     specific_accel_world: Vec3,
+    ang_accel_world: Vec3,
 }
 
 struct TankState {
@@ -527,9 +529,22 @@ impl RocketPropulsion {
         self.ground_y = None;
     }
 
-    /// Enables rotating-planet Coriolis force `-2 m (Ω × v)` on all registered rocket stages.
+    /// Sets the planet angular velocity vector `Ω` (rad/s) in world frame:
+    /// - In flat-ground rotating launch coordinates (`set_flat_ground`), applies exact Coriolis `-2 m (Ω × v)`.
+    /// - In spherical-planet inertial coordinates (`set_spherical_planet`), drives co-rotating atmospheric
+    ///   velocity `v_atmo = Ω × (pos - planet_center)` in [`super::RocketAero`] (with zero fictitious Coriolis!).
     pub fn set_earth_rotation(&mut self, omega_world: Vec3) {
         self.planet_omega_world = omega_world;
+    }
+
+    /// Co-rotating planetary atmosphere velocity `Ω × (pos - planet_center)` in inertial spherical-planet
+    /// mode, or `Vec3::ZERO` in a flat-ground surface-fixed rotating frame.
+    pub fn corotating_atmosphere_velocity(&self, pos_world: Vec3) -> Vec3 {
+        if let Some((center, _)) = self.planet {
+            self.planet_omega_world.cross(pos_world - center)
+        } else {
+            Vec3::ZERO
+        }
     }
 
     /// Selects the planetary atmospheric model (`EarthUs76`, `MarsCospar`, or `Vacuum`).
@@ -597,13 +612,15 @@ impl RocketPropulsion {
         if scene.body(body).is_none() || !dry.mass.is_finite() || dry.mass <= 0.0 {
             return Err(Error::Build("invalid rocket stage dry mass".into()));
         }
-        let vel = scene.body_velocity(body).ok().map(|v| v.linear);
+        let sv = scene.body_velocity(body).ok();
         self.dry_masses.insert(
             body,
             BodyDryMass {
                 dry,
-                prev_vel_world: vel,
+                prev_vel_world: sv.map(|v| v.linear),
+                prev_ang_vel_world: sv.map(|v| v.angular),
                 specific_accel_world: Vec3::ZERO,
+                ang_accel_world: Vec3::ZERO,
             },
         );
         Ok(())
@@ -634,13 +651,15 @@ impl RocketPropulsion {
         // Auto-capture dry mass if caller didn't explicitly register it yet.
         if !self.dry_masses.contains_key(&spec.body) {
             let dry = scene.body_mass_properties(spec.body)?;
-            let vel = scene.body_velocity(spec.body).ok().map(|v| v.linear);
+            let sv = scene.body_velocity(spec.body).ok();
             self.dry_masses.insert(
                 spec.body,
                 BodyDryMass {
                     dry,
-                    prev_vel_world: vel,
+                    prev_vel_world: sv.map(|v| v.linear),
+                    prev_ang_vel_world: sv.map(|v| v.angular),
                     specific_accel_world: Vec3::ZERO,
+                    ang_accel_world: Vec3::ZERO,
                 },
             );
         }
@@ -891,14 +910,18 @@ impl RocketPropulsion {
             }
         };
 
-        // Update body specific accelerations (for NASA SP-8009 slosh natural frequency).
+        // Update body linear specific acceleration & angular acceleration (for exact off-COM tank slosh!).
         let g_world = scene.gravity();
         for (&body, entry) in &mut self.dry_masses {
             if let Ok(v) = scene.body_velocity(body) {
                 if let Some(v0) = entry.prev_vel_world {
                     entry.specific_accel_world = (v.linear - v0) / dt - g_world;
                 }
+                if let Some(w0) = entry.prev_ang_vel_world {
+                    entry.ang_accel_world = (v.angular - w0) / dt;
+                }
                 entry.prev_vel_world = Some(v.linear);
+                entry.prev_ang_vel_world = Some(v.angular);
             }
         }
 
@@ -1117,7 +1140,8 @@ impl RocketPropulsion {
             } else {
                 GRAVITY
             };
-            let hydro_pa = tank.spec.liquid_density_kg_m3 * a_axial_signed * fill_h;
+            // Liquid cannot sustain negative hydrostatic tension; negative-g un-settles propellant off the sump!
+            let hydro_pa = tank.spec.liquid_density_kg_m3 * a_axial_signed.max(0.0) * fill_h;
             let mdot_t = dm / dt.max(1e-6);
             // Feedline friction drop scaling with `mdot² / ρ` (realistic ~20–40 kPa at full 33-Raptor flow!).
             let line_loss_pa = (0.0012 * mdot_t * mdot_t / tank.spec.liquid_density_kg_m3).min(85_000.0);
@@ -1125,11 +1149,15 @@ impl RocketPropulsion {
             let npsh_a = ((p_inlet - tank.vapor_pressure_pa)
                 / (tank.spec.liquid_density_kg_m3 * GRAVITY))
                 .max(0.0);
-            let cav = if tank.npsh_required_m <= 1e-6 || npsh_a >= tank.npsh_required_m {
+            let mut cav = if tank.npsh_required_m <= 1e-6 || npsh_a >= tank.npsh_required_m {
                 1.0
             } else {
                 (0.25 + 0.75 * (npsh_a / tank.npsh_required_m)).clamp(0.25, 1.0)
             };
+            // Unsettled negative-g ullage ingestion degrades pump head when drawing high flow without settling!
+            if a_axial_signed < -0.5 && mdot_t > 1.0 && fill_h < 0.85 * tank.spec.height_m {
+                cav = cav.min(0.45);
+            }
             tank.cavitation_factor = cav;
             tank.reading.ullage_pressure_pa = tank.ullage_pa;
             tank.reading.inlet_pressure_pa = p_inlet;
@@ -1164,8 +1192,9 @@ impl RocketPropulsion {
         let coms = scene.model().body_com.host()?;
         let masses = scene.model().body_mass.host()?;
 
-        // 0. Rotating-Earth Coriolis Force `-2 m (Ω × v)` on every registered rocket stage!
-        if self.planet_omega_world.length_squared() > 0.0 {
+        // 0. Rotating-Frame Coriolis Force `-2 m (Ω × v)` ONLY in surface-fixed flat-ground frames!
+        //    (In spherical-planet inertial ECI mode, `planet_omega_world` instead drives co-rotating air `Ω × r`.)
+        if self.planet.is_none() && self.planet_omega_world.length_squared() > 0.0 {
             let omega = self.planet_omega_world;
             for &body in self.dry_masses.keys() {
                 if let (Some(bi), Some(desc)) = (scene.body_index(body), scene.body(body))
@@ -1200,10 +1229,10 @@ impl RocketPropulsion {
             let nozzle_rot = (base_frame.rotation * gimbal_q).normalize();
 
             let thrust_local = Vec3::new(eng.step_thrust_n, 0.0, 0.0) + eng.step_side_load_local;
-            let mut f_world =
-                nozzle_rot * thrust_local + base_frame.rotation * eng.step_twd_force_local;
+            // Both thrust and Tail-Wags-Dog inertial reactions act in the live gimbaled `nozzle_rot` frame!
+            let mut f_world = nozzle_rot * (thrust_local + eng.step_twd_force_local);
             let arm = base_frame.position - com_w;
-            let mut tau_world = arm.cross(f_world) + base_frame.rotation * eng.step_twd_torque_local;
+            let mut tau_world = arm.cross(f_world) + nozzle_rot * eng.step_twd_torque_local;
 
             // Ground-impingement overpressure cushion when firing near the launch pad / catch pad!
             if let Some(gy) = self.ground_y
@@ -1322,14 +1351,27 @@ impl RocketPropulsion {
                 let i = bi.index();
                 let bp = poses[i];
                 let com_w = bp.transform_point(coms[i]);
-                let a_spec_w = self
+                let slosh_pt_w =
+                    bp.transform_point(tank.spec.base_local + tank.spec.axis_local * (0.75 * fill_h));
+                let r_slosh_w = slosh_pt_w - com_w;
+                let (a_spec_w, alpha_w) = self
                     .dry_masses
                     .get(&tank.spec.body)
-                    .map_or(Vec3::ZERO, |d| d.specific_accel_world);
-                let a_spec_b = bp.rotation.conjugate() * a_spec_w;
+                    .map_or((Vec3::ZERO, Vec3::ZERO), |d| {
+                        (d.specific_accel_world, d.ang_accel_world)
+                    });
+                let omega_w = vels[i].angular;
+                // Exact local specific acceleration at off-COM tank free surface:
+                //   a_tank = a_com + α × r + ω × (ω × r)
+                // Flipping/spinning Starship excites real tangential & centripetal slosh in nose/aft tanks!
+                let a_tank_w =
+                    a_spec_w + alpha_w.cross(r_slosh_w) + omega_w.cross(omega_w.cross(r_slosh_w));
+                let a_tank_b = bp.rotation.conjugate() * a_tank_w;
                 let ax = tank.spec.axis_local;
-                let a_axial = a_spec_b.dot(ax).abs();
-                let a_lat_b = a_spec_b - ax * a_spec_b.dot(ax);
+                // Only positive settling acceleration along tank axis creates hydrostatic restoring ω_s²;
+                // negative-g / microgravity leaves only capillary surface tension `capillary_omega2`!
+                let a_axial = a_tank_b.dot(ax).max(0.0);
+                let a_lat_b = a_tank_b - ax * a_tank_b.dot(ax);
 
                 // NASA SP-8009 fundamental antisymmetric slosh mode frequency:
                 //   ω_s² = (ξ_11 * a_axial / R) * tanh(ξ_11 * h / R) + ω_capillary²
@@ -1362,10 +1404,7 @@ impl RocketPropulsion {
                 // Reaction force exerted by sloshing fluid onto the tank wall (Newton's 3rd Law).
                 let f_wall_b = (tank.slosh_disp_body * omega2 + tank.slosh_vel_body * c_over_m) * m_slosh;
                 let f_wall_w = bp.rotation * f_wall_b;
-                // Apply at the liquid free-surface effective slosh elevation (~0.75 fill_h).
-                let slosh_pt_w =
-                    bp.transform_point(tank.spec.base_local + ax * (0.75 * fill_h));
-                let tau_w = (slosh_pt_w - com_w).cross(f_wall_w);
+                let tau_w = r_slosh_w.cross(f_wall_w);
                 wrenches[i].linear += f_wall_w;
                 wrenches[i].angular += tau_w;
 

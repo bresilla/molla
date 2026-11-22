@@ -428,15 +428,17 @@ fn paint_hud(
                     );
                     mono(
                         ui,
-                        "Blast / Wind / View",
+                        "TVC / Gimbal / View",
                         format!(
-                            "HotStg {:4.2}MN · {} · {}{}",
-                            t.interstage_blast_mn,
+                            "{} · B:{:4.1}° S:{:4.1}° · {} · {} [{}]",
+                            if t.tvc_enabled { "TVC ON" } else { "TVC LOCKED 0°!" },
+                            t.booster_gimbal_deg,
+                            t.ship_gimbal_deg,
                             t.wind_preset.label(),
-                            if split_active { "SPLIT (B|S)" } else { focus.label() },
-                            format!(" [{}]", split_mode.label())
+                            if split_active { "SPLIT" } else { focus.label() },
+                            split_mode.label()
                         ),
-                        white,
+                        if t.tvc_enabled { white } else { red },
                     );
                     ui.add_space(4.0);
                     ui.label(
@@ -445,7 +447,7 @@ fn paint_hud(
                             .color(Color32::from_rgb(255, 210, 120)),
                     );
                     ui.label(
-                        RichText::new("[S] Split-Screen  [V] Focus  [W] Wind  [F] Engine-Out  [+/-] Speed  [Space] Pause  [R] Reset")
+                        RichText::new("[T] TVC On/Off (0° Open-Loop!)  [F] Engine-Out  [S] Split  [V] Focus  [W] Wind  [+/-] Speed  [R] Reset")
                             .size(10.0)
                             .color(Color32::from_rgb(162, 200, 232)),
                     );
@@ -492,6 +494,9 @@ impl eframe::App for App {
             }
             if i.key_pressed(egui::Key::W) {
                 self.sim.cycle_wind();
+            }
+            if i.key_pressed(egui::Key::T) {
+                self.sim.tvc_enabled = !self.sim.tvc_enabled;
             }
             if i.key_pressed(egui::Key::F)
                 && let Err(e) = self.sim.inject_engine_out()

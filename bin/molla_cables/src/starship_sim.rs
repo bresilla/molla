@@ -28,8 +28,8 @@ use molla_solvers::devices::{
     AeroBodyId, AeroBodySpec, AeroSurfaceId, AeroSurfaceKind, AeroSurfaceSpec, BiquadNotchFilter,
     FlexBodyId, FlexBodySpec, ImuId, ImuSpec, MARS_GRAVITY, MARS_OMEGA_RAD_S, MOON_GRAVITY,
     MotorCommand, MotorLimits, MotorSpec, PlanetAtmosphere, PropellantTankSpec,
-    RocketEngineCommand, RocketEngineId, RocketEngineSpec, TankId, WindField,
-    earth_rotation_at_latitude, planet_rotation_at_latitude, us76_atmosphere,
+    RocketEngineCommand, RocketEngineId, RocketEngineSpec, TankId, ThrusterId, ThrusterSpec,
+    WindField, earth_rotation_at_latitude, planet_rotation_at_latitude, us76_atmosphere,
 };
 use molla_solvers::rigid_world::RigidWorld;
 
@@ -248,6 +248,9 @@ pub struct StarshipTelemetry {
     pub chopsticks_closed_frac: f64,
     pub wind_preset: WindPreset,
     pub failed_engines: usize,
+    pub tvc_enabled: bool,
+    pub booster_gimbal_deg: f64,
+    pub ship_gimbal_deg: f64,
 }
 
 pub struct StarshipSim {
@@ -281,6 +284,8 @@ pub struct StarshipSim {
     pub ship_engines: Vec<RocketEngineId>,
     /// 4 Mid-body HLS Lunar Landing Thrusters (mounted high at y = +8 m for 1/6 g soft touchdown).
     pub ship_hls_thrusters: Vec<RocketEngineId>,
+    /// 4 Real Physical Cold-Gas N2 RCS Thrusters (nose + aft pure-couple pairs, finite propellant, valve lag).
+    pub ship_rcs_thrusters: [ThrusterId; 4],
     pub ship_aero: AeroBodyId,
     pub ship_flaps: [AeroSurfaceId; 4], // [fwd_L(+Z), fwd_R(-Z), aft_L(+Z), aft_R(-Z)]
     pub ship_flex: FlexBodyId,
@@ -288,15 +293,16 @@ pub struct StarshipSim {
     pub ship_using_headers: bool,
     pub planet_gravity: f64,
     pub atmosphere: PlanetAtmosphere,
+    /// Toggle closed-loop TVC / attitude control (`false` locks all gimbals at 0° -> raw open-loop physics!).
+    pub tvc_enabled: bool,
 
-    // Hardware-in-the-loop GNC state: adaptive bending notch + roll-off filters, wind observers & RCS yaw
+    // Hardware-in-the-loop GNC state: adaptive bending notch + roll-off filters & wind observers
     booster_notch: [BiquadNotchFilter; 2],
     ship_notch: [BiquadNotchFilter; 2],
     booster_rate_lpf: Vec3,
     ship_rate_lpf: Vec3,
     booster_wind_int: Vec3,
     ship_wind_int: Vec3,
-    ship_rcs_yaw_nm: f64,
     ship_landing_sl_count: usize,
 
     // Physical clamps / mechanical state
@@ -694,7 +700,7 @@ impl StarshipSim {
                 cd_crossflow_subsonic: 1.20,
                 cd_crossflow_supersonic: 1.52,
                 cp_crossflow_local: 0.0,
-                cp_axial_shift_m: -4.5,
+                cp_axial_shift_m: 10.5,
                 rot_damping_scale: 1.0,
                 srp_drag_loss_gain: 0.85,
             },
@@ -834,17 +840,18 @@ impl StarshipSim {
             (Some(ship_main_lox), Some(ship_main_ch4))
         };
         let mut ship_engines = Vec::with_capacity(6);
-        // 3 Center Sea-Level Gimballing Raptors (±15° TVC!)
+        // 3 Center Sea-Level Gimballing Raptors (±15° TVC!) with realistic ±30 ms turbopump spool spread!
+        let sl_spool_tau = [0.155, 0.185, 0.215];
         for k in 0..3 {
             let a = (k as f64) * (TAU / 3.0);
             let frame = Transform::new(
                 Vec3::new(1.10 * a.cos(), -SHIP_HALF_LEN + 0.8, 1.10 * a.sin()),
                 up_rot,
             );
-            ship_engines.push(world.devices.rockets.insert_engine(
-                &world.scene,
-                RocketEngineSpec::raptor3_sea_level(ship, frame, sl_t1, sl_t2, 15.0_f64.to_radians()),
-            )?);
+            let mut spec =
+                RocketEngineSpec::raptor3_sea_level(ship, frame, sl_t1, sl_t2, 15.0_f64.to_radians());
+            spec.startup_tau_s = sl_spool_tau[k];
+            ship_engines.push(world.devices.rockets.insert_engine(&world.scene, spec)?);
         }
         // 3 Outer Fixed RVac Vacuum Raptors (2.30 m bells, 380 s Vac Isp!)
         for k in 0..3 {
@@ -876,6 +883,35 @@ impl StarshipSim {
                 ),
             )?);
         }
+        // 4 Real Physical Cold-Gas N2 RCS Thrusters (nose + aft pure-couple yaw pairs):
+        // `+X` of thruster frame is applied thrust direction (`Quat::from_rotation_y(-PI/2)` maps `+X -> +Z`,
+        // `Quat::from_rotation_y(+PI/2)` maps `+X -> -Z`).
+        // Pair (0, 1) generates `+tau_x` (`+480 kN·m` max); Pair (2, 3) generates `-tau_x` (`-480 kN·m` max).
+        let rot_pos_z = Quat::from_rotation_y(-FRAC_PI_2);
+        let rot_neg_z = Quat::from_rotation_y(FRAC_PI_2);
+        let rcs_mounts = [
+            Transform::new(Vec3::new(0.0, 20.0, -2.2), rot_pos_z),  // 0: Nose +Z -> +tau_x
+            Transform::new(Vec3::new(0.0, -20.0, 4.5), rot_neg_z),  // 1: Aft  -Z -> +tau_x
+            Transform::new(Vec3::new(0.0, 20.0, 2.2), rot_neg_z),   // 2: Nose -Z -> -tau_x
+            Transform::new(Vec3::new(0.0, -20.0, -4.5), rot_pos_z), // 3: Aft  +Z -> -tau_x
+        ];
+        let mut rcs_ids = Vec::with_capacity(4);
+        for frame in rcs_mounts {
+            rcs_ids.push(world.devices.thrusters.insert(
+                &world.scene,
+                ThrusterSpec {
+                    body: ship,
+                    frame,
+                    max_thrust: 12_000.0,
+                    specific_impulse: Some(70.0), // Cold-gas N2 Isp
+                    propellant_mass: 220.0,
+                    deplete_body_mass: false,
+                    min_impulse_bit: 120.0,
+                    response_time: 0.025,
+                },
+            )?);
+        }
+        let ship_rcs_thrusters: [ThrusterId; 4] = rcs_ids.try_into().unwrap();
 
         // Register Hot-Staging Blast Impingement: Ship's 6 Raptors blast Booster's top dome!
         world.devices.rockets.register_interstage_blast_target(
@@ -897,18 +933,19 @@ impl StarshipSim {
                 cd_crossflow_subsonic: 1.22,
                 cd_crossflow_supersonic: 1.54,
                 cp_crossflow_local: 0.5,
-                cp_axial_shift_m: -5.5,
+                cp_axial_shift_m: 8.5,
                 rot_damping_scale: 1.15,
                 srp_drag_loss_gain: 0.75,
             },
         )?;
         // 4 Actuated Body Flaps: [fwd_L(+Z), fwd_R(-Z), aft_L(+Z), aft_R(-Z)].
-        // Normal `-X` faces belly airflow at `δ = 0`; positive `δ ∈ [0, 75°]` folds flap dorsally (+X)!
+        // Normal `-X` faces belly airflow at `δ = 0`; by right-hand rule, positive `δ ∈ [0, 75°]`
+        // about `+Y` on `+Z` flaps (and `-Y` on `-Z` flaps) folds each flap dorsally toward `+X`!
         let flap_specs = [
-            (Vec3::new(0.0, 14.5, 5.2), Vec3::NEG_Y, 24.0, 1.3),  // fwd_L (+Z)
-            (Vec3::new(0.0, 14.5, -5.2), Vec3::Y, 24.0, 1.3),     // fwd_R (-Z)
-            (Vec3::new(0.0, -15.5, 5.9), Vec3::NEG_Y, 44.0, 1.9), // aft_L (+Z)
-            (Vec3::new(0.0, -15.5, -5.9), Vec3::Y, 44.0, 1.9),    // aft_R (-Z)
+            (Vec3::new(0.0, 14.5, 5.2), Vec3::Y, 24.0, 1.3),       // fwd_L (+Z)
+            (Vec3::new(0.0, 14.5, -5.2), Vec3::NEG_Y, 24.0, 1.3),  // fwd_R (-Z)
+            (Vec3::new(0.0, -15.5, 5.9), Vec3::Y, 44.0, 1.9),      // aft_L (+Z)
+            (Vec3::new(0.0, -15.5, -5.9), Vec3::NEG_Y, 44.0, 1.9), // aft_R (-Z)
         ];
         let mut flap_vec = Vec::with_capacity(4);
         let init_flaps_deg = [22.0_f64, 22.0, 56.0, 56.0];
@@ -1002,6 +1039,7 @@ impl StarshipSim {
             ship_hdr_ch4,
             ship_engines,
             ship_hls_thrusters,
+            ship_rcs_thrusters,
             ship_aero,
             ship_flaps,
             ship_flex,
@@ -1009,6 +1047,7 @@ impl StarshipSim {
             ship_using_headers,
             planet_gravity,
             atmosphere,
+            tvc_enabled: true,
             booster_notch: [
                 BiquadNotchFilter::new(2.2, 2.8, 1.0 / SIM_DT),
                 BiquadNotchFilter::new(2.2, 2.8, 1.0 / SIM_DT),
@@ -1021,7 +1060,6 @@ impl StarshipSim {
             ship_rate_lpf: Vec3::ZERO,
             booster_wind_int: Vec3::ZERO,
             ship_wind_int: Vec3::ZERO,
-            ship_rcs_yaw_nm: 0.0,
             ship_landing_sl_count: 3,
             hold_down_engaged,
             interstage_latched,
@@ -1070,16 +1108,37 @@ impl StarshipSim {
         self.world.devices.rocket_aero.set_wind(self.wind_preset.to_wind());
     }
 
-    /// Injects a realistic Raptor engine-out failure on an active outer/inner engine!
+    /// Injects a real Raptor/HLS engine-out failure on an ACTUALLY FIRING engine (creates immediate asymmetric torque!).
     pub fn inject_engine_out(&mut self) -> Result<()> {
-        let candidates: Vec<RocketEngineId> = self
-            .booster_engines
-            .iter()
-            .skip(3) // Keep center 3 available unless user fails multiple
-            .chain(self.ship_engines.iter().skip(3))
-            .copied()
-            .collect();
-        for id in candidates {
+        let candidates: Vec<RocketEngineId> = match self.scenario {
+            StarshipScenario::ShipFlipLanding
+            | StarshipScenario::MarsSrpLanding
+            | StarshipScenario::LunarHlsDescent => self
+                .ship_hls_thrusters
+                .iter()
+                .chain(self.ship_engines.iter())
+                .copied()
+                .collect(),
+            _ => self
+                .booster_engines
+                .iter()
+                .chain(self.ship_engines.iter())
+                .copied()
+                .collect(),
+        };
+        // Prefer failing a currently lit engine so the user sees the real asymmetric torque kick immediately!
+        for &id in &candidates {
+            if let Some(r) = self.world.devices.rockets.engine_reading(id)
+                && !r.failed
+                && r.ignited
+            {
+                self.world.devices.rockets.set_engine_failed(id, true)?;
+                self.failed_engine_count += 1;
+                return Ok(());
+            }
+        }
+        // Fallback if engines aren't lit yet (e.g. during skydiving): fail the first healthy candidate!
+        for &id in &candidates {
             if let Some(r) = self.world.devices.rockets.engine_reading(id)
                 && !r.failed
             {
@@ -1245,14 +1304,17 @@ impl StarshipSim {
         base_gimbal: [f64; 2],
         roll_bias: f64,
     ) -> Result<()> {
+        let eff_gimbal = if self.tvc_enabled { base_gimbal } else { [0.0, 0.0] };
+        let eff_roll = if self.tvc_enabled { roll_bias } else { 0.0 };
         for (idx, &eid) in self.booster_engines.iter().enumerate() {
             let lit = idx < active_count && throttle > 0.01;
-            let mut g = if idx < 13 { base_gimbal } else { [0.0, 0.0] };
-            if idx < 3 && roll_bias.abs() > 1e-4 {
-                // Tangential roll vectoring on the 3 center engines!
+            let mut g = if idx < 13 { eff_gimbal } else { [0.0, 0.0] };
+            if idx < 3 && eff_roll.abs() > 1e-4 {
+                // Exact tangential roll vectoring on the 3 center engines:
+                // F_xz = (-T g0, 0, -T g1) -> tau_y = T r (-g0 sin a + g1 cos a) = +T r eff_roll!
                 let a = (idx as f64) * (TAU / 3.0);
-                g[0] += roll_bias * a.sin();
-                g[1] += roll_bias * a.cos();
+                g[0] -= eff_roll * a.sin();
+                g[1] += eff_roll * a.cos();
             }
             self.world.devices.rockets.command_engine(
                 eid,
@@ -1284,18 +1346,20 @@ impl StarshipSim {
                 _ => true,
             }
         };
-        // Compute live COM-pointing gimbal trim for each active SL engine so flying on 1 or 2
-        // off-center Raptors automatically trims out the exact radial offset moment arm!
+        // Compute live COM-pointing gimbal trim for each active SL engine ONLY when TVC is active!
+        // When TVC is locked OFF (`[T]`), gimbals stay strictly at `0°` so off-center engines spin freely!
         let com_l = self
             .world
             .scene
             .body_mass_properties(self.ship)
             .map_or(Vec3::ZERO, |m| m.local_com);
+        let eff_gimbal = if self.tvc_enabled { base_gimbal } else { [0.0, 0.0] };
+        let eff_roll = if self.tvc_enabled { roll_bias } else { 0.0 };
         for (idx, &eid) in self.ship_engines.iter().enumerate() {
             if idx < 3 {
                 let lit = sl_active(idx) && sl_throttle > 0.01;
-                let mut g = base_gimbal;
-                if lit && sl_count < 3 {
+                let mut g = eff_gimbal;
+                if self.tvc_enabled && lit && sl_count < 3 {
                     if let Some(spec) = self.world.devices.rockets.engine_spec(eid) {
                         let d = spec.frame.position - com_l;
                         let dy = (-d.y).max(5.0);
@@ -1305,10 +1369,10 @@ impl StarshipSim {
                         g[1] += (d.z / dy).atan();
                     }
                 }
-                if sl_count >= 2 && roll_bias.abs() > 1e-4 {
+                if sl_count >= 2 && eff_roll.abs() > 1e-4 {
                     let a = (idx as f64) * (TAU / 3.0);
-                    g[0] += roll_bias * a.sin();
-                    g[1] += roll_bias * a.cos();
+                    g[0] -= eff_roll * a.sin();
+                    g[1] += eff_roll * a.cos();
                 }
                 self.world.devices.rockets.command_engine(
                     eid,
@@ -1341,14 +1405,17 @@ impl StarshipSim {
         diff_thr_xz: [f64; 2],
         roll_bias: f64,
     ) -> Result<()> {
+        let eff_gimbal = if self.tvc_enabled { base_gimbal } else { [0.0, 0.0] };
+        let eff_diff = if self.tvc_enabled { diff_thr_xz } else { [0.0, 0.0] };
+        let eff_roll = if self.tvc_enabled { roll_bias } else { 0.0 };
         for (idx, &eid) in self.ship_hls_thrusters.iter().enumerate() {
             let a = (idx as f64) * FRAC_PI_2;
             // k=0 (+X): +diff_z; k=1 (+Z): +diff_x; k=2 (-X): -diff_z; k=3 (-Z): -diff_x
-            let thr_off = diff_thr_xz[1] * a.cos() + diff_thr_xz[0] * a.sin();
-            let mut g = base_gimbal;
-            if lit && roll_bias.abs() > 1e-4 {
-                g[0] += roll_bias * a.sin();
-                g[1] += roll_bias * a.cos();
+            let thr_off = eff_diff[1] * a.cos() + eff_diff[0] * a.sin();
+            let mut g = eff_gimbal;
+            if lit && eff_roll.abs() > 1e-4 {
+                g[0] -= eff_roll * a.sin();
+                g[1] += eff_roll * a.cos();
             }
             self.world.devices.rockets.command_engine(
                 eid,
@@ -1658,7 +1725,7 @@ impl StarshipSim {
             &mut self.ship_rate_lpf,
         );
 
-        self.ship_rcs_yaw_nm = 0.0;
+        let mut rcs_yaw_cmd_nm = 0.0_f64;
         let mut flap_cmds = [70.0_f64.to_radians(); 4]; // Folded flat during ascent!
         let mut hls_active = false;
         let is_mars = self.atmosphere == PlanetAtmosphere::MarsCospar;
@@ -1763,9 +1830,9 @@ impl StarshipSim {
                     ev * 2.0
                 };
 
-                // Real Starship cold-gas N2 nose RCS keeps yaw aligned to landing flip plane against crosswinds!
-                self.ship_rcs_yaw_nm =
-                    (att_err_b.x * 2.2e6 - omega_b_filt.x * 3.2e6).clamp(-4.5e5, 4.5e5);
+                // Real Starship cold-gas N2 nose/aft RCS pods keep yaw aligned to landing flip plane!
+                rcs_yaw_cmd_nm =
+                    (att_err_b.x * 2.2e6 - omega_b_filt.x * 3.2e6).clamp(-4.8e5, 4.8e5);
 
                 let u_pitch_z = (att_err_b.z * 1.55 - omega_b_filt.z * 2.20).clamp(-0.65, 0.65);
                 let u_roll_y = (att_err_b.y * 1.35 - omega_b_filt.y * 1.90).clamp(-0.48, 0.48);
@@ -1955,10 +2022,11 @@ impl StarshipSim {
                 let base_thr = (f_req / (4.0 * 220_000.0)).clamp(0.22, 0.88);
                 let t_hls = 4.0 * 220_000.0 * base_thr;
 
-                // Full ±12° signed TVC (upper ring lever < 0) + strong differential throttling for crisp lunar damping!
-                let (g, r_b) = Self::compute_tvc_attitude_gimbal(
+                // Clean physical 50/50 torque allocation: 50% signed TVC (upper ring lever < 0) + 50% diff throttle!
+                let (g_full, r_b) = Self::compute_tvc_attitude_gimbal(
                     sp, omega_b_filt, mp, des_up, t_hls, 8.0, 1.15, 1.25, 0.21,
                 );
+                let g = [g_full[0] * 0.5, g_full[1] * 0.5];
                 let des_up_b = (sp.rotation.conjugate() * des_up).normalize_or_zero();
                 let cross_e = Vec3::Y.cross(des_up_b);
                 let ang_e = Vec3::Y.dot(des_up_b).clamp(-1.0, 1.0).acos();
@@ -1967,10 +2035,10 @@ impl StarshipSim {
                 } else {
                     Vec3::ZERO
                 };
-                let alpha_c = err_b * (1.15 * 1.15) - omega_b_filt * (2.0 * 1.25 * 1.15);
+                let alpha_c = (err_b * (1.15 * 1.15) - omega_b_filt * (2.0 * 1.25 * 1.15)) * 0.5;
                 let denom_diff = 2.0 * 4.75 * 220_000.0;
-                let diff_z = (mp.inertia.z_axis.z * alpha_c.z / denom_diff).clamp(-0.42, 0.42);
-                let diff_x = (-mp.inertia.x_axis.x * alpha_c.x / denom_diff).clamp(-0.42, 0.42);
+                let diff_z = (mp.inertia.z_axis.z * alpha_c.z / denom_diff).clamp(-0.32, 0.32);
+                let diff_x = (-mp.inertia.x_axis.x * alpha_c.x / denom_diff).clamp(-0.32, 0.32);
                 self.command_ship_hls_thrusters(true, base_thr, g, [diff_x, diff_z], r_b)?;
 
                 if alt_base < 0.85 && sv.linear.length() < 3.5 && tilt_rad < 0.12 {
@@ -1990,6 +2058,22 @@ impl StarshipSim {
         }
         if !hls_active {
             self.command_ship_hls_thrusters(false, 0.0, [0.0, 0.0], [0.0, 0.0], 0.0)?;
+        }
+
+        // Command real physical Cold-Gas N2 RCS pods (0..2 = +tau_x couple, 2..4 = -tau_x couple; max 480 kN·m)!
+        let u_rcs = if self.tvc_enabled {
+            (rcs_yaw_cmd_nm / 480_000.0).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        let thr_pos = u_rcs.max(0.0);
+        let thr_neg = (-u_rcs).max(0.0);
+        let rcs_throttles = [thr_pos, thr_pos, thr_neg, thr_neg];
+        for i in 0..4 {
+            self.world
+                .devices
+                .thrusters
+                .set_throttle(self.ship_rcs_thrusters[i], rcs_throttles[i])?;
         }
 
         for i in 0..4 {
@@ -2013,8 +2097,6 @@ impl StarshipSim {
         let hold_down = self.hold_down_engaged;
         let interstage = self.interstage_latched;
         let caught = self.booster_caught;
-        let ship_landed = self.ship_landed;
-        let ship_rcs_yaw = self.ship_rcs_yaw_nm;
         let nudge = self.user_nudge;
         let mut nudge_f_accum = 0.0_f64;
         let mut samples = 0usize;
@@ -2084,31 +2166,31 @@ impl StarshipSim {
                     }
                 }
 
-                // D. Ground / Pad B Contact with Crushable Aft Skirt Dampers (prevents tunneling through y = 0).
-                for &(idx, pose, vel, com, half_l, is_landed) in &[
-                    (bi, bp, bv, b_com, BOOSTER_HALF_LEN, false),
-                    (si, sp, sv, s_com, SHIP_HALF_LEN, ship_landed),
+                // D. Ground / Pad B Contact (aft skirt + nose/top perimeter, strictly `pt_w.y < 0.0` + Coulomb friction!).
+                for &(idx, pose, vel, com, half_l) in &[
+                    (bi, bp, bv, b_com, BOOSTER_HALF_LEN),
+                    (si, sp, sv, s_com, SHIP_HALF_LEN),
                 ] {
                     let m = masses[idx];
-                    for k in 0..4 {
-                        let a = k as f64 * FRAC_PI_2;
-                        let pt_l = Vec3::new(4.5 * a.cos(), -half_l, 4.5 * a.sin());
-                        let pt_w = pose.transform_point(pt_l);
-                        if pt_w.y < 0.0 || (is_landed && pt_w.y < 0.35) {
-                            let pen = (-pt_w.y).max(0.0);
-                            let vp = vel_at(vel, com, pt_w);
-                            let k_g = m * 65.0;
-                            let c_g = m * 14.0;
-                            let fy = (k_g * pen - c_g * vp.y).max(0.0);
-                            let f_fric = Vec3::new(-vp.x, 0.0, -vp.z) * (m * 4.0);
-                            apply_at(wrenches, idx, com, pt_w, Vec3::new(f_fric.x, fy, f_fric.z));
+                    for &end_y in &[-half_l, half_l] {
+                        let rad = if end_y < 0.0 { 4.5 } else { 2.2 };
+                        for k in 0..4 {
+                            let a = k as f64 * FRAC_PI_2;
+                            let pt_l = Vec3::new(rad * a.cos(), end_y, rad * a.sin());
+                            let pt_w = pose.transform_point(pt_l);
+                            if pt_w.y < 0.0 {
+                                let pen = -pt_w.y;
+                                let vp = vel_at(vel, com, pt_w);
+                                let k_g = m * 65.0;
+                                let c_g = m * 14.0;
+                                let fy = (k_g * pen - c_g * vp.y).max(0.0);
+                                // True Coulomb friction cone: `|f_t| <= mu * fy` (strictly zero when rebounding!).
+                                let v_t = Vec3::new(vp.x, 0.0, vp.z);
+                                let f_fric = (-v_t * (m * 4.0)).clamp_length_max(0.85 * fy);
+                                apply_at(wrenches, idx, com, pt_w, Vec3::new(f_fric.x, fy, f_fric.z));
+                            }
                         }
                     }
-                }
-
-                // D2. Starship Nose Cold-Gas N2 Yaw RCS during Belly-Flop Skydiving!
-                if ship_rcs_yaw.abs() > 1.0 {
-                    wrenches[si].angular += (sp.rotation * Vec3::X) * ship_rcs_yaw;
                 }
 
                 // E. Interactive 3D Mouse Nudge Force!
@@ -2233,6 +2315,38 @@ impl StarshipSim {
         emit_for(&s_ids, sp, sv, 1);
         emit_for(&hls_ids, sp, sv, 1);
 
+        // Emit visible white cold-gas N2 RCS thruster puffs whenever any physical RCS pod fires!
+        let rcs_ids = self.ship_rcs_thrusters;
+        for tid in rcs_ids {
+            let (Some(spec), Some(read)) = (
+                self.world.devices.thrusters.spec(tid),
+                self.world.devices.thrusters.reading(tid),
+            ) else {
+                continue;
+            };
+            if read.thrust < 200.0 {
+                continue;
+            }
+            let base_f = sp.compose(&spec.frame);
+            let exh_w = -(base_f.rotation * Vec3::X).normalize();
+            let seed = (self.next_rand() * 100.0) as f32;
+            if self.plumes.len() >= 900 {
+                self.plumes.swap_remove(0);
+            }
+            self.plumes.push(PlumePuff {
+                pos: base_f.position + exh_w * 0.4,
+                vel: sv + exh_w * 55.0,
+                radius: 0.45,
+                growth_rate: 7.5,
+                stretch: 2.2,
+                age: 0.0,
+                max_age: 0.22,
+                base_opacity: 0.42,
+                seed,
+                kind: 1.0,
+            });
+        }
+
         for p in &mut self.plumes {
             p.pos += p.vel * dt;
             // Ground-pad exhaust steam deflection outward along y = 0!
@@ -2274,10 +2388,13 @@ impl StarshipSim {
         let mut b_lit = 0;
         let mut b_thrust = 0.0;
         let mut b_twd = 0.0_f64;
+        let mut b_gimbal_deg = 0.0_f64;
         for &e in &self.booster_engines {
             if let Some(r) = self.world.devices.rockets.engine_reading(e) {
                 if r.ignited {
                     b_lit += 1;
+                    b_gimbal_deg = b_gimbal_deg
+                        .max(r.gimbal_rad[0].hypot(r.gimbal_rad[1]).to_degrees());
                 }
                 b_thrust += r.thrust_n;
                 b_twd = b_twd.max(r.twd_torque_nm);
@@ -2286,10 +2403,13 @@ impl StarshipSim {
         let mut s_lit = 0;
         let mut s_thrust = 0.0;
         let mut rvac_sep = false;
+        let mut s_gimbal_deg = 0.0_f64;
         for (i, &e) in self.ship_engines.iter().enumerate() {
             if let Some(r) = self.world.devices.rockets.engine_reading(e) {
                 if r.ignited {
                     s_lit += 1;
+                    s_gimbal_deg = s_gimbal_deg
+                        .max(r.gimbal_rad[0].hypot(r.gimbal_rad[1]).to_degrees());
                 }
                 s_thrust += r.thrust_n;
                 if i >= 3 && r.flow_separated {
@@ -2301,6 +2421,8 @@ impl StarshipSim {
             if let Some(r) = self.world.devices.rockets.engine_reading(e) {
                 if r.ignited {
                     s_lit += 1;
+                    s_gimbal_deg = s_gimbal_deg
+                        .max(r.gimbal_rad[0].hypot(r.gimbal_rad[1]).to_degrees());
                 }
                 s_thrust += r.thrust_n;
             }
@@ -2404,6 +2526,9 @@ impl StarshipSim {
             chopsticks_closed_frac: (1.0 - self.chopsticks_cmd_rad / 0.36).clamp(0.0, 1.0),
             wind_preset: self.wind_preset,
             failed_engines: self.failed_engine_count,
+            tvc_enabled: self.tvc_enabled,
+            booster_gimbal_deg: b_gimbal_deg,
+            ship_gimbal_deg: s_gimbal_deg,
         })
     }
 }

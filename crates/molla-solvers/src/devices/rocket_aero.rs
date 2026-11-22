@@ -95,7 +95,8 @@ pub struct AeroBodySpec {
     pub cd_crossflow_supersonic: Real,
     /// Geometric Center of Pressure axial coordinate (m along `axis_local`) in `90°` crossflow.
     pub cp_crossflow_local: Real,
-    /// Forward/aft nose-first CP offset relative to `cp_crossflow_local` (m; negative = aft of midbody).
+    /// Nose-first CP offset relative to `cp_crossflow_local` (m; positive = forward toward nose
+    /// during `α = 0°` ascent -> real finless rocket aerodynamic instability, shifting aft at `α = 180°`).
     pub cp_axial_shift_m: Real,
     /// Rotational aerodynamic strip damping factor (dimensionless, ~0.8–1.2).
     pub rot_damping_scale: Real,
@@ -473,7 +474,8 @@ impl RocketAero {
                 ab.reading.pifs_cp_shift_m = 0.0;
                 continue;
             }
-            let mut wind_w = self.wind.wind_at(com_w, alt_m, self.time_s);
+            let mut wind_w =
+                rockets.corotating_atmosphere_velocity(com_w) + self.wind.wind_at(com_w, alt_m, self.time_s);
             // Add stateful MIL-F-8785C Dryden stochastic turbulence (fades cleanly above 25 km)!
             let turb_alt_scale = (-alt_m / 18_000.0).exp();
             wind_w += self.dryden.gust_world() * turb_alt_scale;
@@ -558,8 +560,8 @@ impl RocketAero {
             let v_perp_mag = v_perp.length();
             let f_normal_w = if v_perp_mag > 1e-6 {
                 let n_dir = -v_perp / v_perp_mag; // Opposes crossflow velocity
-                // Potential slender-body term + viscous crossflow cylinder drag term:
-                let f_pot = q * s_ref * 1.45 * (2.0 * aoa).sin().abs() * (0.5 * aoa).cos().abs() * (1.0 - fm_blend);
+                // Exact Munk-Jones potential slender-body term (`dC_N/dα = 2` -> `1.0 * sin(2α)`) + viscous crossflow:
+                let f_pot = q * s_ref * 1.0 * (2.0 * aoa).sin().abs() * (0.5 * aoa).cos().abs() * (1.0 - fm_blend);
                 let f_visc = q * s_plan * 0.88 * cd_n * sin_a * sin_a;
                 n_dir * (f_pot + f_visc)
             } else {
@@ -585,21 +587,24 @@ impl RocketAero {
             }
 
             let f_total = f_axial_w + f_normal_w + f_buffet_w;
-            // Center of pressure shifts smoothly from axial flight CP to geometric midbody at 90° belly-flop,
-            // plus forward shift under Plume-Induced Flow Separation (PIFS)!
+            // Signed Center of Pressure shift: nose-first (`cos_a > 0`) shifts CP FORWARD toward ogive nose
+            // (real finless rocket aerodynamic instability!), belly-flop (`cos_a = 0`) sits at geometric midbody,
+            // and tail-first (`cos_a < 0`) shifts CP AFT toward the engine skirt (requiring top grid fins)!
             let cp_local_z =
-                ab.spec.cp_crossflow_local + ab.spec.cp_axial_shift_m * cos_a.abs() + pifs_cp_shift_m;
+                ab.spec.cp_crossflow_local + ab.spec.cp_axial_shift_m * cos_a + pifs_cp_shift_m;
             let cp_w = bp.transform_point(ab.spec.axis_local * cp_local_z);
             let mut tau_total = (cp_w - com_w).cross(f_axial_w + f_normal_w) + tau_buffet_w;
 
-            // Crossflow rotational strip damping (exact integral of ρ c_d D |ω×r| (ω×r) r dr ≈ 1/32 ρ c_d D L⁴ ω² + linear).
+            // Crossflow rotational strip damping (exact integral along slender cylinder `[-L/2, +L/2]`):
+            // Linear crossflow term scales with perpendicular airflow `v_perp_mag` (strictly 0 in pure axial flight!),
+            // and quadratic spin-drag integral is `∫ 0.5 ρ C_d D |ω r| (ω r) r dr = (1/64) ρ C_d D L⁴ |ω| ω`!
             let omega_perp = bv.angular - axis_w * bv.angular.dot(axis_w);
             let w_mag = omega_perp.length();
             if w_mag > 1e-6 && ab.spec.rot_damping_scale > 0.0 {
                 let l = ab.spec.length_m;
                 let d = ab.spec.diameter_m;
-                let c_lin = 0.06 * atmo.density_kg_m3 * cd_n * d * l * l * l * speed;
-                let c_quad = 0.03 * atmo.density_kg_m3 * cd_n * d * l.powi(4) * w_mag;
+                let c_lin = (1.0 / 12.0) * atmo.density_kg_m3 * cd_n * d * l * l * l * v_perp_mag;
+                let c_quad = (1.0 / 64.0) * atmo.density_kg_m3 * cd_n * d * l.powi(4) * w_mag;
                 tau_total -= omega_perp * ((c_lin + c_quad) * ab.spec.rot_damping_scale);
             }
 
@@ -637,7 +642,10 @@ impl RocketAero {
                 continue;
             }
             let arm = pt_w - com_w;
-            let wind_w = self.wind.wind_at(pt_w, alt_m, self.time_s);
+            let turb_alt_scale = (-alt_m / 18_000.0).exp();
+            let wind_w = rockets.corotating_atmosphere_velocity(pt_w)
+                + self.wind.wind_at(pt_w, alt_m, self.time_s)
+                + self.dryden.gust_world() * turb_alt_scale;
             let v_local_w = bv.linear + bv.angular.cross(arm) - wind_w;
             let speed = v_local_w.length();
             if speed < 1e-3 {

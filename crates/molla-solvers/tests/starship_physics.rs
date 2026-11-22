@@ -784,3 +784,348 @@ fn mars_co2_atmosphere_and_lunar_vacuum_propulsion_and_aero() {
     assert!(ra_l.world_force.length() < 1e-9, "Lunar vacuum must produce strictly zero aero drag");
     assert!((rt_l.effective_isp_s - 335.0).abs() < 0.5, "HLS thruster must run at full 335 s vacuum Isp");
 }
+
+#[test]
+fn open_loop_offcenter_and_tilted_ignition_spins_without_tvc() {
+    // Proves ZERO hidden stabilization in molla-solvers:
+    // 1) Igniting an off-center Raptor (r = 1.1 m) with locked gimbal=0° spins & tumbles the stage
+    //    at exact Newton-Euler α = (r × F) / I.
+    // 2) Pure axial flight (aoa = 0, v = 250 m/s) has zero spurious linear crossflow spin brake.
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::ZERO).unwrap();
+    w.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+    w.devices.rockets.set_atmosphere(PlanetAtmosphere::Vacuum);
+
+    let i_trans = 2.6e7;
+    let ship = dynamic_stage(&mut w, Vec3::new(0.0, 1_000.0, 0.0), 120_000.0, Vec3::new(i_trans, 1.5e6, i_trans));
+    // Start tilted 45° with zero spin!
+    w.scene
+        .set_body_pose(ship, Transform::new(Vec3::new(0.0, 1_000.0, 0.0), Quat::from_rotation_z(0.785)))
+        .unwrap();
+    // Single off-center Raptor at x = +1.10 m, y = -24.2 m, gimbal LOCKED at 0°!
+    let frame = Transform::new(Vec3::new(1.10, -24.2, 0.0), Quat::from_rotation_z(FRAC_PI_2));
+    let eng = w
+        .devices
+        .rockets
+        .insert_engine(&w.scene, RocketEngineSpec::raptor3_sea_level(ship, frame, None, None, 0.26))
+        .unwrap();
+    w.devices
+        .rockets
+        .command_engine(eng, RocketEngineCommand { ignited: true, throttle: 0.90, gimbal_rad: [0.0, 0.0] })
+        .unwrap();
+
+    for _ in 0..200 {
+        w.step(0.01).unwrap();
+    }
+    let vel = w.scene.body_velocity(ship).unwrap();
+    let pose = w.scene.body_pose(ship).unwrap();
+    let tilt_deg = (pose.rotation * Vec3::Y).y.clamp(-1.0, 1.0).acos().to_degrees();
+    // Exact Newton-Euler: τ_z ≈ +1.10 * (0.90 * 2.746e6) ≈ +2.72e6 N·m -> α ≈ 0.104 rad/s² -> ω ≈ +0.19 rad/s!
+    assert!(
+        vel.angular.z > 0.15,
+        "off-center open-loop Raptor MUST spin stage at exact Newton-Euler rate: wz={:.4}",
+        vel.angular.z
+    );
+    assert!(
+        tilt_deg > 52.0,
+        "open-loop tilted rocket must spin further off vertical (never self-straighten!): tilt={tilt_deg:.1}°"
+    );
+
+    // Now verify pure axial flight at 250 m/s in Earth air does NOT falsely molasses-brake a small spin!
+    let mut wa = RigidWorld::new().unwrap();
+    wa.scene.set_gravity(Vec3::ZERO).unwrap();
+    wa.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+    wa.devices.rockets.set_atmosphere(PlanetAtmosphere::EarthUs76);
+    let b = dynamic_stage(&mut wa, Vec3::new(0.0, 500.0, 0.0), 120_000.0, Vec3::new(i_trans, 1.5e6, i_trans));
+    wa.scene
+        .set_body_velocity(b, SpatialVector::new(Vec3::new(0.0, 250.0, 0.0), Vec3::new(0.0, 0.0, 0.20)))
+        .unwrap();
+    wa.devices
+        .rocket_aero
+        .insert_body(
+            &wa.scene,
+            AeroBodySpec {
+                body: b,
+                axis_local: Vec3::Y,
+                diameter_m: 9.0,
+                length_m: 50.0,
+                cd_axial_nose: 0.30,
+                cd_axial_tail: 0.90,
+                cd_crossflow_subsonic: 1.22,
+                cd_crossflow_supersonic: 1.54,
+                cp_crossflow_local: 0.0,
+                cp_axial_shift_m: 0.0,
+                rot_damping_scale: 1.0,
+                srp_drag_loss_gain: 0.0,
+            },
+        )
+        .unwrap();
+    wa.step(0.05).unwrap();
+    let wz_after = wa.scene.body_velocity(b).unwrap().angular.z;
+    assert!(
+        wz_after > 0.185,
+        "pure axial flight must NOT apply huge false linear damping: wz_after={wz_after:.4}"
+    );
+}
+
+#[test]
+fn nose_first_aerodynamic_instability_and_rotational_slosh_coupling() {
+    // 1. Finless rocket flying nose-first at AoA = 12° with positive cp_axial_shift_m (+9 m ahead of COM)
+    //    MUST experience destabilizing pitch-up torque (increases tilt, NEVER self-straightens!).
+    let mut wa = RigidWorld::new().unwrap();
+    wa.scene.set_gravity(Vec3::ZERO).unwrap();
+    wa.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+    wa.devices.rockets.set_atmosphere(PlanetAtmosphere::EarthUs76);
+    let b = dynamic_stage(&mut wa, Vec3::new(0.0, 2_000.0, 0.0), 120_000.0, Vec3::new(2.6e7, 1.5e6, 2.6e7));
+    // Tilt +12° around -Z (nose leaned toward +X), flying straight UP (+Y) at 220 m/s!
+    wa.scene
+        .set_body_pose(b, Transform::new(Vec3::new(0.0, 2_000.0, 0.0), Quat::from_rotation_z(-0.21)))
+        .unwrap();
+    wa.scene
+        .set_body_velocity(b, SpatialVector::new(Vec3::new(0.0, 220.0, 0.0), Vec3::ZERO))
+        .unwrap();
+    wa.devices
+        .rocket_aero
+        .insert_body(
+            &wa.scene,
+            AeroBodySpec {
+                body: b,
+                axis_local: Vec3::Y,
+                diameter_m: 9.0,
+                length_m: 50.0,
+                cd_axial_nose: 0.30,
+                cd_axial_tail: 0.90,
+                cd_crossflow_subsonic: 1.22,
+                cd_crossflow_supersonic: 1.54,
+                cp_crossflow_local: 0.5,
+                cp_axial_shift_m: 8.5,
+                rot_damping_scale: 1.0,
+                srp_drag_loss_gain: 0.0,
+            },
+        )
+        .unwrap();
+    for _ in 0..80 {
+        wa.step(0.01).unwrap();
+    }
+    let tilt_after = (wa.scene.body_pose(b).unwrap().rotation * Vec3::Y)
+        .y
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees();
+    let wz_after = wa.scene.body_velocity(b).unwrap().angular.z;
+    assert!(
+        tilt_after > 13.0 && wz_after < -0.02,
+        "finless nose-first rocket MUST be aerodynamically unstable (pitch further over!): tilt={tilt_after:.2}°, wz={wz_after:.4}"
+    );
+
+    // 2. Pure rotation/flip of a stage with an off-COM nose header tank (y = +16 m) in 0-g MUST excite
+    //    real tangential/centripetal slosh (`α × r + ω × (ω × r)`) even with zero COM linear acceleration!
+    let mut ws = RigidWorld::new().unwrap();
+    ws.scene.set_gravity(Vec3::ZERO).unwrap();
+    let s = dynamic_stage(&mut ws, Vec3::ZERO, 120_000.0, Vec3::new(2.6e7, 1.5e6, 2.6e7));
+    ws.devices
+        .rockets
+        .register_stage_dry_mass(
+            &ws.scene,
+            s,
+            MassProperties {
+                mass: 120_000.0,
+                local_com: Vec3::new(0.0, -3.5, 0.0),
+                inertia: Mat3::from_diagonal(Vec3::new(2.6e7, 1.5e6, 2.6e7)),
+            },
+        )
+        .unwrap();
+    let nose_tank = ws
+        .devices
+        .rockets
+        .insert_tank(
+            &mut ws.scene,
+            PropellantTankSpec {
+                body: s,
+                base_local: Vec3::new(0.0, 14.5, 0.0),
+                axis_local: Vec3::Y,
+                radius_m: 1.85,
+                height_m: 4.5,
+                liquid_density_kg_m3: 1_140.0,
+                initial_mass_kg: 28_000.0,
+                slosh_mass_fraction: 0.25,
+                slosh_damping_ratio: 0.05,
+                capillary_omega2: 0.35,
+            },
+        )
+        .unwrap();
+    // Apply a pure angular spin-up torque (via off-COM step angular velocity change) to mimic flip!
+    ws.scene
+        .set_body_velocity(s, SpatialVector::new(Vec3::ZERO, Vec3::new(0.0, 0.0, 0.8)))
+        .unwrap();
+    for _ in 0..40 {
+        ws.step(0.01).unwrap();
+    }
+    let tr = ws.devices.rockets.tank_reading(nose_tank).unwrap();
+    assert!(
+        tr.slosh_disp_m.length() > 0.02,
+        "flipping/rotating nose tank MUST excite real rotational slosh: disp={:?}",
+        tr.slosh_disp_m
+    );
+}
+
+#[test]
+fn roll_vectoring_produces_pure_roll_and_free_free_bending_conserves_momentum() {
+    // 1. Tangential roll vectoring (`g0 = -r sin a, g1 = +r cos a`) on a 3-Raptor cluster
+    //    must generate pure roll torque `+tau_y` with ZERO net lateral force!
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::ZERO).unwrap();
+    w.devices.rockets.set_atmosphere(PlanetAtmosphere::Vacuum);
+    let stage = dynamic_stage(&mut w, Vec3::ZERO, 120_000.0, Vec3::new(2.6e7, 1.5e6, 2.6e7));
+    let up_rot = Quat::from_rotation_z(FRAC_PI_2);
+    let roll_rad = 0.10;
+    for k in 0..3 {
+        let a = (k as f64) * (std::f64::consts::TAU / 3.0);
+        let frame = Transform::new(Vec3::new(1.10 * a.cos(), -24.0, 1.10 * a.sin()), up_rot);
+        let eid = w
+            .devices
+            .rockets
+            .insert_engine(&w.scene, RocketEngineSpec::raptor3_sea_level(stage, frame, None, None, 0.26))
+            .unwrap();
+        w.devices
+            .rockets
+            .command_engine(
+                eid,
+                RocketEngineCommand {
+                    ignited: true,
+                    throttle: 0.80,
+                    gimbal_rad: [-roll_rad * a.sin(), roll_rad * a.cos()],
+                },
+            )
+            .unwrap();
+    }
+    for _ in 0..100 {
+        w.step(0.01).unwrap();
+    }
+    let v = w.scene.body_velocity(stage).unwrap();
+    assert!(
+        v.angular.y > 0.35,
+        "tangential roll vectoring must spin stage strongly about +Y: wy={:.4}",
+        v.angular.y
+    );
+    // Finite-angle 3D gimbal kinematics (`sin(g) - 2 sin(g/2) = O(g³)`) keeps lateral drift < 0.02% of axial Δv!
+    assert!(
+        v.linear.x.abs() < 0.01 && v.linear.z.abs() < 0.01,
+        "symmetric 3-engine roll vectoring must produce negligible lateral drift: v={:?}",
+        v.linear
+    );
+
+    // 2. Free-free Euler-Bernoulli bending modes must strictly conserve rigid-body linear momentum in 0-g!
+    let mut wf = RigidWorld::new().unwrap();
+    wf.scene.set_gravity(Vec3::ZERO).unwrap();
+    let fb = dynamic_stage(&mut wf, Vec3::ZERO, 120_000.0, Vec3::new(2.6e7, 1.5e6, 2.6e7));
+    wf.devices.rocket_structure.insert(&wf.scene, FlexBodySpec::starship_upper(fb)).unwrap();
+    for _ in 0..50 {
+        wf.step(0.01).unwrap();
+    }
+    let vf = wf.scene.body_velocity(fb).unwrap();
+    assert!(
+        vf.linear.length() < 1e-12 && vf.angular.length() < 1e-12,
+        "free-free structure with no external forces must conserve zero momentum: {vf:?}"
+    );
+}
+
+#[test]
+fn spherical_planet_corotating_atmosphere_gives_zero_pad_wind_and_inertial_ascent() {
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::ZERO).unwrap();
+    let r_earth = 6_378_137.0;
+    let omega = Vec3::new(0.0, molla_solvers::devices::EARTH_OMEGA_RAD_S, 0.0); // Spinning around +Y North Pole
+    w.devices.rockets.set_spherical_planet(Vec3::ZERO, r_earth);
+    w.devices.rockets.set_earth_rotation(omega);
+    w.devices.rockets.set_atmosphere(PlanetAtmosphere::EarthUs76);
+
+    // Rocket parked on the equator at (+R_earth, 0, 0) moving at exact co-rotating surface velocity Ω × r (~465.1 m/s)!
+    let pad_pos = Vec3::new(r_earth, 0.0, 0.0);
+    let v_pad = omega.cross(pad_pos);
+    let pad_ship = dynamic_stage(&mut w, pad_pos, 120_000.0, Vec3::splat(2.5e7));
+    w.scene
+        .set_body_velocity(pad_ship, SpatialVector::new(v_pad, Vec3::ZERO))
+        .unwrap();
+    w.devices
+        .rockets
+        .register_stage_dry_mass(
+            &w.scene,
+            pad_ship,
+            MassProperties {
+                mass: 120_000.0,
+                local_com: Vec3::ZERO,
+                inertia: Mat3::from_diagonal(Vec3::splat(2.5e7)),
+            },
+        )
+        .unwrap();
+    let ab_pad = w
+        .devices
+        .rocket_aero
+        .insert_body(
+            &w.scene,
+            AeroBodySpec {
+                body: pad_ship,
+                axis_local: Vec3::X, // Nose pointing radially outward (+X)
+                diameter_m: 9.0,
+                length_m: 50.0,
+                cd_axial_nose: 0.30,
+                cd_axial_tail: 0.90,
+                cd_crossflow_subsonic: 1.22,
+                cd_crossflow_supersonic: 1.54,
+                cp_crossflow_local: 0.0,
+                cp_axial_shift_m: 8.5,
+                rot_damping_scale: 1.0,
+                srp_drag_loss_gain: 0.0,
+            },
+        )
+        .unwrap();
+
+    // Second rocket climbing radially at +100 m/s relative to the co-rotating atmosphere!
+    let climb_ship = dynamic_stage(&mut w, pad_pos + Vec3::new(50.0, 0.0, 0.0), 120_000.0, Vec3::splat(2.5e7));
+    w.scene
+        .set_body_velocity(climb_ship, SpatialVector::new(v_pad + Vec3::new(100.0, 0.0, 0.0), Vec3::ZERO))
+        .unwrap();
+    let ab_climb = w
+        .devices
+        .rocket_aero
+        .insert_body(
+            &w.scene,
+            AeroBodySpec {
+                body: climb_ship,
+                axis_local: Vec3::X,
+                diameter_m: 9.0,
+                length_m: 50.0,
+                cd_axial_nose: 0.30,
+                cd_axial_tail: 0.90,
+                cd_crossflow_subsonic: 1.22,
+                cd_crossflow_supersonic: 1.54,
+                cp_crossflow_local: 0.0,
+                cp_axial_shift_m: 8.5,
+                rot_damping_scale: 1.0,
+                srp_drag_loss_gain: 0.0,
+            },
+        )
+        .unwrap();
+
+    w.step(0.01).unwrap();
+    let r_pad = w.devices.rocket_aero.body_reading(ab_pad).unwrap();
+    let r_climb = w.devices.rocket_aero.body_reading(ab_climb).unwrap();
+    let v_pad_after = w.scene.body_velocity(pad_ship).unwrap().linear;
+    assert!(
+        r_pad.world_force.length() < 1e-6 && r_pad.dynamic_pressure_pa < 1e-6,
+        "rocket co-rotating on spinning round Earth pad must feel zero wind: q={:.3}, f={:?}",
+        r_pad.dynamic_pressure_pa,
+        r_pad.world_force
+    );
+    assert!(
+        (v_pad_after - v_pad).length() < 1e-6,
+        "inertial spherical-planet mode must NOT inject fictitious flat-frame Coriolis force!"
+    );
+    let q_expected = 0.5 * us76_atmosphere(50.0).density_kg_m3 * 100.0 * 100.0;
+    assert!(
+        (r_climb.dynamic_pressure_pa - q_expected).abs() / q_expected < 0.02,
+        "climbing rocket q must match relative 100 m/s airspeed ({q_expected:.1} Pa), got {:.1} Pa",
+        r_climb.dynamic_pressure_pa
+    );
+}
