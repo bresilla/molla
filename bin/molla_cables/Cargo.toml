@@ -1,0 +1,46 @@
+[package]
+name = "molla_cables"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+default-run = "molla_cables"
+
+[[bin]]
+name = "molla_apple_tree"
+path = "src/apple_tree.rs"
+
+[[bin]]
+name = "molla_leafy_tree"
+path = "src/leafy_tree.rs"
+
+[[bin]]
+name = "molla_drone_orchard"
+path = "src/drone_orchard.rs"
+
+[[bin]]
+name = "molla_foliage_bake"
+path = "src/foliage_bake.rs"
+
+[[bin]]
+name = "molla_space_docking"
+path = "src/space_docking.rs"
+
+[[bin]]
+name = "molla_starship"
+path = "src/starship.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+eframe = { version = "=0.34.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+pollster = "0.4"
+serde_json = "1"
+molla-core = { path = "../../crates/molla-core" }
+molla-math = { path = "../../crates/molla-math" }
+molla-geometry = { path = "../../crates/molla-geometry" }
+molla-compute = { path = "../../crates/molla-compute", features = ["gpu"] }
+molla-sim = { path = "../../crates/molla-sim", features = ["gpu"] }
+molla-solvers = { path = "../../crates/molla-solvers", features = ["gpu"] }

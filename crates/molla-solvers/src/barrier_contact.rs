@@ -23,6 +23,7 @@ use crate::core::{Error, Result};
 use crate::math::{Mat3, Real, Vec3};
 
 mod validation;
+mod strain;
 use molla_math::constitutive::MaterialResponse;
 use molla_sim::ElasticElement;
 use validation::{finite_scalars, finite_vectors};
@@ -268,6 +269,9 @@ pub struct BarrierShell {
     pub tet_v0: Vec<Real>,
     /// Constitutive membrane/tet elements; collision topology is separate.
     pub elastic_elements: Vec<ElasticElement>,
+    strain_faces: Vec<usize>,
+    strain_neighbors: Vec<Vec<u32>>,
+    strain_weights: Vec<Real>,
     /// Lagged friction contacts, rebuilt at each step start from the
     /// committed positions (IPC semi-implicit friction: the normal
     /// force λ and the contact frame are FROZEN for the whole step's
@@ -388,6 +392,9 @@ impl BarrierShell {
             tets: Vec::new(),
             tet_v0: Vec::new(),
             elastic_elements: Vec::new(),
+            strain_faces: Vec::new(),
+            strain_neighbors: Vec::new(),
+            strain_weights: Vec::new(),
             lagged_friction: Vec::new(),
             lagged_pair_friction: Vec::new(),
             vertex_ksum,
@@ -893,11 +900,16 @@ impl BarrierShell {
             let dv = Self::tet_volume(x, t.ids) - v0;
             e += h2 * 0.5 * t.kv * dv * dv;
         }
-        for element in &self.elastic_elements {
+        for (index, element) in self.elastic_elements.iter().enumerate() {
             let Ok(energy) = element.energy(x) else {
                 return Real::INFINITY;
             };
             e += h2 * energy;
+            if let Some(limit) = element.strain_limit() {
+                let barrier = element.deformation(x).and_then(|f| limit.energy(f));
+                let Ok(barrier) = barrier else { return Real::INFINITY; };
+                e += h2*self.strain_weights.get(index).copied().unwrap_or(0.0)*barrier;
+            }
         }
         for (i, xi) in x.iter().enumerate() {
             if self.pinned[i] {
@@ -970,8 +982,8 @@ impl BarrierShell {
                 }
             }
         }
-        for element in &self.elastic_elements {
-            let Ok(response) = element.response(x, false) else {
+        for (index, element) in self.elastic_elements.iter().enumerate() {
+            let Ok(response) = self.material_response(index, x, false) else {
                 out.fill(Vec3::splat(Real::NAN));
                 return;
             };
@@ -1097,7 +1109,7 @@ impl BarrierShell {
             let response = if let Some(tangents) = tangents {
                 &tangents[index]
             } else {
-                let Ok(r) = element.response(x, true) else {
+                let Ok(r) = self.material_response(index, x, true) else {
                     y.fill(Vec3::splat(Real::NAN));
                     return;
                 };
@@ -1605,6 +1617,7 @@ impl BarrierShell {
             "initial",
             self.params.reject_intersecting_start,
         )?;
+        self.strain_neighborhoods()?;
         if !self.affine_bodies.is_empty() {
             return self.step_abd(h);
         }
@@ -1640,6 +1653,7 @@ impl BarrierShell {
             // the 3·d̂ margin + travel cap make between-rebuild motion
             // safe).
             let pairs = self.self_candidates(&x);
+            self.prepare_strain(&x)?;
             self.gradient(&x, &x_tilde, h, &pairs, &mut grad);
             finite_vectors(&grad, "Newton gradient")?;
             let g_inf = grad
@@ -1712,7 +1726,7 @@ impl BarrierShell {
         let tangents: Vec<_> = self
             .elastic_elements
             .iter()
-            .map(|e| e.response(x, true))
+            .enumerate().map(|(i,_)| self.material_response(i, x, true))
             .collect::<Result<_>>()?;
         let n = x.len();
         let mut p_out = vec![Vec3::ZERO; n];
@@ -1833,6 +1847,7 @@ impl BarrierShell {
                 }
             }
             let pairs = self.self_candidates(&x);
+            self.prepare_strain(&x)?;
             self.gradient(&x, &x_tilde, h, &pairs, &mut grad);
             // Body gradients: reduced proxy forces + inertia + ortho.
             let mut gbody = self.abd_reduce(&grad);
@@ -1871,7 +1886,7 @@ impl BarrierShell {
             let tangents: Vec<_> = self
                 .elastic_elements
                 .iter()
-                .map(|e| e.response(&x, true))
+                .enumerate().map(|(i,_)| self.material_response(i, &x, true))
                 .collect::<Result<_>>()?;
             // ── composite PCG on H·d = −g.
             let mut dv = vec![Vec3::ZERO; n];

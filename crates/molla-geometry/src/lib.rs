@@ -2,10 +2,12 @@
 
 pub mod aabb;
 pub mod broad_phase;
+pub mod cell_contact;
 pub mod bvh;
 pub mod collider_query;
 pub mod contact_extras;
 pub mod contact_reduction;
+pub mod convex_cut;
 pub mod decimate;
 pub mod decomposition;
 pub mod epa;

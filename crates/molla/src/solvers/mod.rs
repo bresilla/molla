@@ -35,6 +35,10 @@ pub use featherstone::FeatherstoneSolver;
 pub use ik::{IkConfig, IkObjective, IkResult, IkSolver, ik_solver_health};
 pub use jacobian::jacobian;
 pub use molla_solvers::Solver;
+pub use molla_solvers::airflow;
+pub use molla_solvers::attachments;
+pub use molla_solvers::devices;
+pub use molla_solvers::strands;
 pub use molla_solvers::{rigid_world, track_forces};
 #[cfg(feature = "gpu")]
 pub use molla_solvers::{

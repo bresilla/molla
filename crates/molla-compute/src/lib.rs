@@ -14,3 +14,8 @@ pub use pipeline_cache::PipelineCacheSnapshot;
 
 #[cfg(feature = "gpu")]
 pub use engine::{AdapterInfo, Backend, DeviceHealth, DeviceLoss, Engine};
+
+#[cfg(feature = "gpu")]
+mod upload;
+#[cfg(feature = "gpu")]
+pub use upload::copy_to_mapped;

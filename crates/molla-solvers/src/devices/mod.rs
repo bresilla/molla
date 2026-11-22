@@ -1,26 +1,81 @@
 //! Actuator devices of the rigid world, after Webots: joint motors and
-//! brakes, propellers, belts (conveyors and tank tracks) and connectors.
+//! brakes, propellers, belts (conveyors and tank tracks), connectors,
+//! spacecraft thrusters, reaction wheels, orbital force fields and 6-DOF
+//! spacecraft controllers.
 //!
 //! Each device is part of the physics step. Motors turn a position,
 //! velocity or force command into the joint drive; brakes damp a joint
 //! axis; propellers push their body; belts move their colliders' surfaces;
 //! connectors dock bodies with a breakable joint; copter controllers fly a
 //! multirotor on its propellers; the air drags bodies and blows with the
-//! wind. Every device reports what it did in the last step.
+//! wind; thrusters push spacecraft with optional valve lag, MIB and propellant
+//! depletion; reaction wheels exchange angular momentum with exact gyroscopic
+//! coupling; orbital fields model Clohessy–Wiltshire and central gravity; and
+//! spacecraft controllers fly 6-DOF free-flyers. Every device reports what it
+//! did in the last step.
 
 mod aero;
 mod belts;
 mod connectors;
 mod copter;
 mod motors;
+mod orbital;
 mod propellers;
+mod reaction_wheels;
+mod rocket;
+mod rocket_aero;
+mod rocket_structure;
+mod sensors;
+mod space_env;
+mod spacecraft;
+mod thrusters;
 
 pub use aero::{AIR_DENSITY, Aero, DragId, DragReading, DragSpec};
 pub use belts::{BeltId, BeltReading, BeltSpec, Belts};
 pub use connectors::{ConnectorId, ConnectorKind, ConnectorReading, ConnectorSpec, Connectors};
 pub use copter::{CopterCommand, CopterId, CopterLimits, CopterReading, CopterSpec, Copters};
 pub use motors::{MotorKey, MotorReading, MotorSpec, Motors};
+pub use orbital::{
+    EARTH_EQUATORIAL_RADIUS, EARTH_J2, EARTH_J3, EARTH_J4, EARTH_MU, EccentricOrbit,
+    J2Perturbation, MARS_MU, MOON_MU, Orbital, OrbitalField, OrbitalReading, YamanakaAnkersen,
+    ZonalHarmonics,
+};
 pub use propellers::{PropellerId, PropellerReading, PropellerSpec, Propellers};
+pub use reaction_wheels::{
+    GimbalSpec, ImbalanceSpec, ReactionWheelCommand, ReactionWheelId, ReactionWheelReading,
+    ReactionWheelSpec, ReactionWheels,
+};
+pub use rocket::{
+    AtmosphereState, EARTH_OMEGA_RAD_S, PropellantTankReading, PropellantTankSpec,
+    RocketEngineCommand, RocketEngineId, RocketEngineReading, RocketEngineSpec, RocketPropulsion,
+    TankId, earth_rotation_at_latitude, us76_atmosphere,
+};
+pub use rocket_aero::{
+    AeroBodyId, AeroBodyReading, AeroBodySpec, AeroSurfaceId, AeroSurfaceKind, AeroSurfaceReading,
+    AeroSurfaceSpec, RocketAero, WindField,
+};
+pub use rocket_structure::{
+    BiquadNotchFilter, FlexBodyId, FlexBodyReading, FlexBodySpec, RocketStructure,
+    free_free_beam_mode,
+};
+pub use sensors::{
+    ImuId, ImuReading, ImuSpec, LidarId, LidarReading, LidarSpec, NavigationFilter, SpaceSensors,
+    StarTrackerId, StarTrackerReading, StarTrackerSpec,
+};
+pub use space_env::{
+    EARTH_MAGNETIC_MU0_M_OVER_4PI, FacetId, FacetReading, FlexJointId, FlexJointReading,
+    FlexJointSpec, MagneticField, MagnetorquerId, MagnetorquerReading, MagnetorquerSpec,
+    NrlmsiseAtmosphere, OrbitalAtmosphere, SOLAR_PRESSURE_1AU, SloshTankId, SloshTankReading,
+    SloshTankSpec, SolarActivity, SolarRadiation, SpaceEnvironment, SurfaceFacetSpec,
+    desaturation_dipole_body, nrlmsise_density_kg_m3,
+};
+pub use spacecraft::{
+    SpacecraftCommand, SpacecraftControllers, SpacecraftId, SpacecraftLimits, SpacecraftReading,
+    SpacecraftSpec,
+};
+pub use thrusters::{
+    ThrusterId, ThrusterModulation, ThrusterReading, ThrusterSpec, Thrusters,
+};
 
 use std::collections::BTreeMap;
 
@@ -188,8 +243,18 @@ pub struct Devices {
     pub connectors: Connectors,
     pub copters: Copters,
     pub aero: Aero,
+    pub thrusters: Thrusters,
+    pub reaction_wheels: ReactionWheels,
+    pub orbital: Orbital,
+    pub space_env: SpaceEnvironment,
+    pub space_sensors: SpaceSensors,
+    pub rockets: RocketPropulsion,
+    pub rocket_aero: RocketAero,
+    pub rocket_structure: RocketStructure,
+    pub spacecraft: SpacecraftControllers,
     /// Loop-joint reactions of the last step, averaged over its substeps.
     reactions: BTreeMap<JointHandle, LoopReaction>,
+    last_dt: Real,
 }
 
 impl Devices {
@@ -200,38 +265,96 @@ impl Devices {
             && self.connectors.is_empty()
             && self.copters.is_empty()
             && !self.aero.active()
+            && self.thrusters.is_empty()
+            && self.reaction_wheels.is_empty()
+            && !self.orbital.active()
+            && self.space_env.is_empty()
+            && self.space_sensors.is_empty()
+            && self.rockets.is_empty()
+            && self.rocket_aero.is_empty()
+            && self.rocket_structure.is_empty()
+            && self.spacecraft.is_empty()
     }
 
     /// Whether a device needs the per-substep force path this step.
     pub fn needs_forces(&self) -> bool {
-        self.propellers.active() || self.aero.active()
+        self.propellers.active()
+            || self.aero.active()
+            || self.thrusters.active()
+            || self.reaction_wheels.active()
+            || self.orbital.active()
+            || self.space_env.active()
+            || self.rockets.active()
+            || self.rocket_aero.active()
+            || self.rocket_structure.active()
+            || self.spacecraft.active()
     }
 
     /// Commands the scene for the coming step of `dt`: connectors dock,
     /// undock or break, motors and belts set their drives, copters their
-    /// rotors.
+    /// rotors, spacecraft controllers their thrusters and reaction wheels.
     pub fn before_step(&mut self, scene: &mut RigidScene, dt: Real) -> Result<()> {
+        self.last_dt = dt;
         self.connectors.update(scene, &self.reactions)?;
         self.motors.before_step(scene, dt)?;
         self.belts.before_step(scene, dt)?;
         self.copters.before_step(scene, &mut self.propellers, dt)?;
         self.propellers.before_step(dt);
+        self.spacecraft.before_step(
+            scene,
+            &mut self.thrusters,
+            &mut self.reaction_wheels,
+            dt,
+        )?;
+        self.thrusters.before_step(scene, dt)?;
+        self.reaction_wheels.before_step();
+        self.orbital.before_step();
+        self.space_env.before_step(scene)?;
+        self.rockets.before_step(scene, dt)?;
+        self.rocket_aero.before_step(dt);
         self.aero.before_step();
         Ok(())
     }
 
-    /// Adds the propellers' and the air's wrenches for one substep.
+    /// Adds the propellers', air's, thrusters', reaction wheels', orbital
+    /// fields' and LEO space environment's wrenches for one substep of `sub_dt`.
     pub fn apply(
         &mut self,
         scene: &RigidScene,
         state: &State,
         wrenches: &mut [SpatialVector],
+        sub_dt: Real,
         weight: Real,
     ) -> Result<()> {
         let aero = &self.aero;
         self.propellers
             .apply(scene, state, wrenches, weight, &|body| aero.wind_at(body))?;
-        self.aero.apply(scene, state, wrenches, weight)
+        self.aero.apply(scene, state, wrenches, weight)?;
+        self.thrusters.apply(scene, state, wrenches, weight)?;
+        self.reaction_wheels
+            .apply(scene, state, wrenches, sub_dt, weight)?;
+        self.orbital.apply(scene, state, wrenches, sub_dt, weight)?;
+        self.space_env.apply(
+            scene,
+            state,
+            &self.thrusters,
+            &self.orbital,
+            wrenches,
+            sub_dt,
+            weight,
+        )?;
+        self.rockets.apply(scene, state, wrenches, sub_dt, weight)?;
+        self.rocket_aero
+            .apply(scene, state, &self.rockets, wrenches, weight)?;
+        self.rocket_structure.apply(
+            scene,
+            state,
+            &self.rockets,
+            &self.rocket_aero,
+            wrenches,
+            sub_dt,
+            weight,
+        )
     }
 
     /// Records one substep's loop-joint reactions with `weight`.
@@ -251,9 +374,18 @@ impl Devices {
         }
     }
 
-    /// Records the step's joint efforts for the motor and brake readings.
+    /// Records the step's joint efforts for motors, flexible appendages, and updates
+    /// hardware spacecraft sensors (IMU, Star Tracker, LiDAR).
     pub fn after_step(&mut self, scene: &RigidScene, efforts: &[JointEffort]) -> Result<()> {
-        self.motors.after_step(scene, efforts)
+        self.motors.after_step(scene, efforts)?;
+        self.space_env.after_step(scene, efforts)?;
+        self.space_sensors.after_step(
+            scene,
+            &self.orbital,
+            &self.space_env,
+            &self.rocket_structure,
+            self.last_dt,
+        )
     }
 
     /// A loop joint's reaction on its child in the last step.

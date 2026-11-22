@@ -82,6 +82,10 @@ pub struct Contact {
 /// input index).
 #[must_use]
 pub fn reduce_contacts(contacts: &[Contact], max_per_pair: usize) -> Vec<Contact> {
+    reduce_contacts_tolerant(contacts, max_per_pair, None)
+}
+
+pub(crate) fn reduce_contacts_tolerant(contacts: &[Contact], max_per_pair: usize, tolerance: Option<Real>) -> Vec<Contact> {
     if contacts.is_empty() || max_per_pair == 0 {
         return Vec::new();
     }
@@ -102,7 +106,7 @@ pub fn reduce_contacts(contacts: &[Contact], max_per_pair: usize) -> Vec<Contact
     keys.sort_unstable();
     for key in keys {
         let indices = &groups[&key];
-        reduce_one_pair(contacts, indices, max_per_pair, &mut out);
+        reduce_one_pair(contacts, indices, max_per_pair, &mut out, tolerance);
     }
     out
 }
@@ -113,6 +117,7 @@ fn reduce_one_pair(
     indices: &[usize],
     max_per_pair: usize,
     out: &mut Vec<Contact>,
+    tolerance: Option<Real>,
 ) {
     if indices.is_empty() {
         return;
@@ -125,13 +130,14 @@ fn reduce_one_pair(
     let mut deepest_depth = contacts[indices[0]].depth;
     for (li, &gi) in indices.iter().enumerate().skip(1) {
         let d = contacts[gi].depth;
-        if d > deepest_depth {
+        if d > deepest_depth + tolerance.unwrap_or(0.0) {
             deepest_depth = d;
             deepest_local = li;
         }
     }
     let mut kept_local: Vec<usize> = Vec::with_capacity(cap);
     kept_local.push(deepest_local);
+    let epsilon = tolerance.unwrap_or(1e-12);
 
     // 2) Greedy farthest-point sweep until we have `cap` contacts.
     //    For each remaining candidate compute `min_dist_to_kept`,
@@ -159,15 +165,15 @@ fn reduce_one_pair(
             let pick = match best_local {
                 None => true,
                 Some(_) => {
-                    if min_d > best_min_dist + 1e-12 {
+                    if min_d > best_min_dist + epsilon {
                         true
-                    } else if (min_d - best_min_dist).abs() <= 1e-12 {
+                    } else if (min_d - best_min_dist).abs() <= epsilon {
                         // Tie on spread → deeper wins; lower index breaks.
                         let bli = best_local.unwrap();
                         let bdepth = contacts[indices[bli]].depth;
-                        if cur_depth > bdepth + 1e-12 {
+                        if cur_depth > bdepth + epsilon {
                             true
-                        } else if (cur_depth - bdepth).abs() <= 1e-12 {
+                        } else if (cur_depth - bdepth).abs() <= epsilon {
                             li < bli
                         } else {
                             false

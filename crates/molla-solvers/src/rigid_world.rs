@@ -590,7 +590,7 @@ impl RigidWorld {
                 if capture {
                     *compliant.borrow_mut() = reactions;
                 }
-                devices.apply(scene, state, wrenches, weight)?;
+                devices.apply(scene, state, wrenches, sub_dt, weight)?;
                 substep += 1;
                 track_step.apply(scene, &mut response, contacts, sub_dt, wrenches)?;
                 forces(scene, state, sub_dt, wrenches)?;

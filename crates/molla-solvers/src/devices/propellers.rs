@@ -35,10 +35,16 @@ pub struct PropellerSpec {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PropellerReading {
     pub omega: Real,
+    /// Integrated shaft angle, wrapped to one revolution (rad).
+    pub phase: Real,
     pub thrust: Real,
     pub torque: Real,
     /// Speed of the centre of thrust along the shaft (m/s).
     pub advance: Real,
+    /// World-space force on the aircraft, averaged over the step (N).
+    pub world_force: Vec3,
+    /// Moment of the aircraft load about the world origin (N m).
+    pub world_moment: Vec3,
 }
 
 struct Propeller {
@@ -120,9 +126,11 @@ impl Propellers {
 
     pub(crate) fn before_step(&mut self, dt: Real) {
         for propeller in self.propellers.values_mut() {
+            let previous = propeller.reading;
             let omega = propeller.controller.velocity(0.0, dt).unwrap_or(0.0);
             propeller.reading = PropellerReading {
                 omega,
+                phase: (previous.phase + omega * dt).rem_euclid(std::f64::consts::TAU),
                 ..PropellerReading::default()
             };
         }
@@ -172,6 +180,8 @@ impl Propellers {
             reading.thrust += thrust * weight;
             reading.torque += torque * weight;
             reading.advance += advance * weight;
+            reading.world_force += force * weight;
+            reading.world_moment += (shaft.position.cross(force) - axis * torque) * weight;
         }
         Ok(())
     }

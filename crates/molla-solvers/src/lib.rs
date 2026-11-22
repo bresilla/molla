@@ -18,6 +18,8 @@ pub use molla_sim as sim;
 pub use molla_storage as storage;
 
 mod articulated_response;
+pub mod airflow;
+pub mod attachments;
 pub mod barrier_contact;
 pub mod barrier_solver;
 mod body_wrenches;
@@ -94,6 +96,7 @@ pub mod rigid_world;
 pub mod rnea;
 pub mod semi_implicit;
 pub mod soft_rigid_contact;
+pub mod strands;
 #[cfg(feature = "gpu")]
 pub mod soil_admm_geometry_gpu;
 #[cfg(feature = "gpu")]

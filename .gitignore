@@ -1,4 +1,5 @@
 /target
+/artifacts/
 /.direnv
 Cargo.lock.bak
 *.rs.bk
@@ -11,3 +12,6 @@ book/book
 !/plans/
 /plans/*
 !/plans/PPF.md
+!/plans/STRAND_FRACTURE.md
+!/plans/DRONE_ORCHARD.md
+!/bin/molla_cables/data/

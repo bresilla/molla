@@ -3,7 +3,7 @@
 use molla_core::{Error, Result};
 use molla_math::{
     Mat3, Real, Vec3,
-    constitutive::{ElasticMaterial, MaterialResponse},
+    constitutive::{ElasticMaterial, MaterialResponse, MembraneStrainLimit},
 };
 
 #[derive(Clone, Debug)]
@@ -13,6 +13,8 @@ pub struct ElasticElement {
     inverse_rest: Mat3,
     measure: Real,
     material: ElasticMaterial,
+    strain_limit: Option<MembraneStrainLimit>,
+    strain_mass: Real,
 }
 
 fn invalid(detail: &str) -> Error {
@@ -63,6 +65,8 @@ impl ElasticElement {
             inverse_rest,
             measure,
             material,
+            strain_limit: None,
+            strain_mass: 0.0,
         })
     }
 
@@ -71,6 +75,24 @@ impl ElasticElement {
         self.material = material;
         Ok(self)
     }
+
+    /// Attach the cubic strain barrier and cap with the face's physical mass.
+    pub fn with_strain_limit(mut self, limit: MembraneStrainLimit, mass: Real) -> Result<Self> {
+        if self.dimensions != 2 {
+            return Err(invalid("strain limit on solid element"));
+        }
+        limit.maximum_stretch()?;
+        if !mass.is_finite() || mass <= 0.0 { return Err(invalid("strain face mass")); }
+        self.strain_limit = Some(limit);
+        self.strain_mass = mass;
+        Ok(self)
+    }
+
+    pub fn strain_limit(&self) -> Option<MembraneStrainLimit> {
+        self.strain_limit
+    }
+
+    pub fn strain_mass(&self) -> Real { self.strain_mass }
 
     /// Rest-area times thickness weights the membrane energy density.
     pub fn membrane(
@@ -104,6 +126,8 @@ impl ElasticElement {
             inverse_rest,
             measure: area2 * 0.5 * thickness,
             material,
+            strain_limit: None,
+            strain_mass: 0.0,
         };
         element.validate(rest)?;
         Ok(element)
@@ -133,6 +157,8 @@ impl ElasticElement {
             inverse_rest: dm.inverse(),
             measure: det.abs() / 6.0,
             material,
+            strain_limit: None,
+            strain_mass: 0.0,
         };
         element.validate(rest)?;
         Ok(element)
@@ -206,14 +232,18 @@ impl ElasticElement {
         if !f.is_finite() || !measure.is_finite() || measure <= 0.0 {
             return Err(invalid("singular or inverted deformation"));
         }
+        if let Some(limit) = self.strain_limit {
+            limit.check(f)?;
+        }
         Ok(())
     }
 
     pub fn energy(&self, positions: &[Vec3]) -> Result<Real> {
-        let energy = self
-            .material
-            .energy(self.deformation(positions)?, self.dimensions)?
-            * self.measure;
+        let f = self.deformation(positions)?;
+        if let Some(limit) = self.strain_limit {
+            limit.check(f)?;
+        }
+        let energy = self.material.energy(f, self.dimensions)? * self.measure;
         if !energy.is_finite() {
             return Err(invalid("nonfinite energy"));
         }
@@ -249,15 +279,23 @@ impl ElasticElement {
         if !norm.is_finite() || !sigma.is_finite() || sigma <= 0.0 {
             return Err(invalid("step bound"));
         }
-        Ok(if norm == 0.0 {
+        let alpha = if norm == 0.0 {
             1.0
         } else {
             (0.9 * sigma / norm).min(1.0)
-        })
+        };
+        if let Some(limit) = self.strain_limit {
+            limit.step_bound(f, df, alpha)
+        } else {
+            Ok(alpha)
+        }
     }
 
     pub fn response(&self, positions: &[Vec3], projected: bool) -> Result<MaterialResponse> {
         let f = self.deformation(positions)?;
+        if let Some(limit) = self.strain_limit {
+            limit.check(f)?;
+        }
         let mut r = self.material.evaluate(f, self.dimensions, projected)?;
         r.energy *= self.measure;
         r.gradient *= self.measure;

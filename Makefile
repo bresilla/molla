@@ -20,6 +20,9 @@ APP_PKG ?= molla_viewer
 APP_TARGET := -p $(APP_PKG)
 RUN_WITH ?= nixVulkan
 BENCH_ARGS ?=
+CABLE_PROFILE ?= --release
+APPLE_SKEL ?= ../../../../OUSD/appleskel
+APPLE_TREE_INPUT ?= $(APPLE_SKEL)/examples/pipeline_output/apple_trees/tree1/Characterization/paper_dataset/tree1_characterization.json
 TEST_ALL_ARGS ?=
 PRIMITIVE_BENCH_PROFILE ?= release
 SENSOR_BENCH ?= bench_scene_queries
@@ -27,6 +30,9 @@ SENSOR_BENCH_PKG ?= molla-sensors
 LATENCY_BENCH ?= bench_sensor_latency
 NVIDIA_SMI ?= nvidia-smi
 FMT_ARGS ?=
+VIDEO_OUTPUT ?= artifacts/apple-tree-clean/molla-alpha-0.0.1-1080p.mp4
+SHOWCASE_REPORT ?= target/apple-showcase-check.json
+VIDEO_BUNDLE ?= artifacts/molla-apple-tree-clean.zip
 CLIPPY_TARGET ?= --workspace --all-targets --all-features
 PRIMITIVE_CPU_BASELINES := joint_control runtime_motor_models runtime_motor_coupling runtime_friction_contract runtime_capsule_manifold runtime_loop_compliance runtime_loop_controls runtime_loop_contacts runtime_loop_articulated_contacts runtime_rigid_fixed_loops runtime_scene runtime_tree runtime_mass runtime_limit_reactions runtime_softness loop_forces featherstone_polish_cpu featherstone_articulation_cpu contact_friction_modes runtime_multidof_limits runtime_d6_axis_certification rigid_singular_forces primitives_benchmark_process primitives_benchmark_settings
 PRIMITIVE_GPU_BASELINES := featherstone_polish_gpu featherstone_multidof_gpu featherstone_motor_caps_gpu runtime_motor_models runtime_motor_coupling runtime_friction_contract runtime_capsule_manifold runtime_loop_compliance runtime_loop_controls runtime_loop_contacts runtime_loop_articulated_contacts runtime_rigid_fixed_loops contact_friction_modes_gpu featherstone_scalar_equality_gpu rigid_singular_forces
@@ -137,14 +143,384 @@ run:
 
 r: run
 
+.PHONY: run-cables test-cables
+bench-cable-branches:
+	@$(RUN_WITH) $(CARGO) run $(REL) -p molla_cables -- --bench-branches
+
+run-cables:
+	@$(RUN_WITH) $(CARGO) run $(CABLE_PROFILE) -p molla_cables -- $(CABLE_ARGS)
+
+.PHONY: import-apple-tree run-apple-tree test-apple-tree test-apple-tree-ui test-apple-tree-recovery test-apple-tree-tools bench-apple-tree
+import-apple-tree:
+	@mkdir -p bin/molla_cables/data
+	@jq '{tree_id, geometry}' "$(APPLE_TREE_INPUT)" > bin/molla_cables/data/apple_tree1.json.tmp
+	@mv bin/molla_cables/data/apple_tree1.json.tmp bin/molla_cables/data/apple_tree1.json
+
+run-apple-tree:
+	@$(RUN_WITH) $(CARGO) run $(CABLE_PROFILE) -p molla_cables --bin molla_apple_tree -- $(TREE_ARGS)
+
+.PHONY: run-leafy-tree test-leafy-tree test-leafy-tree-ui test-leafy-tree-matrix test-attachments test-attachments-gpu
+run-leafy-tree:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_leafy_tree -- $(TREE_ARGS)
+
+test-leafy-tree:
+	@$(MAKE) test APP_TARGET='--release -p molla_cables --bin molla_leafy_tree'
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_leafy_tree -- --verify
+
+test-leafy-tree-ui:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_leafy_tree -- --verify-ui $(TREE_ARGS)
+
+test-leafy-tree-matrix:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_leafy_tree -- --verify-matrix
+
+LEAFY_VIDEO_OUTPUT ?= artifacts/leafy-tree-video/molla-leafy-alpha-0.0.1-1080p.mp4
+LEAFY_SHOWCASE_REPORT ?= artifacts/leafy-tree-video/verification.json
+LEAFY_DETAIL_OUTPUT ?= artifacts/leafy-tree-detail/molla-leafy-bending-1080p.mp4
+LEAFY_FRACTURE_PREVIEW ?= target/leafy-fracture-preview.mp4
+
+.PHONY: capture-leafy-detail test-leafy-detail verify-leafy-detail bundle-leafy-detail preview-leafy-fracture
+capture-leafy-detail:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_leafy_tree -- --detail-video '$(LEAFY_DETAIL_OUTPUT)'
+
+preview-leafy-fracture:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_leafy_tree -- --fracture-preview '$(LEAFY_FRACTURE_PREVIEW)'
+
+.PHONY: test-leafy-detail-bend
+test-leafy-detail-bend:
+	@$(RUN_WITH) $(CARGO) test --release -p molla_cables --bin molla_leafy_tree distal_bend_moves_visibly_without_fracture -- --ignored --nocapture
+
+.PHONY: test-leafy-overlay
+test-leafy-overlay:
+	@$(RUN_WITH) $(CARGO) test --release -p molla_cables --bin molla_leafy_tree watermark_is_present_in_captured_frame -- --ignored --nocapture
+
+test-leafy-detail:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_leafy_tree -- --verify-detail target/leafy-detail-check.json
+	@bash bin/molla_cables/verify_detail_manifest.sh target/leafy-detail-check.json
+
+verify-leafy-detail:
+	@bash bin/molla_cables/verify_video.sh '$(LEAFY_DETAIL_OUTPUT)'
+	@bash bin/molla_cables/inspect_detail_video.sh '$(LEAFY_DETAIL_OUTPUT)'
+
+bundle-leafy-detail: verify-leafy-detail
+	@$(MAKE) bundle-apple-tree-video VIDEO_OUTPUT='$(LEAFY_DETAIL_OUTPUT)' VIDEO_BUNDLE=artifacts/molla-leafy-bending-1080p.zip
+	@unzip -t artifacts/molla-leafy-bending-1080p.zip
+
+.PHONY: capture-leafy-tree test-leafy-tree-showcase test-leafy-tree-capture verify-leafy-tree-video test-leafy-tree-intro
+capture-leafy-tree:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_leafy_tree -- --showcase-video '$(LEAFY_VIDEO_OUTPUT)'
+
+test-leafy-tree-showcase:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_leafy_tree -- --verify-showcase '$(LEAFY_SHOWCASE_REPORT)'
+
+test-leafy-tree-intro:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_leafy_tree -- --verify-intro target/leafy-intro.json
+
+.PHONY: probe-leafy-tree-release
+probe-leafy-tree-release:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_leafy_tree -- --probe-release
+
+test-leafy-tree-capture:
+	@directory=$$(mktemp -d); \
+	$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_leafy_tree -- --capture-smoke "$$directory/smoke.mp4" && \
+	ffprobe -v error -select_streams v:0 -show_entries stream=width,height,nb_frames -of json "$$directory/smoke.mp4" | \
+	jq -e '.streams[0] | .width == 1920 and .height == 1080 and .nb_frames == "30"'; \
+	result=$$?; echo "Leafy capture smoke artifacts: $$directory"; exit $$result
+
+verify-leafy-tree-video:
+	@jq -e '.leaves_total == 420 and .leaf_strength_multiplier_vs_original == 2.2 and .opening_leaves_shed >= 5 and .opening_leaves_shed <= 60 and .leaves_attached >= 0 and .leaves_attached <= .leaves_total and ([.events[] | select(.kind == "shake_finished")][-1].frame < [.events[] | select(.kind == "rough_break")][0].frame)' '$(basename $(LEAFY_VIDEO_OUTPUT)).json' > /dev/null
+	@jq -e '([.events[] | select(.kind == "delayed_load_failure")] | length) == 1 and ([.events[] | select(.kind == "delayed_load_failure")][0].frame > [.events[] | select(.kind == "rough_break")][0].frame) and ([.events[] | select(.kind == "released_control")][0].data | .failures == 0 and .control_seconds >= 3)' '$(basename $(LEAFY_VIDEO_OUTPUT)).json' > /dev/null
+	@bash bin/molla_cables/verify_video.sh '$(LEAFY_VIDEO_OUTPUT)'
+	@ffmpeg -v error -y -ss 3.5 -t 10 -i '$(LEAFY_VIDEO_OUTPUT)' -vf 'fps=4,scale=480:-1,tile=8x5:padding=4:margin=4:color=0x0f151f' -frames:v 1 '$(dir $(LEAFY_VIDEO_OUTPUT))shake-sequence.png'
+
+.PHONY: bundle-leafy-tree-video
+bundle-leafy-tree-video: verify-leafy-tree-video
+	@$(MAKE) bundle-apple-tree-video VIDEO_OUTPUT='$(LEAFY_VIDEO_OUTPUT)' VIDEO_BUNDLE='artifacts/molla-leafy-tree-1080p.zip'
+	@unzip -t artifacts/molla-leafy-tree-1080p.zip
+
+LEAFY_PREVIEW_SOURCE ?= $(LEAFY_VIDEO_OUTPUT)
+.PHONY: preview-leafy-tree-video
+preview-leafy-tree-video:
+	@ffmpeg -v error -n -i '$(LEAFY_PREVIEW_SOURCE)' -frames:v 405 -an -c:v libx264 -preset medium -crf 17 -pix_fmt yuv420p -movflags +faststart artifacts/leafy-tree-opening-preview.mp4
+	@ffprobe -v error -select_streams v:0 -show_entries stream=width,height,nb_frames -of json artifacts/leafy-tree-opening-preview.mp4 | jq -e '.streams[0] | .width == 1920 and .height == 1080 and .nb_frames == "405"'
+
+test-attachments:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --test attachments'
+	@$(MAKE) test APP_TARGET='-p molla-kernels --test attachments_shader'
+
+test-attachments-gpu:
+	@$(MAKE) test-gpu P=molla-solvers T=attachments RELEASE=1 A='--nocapture --test-threads=1'
+
+test-apple-tree:
+	@$(MAKE) test APP_TARGET='--release -p molla_cables --bin molla_apple_tree'
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --verify $(TREE_ARGS)
+
+test-apple-tree-ui:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --verify-ui $(TREE_ARGS)
+
+test-apple-tree-recovery:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --verify-recovery $(TREE_ARGS)
+
+test-apple-tree-tools:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --verify-tools $(TREE_ARGS)
+
+.PHONY: test-apple-tree-grab-ui test-apple-tree-grab-ui-matrix test-apple-tree-grab test-apple-tree-grab-matrix
+test-apple-tree-grab-matrix:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --verify-grab-matrix $(TREE_ARGS)
+
+test-apple-tree-grab:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --verify-grab $(TREE_ARGS)
+
+.PHONY: probe-apple-tree-showcase
+probe-apple-tree-showcase:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --probe-showcase $(TREE_ARGS)
+
+.PHONY: probe-apple-tree-release
+probe-apple-tree-release:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --probe-release-gap
+
+.PHONY: test-apple-tree-capture
+test-apple-tree-capture:
+	@directory=$$(mktemp -d); \
+	$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --capture-smoke "$$directory/smoke.mp4" && \
+	ffprobe -v error -select_streams v:0 -show_entries stream=width,height,nb_frames -of json "$$directory/smoke.mp4" | \
+	jq -e '.streams[0] | .width == 1920 and .height == 1080 and .nb_frames == "30"'; \
+	result=$$?; echo "Capture smoke artifacts: $$directory"; exit $$result
+
+.PHONY: capture-apple-tree test-apple-tree-showcase
+capture-apple-tree:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --showcase-video '$(VIDEO_OUTPUT)'
+
+test-apple-tree-showcase:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --verify-showcase '$(SHOWCASE_REPORT)'
+
+.PHONY: verify-apple-tree-video
+verify-apple-tree-video:
+	@bash bin/molla_cables/verify_video.sh '$(VIDEO_OUTPUT)'
+
+.PHONY: bundle-apple-tree-video
+bundle-apple-tree-video: verify-apple-tree-video
+	@test ! -e '$(VIDEO_BUNDLE)' || { echo 'Video bundle already exists'; exit 1; }
+	@directory=$$(dirname '$(VIDEO_OUTPUT)'); \
+	cp ACKNOWLEDGEMENT.md "$$directory/ACKNOWLEDGEMENT.md"; \
+	cp bin/molla_cables/data/ATTRIBUTION.md "$$directory/TREE_DATA_ATTRIBUTION.md"; \
+	(cd "$$directory" && sha256sum *.mp4 > SHA256SUMS); \
+	zip -j '$(VIDEO_BUNDLE)' "$$directory"/*.mp4 "$$directory"/*.json "$$directory"/*.md "$$directory"/cover.png "$$directory"/contact-sheet.png "$$directory"/SHA256SUMS
+
+test-apple-tree-grab-ui:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --verify-grab-ui $(TREE_ARGS)
+
+test-apple-tree-grab-ui-matrix:
+	@set -e; for mode in gentle load; do \
+		for pair in '0 0' '8 90' '16 180' '24 270' '32 45' '40 135'; do \
+			read -r pick angle <<< "$$pair"; \
+			flag=--allow-intact; [ "$$mode" != gentle ] || flag=--gentle; \
+			$(MAKE) test-apple-tree-grab-ui TREE_ARGS="$$flag --grab-pick $$pick --grab-angle $$angle --screenshot /tmp/molla-apple-grab-ui-$$mode-$$pick.png"; \
+		done; \
+	done
+	@$(MAKE) test-apple-tree-grab-ui TREE_ARGS='--screenshot /tmp/molla-apple-grab-ui-fracture.png'
+
+bench-apple-tree:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_apple_tree -- --bench $(TREE_ARGS)
+
+test-cables:
+	@$(RUN_WITH) $(CARGO) run $(REL) -p molla_cables -- --verify
+
+.PHONY: test-cable-branches test-cable-ui test-cable-click-ui test-cable-break-ui
+test-cable-branches:
+	@$(MAKE) test APP_TARGET='-p molla_cables'
+	@$(RUN_WITH) $(CARGO) run $(REL) -p molla_cables -- --verify-branches
+
+test-cable-ui:
+	@$(RUN_WITH) $(CARGO) run $(REL) -p molla_cables -- --verify-ui $(CABLE_ARGS)
+
+test-cable-click-ui:
+	@$(RUN_WITH) $(CARGO) run $(REL) -p molla_cables -- --verify-click-ui $(CABLE_ARGS)
+
+test-cable-break-ui:
+	@$(RUN_WITH) $(CARGO) run $(REL) -p molla_cables -- --verify-click-ui --scene 4 $(CABLE_ARGS)
+
+.PHONY: test-strand-cuts test-strands test-strands-gpu test-strands-dense-oracle
+test-strand-cuts:
+	@$(MAKE) test APP_TARGET='-p molla-geometry --test convex_cut --test cell_contact'
+
+test-strands:
+	@$(MAKE) test APP_TARGET='-p molla-solvers --test strands --test strand_bundle --test strand_contacts --test strand_splinter'
+
+test-strands-gpu:
+	@$(MAKE) test APP_TARGET='-p molla-kernels --test strands_shader'
+	@$(MAKE) test-gpu P=molla-solvers T=strands_gpu GPU_FEATURES=resource-counters A='--nocapture --test-threads=1 --skip dense_bundle_preview_tolerance'
+	@$(MAKE) test-gpu P=molla-solvers T=strand_contacts GPU_FEATURES=resource-counters A='--nocapture --test-threads=1'
+	@$(MAKE) test-gpu P=molla-solvers T=strand_splinter GPU_FEATURES=resource-counters A='--nocapture --test-threads=1'
+
+test-strands-dense-oracle:
+	@$(MAKE) test-gpu P=molla-solvers T=strands_gpu GPU_FEATURES=resource-counters RELEASE=1 A='dense_bundle_preview_tolerance --nocapture --test-threads=1'
+
 test:
 	@$(CARGO) test $(APP_TARGET)
+
+.PHONY: test-airflow test-airflow-gpu test-airflow-refinement
+test-airflow:
+	@$(MAKE) test APP_TARGET='--release -p molla-solvers --test airflow'
+	@$(MAKE) test APP_TARGET='--release -p molla-kernels --test airflow_shader'
+
+test-airflow-gpu:
+	@$(MAKE) test-gpu P=molla-solvers T=airflow RELEASE=1 A='--nocapture --test-threads=1'
+test-airflow-refinement:
+	@$(MAKE) test-gpu P=molla-solvers T=airflow_refinement RELEASE=1 A='--nocapture --test-threads=1'
+
+.PHONY: profile-airflow
+profile-airflow:
+	@$(RUN_WITH) $(CARGO) test --release -p molla-solvers --features resource-counters --lib airflow::gpu::tests::profile_air_kernels -- --ignored --nocapture --test-threads=1
+
+.PHONY: test-rotorcraft test-rotorcraft-gpu
+test-rotorcraft:
+	@$(MAKE) test APP_TARGET='--release -p molla-solvers --test rotorcraft --test devices'
+test-rotorcraft-gpu:
+	@$(MAKE) test-gpu P=molla-solvers T=rotorcraft RELEASE=1 A='--nocapture --test-threads=1'
+
+.PHONY: run-drone-orchard test-drone-orchard verify-drone-orchard verify-drone-orchard-row probe-drone-orchard capture-drone-orchard
+ORCHARD_ARGS ?=
+ORCHARD_SECONDS ?= 78
+ORCHARD_REPORT ?= artifacts/drone-orchard/probe.json
+ORCHARD_VIDEO ?= artifacts/drone-orchard/showcase.mp4
+AG_BASELINE_REPORT ?= artifacts/ag-spray/ag-orchard-full-1080p.json
+AG_RETENTION_REDUCTION ?= 0.20
+AG_RETENTION_TOLERANCE ?= 0.03
+AG_SETTLING_BASELINE_REPORT ?= artifacts/ag-spray/final/ag-orchard-full-1080p.json
+ORCHARD_PREVIEW_START ?= 0
+ORCHARD_BASELINE_REPORT ?= artifacts/drone-orchard/border-baseline.json
+ORCHARD_BASELINE_STATE ?= artifacts/drone-orchard/border-baseline-state.json
+ORCHARD_STATE ?= artifacts/drone-orchard/free-leaves-sway-state.json
+.PHONY: import-drone-asset
+.PHONY: import-mavic-asset
+import-mavic-asset:
+	@mkdir -p bin/molla_cables/data/drone
+	@curl --fail --location --max-time 60 'https://raw.githubusercontent.com/Lexik-mqslll/Skyfront/31f4791441329e969968d3793fd3f41b5e8c516b/src/main/resources/assets/sfw/models/entity/drone.glb' -o bin/molla_cables/data/drone/mavic-3.glb.tmp
+	@echo '48afb1bb7fe461e1e6ef1df824a768098a1b170f920fb98ed38ed24eeb33a7a5  bin/molla_cables/data/drone/mavic-3.glb.tmp' | sha256sum --check
+	@mv bin/molla_cables/data/drone/mavic-3.glb.tmp bin/molla_cables/data/drone/mavic-3.glb
+FOLIAGE_SOURCE ?= target/foliage-src
+FOLIAGE_ASSETS := \
+	Leaf001:5e1dcb8bfa04734cc3964c5f673b002cd03110ecb20a110db9cc20095f87d8bb \
+	LeafSet001:26b43318e64ae442241f396309e78ee772dac53577bd92edc450d294b46ae9ba \
+	LeafSet003:3b6b8a128c4809f9a924fb13f769a014c8258c25a19c77b2f658369363afc000 \
+	LeafSet014:8065d616032cc3a2dfa7ff40ba716e483b7fc854ae8c8f03fa95ada2cb7fccc6 \
+	LeafSet022:2af6b5d525c16b32dd8574ae07f37a78a42b198327500777a6512e041644f9c7 \
+	LeafSet024:5e750c97b02717b94284128704039563acdd40e3b01a2b4a852c08eff61f5621 \
+	Bark003:8a46c556a103194f314bd3e6414746fba7b65a7964cb99e47f8cc65360a9318d \
+	Bark004:1ef152366455b01423e1e8498db430fea691bda8cb388f235cbec49bd94eb7ea \
+	Bark005:8d48cc49ed3f1a655455ae2e746a8a1cfdd6447562d8127fd89f82acff527a96
+.PHONY: import-foliage-textures
+import-foliage-textures:
+	@mkdir -p $(FOLIAGE_SOURCE)
+	@set -e; for entry in $(FOLIAGE_ASSETS); do \
+		id=$${entry%%:*}; sum=$${entry##*:}; zip=$(FOLIAGE_SOURCE)/$${id}_2K-JPG.zip; \
+		[ -f $$zip ] || curl --fail --location --max-time 300 "https://ambientcg.com/get?file=$${id}_2K-JPG.zip" -o $$zip; \
+		echo "$$sum  $$zip" | sha256sum --check --quiet; \
+		rm -rf $(FOLIAGE_SOURCE)/$${id}_2K-JPG; unzip -q $$zip -d $(FOLIAGE_SOURCE)/$${id}_2K-JPG; \
+	done
+	@$(CARGO) run --release -p molla_cables --bin molla_foliage_bake -- $(FOLIAGE_SOURCE) bin/molla_cables/data/foliage
+import-drone-asset:
+	@mkdir -p bin/molla_cables/data/drone
+	@curl --fail --location --max-time 60 'https://files.innerscene.com/library/quadcopter-with-flight-electronics-a25968c1/7bbe389047145edeb575/quadcopter-original.glb' -o bin/molla_cables/data/drone/quadcopter-original.glb.tmp
+	@echo '24d1ac5804afea4076df2b4bc65ce780764d01619eb5fc08900480471cc43a0d  bin/molla_cables/data/drone/quadcopter-original.glb.tmp' | sha256sum --check
+	@mv bin/molla_cables/data/drone/quadcopter-original.glb.tmp bin/molla_cables/data/drone/quadcopter-original.glb
+run-drone-orchard:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_drone_orchard -- $(ORCHARD_ARGS)
+test-drone-orchard:
+	@$(MAKE) test APP_TARGET='--release -p molla_cables --bin molla_drone_orchard'
+.PHONY: run-space-docking verify-space-docking capture-space-docking
+SPACE_ARGS ?=
+SPACE_REPORT ?= artifacts/space-docking/verify.json
+SPACE_VIDEO ?= artifacts/space-docking/showcase.mp4
+run-space-docking:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_space_docking -- $(SPACE_ARGS)
+verify-space-docking:
+	@$(CARGO) run --release -p molla_cables --bin molla_space_docking -- --verify $(SPACE_REPORT) $(SPACE_ARGS)
+capture-space-docking:
+	@$(RUN_WITH) $(CARGO) run --release -p molla_cables --bin molla_space_docking -- --video $(SPACE_VIDEO) $(SPACE_ARGS)
+.PHONY: run-ag-orchard capture-ag-orchard test-ag-spray verify-ag-spray verify-ag-retention verify-ag-settling
+run-ag-orchard:
+	@$(MAKE) run-drone-orchard ORCHARD_ARGS='--ag-spray $(ORCHARD_ARGS)'
+capture-ag-orchard:
+	@$(MAKE) capture-drone-orchard ORCHARD_ARGS='--ag-spray $(ORCHARD_ARGS)'
+AG_CROSSWIND ?= 3.5
+.PHONY: capture-ag-crosswind
+capture-ag-crosswind:
+	@$(MAKE) capture-ag-orchard ORCHARD_SECONDS=140 ORCHARD_ARGS='--crosswind $(AG_CROSSWIND) $(ORCHARD_ARGS)'
+.PHONY: verify-ag-crosswind
+verify-ag-crosswind:
+	@$(MAKE) verify-ag-spray ORCHARD_SECONDS=140
+	@jq -e -f bin/molla_cables/verify_ag_crosswind.jq '$(basename $(ORCHARD_VIDEO)).json'
+test-ag-spray:
+	@$(MAKE) test APP_TARGET='--release -p molla-solvers --lib airflow::droplet'
+	@$(MAKE) test-drone-orchard
+verify-ag-spray:
+	@jq -e -f bin/molla_cables/verify_ag_spray.jq '$(basename $(ORCHARD_VIDEO)).json'
+	@$(MAKE) verify-orchard-video
+verify-ag-retention:
+	@jq -n -e --argjson target '$(AG_RETENTION_REDUCTION)' --argjson tolerance '$(AG_RETENTION_TOLERANCE)' --slurpfile baseline '$(AG_BASELINE_REPORT)' --slurpfile current '$(basename $(ORCHARD_VIDEO)).json' -f bin/molla_cables/verify_ag_retention.jq
+verify-ag-settling:
+	@jq -n -e --slurpfile baseline '$(AG_SETTLING_BASELINE_REPORT)' --slurpfile current '$(basename $(ORCHARD_VIDEO)).json' -f bin/molla_cables/verify_ag_settling.jq
+.PHONY: test-studio-upload
+test-studio-upload:
+	@$(RUN_WITH) $(CARGO) test --release -p molla_cables --bin molla_drone_orchard studio::tests::bounded_renderer_upload -- --ignored --nocapture --test-threads=1
+verify-drone-orchard:
+	@$(MAKE) run-drone-orchard ORCHARD_ARGS='--verify $(ORCHARD_REPORT) --seconds 4 $(ORCHARD_ARGS)'
+verify-drone-orchard-row:
+	@$(MAKE) run-drone-orchard ORCHARD_ARGS='--verify-row $(ORCHARD_REPORT) --seconds 78 $(ORCHARD_ARGS)'
+probe-drone-orchard:
+	@$(MAKE) run-drone-orchard ORCHARD_ARGS='--probe $(ORCHARD_REPORT) --seconds $(ORCHARD_SECONDS) $(ORCHARD_ARGS)'
+capture-drone-orchard:
+	@$(MAKE) run-drone-orchard ORCHARD_ARGS='--video $(ORCHARD_VIDEO) --seconds $(ORCHARD_SECONDS) $(ORCHARD_ARGS)'
+
+.PHONY: capture-leaf-flight
+capture-leaf-flight:
+	@$(MAKE) capture-drone-orchard ORCHARD_ARGS='--leaf-lab $(ORCHARD_ARGS)'
+
+.PHONY: capture-ag-model
+capture-ag-model:
+	@$(MAKE) capture-drone-orchard ORCHARD_SECONDS=12 ORCHARD_ARGS='--ag-model-lab $(ORCHARD_ARGS)'
+
+.PHONY: capture-drone-flight verify-drone-flight
+capture-drone-flight:
+	@$(MAKE) capture-drone-orchard ORCHARD_SECONDS=30 ORCHARD_ARGS='--flight-lab $(ORCHARD_ARGS)'
+verify-drone-flight:
+	@jq -e -f bin/molla_cables/verify_drone_flight.jq '$(basename $(ORCHARD_VIDEO)).json'
+	@$(MAKE) verify-orchard-video ORCHARD_SECONDS=30 ORCHARD_PREVIEW_START=3
+
+.PHONY: verify-orchard-video
+verify-orchard-video:
+	@ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate,nb_frames -of json '$(ORCHARD_VIDEO)' | jq -e --argjson seconds '$(ORCHARD_SECONDS)' '.streams[0] | .width == 1920 and .height == 1080 and .r_frame_rate == "30/1" and (.nb_frames|tonumber) == ($$seconds * 30 | ceil)'
+	@ffmpeg -v error -i '$(ORCHARD_VIDEO)' -f null -
+	@ffmpeg -v error -y -ss '$(ORCHARD_PREVIEW_START)' -i '$(ORCHARD_VIDEO)' -vf 'fps=2,scale=480:-1,tile=4x2' -frames:v 1 '$(basename $(ORCHARD_VIDEO)).contact.png'
+
+.PHONY: verify-orchard-leaf-transport
+verify-orchard-leaf-transport:
+	@jq -n -e --slurpfile before '$(ORCHARD_BASELINE_REPORT)' --slurpfile after '$(ORCHARD_REPORT)' --slurpfile first '$(ORCHARD_BASELINE_STATE)' --slurpfile last '$(ORCHARD_STATE)' -f bin/molla_cables/verify_leaf_transport.jq
+
+.PHONY: verify-orchard-leaf-motion
+verify-orchard-leaf-motion:
+	@jq -n -e --slurpfile report '$(ORCHARD_REPORT)' --slurpfile state '$(ORCHARD_STATE)' -f bin/molla_cables/verify_leaf_motion.jq
 
 .PHONY: test-ppf test-ppf-inputs test-ppf-gpu bench-ppf-gpu bench-ppf-replay
 .PHONY: test-ppf-geometry
 .PHONY: test-ppf-publication
 .PHONY: test-ppf-materials test-ppf-materials-gpu bench-ppf-materials
 .PHONY: test-ppf-material-solver-gpu bench-ppf-material-solver bench-ppf-material-replay
+.PHONY: test-ppf-strain test-ppf-strain-gpu bench-ppf-strain
+bench-ppf-strain:
+	@$(MAKE) test-gpu P=molla-solvers T=barrier_materials_gpu GPU_FEATURES=resource-counters RELEASE=1 A='--nocapture --test-threads=1 resident_material_strain_resource_profile'
+
+test-ppf-strain:
+	@$(MAKE) test APP_TARGET='-p molla-math --test strain_limit'
+	@$(MAKE) test APP_TARGET='-p molla-solvers --test barrier_strain'
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features resource-counters --test constitutive_gpu shader_parses_and_validates'
+	@$(MAKE) test APP_TARGET='-p molla-kernels --features resource-counters --lib barrier_newton::materials::tests'
+
+test-ppf-strain-gpu:
+	@$(MAKE) test-gpu P=molla-kernels T=constitutive_gpu GPU_FEATURES=resource-counters A='--nocapture --test-threads=1 principal_strain'
+	@$(MAKE) test-gpu P=molla-solvers T=barrier_strain GPU_FEATURES=resource-counters A='--nocapture --test-threads=1'
+
 test-ppf-materials:
 	@$(MAKE) test APP_TARGET='-p molla-storage --lib buffer::tests'
 	@$(MAKE) test APP_TARGET='-p molla-sim --lib elastic_element_set'
@@ -158,7 +534,7 @@ test-ppf-materials-gpu:
 
 test-ppf-material-solver-gpu:
 	@$(RUN_WITH) $(CARGO) test -p molla-kernels --features resource-counters --lib barrier_newton::materials::gpu_tests -- --ignored --nocapture --test-threads=1
-	@$(MAKE) test-gpu P=molla-solvers T=barrier_materials_gpu GPU_FEATURES=resource-counters A='--nocapture --test-threads=1 --skip resident_material_solver_resource_profile'
+	@$(MAKE) test-gpu P=molla-solvers T=barrier_materials_gpu GPU_FEATURES=resource-counters A='--nocapture --test-threads=1 --skip resident_'
 
 bench-ppf-material-solver:
 	@$(MAKE) test-gpu P=molla-solvers T=barrier_materials_gpu GPU_FEATURES=resource-counters RELEASE=1 A='--nocapture --test-threads=1 resident_material_solver_resource_profile'

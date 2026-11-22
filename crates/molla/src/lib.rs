@@ -27,6 +27,7 @@ pub mod math;
 pub mod optim;
 pub mod sensors;
 pub mod solvers;
+pub mod space;
 pub mod storage;
 pub mod vehicle;
 

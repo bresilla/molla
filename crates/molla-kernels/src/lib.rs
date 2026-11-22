@@ -8,6 +8,8 @@ pub use molla_autograd as autograd;
 pub use molla_compute as compute;
 pub use molla_core as core;
 pub use molla_math as math;
+#[cfg(feature = "gpu")]
+pub mod strands;
 
 #[cfg(feature = "gpu")]
 mod tire_fem_cavity;

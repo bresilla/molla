@@ -4,6 +4,7 @@ struct MaterialResponse {
     hessian: array<f32, 81>,
     valid: u32,
     minimum_stretch: f32,
+    coefficient: f32,
 }
 
 struct MaterialProjection { h: array<f32, 81>, valid: u32 }

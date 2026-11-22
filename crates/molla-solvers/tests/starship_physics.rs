@@ -1,0 +1,707 @@
+use std::f64::consts::FRAC_PI_2;
+
+use molla_math::{GRAVITY, Mat3, Quat, SpatialVector, Transform, Vec3};
+use molla_sim::runtime::BodyDesc;
+use molla_sim::{BodyParams, MassProperties};
+use molla_solvers::devices::{
+    AeroBodySpec, AeroSurfaceKind, AeroSurfaceSpec, BiquadNotchFilter, FlexBodySpec, ImuSpec,
+    PropellantTankSpec, RocketEngineCommand, RocketEngineSpec, WindField,
+    earth_rotation_at_latitude, free_free_beam_mode, us76_atmosphere,
+};
+use molla_solvers::rigid_world::RigidWorld;
+
+fn dynamic_stage(w: &mut RigidWorld, pos: Vec3, dry_mass: f64, inertia: Vec3) -> molla_sim::runtime::BodyHandle {
+    w.scene
+        .insert_body(BodyDesc {
+            params: BodyParams::new().with_pose(Transform::from_translation(pos)),
+            additional_mass: Some(MassProperties {
+                mass: dry_mass,
+                local_com: Vec3::ZERO,
+                inertia: Mat3::from_diagonal(inertia),
+            }),
+            ..BodyDesc::default()
+        })
+        .unwrap()
+}
+
+#[test]
+fn us76_atmosphere_matches_standard_tables_from_sea_level_to_100km() {
+    let sl = us76_atmosphere(0.0);
+    assert!((sl.temperature_k - 288.15).abs() < 1e-6);
+    assert!((sl.pressure_pa - 101_325.0).abs() < 1.0);
+    assert!((sl.density_kg_m3 - 1.225).abs() < 1e-3);
+    assert!((sl.speed_of_sound_mps - 340.29).abs() < 0.2);
+
+    let trop = us76_atmosphere(11_000.0);
+    assert!((trop.temperature_k - 216.65).abs() < 0.1);
+    assert!((trop.pressure_pa - 22_632.0).abs() < 50.0);
+
+    let strat = us76_atmosphere(50_000.0);
+    assert!((strat.temperature_k - 270.65).abs() < 0.5);
+    assert!(strat.pressure_pa > 60.0 && strat.pressure_pa < 95.0);
+
+    let karman = us76_atmosphere(100_000.0);
+    assert!(karman.density_kg_m3 > 1e-7 && karman.density_kg_m3 < 1e-6);
+}
+
+#[test]
+fn raptor_nozzle_thrust_varies_with_altitude_and_triggers_schmucker_flow_separation() {
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::ZERO).unwrap();
+    w.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+
+    let stage_sl = dynamic_stage(&mut w, Vec3::new(0.0, 100.0, 0.0), 120_000.0, Vec3::splat(1e7));
+    let stage_vac = dynamic_stage(&mut w, Vec3::new(0.0, 120_000.0, 0.0), 120_000.0, Vec3::splat(1e7));
+    let up_frame = Transform::from_rotation(Quat::from_rotation_z(FRAC_PI_2));
+
+    let r_sl_low = w
+        .devices
+        .rockets
+        .insert_engine(&w.scene, RocketEngineSpec::raptor3_sea_level(stage_sl, up_frame, None, None, 0.0))
+        .unwrap();
+    let r_sl_high = w
+        .devices
+        .rockets
+        .insert_engine(&w.scene, RocketEngineSpec::raptor3_sea_level(stage_vac, up_frame, None, None, 0.0))
+        .unwrap();
+    let r_vac_at_sl = w
+        .devices
+        .rockets
+        .insert_engine(&w.scene, RocketEngineSpec::raptor3_vacuum(stage_sl, up_frame, None, None))
+        .unwrap();
+
+    for e in [r_sl_low, r_sl_high, r_vac_at_sl] {
+        w.devices
+            .rockets
+            .command_engine(e, RocketEngineCommand { ignited: true, throttle: 1.0, gimbal_rad: [0.0, 0.0] })
+            .unwrap();
+    }
+    for _ in 0..200 {
+        w.step(0.01).unwrap();
+    }
+    let read_sl = w.devices.rockets.engine_reading(r_sl_low).unwrap();
+    let read_vac = w.devices.rockets.engine_reading(r_sl_high).unwrap();
+    let read_rvac_sl = w.devices.rockets.engine_reading(r_vac_at_sl).unwrap();
+
+    // Exact nozzle equation: F_vac - F_sl = P_a * A_e!
+    let ae = w.devices.rockets.engine_spec(r_sl_low).unwrap().exit_area_m2();
+    let expected_diff = us76_atmosphere(100.0).pressure_pa * ae;
+    assert!(
+        ((read_vac.thrust_n - read_sl.thrust_n) - expected_diff).abs() < 2_500.0,
+        "F_vac - F_sl mismatch: got {:.1} vs {:.1}",
+        read_vac.thrust_n - read_sl.thrust_n,
+        expected_diff
+    );
+    assert!(read_vac.effective_isp_s > read_sl.effective_isp_s + 15.0);
+    // Firing huge RVac bell (P_e = 14.5 kPa) at sea level (P_a = 101 kPa) MUST trigger Schmucker flow separation + side-loads!
+    assert!(
+        read_rvac_sl.flow_separated && read_rvac_sl.side_load_n > 1_000.0,
+        "RVac at sea level must separate and produce side loads: {read_rvac_sl:?}"
+    );
+    assert!(
+        !read_sl.flow_separated,
+        "Raptor SL at full throttle should not separate at sea level"
+    );
+    assert!(read_sl.shock_cell_length_m > 4.0 && read_sl.shock_cell_length_m < 6.5);
+}
+
+#[test]
+fn multi_tank_drain_shifts_com_and_inertia_and_scales_slosh_with_axial_g() {
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::new(0.0, -GRAVITY, 0.0)).unwrap();
+    w.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+
+    let stage = dynamic_stage(&mut w, Vec3::new(0.0, 1_000.0, 0.0), 100_000.0, Vec3::splat(2.0e7));
+    let lox = w
+        .devices
+        .rockets
+        .insert_tank(
+            &mut w.scene,
+            PropellantTankSpec {
+                body: stage,
+                base_local: Vec3::new(0.0, -15.0, 0.0),
+                axis_local: Vec3::Y,
+                radius_m: 4.5,
+                height_m: 14.0,
+                liquid_density_kg_m3: 1140.0,
+                initial_mass_kg: 700_000.0,
+                slosh_mass_fraction: 0.25,
+                slosh_damping_ratio: 0.05,
+                capillary_omega2: 0.2,
+            },
+        )
+        .unwrap();
+    let ch4 = w
+        .devices
+        .rockets
+        .insert_tank(
+            &mut w.scene,
+            PropellantTankSpec {
+                body: stage,
+                base_local: Vec3::new(0.0, 0.0, 0.0),
+                axis_local: Vec3::Y,
+                radius_m: 4.5,
+                height_m: 14.0,
+                liquid_density_kg_m3: 422.0,
+                initial_mass_kg: 200_000.0,
+                slosh_mass_fraction: 0.25,
+                slosh_damping_ratio: 0.05,
+                capillary_omega2: 0.2,
+            },
+        )
+        .unwrap();
+
+    let mp0 = w.scene.body_mass_properties(stage).unwrap();
+    assert!((mp0.mass - 1_000_000.0).abs() < 1.0);
+    let com_y0 = mp0.local_com.y;
+
+    let up_frame = Transform::new(Vec3::new(0.0, -24.0, 0.0), Quat::from_rotation_z(FRAC_PI_2));
+    let mut engines = Vec::new();
+    for _ in 0..8 {
+        let e = w
+            .devices
+            .rockets
+            .insert_engine(
+                &w.scene,
+                RocketEngineSpec::raptor3_sea_level(stage, up_frame, Some(lox), Some(ch4), 0.25),
+            )
+            .unwrap();
+        w.devices
+            .rockets
+            .command_engine(e, RocketEngineCommand { ignited: true, throttle: 1.0, gimbal_rad: [0.0, 0.0] })
+            .unwrap();
+        engines.push(e);
+    }
+
+    for _ in 0..400 {
+        w.step(0.02).unwrap();
+    }
+    let mp1 = w.scene.body_mass_properties(stage).unwrap();
+    assert!(mp1.mass < mp0.mass - 40_000.0, "propellant did not drain");
+    assert!(
+        (mp1.local_com.y - com_y0).abs() > 0.15,
+        "COM should shift as tanks drain: y0={com_y0:.3}, y1={:.3}",
+        mp1.local_com.y
+    );
+    // Under ~2g axial acceleration, NASA SP-8009 slosh frequency in R=4.5 m tank is ~0.4–0.5 Hz!
+    let tr = w.devices.rockets.tank_reading(lox).unwrap();
+    assert!(
+        tr.slosh_freq_hz > 0.30 && tr.slosh_freq_hz < 0.75,
+        "unexpected SP-8009 slosh freq under ~2g burn: {:.3} Hz",
+        tr.slosh_freq_hz
+    );
+}
+
+#[test]
+fn tvc_gimbal_produces_tail_wags_dog_counter_torque_and_hot_staging_blasts_booster() {
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::ZERO).unwrap();
+
+    let booster = dynamic_stage(&mut w, Vec3::new(0.0, 100.0, 0.0), 275_000.0, Vec3::splat(1e8));
+    let ship = dynamic_stage(&mut w, Vec3::new(0.0, 145.0, 0.0), 120_000.0, Vec3::splat(2e7));
+    w.devices
+        .rockets
+        .register_interstage_blast_target(ship, booster, Vec3::new(0.0, 35.0, 0.0), 4.5);
+
+    let up_frame = Transform::new(Vec3::new(0.0, -5.0, 0.0), Quat::from_rotation_z(FRAC_PI_2));
+    let eng = w
+        .devices
+        .rockets
+        .insert_engine(
+            &w.scene,
+            RocketEngineSpec::raptor3_sea_level(ship, up_frame, None, None, 0.26),
+        )
+        .unwrap();
+
+    // Command rapid TVC gimbal step while unignited -> pure Tail-Wags-Dog inertial torque!
+    w.devices
+        .rockets
+        .command_engine(
+            eng,
+            RocketEngineCommand {
+                ignited: false,
+                throttle: 0.0,
+                gimbal_rad: [0.22, 0.0],
+            },
+        )
+        .unwrap();
+    w.step(0.01).unwrap();
+    let r_twd = w.devices.rockets.engine_reading(eng).unwrap();
+    assert!(
+        r_twd.twd_torque_nm > 10_000.0,
+        "expected strong TWD inertial torque from 1,525 kg Raptor slew: {r_twd:?}"
+    );
+
+    // Now ignite Ship engine above Booster hot-stage dome -> real downward hot-staging blast force on Booster!
+    w.devices
+        .rockets
+        .command_engine(
+            eng,
+            RocketEngineCommand {
+                ignited: true,
+                throttle: 1.0,
+                gimbal_rad: [0.0, 0.0],
+            },
+        )
+        .unwrap();
+    for _ in 0..60 {
+        w.step(0.01).unwrap();
+    }
+    assert!(
+        w.devices.rockets.last_interstage_blast_n() > 200_000.0,
+        "expected hot-staging plume blast onto booster dome: {:.1} N",
+        w.devices.rockets.last_interstage_blast_n()
+    );
+    assert!(
+        w.scene.body_velocity(booster).unwrap().linear.y < -0.5,
+        "booster must be physically pushed aft by hot-staging blast!"
+    );
+}
+
+#[test]
+fn rocket_aero_bellyflop_crossflow_grid_fin_choking_and_srp_drag_loss() {
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::ZERO).unwrap();
+    w.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+    w.devices.rocket_aero.set_wind(WindField::calm());
+
+    // 1. Starship in 90° horizontal belly-flop at 85 m/s downward -> strong upward crossflow drag!
+    let ship = dynamic_stage(&mut w, Vec3::new(0.0, 1_000.0, 0.0), 120_000.0, Vec3::splat(2e7));
+    w.scene
+        .set_body_pose(ship, Transform::new(Vec3::new(0.0, 1_000.0, 0.0), Quat::from_rotation_z(FRAC_PI_2)))
+        .unwrap();
+    w.scene
+        .set_body_velocity(ship, SpatialVector::new(Vec3::new(0.0, -85.0, 0.0), Vec3::ZERO))
+        .unwrap();
+    let ab = w
+        .devices
+        .rocket_aero
+        .insert_body(
+            &w.scene,
+            AeroBodySpec {
+                body: ship,
+                axis_local: Vec3::Y,
+                diameter_m: 9.0,
+                length_m: 50.0,
+                cd_axial_nose: 0.32,
+                cd_axial_tail: 0.95,
+                cd_crossflow_subsonic: 1.20,
+                cd_crossflow_supersonic: 1.50,
+                cp_crossflow_local: 0.0,
+                cp_axial_shift_m: -4.0,
+                rot_damping_scale: 1.0,
+                srp_drag_loss_gain: 0.9,
+            },
+        )
+        .unwrap();
+    w.step(0.01).unwrap();
+    let r_bf = w.devices.rocket_aero.body_reading(ab).unwrap();
+    assert!((r_bf.aoa_rad - FRAC_PI_2).abs() < 0.02);
+    // Terminal belly-flop drag on 9×50 m cylinder at 85 m/s should be ~1.5–2.5 MN upward!
+    assert!(
+        r_bf.world_force.y > 1_000_000.0,
+        "belly-flop crossflow drag too low: {:?}",
+        r_bf.world_force
+    );
+
+    // 2. Grid fin transonic choking dip around M = 1.12 vs M = 0.6 & M = 2.0!
+    let test_fin_at_mach = |mach: f64| -> f64 {
+        let mut wf = RigidWorld::new().unwrap();
+        wf.scene.set_gravity(Vec3::ZERO).unwrap();
+        wf.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+        let b = dynamic_stage(&mut wf, Vec3::new(0.0, 12_000.0, 0.0), 275_000.0, Vec3::splat(1e8));
+        let a = us76_atmosphere(12_000.0).speed_of_sound_mps;
+        wf.scene
+            .set_body_velocity(b, SpatialVector::new(Vec3::new(0.0, -mach * a, 0.0), Vec3::ZERO))
+            .unwrap();
+        let fin = wf
+            .devices
+            .rocket_aero
+            .insert_surface(
+                &wf.scene,
+                AeroSurfaceSpec {
+                    body: b,
+                    kind: AeroSurfaceKind::GridFin,
+                    center_local: Vec3::new(4.8, 30.0, 0.0),
+                    hinge_axis_local: Vec3::X,
+                    normal_local: Vec3::Z,
+                    area_m2: 6.0,
+                    hinge_moment_arm_m: 0.35,
+                    min_deflection_rad: -0.35,
+                    max_deflection_rad: 0.35,
+                    max_rate_rad_s: 5.0,
+                    max_hinge_torque_nm: 500_000.0,
+                    cn_max: 2.2,
+                },
+            )
+            .unwrap();
+        wf.devices.rocket_aero.command_surface(fin, 0.15).unwrap();
+        for _ in 0..20 {
+            wf.step(0.01).unwrap();
+        }
+        let f_mag = wf.devices.rocket_aero.surface_reading(fin).unwrap().world_force.length();
+        let q = 0.5 * us76_atmosphere(12_000.0).density_kg_m3 * (mach * a).powi(2);
+        f_mag / (q * 6.0) // Effective normalized C_N!
+    };
+    let cn_sub = test_fin_at_mach(0.6);
+    let cn_trans = test_fin_at_mach(1.12);
+    let cn_sup = test_fin_at_mach(2.0);
+    assert!(
+        cn_trans < 0.65 * cn_sub && cn_trans < 0.65 * cn_sup,
+        "grid fin should show transonic choking dip: sub={cn_sub:.3}, trans={cn_trans:.3}, sup={cn_sup:.3}"
+    );
+
+    // 3. Supersonic Retropropulsion (SRP) drag loss when firing into M=2.2 flow!
+    let mut ws = RigidWorld::new().unwrap();
+    ws.scene.set_gravity(Vec3::ZERO).unwrap();
+    ws.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+    let b = dynamic_stage(&mut ws, Vec3::new(0.0, 20_000.0, 0.0), 275_000.0, Vec3::splat(1e8));
+    let a20 = us76_atmosphere(20_000.0).speed_of_sound_mps;
+    ws.scene
+        .set_body_velocity(b, SpatialVector::new(Vec3::new(0.0, -2.2 * a20, 0.0), Vec3::ZERO))
+        .unwrap();
+    let ab_srp = ws
+        .devices
+        .rocket_aero
+        .insert_body(
+            &ws.scene,
+            AeroBodySpec {
+                body: b,
+                axis_local: Vec3::Y,
+                diameter_m: 9.0,
+                length_m: 71.0,
+                cd_axial_nose: 0.35,
+                cd_axial_tail: 0.95,
+                cd_crossflow_subsonic: 1.2,
+                cd_crossflow_supersonic: 1.5,
+                cp_crossflow_local: 0.0,
+                cp_axial_shift_m: 0.0,
+                rot_damping_scale: 1.0,
+                srp_drag_loss_gain: 0.9,
+            },
+        )
+        .unwrap();
+    let up_frame = Transform::from_rotation(Quat::from_rotation_z(FRAC_PI_2));
+    let e = ws
+        .devices
+        .rockets
+        .insert_engine(&ws.scene, RocketEngineSpec::raptor3_sea_level(b, up_frame, None, None, 0.0))
+        .unwrap();
+    ws.step(0.01).unwrap();
+    let srp_off = ws.devices.rocket_aero.body_reading(ab_srp).unwrap().srp_drag_factor;
+    ws.devices
+        .rockets
+        .command_engine(e, RocketEngineCommand { ignited: true, throttle: 1.0, gimbal_rad: [0.0, 0.0] })
+        .unwrap();
+    for _ in 0..80 {
+        ws.step(0.01).unwrap();
+    }
+    let srp_on = ws.devices.rocket_aero.body_reading(ab_srp).unwrap().srp_drag_factor;
+    assert!(
+        (srp_off - 1.0).abs() < 1e-6 && srp_on < 0.75,
+        "SRP retropropulsion must reduce axial body drag factor: off={srp_off:.3}, on={srp_on:.3}"
+    );
+}
+
+#[test]
+fn flex_bending_modes_excite_imu_and_biquad_notch_rejects_bending_and_pogo_couples() {
+    // 1. Verify free-free Euler-Bernoulli eigenfunctions at ends and midpoint.
+    let (phi1_0, _) = free_free_beam_mode(1, 0.0);
+    let (phi1_1, _) = free_free_beam_mode(1, 1.0);
+    let (phi2_1, _) = free_free_beam_mode(2, 1.0);
+    assert!((phi1_0 - 1.0).abs() < 1e-6 && (phi1_1 - 1.0).abs() < 1e-6);
+    assert!((phi2_1 + 1.0).abs() < 1e-6);
+
+    // 2. Excite Super Heavy bending modes with lateral TVC gimbal + axial Pogo with ignition transient!
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::ZERO).unwrap();
+    w.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+    let b = dynamic_stage(&mut w, Vec3::new(0.0, 2_000.0, 0.0), 275_000.0, Vec3::splat(1.2e8));
+    let flex_id = w
+        .devices
+        .rocket_structure
+        .insert(&w.scene, FlexBodySpec::super_heavy(b))
+        .unwrap();
+    let mut ideal_imu = ImuSpec::tactical_fog(b, 42);
+    ideal_imu.gyro_bias_init = Vec3::ZERO;
+    ideal_imu.gyro_arw = 0.0;
+    ideal_imu.gyro_rrw = 0.0;
+    ideal_imu.gyro_quantization = 0.0;
+    ideal_imu.latency_s = 0.0;
+    ideal_imu.sample_rate_hz = 0.0;
+    let imu_id = w.devices.space_sensors.insert_imu(&w.scene, ideal_imu).unwrap();
+    let up_frame = Transform::new(Vec3::new(0.0, -34.7, 0.0), Quat::from_rotation_z(FRAC_PI_2));
+    let eng = w
+        .devices
+        .rockets
+        .insert_engine(&w.scene, RocketEngineSpec::raptor3_sea_level(b, up_frame, None, None, 0.25))
+        .unwrap();
+    w.devices
+        .rockets
+        .command_engine(eng, RocketEngineCommand { ignited: true, throttle: 1.0, gimbal_rad: [0.22, 0.0] })
+        .unwrap();
+
+    let mut max_tip = 0.0_f64;
+    let mut max_imu_bend = 0.0_f64;
+    let mut max_imu_flex_diff = 0.0_f64;
+    let mut max_pogo_g = 0.0_f64;
+    for _ in 0..80 {
+        w.step(1.0 / 60.0).unwrap();
+        let r = w.devices.rocket_structure.reading(flex_id).unwrap();
+        let ir = w.devices.space_sensors.imu_reading(imu_id).unwrap();
+        let bp = w.scene.body_pose(b).unwrap();
+        let bv = w.scene.body_velocity(b).unwrap();
+        let rigid_omega_b = bp.rotation.conjugate() * bv.angular;
+        max_imu_flex_diff = max_imu_flex_diff.max((ir.angular_velocity - rigid_omega_b).length());
+        max_tip = max_tip.max(r.tip_deflection_m);
+        max_imu_bend = max_imu_bend.max(r.imu_bending_rate_body.length());
+        max_pogo_g = max_pogo_g.max(r.pogo_accel_g);
+    }
+    assert!(max_tip > 1e-3, "lateral TVC must excite fuselage bending: {max_tip:.6} m");
+    assert!(max_imu_bend > 1e-4, "IMU must pick up elastic bending slope rate: {max_imu_bend:.6} rad/s");
+    assert!(
+        max_imu_flex_diff > 1e-4,
+        "SpaceSensors ideal IMU must automatically include RocketStructure bending feedthrough: {max_imu_flex_diff:.6}"
+    );
+    assert!(max_pogo_g > 1e-3, "thrust ramp must excite SP-8055 longitudinal Pogo mode: {max_pogo_g:.5} g");
+
+    // 3. Verify digital BiquadNotchFilter kills 1st bending sine (> 25 dB) while passing rigid rate!
+    let fs = 60.0;
+    let f_bend = 2.8;
+    let mut notch_bend = BiquadNotchFilter::new(f_bend, 3.0, fs);
+    let mut notch_rigid = BiquadNotchFilter::new(f_bend, 3.0, fs);
+    let mut peak_bend = 0.0_f64;
+    let mut peak_rigid = 0.0_f64;
+    for k in 0..600 {
+        let t = k as f64 / fs;
+        let yb = notch_bend.filter((std::f64::consts::TAU * f_bend * t).sin());
+        let yr = notch_rigid.filter((std::f64::consts::TAU * 0.15 * t).sin());
+        if k > 300 {
+            peak_bend = peak_bend.max(yb.abs());
+            peak_rigid = peak_rigid.max(yr.abs());
+        }
+    }
+    assert!(
+        peak_bend < 0.05 && peak_rigid > 0.95,
+        "biquad notch must kill bending ({peak_bend:.4}) and pass rigid motion ({peak_rigid:.4})"
+    );
+}
+
+#[test]
+fn ullage_pressurization_cavitation_and_rotating_earth_coriolis() {
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::ZERO).unwrap();
+    w.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+    w.devices
+        .rockets
+        .set_earth_rotation(earth_rotation_at_latitude(26.0));
+
+    let s_ok = dynamic_stage(&mut w, Vec3::new(0.0, 500.0, 0.0), 120_000.0, Vec3::splat(2e7));
+    let s_cav = dynamic_stage(&mut w, Vec3::new(100.0, 500.0, 0.0), 120_000.0, Vec3::splat(2e7));
+    let t_ok = w
+        .devices
+        .rockets
+        .insert_tank(
+            &mut w.scene,
+            PropellantTankSpec {
+                body: s_ok,
+                base_local: Vec3::new(0.0, -10.0, 0.0),
+                axis_local: Vec3::Y,
+                radius_m: 2.0,
+                height_m: 6.0,
+                liquid_density_kg_m3: 1140.0,
+                initial_mass_kg: 40_000.0,
+                slosh_mass_fraction: 0.15,
+                slosh_damping_ratio: 0.06,
+                capillary_omega2: 0.2,
+            },
+        )
+        .unwrap();
+    let t_cav = w
+        .devices
+        .rockets
+        .insert_tank(
+            &mut w.scene,
+            PropellantTankSpec {
+                body: s_cav,
+                base_local: Vec3::new(0.0, -10.0, 0.0),
+                axis_local: Vec3::Y,
+                radius_m: 2.0,
+                height_m: 6.0,
+                liquid_density_kg_m3: 1140.0,
+                initial_mass_kg: 40_000.0,
+                slosh_mass_fraction: 0.15,
+                slosh_damping_ratio: 0.06,
+                capillary_omega2: 0.2,
+            },
+        )
+        .unwrap();
+    // Healthy 5.5 bar header vs depressurized 1.15 bar cavitating tank!
+    w.devices
+        .rockets
+        .set_tank_pressurization(t_ok, 550_000.0, 110_000.0, 14.0)
+        .unwrap();
+    w.devices
+        .rockets
+        .set_tank_pressurization(t_cav, 115_000.0, 110_000.0, 28.0)
+        .unwrap();
+
+    let up_frame = Transform::new(Vec3::new(0.0, -20.0, 0.0), Quat::from_rotation_z(FRAC_PI_2));
+    let e_ok = w
+        .devices
+        .rockets
+        .insert_engine(&w.scene, RocketEngineSpec::raptor3_sea_level(s_ok, up_frame, Some(t_ok), None, 0.0))
+        .unwrap();
+    let e_cav = w
+        .devices
+        .rockets
+        .insert_engine(&w.scene, RocketEngineSpec::raptor3_sea_level(s_cav, up_frame, Some(t_cav), None, 0.0))
+        .unwrap();
+    for e in [e_ok, e_cav] {
+        w.devices
+            .rockets
+            .command_engine(e, RocketEngineCommand { ignited: true, throttle: 1.0, gimbal_rad: [0.0, 0.0] })
+            .unwrap();
+    }
+    for _ in 0..120 {
+        w.step(0.02).unwrap();
+    }
+    let r_ok = w.devices.rockets.engine_reading(e_ok).unwrap();
+    let r_cav = w.devices.rockets.engine_reading(e_cav).unwrap();
+    assert!(!r_ok.cavitating && r_cav.cavitating, "low-ullage tank must trigger real pump cavitation");
+    assert!(
+        r_cav.thrust_n < 0.75 * r_ok.thrust_n,
+        "cavitation must degrade thrust: ok={:.0} N, cav={:.0} N",
+        r_ok.thrust_n,
+        r_cav.thrust_n
+    );
+    // Ascending rocket at 26°N must deflect Westward (-X) due to exact Coriolis -2m(Ω × v)!
+    let v_ok = w.scene.body_velocity(s_ok).unwrap().linear;
+    assert!(
+        v_ok.y > 20.0 && v_ok.x < -1e-3,
+        "ascending rocket must experience Westward Coriolis deflection: v={v_ok:?}"
+    );
+}
+
+#[test]
+fn pifs_cp_shift_transonic_buffet_dryden_turbulence_and_knudsen_bridging() {
+    let mut w = RigidWorld::new().unwrap();
+    w.scene.set_gravity(Vec3::ZERO).unwrap();
+    w.devices.rockets.set_flat_ground(Some(0.0), 0.0);
+    w.devices.rocket_aero.set_wind(WindField::boca_chica_moderate());
+
+    // 1. High-altitude supersonic powered ascent -> underexpanded plume drives forward PIFS CP shift!
+    let b_pifs = dynamic_stage(&mut w, Vec3::new(0.0, 22_000.0, 0.0), 275_000.0, Vec3::splat(1e8));
+    let a22 = us76_atmosphere(22_000.0).speed_of_sound_mps;
+    w.scene
+        .set_body_velocity(b_pifs, SpatialVector::new(Vec3::new(0.0, 1.8 * a22, 0.0), Vec3::ZERO))
+        .unwrap();
+    let ab_pifs = w
+        .devices
+        .rocket_aero
+        .insert_body(
+            &w.scene,
+            AeroBodySpec {
+                body: b_pifs,
+                axis_local: Vec3::Y,
+                diameter_m: 9.0,
+                length_m: 71.0,
+                cd_axial_nose: 0.34,
+                cd_axial_tail: 0.95,
+                cd_crossflow_subsonic: 1.2,
+                cd_crossflow_supersonic: 1.5,
+                cp_crossflow_local: 0.0,
+                cp_axial_shift_m: -4.5,
+                rot_damping_scale: 1.0,
+                srp_drag_loss_gain: 0.8,
+            },
+        )
+        .unwrap();
+    let up_frame = Transform::new(Vec3::new(0.0, -34.0, 0.0), Quat::from_rotation_z(FRAC_PI_2));
+    let eng = w
+        .devices
+        .rockets
+        .insert_engine(&w.scene, RocketEngineSpec::raptor3_sea_level(b_pifs, up_frame, None, None, 0.0))
+        .unwrap();
+    w.devices
+        .rockets
+        .command_engine(eng, RocketEngineCommand { ignited: true, throttle: 1.0, gimbal_rad: [0.0, 0.0] })
+        .unwrap();
+
+    // 2. Transonic Max-Q stage at M = 1.02, 8 km -> real stochastic transonic buffet torque!
+    let b_buf = dynamic_stage(&mut w, Vec3::new(200.0, 8_000.0, 0.0), 275_000.0, Vec3::splat(1e8));
+    let a8 = us76_atmosphere(8_000.0).speed_of_sound_mps;
+    w.scene
+        .set_body_velocity(b_buf, SpatialVector::new(Vec3::new(0.0, 1.02 * a8, 0.0), Vec3::ZERO))
+        .unwrap();
+    let ab_buf = w
+        .devices
+        .rocket_aero
+        .insert_body(
+            &w.scene,
+            AeroBodySpec {
+                body: b_buf,
+                axis_local: Vec3::Y,
+                diameter_m: 9.0,
+                length_m: 71.0,
+                cd_axial_nose: 0.34,
+                cd_axial_tail: 0.95,
+                cd_crossflow_subsonic: 1.2,
+                cd_crossflow_supersonic: 1.5,
+                cp_crossflow_local: 0.0,
+                cp_axial_shift_m: -4.5,
+                rot_damping_scale: 1.0,
+                srp_drag_loss_gain: 0.8,
+            },
+        )
+        .unwrap();
+
+    // 3. Upper-atmosphere rarefied stage at 105 km -> Knudsen number enters transition regime!
+    let b_kn = dynamic_stage(&mut w, Vec3::new(400.0, 105_000.0, 0.0), 120_000.0, Vec3::splat(2e7));
+    w.scene
+        .set_body_velocity(b_kn, SpatialVector::new(Vec3::new(0.0, -3_000.0, 0.0), Vec3::ZERO))
+        .unwrap();
+    let ab_kn = w
+        .devices
+        .rocket_aero
+        .insert_body(
+            &w.scene,
+            AeroBodySpec {
+                body: b_kn,
+                axis_local: Vec3::Y,
+                diameter_m: 9.0,
+                length_m: 50.0,
+                cd_axial_nose: 0.30,
+                cd_axial_tail: 0.90,
+                cd_crossflow_subsonic: 1.2,
+                cd_crossflow_supersonic: 1.5,
+                cp_crossflow_local: 0.0,
+                cp_axial_shift_m: -4.0,
+                rot_damping_scale: 1.0,
+                srp_drag_loss_gain: 0.0,
+            },
+        )
+        .unwrap();
+
+    let mut peak_buffet = 0.0_f64;
+    for _ in 0..80 {
+        w.step(0.01).unwrap();
+        peak_buffet = peak_buffet.max(w.devices.rocket_aero.body_reading(ab_buf).unwrap().buffet_torque_nm);
+    }
+    let r_pifs = w.devices.rocket_aero.body_reading(ab_pifs).unwrap();
+    let r_kn = w.devices.rocket_aero.body_reading(ab_kn).unwrap();
+    assert!(
+        r_pifs.pifs_cp_shift_m > 1.0,
+        "underexpanded supersonic ascent must shift CP forward via PIFS: {:.2} m",
+        r_pifs.pifs_cp_shift_m
+    );
+    assert!(
+        peak_buffet > 20_000.0,
+        "transonic Max-Q must produce real buffet torque: {peak_buffet:.1} N·m"
+    );
+    assert!(
+        r_kn.knudsen_number > 0.01,
+        "105 km flight must enter rarefied Knudsen transition regime: Kn={:.5}",
+        r_kn.knudsen_number
+    );
+}

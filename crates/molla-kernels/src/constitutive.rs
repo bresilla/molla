@@ -3,13 +3,15 @@
 use molla_core::{Error, Result};
 use molla_math::{
     Mat3,
-    constitutive::{ElasticMaterial, MaterialResponse},
+    constitutive::{ElasticMaterial, MaterialResponse, MembraneStrainLimit},
 };
 use std::num::NonZeroU64;
 
 pub const OUTPUT_FLOATS: usize = 100;
 pub const SHADER_SOURCE: &str = concat!(
     include_str!("../shaders/constitutive.wgsl"),
+    "\n",
+    include_str!("../shaders/strain_limit.wgsl"),
     "\n",
     include_str!("../shaders/constitutive_batch.wgsl")
 );
@@ -21,6 +23,39 @@ pub struct ConstitutiveInput {
 }
 
 impl ConstitutiveInput {
+    /// Unit-stiffness cubic principal-strain energy and its coupled derivatives.
+    pub fn membrane_strain_limit(
+        limit: MembraneStrainLimit,
+        mut deformation: Mat3,
+    ) -> Result<Self> {
+        limit.maximum_stretch()?;
+        deformation.z_axis = molla_math::Vec3::ZERO;
+        let mut values = [0.0; 16];
+        values[..9].copy_from_slice(&deformation.to_cols_array().map(|v| v as f32));
+        values[9] = limit.strain as f32;
+        values[10] = limit.shrink[0] as f32;
+        values[11] = 4.0;
+        values[12] = 2.0;
+        values[14] = limit.shrink[1] as f32;
+        MembraneStrainLimit {
+            strain: values[9] as f64,
+            shrink: [values[10] as f64, values[14] as f64],
+        }
+        .maximum_stretch()?;
+        let maximum = (1.0 + values[9]) / values[10].min(values[14]);
+        if !maximum.is_finite() || maximum <= 1.0 {
+            return Err(Error::Solver(
+                "constitutive: strain cap is not representable as f32".into(),
+            ));
+        }
+        if values.iter().any(|v| !v.is_finite()) {
+            return Err(Error::Solver(
+                "constitutive: strain input exceeds f32 range".into(),
+            ));
+        }
+        Ok(Self { values })
+    }
+
     pub fn new(
         material: ElasticMaterial,
         mut deformation: Mat3,

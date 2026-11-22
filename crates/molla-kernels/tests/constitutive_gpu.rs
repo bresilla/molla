@@ -52,6 +52,123 @@ fn models() -> [ElasticModel; 4] {
 }
 
 #[test]
+#[ignore = "requires GPU; run via make test-ppf-strain-gpu"]
+fn principal_strain_responses_match_cpu_and_refuse_invalid_device_inputs() {
+    use molla_math::constitutive::MembraneStrainLimit;
+    let engine = Engine::new_gpu().unwrap();
+    let device = engine.device().unwrap();
+    let queue = engine.queue().unwrap();
+    let kernel = ConstitutiveKernel::new(device);
+    let mut inputs: Vec<[f32; 16]> = vec![];
+    let mut expected = vec![];
+    let rotate = Mat3::from_quat(Quat::from_rotation_x(0.4) * Quat::from_rotation_y(-0.7));
+    let right = Mat3::from_quat(Quat::from_rotation_z(0.6));
+    for strain in [0.05f32, 0.4] {
+        for shrink in [[1.0f32; 2], [0.8, 0.9]] {
+            let limit = MembraneStrainLimit {
+                strain: strain as f64,
+                shrink: shrink.map(f64::from),
+            };
+            for (a, b) in [
+                (0.7, 0.8),
+                (1.0, 1.0),
+                (1.02, 1.02),
+                (1.02, 1.0200001),
+                (1.02, 0.8),
+                (1.3, 1.1),
+            ] {
+                let diagonal = Mat3::from_diagonal(Vec3::new(a, b, 0.0));
+                for f in [diagonal, rotate * diagonal, rotate * diagonal * right] {
+                    let f = Mat3::from_cols_array(&f.to_cols_array().map(|v| f64::from(v as f32)));
+                    if limit.check(f).is_err() {
+                        continue;
+                    }
+                    let data = ConstitutiveInput::membrane_strain_limit(limit, f).unwrap();
+                    inputs.push(*bytemuck::from_bytes(bytemuck::bytes_of(&data)));
+                    expected.push(Some(limit.evaluate(f).unwrap()));
+                }
+            }
+        }
+    }
+    let good = ConstitutiveInput::membrane_strain_limit(
+        MembraneStrainLimit {
+            strain: 0.05,
+            shrink: [1.0; 2],
+        },
+        Mat3::IDENTITY,
+    )
+    .unwrap();
+    let base: [f32; 16] = *bytemuck::from_bytes(bytemuck::bytes_of(&good));
+    for (index, value) in [
+        (9, 0.0),
+        (9, f32::NAN),
+        (10, 0.0),
+        (14, -1.0),
+        (14, f32::INFINITY),
+        (12, 3.0),
+        (0, 1.2),
+        (0, 0.0),
+        (0, f32::NAN),
+    ] {
+        let mut data = base;
+        data[index] = value;
+        inputs.push(data);
+        expected.push(None);
+    }
+    let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&inputs),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let output = buffer(
+        device,
+        (inputs.len() * OUTPUT_FLOATS * 4) as u64,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+    );
+    let bindings = kernel
+        .bind(device, &input, &output, inputs.len() as u32)
+        .unwrap();
+    let allocations = DeviceScope::start().unwrap();
+    let transfers = TransferScope::start().unwrap();
+    let mut encoder = device.create_command_encoder(&Default::default());
+    kernel.encode(&mut encoder, &bindings);
+    queue.submit([encoder.finish()]);
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let allocation = allocations.finish();
+    let transfer = transfers.finish();
+    assert_eq!(allocation.observations, 0);
+    assert_eq!(transfer.upload_bytes, 0);
+    assert_eq!(transfer.readback_bytes, 0);
+    let mut worst = 0.0f64;
+    for (row, expected) in read(device, queue, &output)
+        .chunks_exact(OUTPUT_FLOATS)
+        .zip(expected)
+    {
+        let Some(cpu) = expected else {
+            assert!(decode_response(row).is_err());
+            continue;
+        };
+        let gpu = decode_response(row).unwrap();
+        assert!((f64::from(row[3]) - cpu.energy).abs() < 2.0e-5 * (1.0 + cpu.energy.abs()));
+        let values = |r: &molla_math::constitutive::MaterialResponse| {
+            std::iter::once(r.energy)
+                .chain(r.gradient.to_cols_array())
+                .chain(r.hessian.into_iter().flatten())
+                .collect::<Vec<_>>()
+        };
+        for (a, b) in values(&cpu).into_iter().zip(values(&gpu)) {
+            let error = (a - b).abs() / (1.0 + a.abs());
+            worst = worst.max(error);
+            assert!(error < 2.0e-5, "{a} != {b}, error={error}");
+        }
+    }
+    eprintln!(
+        "principal strain cases={} worst_scaled_error={worst:.3e}",
+        inputs.len()
+    );
+}
+
+#[test]
 fn shader_parses_and_validates() {
     let module = naga::front::wgsl::parse_str(SHADER_SOURCE)
         .unwrap_or_else(|error| panic!("{}", error.emit_to_string(SHADER_SOURCE)));

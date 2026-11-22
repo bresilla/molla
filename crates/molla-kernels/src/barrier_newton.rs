@@ -321,7 +321,7 @@ impl BarrierNewtonGpu {
         )?;
         let has_zero_rest_springs = springs.iter().any(|s| s.rest == 0.0);
         validation::strain_limit(&params, has_zero_rest_springs)?;
-        let prepared_materials = materials::Prepared::new(device, positions, elements)?;
+        let prepared_materials = materials::Prepared::new(device, positions, elements, springs, tets)?;
         let n = positions.len();
         // Spring CSR.
         let mut counts = vec![0u32; n + 1];
@@ -821,7 +821,7 @@ impl BarrierNewtonGpu {
                 prepared,
                 &uniform_buf,
                 &pinned_buf,
-                [&x_iter, &x_try, &cg_d, &p_dir],
+                [&x_iter, &x_try, &cg_d, &p_dir, &x_pos],
                 [&grad, &cg_hd, &part, &scalars],
             )
         });

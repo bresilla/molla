@@ -74,7 +74,10 @@ fn dispatch(engine: &Engine, factor: u32, addend: u32) -> Vec<u32> {
         .map_async(wgpu::MapMode::Read, move |result| tx.send(result).unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
-    let view = readback.slice(..).get_mapped_range().expect("mapped GPU buffer range");
+    let view = readback
+        .slice(..)
+        .get_mapped_range()
+        .expect("mapped GPU buffer range");
     let words = view
         .chunks_exact(4)
         .map(|word| u32::from_le_bytes(word.try_into().unwrap()))

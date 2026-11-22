@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "bin/molla_cables",
     "crates/molla-core",
     "crates/molla-math",
     "crates/molla-storage",

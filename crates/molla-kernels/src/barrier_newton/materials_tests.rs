@@ -75,7 +75,7 @@ fn resident_assembly_matches_coupled_oracle_and_rejects_invalid_trials() {
         .iter()
         .map(|v| [v.x as f32, v.y as f32, v.z as f32])
         .collect();
-    let prepared = Prepared::new(device, &p, &elements).unwrap().unwrap();
+    let prepared = Prepared::new(device, &p, &elements, &[], &[]).unwrap().unwrap();
     let buffer = |data: &[u8], uniform: bool| {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
@@ -115,7 +115,7 @@ fn resident_assembly_matches_coupled_oracle_and_rejects_invalid_trials() {
         prepared,
         &uniforms,
         &pin_buffer,
-        [&x_buffer, &trial_buffer, &directions, &newton_buffer],
+        [&x_buffer, &trial_buffer, &directions, &newton_buffer, &x_buffer],
         [&gradient, &product, &partial, &scalars],
     );
     let allocations = DeviceScope::start().unwrap();

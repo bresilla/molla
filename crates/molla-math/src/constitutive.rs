@@ -3,6 +3,9 @@
 use crate::{Mat3, Real, Vec3, dense3::svd3};
 use molla_core::{Error, Result};
 
+mod strain_limit;
+pub use strain_limit::MembraneStrainLimit;
+
 /// Material selectors matching the pinned PPF energy functions.
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

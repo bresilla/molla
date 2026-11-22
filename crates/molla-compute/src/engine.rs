@@ -217,6 +217,29 @@ impl Engine {
             .check()
     }
 
+    /// Run setup or resource replacement with validation, allocation, and loss checks.
+    pub fn checked_gpu_setup<T>(
+        &self,
+        create: impl FnOnce(&wgpu::Device) -> Result<T>,
+    ) -> Result<T> {
+        self.check_device()?;
+        let device = self.device.as_ref().expect("GPU health has a device");
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let allocation = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let result = create(device);
+        let errors = [
+            pollster::block_on(internal.pop()),
+            pollster::block_on(allocation.pop()),
+            pollster::block_on(validation.pop()),
+        ];
+        self.check_device()?;
+        if let Some(error) = errors.into_iter().flatten().next() {
+            return Err(Error::Gpu(format!("GPU resource setup: {error}")));
+        }
+        result
+    }
+
     /// Enable compiler caching on a device requested with `PIPELINE_CACHE`.
     /// Existing programs remain valid; only subsequent pipeline builds use this cache.
     /// Incompatible snapshots fall back to empty caches. No disk I/O is performed.

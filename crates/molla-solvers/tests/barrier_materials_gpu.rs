@@ -227,12 +227,22 @@ fn material_overflow_is_transactional_and_invalid_setup_allocates_nothing() {
 #[test]
 #[ignore = "requires release GPU benchmark; run via make bench-ppf-material-solver"]
 fn resident_material_solver_resource_profile() {
+    material_resource_profile(None);
+}
+
+#[test]
+#[ignore = "requires release GPU benchmark; run via make bench-ppf-strain"]
+fn resident_material_strain_resource_profile() {
+    material_resource_profile(Some(0.08));
+}
+
+fn material_resource_profile(strain_limit: Option<f64>) {
     use molla_core::gpu_metrics::{DispatchScope, TransferScope};
     use std::time::Instant;
     let engine = Engine::new_gpu().unwrap();
     assert!(!engine.adapter_info().unwrap().is_software);
     eprintln!(
-        "material solver adapter={:?} warmup=48 samples=16 repeats=3 dt=1/240",
+        "material solver adapter={:?} strain_limit={strain_limit:?} warmup=48 samples=16 repeats=3 dt=1/240",
         engine.adapter_info().unwrap()
     );
     let device = engine.device().unwrap();
@@ -264,7 +274,18 @@ fn resident_material_solver_resource_profile() {
         };
         let elements: Vec<_> = triangles
             .iter()
-            .map(|t| ElasticElement::membrane(&rest, *t, 0.01, material).unwrap())
+            .map(|t| {
+                let e = ElasticElement::membrane(&rest, *t, 0.01, material).unwrap();
+                if let Some(strain) = strain_limit {
+                    e.with_strain_limit(molla_math::constitutive::MembraneStrainLimit {
+                        strain,
+                        shrink: [1.0; 2],
+                    }, 0.02 * rest.len() as f64 / triangles.len() as f64)
+                    .unwrap()
+                } else {
+                    e
+                }
+            })
             .collect();
         let positions: Vec<_> = rest
             .iter()
@@ -338,6 +359,21 @@ fn resident_material_solver_resource_profile() {
             assert!(current.iter().all(|p| p.y > 0.0 && p.length() > 0.06));
             for e in &elements {
                 e.validate(&current).unwrap();
+            }
+            if strain_limit.is_some() {
+                let maximum = elements
+                    .iter()
+                    .map(|e| {
+                        molla_math::constitutive::MembraneStrainLimit::largest_stretch(
+                            e.deformation(&current).unwrap(),
+                        )
+                        .unwrap()
+                    })
+                    .fold(0.0f64, f64::max);
+                eprintln!(
+                    "material strain vertices={} final_maximum_stretch={maximum:.9}",
+                    rest.len()
+                );
             }
         }
     }

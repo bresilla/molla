@@ -20,7 +20,7 @@ integration, correctness, resource, and performance evidence is recorded.
 | P0 | Runnable native CPU/GPU verification and measured baseline | Make targets; real adapter identity; repeated elapsed and allocation/readback measurements on fixed workloads | In progress |
 | P1 | Robust input and accepted-state contracts | CPU/GPU refuse invalid configuration, nonfinite state, intersecting starts and invalid accepted geometry; rejected steps do not publish state; adversarial tests | In progress: CPU/GPU geometry gates and transactional host/readback publication; broader geometry, lifecycle and device-loss qualification open |
 | P2 | Material-complete barrier solve | Shell membrane and bending, tet constitutive energies, damping and relevant plasticity integrated with contact; analytical derivatives checked against finite differences; WGSL parity | In progress: CPU/GPU membrane/tet contact, initial Model authoring and coupled-operator parity; broader authoring qualification, bending, damping and plasticity open |
-| P3 | Triangle principal-stretch limiting | Deformation-gradient singular-value limits, matching barrier derivatives and CCD/line-search constraints; shear/directional/rotated tests, not just edge length tests | Open |
+| P3 | Triangle principal-stretch limiting | Deformation-gradient singular-value limits, matching barrier derivatives and CCD/line-search constraints; shear/directional/rotated tests, not just edge length tests | In progress: CPU/GPU principal caps and cubic derivative kernels; dynamic-stiffness-weighted barrier assembly remains open |
 | P4 | PPF dynamic stiffness | Local material Hessian projection and gap-dependent inertia; CPU oracle, WGSL implementation and stiff-contact tests | Open |
 | P5 | Complete mixed GPU integration | Explicit rod edges/bending and relevant rod models, GPU rigid/deformable coupling, supported collider geometries and moving boundary controls; Model/State integration, no silently skipped shapes | Open |
 | P6 | Scalable resident execution | Resident broad phase and sparse contact adjacency; checked capacity growth; persistent scratch/readback buffers; no added per-element CPU hot loops; benchmark dense/adversarial contacts | In progress: scalar staging and resident validation BVH; performance qualification open |
@@ -641,6 +641,94 @@ barrier regressions. Formatting and `git diff --check` passed. Evidence is
 in `/tmp/molla-precommit-cpu.log`, `/tmp/molla-precommit-updated.log` and
 `/tmp/molla-precommit-format-check.log`. These are focused checks, not
 whole-workspace, rendered, cross-platform or renewed performance acceptance.
+
+### Principal-strain cap and cubic-operator checkpoint
+
+`MembraneStrainLimit` separates authored strain from the shrink-adjusted
+maximum stretch `(1 + strain) / min(shrink_x, shrink_y)`. The unit-stiffness
+cubic potential is `2/(3*strain) * sum(max(sigma - 1, 0)^3)`. Its CPU f64
+and resident WGSL evaluators provide the full coupled deformation-space
+gradient and Hessian, including repeated singular values and material-axis
+rotations. This operator is convex; no numerical eigenvalue clipping is
+needed. The implementation follows the pinned upstream
+[strain formulation](https://github.com/st-tech/ppf-contact-solver/blob/71a2e26c8b0d6dc5b12094cabdc16acc7c1017a1/crates/ppf-cts-solver/src/kernels/strainlimiting/shell_strain.kernel.cpp)
+and `barrier/cubic.hpp`.
+
+`ElasticElement::with_strain_limit` currently enables the **hard cap**, not
+the cubic potential in the solve. It is available through the public Model
+registry on CPU and GPU. Initial and final geometry, line-search trials and
+Newton travel bounds enforce it independently of edge lengths. The GPU uses
+the existing material record's spare scalar and existing dispatches: there
+are no extra material buffers, submissions, per-step host element scans or
+vector readbacks. The f32 cap reserves a relative `16 * EPSILON` margin;
+this is a numerical guard, not an exact-arithmetic predicate guarantee.
+
+The spectral-norm sublevel set is convex along the affine deformation path.
+Endpoint testing plus bisection therefore yields a safe prefix for the upper
+stretch cap. The existing minimum-singular-value/Frobenius bound remains in
+place separately for rank preservation. Shrink factors here correct the cap
+only; they do not introduce a new rest-shrink material model.
+
+Checks so far (`make test-ppf-strain test-ppf-strain-gpu`):
+
+- Three f64 tests cover energy/gradient/Hessian finite differences,
+  symmetry/PSD, repeated stretches, compression, rotations, shear with
+  non-growing mesh edges, shrink-adjusted limits and sampled sweeps.
+- Two public CPU tests cover authoring, stepping, rejected-state
+  publication and registry replacement. Two offline WGSL validations pass.
+- The resident GPU operator matches 69 valid f64 cases, with nine malformed
+  device records refused. Worst scaled response error is `4.361e-6`;
+  this dispatch allocates no instrumented buffers and transfers no data.
+- Public CPU/GPU trajectories use matching 12-Newton budgets for 80 steps.
+  Peaks are `1.049997823` and `1.312497468` for caps `1.05` and `1.3125`;
+  maximum position errors are `1.672e-4` and `1.746e-4` metres (gate 0.001).
+  The initial mismatched 20-versus-12 comparison failed at 0.04 metres;
+  matching budgets corrected the fixture without weakening travel safety.
+  The shrink case needed 80 steps to reach its larger cap.
+- A separate 20-step resident cap test records zero instrumented GPU buffer
+  allocations, 41,304 uploaded bytes, 32,320 scalar-readback bytes and 16,025
+  dispatches. Its debug timing is not performance acceptance.
+- Evidence: `/tmp/molla-ppf-strain-math.log`,
+  `/tmp/molla-ppf-strain-gates.log`; failed fixture and diagnosis are retained
+  in `/tmp/molla-ppf-strain-first.log` and `/tmp/molla-ppf-strain-debug.log`.
+
+**P3 is not complete.** The tested cubic derivatives still need assembly
+with the full elasticity/inertia-dependent stiffness and consistent
+line-search weighting. A fixed arbitrary stiffness is not a substitute.
+Other upstream barrier selectors and broader contact-rich/rigid-coupled
+qualification remain open alongside P4. All P0-P7 requirements above remain
+the completion contract.
+
+### Interactive cable examples (user-requested detour)
+
+`bin/molla_cables` adds a separate native viewer for the **existing GPU VBD**
+solver: suspended/plucked cable, three bending cantilevers, and sphere/floor
+drape. It uses public Model/State APIs, WGSL simulation and rendered tubes
+from actual simulated positions. This is not evidence of PPF rod integration,
+torsion, cable self-CCD, knot preservation, or P5/P7 completion.
+
+`make test-cables` passed 720 steps per scene on RTX 4080/Vulkan 595.112.07,
+including a velocity pluck, fixed-anchor checks and nonzero motion. Maximum
+segment stretch was 1.00298 / 1.00096 / 1.00480. Worst particle penetration
+was 0.23 mm; the sphere scene's tube-segment penetration was 2.12 mm. The
+cantilever tip heights at three seconds were 0.181 / 1.487 / 2.050 m.
+An initial 32-node/24-iteration cantilever failed the tip-separation gate;
+the final demo uses a shared 16-node/64-iteration discretization for all
+three stiffnesses. This demonstrates iteration/resolution sensitivity, not
+resolution-independent calibrated bending. No physics kernel was changed
+for this demo.
+
+Evidence: `/tmp/molla-cables-verified-second.log`; framebuffer captures
+`/tmp/molla-cables-{0,1,2}.png` were inspected. Run with `make run-cables`;
+the viewer reports its numerical/contact limitations in the UI and README.
+Do not benchmark PPF while the interactive GPU demo is running.
+
+The adaptive principal-strain assembly preceding this detour remains
+unverified. CPU compilation now passes, but the previous hard-cap-only
+trajectory assertion fails (peak 1.01775 rather than almost 1.05). Weighted
+derivative/coupled GPU gates and physics-correct pre-cap trajectory checks
+must be added before accepting that work. Preserve the earlier cap-only
+passing logs as historical evidence, not current integrated acceptance.
 
 ### Next required work
 
