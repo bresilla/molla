@@ -284,8 +284,8 @@ pub struct StarshipSim {
     pub ship_engines: Vec<RocketEngineId>,
     /// 4 Mid-body HLS Lunar Landing Thrusters (mounted high at y = +8 m for 1/6 g soft touchdown).
     pub ship_hls_thrusters: Vec<RocketEngineId>,
-    /// 4 Real Physical Cold-Gas N2 RCS Thrusters (nose + aft pure-couple pairs, finite propellant, valve lag).
-    pub ship_rcs_thrusters: [ThrusterId; 4],
+    /// 12 Real Physical RCS Thrusters (0..4 cold-gas N2 yaw ±tau_x, 4..8 roll ±tau_y, 8..12 hot-gas apogee pitch ±tau_z).
+    pub ship_rcs_thrusters: [ThrusterId; 12],
     pub ship_aero: AeroBodyId,
     pub ship_flaps: [AeroSurfaceId; 4], // [fwd_L(+Z), fwd_R(-Z), aft_L(+Z), aft_R(-Z)]
     pub ship_flex: FlexBodyId,
@@ -476,20 +476,21 @@ impl StarshipSim {
             ship_using_headers,
         ) = match scenario {
             StarshipScenario::FullStackMission => {
-                // Full 121 m stack sitting on the 20 m Orbital Launch Mount (RTLS suborbital test load
-                // so liftoff -> Max-Q -> hot-stage -> booster catch AND ship belly-flop flip-landing
-                // all play out cleanly in ~2.5 minutes!).
+                // Full 121 m stack sitting on the 20 m Orbital Launch Mount (physically Tsiolkovsky-matched
+                // RTLS suborbital flight-test propellant budget: Ship burns its main tanks dry during
+                // hot-stage separation + upper-stage push, entering belly-flop on nose/mid header tanks
+                // with balanced COM just like real Starship!).
                 let by = OLM_DECK_Y + BOOSTER_HALF_LEN;
                 let sy = by + BOOSTER_HALF_LEN + HOTSTAGE_RING_H + SHIP_HALF_LEN;
                 (
                     Transform::from_translation(Vec3::new(0.0, by, 0.0)),
                     SpatialVector::ZERO,
-                    1_280_000.0,
-                    360_000.0,
+                    450_000.0,
+                    128_000.0,
                     Transform::from_translation(Vec3::new(0.0, sy, 0.0)),
                     SpatialVector::ZERO,
-                    380_000.0,
-                    110_000.0,
+                    14_000.0,
+                    4_000.0,
                     48_000.0,
                     14_000.0,
                     true,
@@ -500,21 +501,21 @@ impl StarshipSim {
                 )
             }
             StarshipScenario::HotStaging => {
-                // Directly at MECO (h = 4.2 km, Mach 1.08, slight 11° downrange tilt).
-                let rot = Quat::from_rotation_z(-0.18);
+                // Directly at MECO above Max-Q (h = 7.8 km, thin air q ≈ 14 kPa, clean 5° prograde climb!).
+                let rot = Quat::from_rotation_z(-0.085);
                 let up = rot * Vec3::Y;
-                let bp = Vec3::new(420.0, 4_200.0, 0.0);
+                let bp = Vec3::new(260.0, 7_800.0, 0.0);
                 let sp = bp + up * (BOOSTER_HALF_LEN + HOTSTAGE_RING_H + SHIP_HALF_LEN);
-                let v0 = up * 340.0;
+                let v0 = up * 220.0;
                 (
                     Transform::new(bp, rot),
                     SpatialVector::new(v0, Vec3::ZERO),
-                    175_000.0,
-                    52_000.0,
+                    240_000.0,
+                    70_000.0,
                     Transform::new(sp, rot),
                     SpatialVector::new(v0, Vec3::ZERO),
-                    340_000.0,
-                    100_000.0,
+                    14_000.0,
+                    4_000.0,
                     48_000.0,
                     14_000.0,
                     false,
@@ -617,9 +618,26 @@ impl StarshipSim {
         };
 
         // 3. Super Heavy Booster Body, Dry Mass, LOX/CH4 Tanks, 33 Raptors, 4 Grid Fins & IMU!
+        // On non-Earth planets (Mars / Moon), Booster is not present — park it fixed & inert out of scene!
         let booster_dry_mass = 275_000.0;
         let booster_dry_inertia = Vec3::new(1.15e8, 3.4e6, 1.15e8);
-        let booster = insert_stage_body(&mut world, b_pose, b_vel, booster_dry_mass, booster_dry_inertia)?;
+        let booster = if matches!(
+            scenario,
+            StarshipScenario::MarsSrpLanding | StarshipScenario::LunarHlsDescent
+        ) {
+            world.scene.insert_body(BodyDesc {
+                kind: BodyKind::Fixed,
+                params: BodyParams::new().with_pose(b_pose),
+                additional_mass: Some(MassProperties {
+                    mass: booster_dry_mass,
+                    local_com: Vec3::ZERO,
+                    inertia: Mat3::from_diagonal(booster_dry_inertia),
+                }),
+                ..BodyDesc::default()
+            })?
+        } else {
+            insert_stage_body(&mut world, b_pose, b_vel, booster_dry_mass, booster_dry_inertia)?
+        };
         world.devices.rockets.register_stage_dry_mass(
             &world.scene,
             booster,
@@ -883,35 +901,46 @@ impl StarshipSim {
                 ),
             )?);
         }
-        // 4 Real Physical Cold-Gas N2 RCS Thrusters (nose + aft pure-couple yaw pairs):
-        // `+X` of thruster frame is applied thrust direction (`Quat::from_rotation_y(-PI/2)` maps `+X -> +Z`,
-        // `Quat::from_rotation_y(+PI/2)` maps `+X -> -Z`).
-        // Pair (0, 1) generates `+tau_x` (`+480 kN·m` max); Pair (2, 3) generates `-tau_x` (`-480 kN·m` max).
+        // 12 Real Physical Hot-Gas / Cold-Gas RCS Thrusters:
+        // - 0..4: Hot-gas methalox yaw couple (±tau_x, 55 kN each -> 2.2 MN·m — holds belly-flop heading in jet stream!)
+        // - 4..8: Cold-gas N2 roll couple (±tau_y, 14 kN each -> 126 kN·m — cancels single-Raptor roll & holds apogee roll)
+        // - 8..12: Hot-gas methalox apogee pitch-over couple (±tau_z, 55 kN each -> 2.2 MN·m, zero net force!)
+        // `+X` of thruster frame is applied thrust direction.
         let rot_pos_z = Quat::from_rotation_y(-FRAC_PI_2);
         let rot_neg_z = Quat::from_rotation_y(FRAC_PI_2);
-        let rcs_mounts = [
-            Transform::new(Vec3::new(0.0, 20.0, -2.2), rot_pos_z),  // 0: Nose +Z -> +tau_x
-            Transform::new(Vec3::new(0.0, -20.0, 4.5), rot_neg_z),  // 1: Aft  -Z -> +tau_x
-            Transform::new(Vec3::new(0.0, 20.0, 2.2), rot_neg_z),   // 2: Nose -Z -> -tau_x
-            Transform::new(Vec3::new(0.0, -20.0, -4.5), rot_pos_z), // 3: Aft  +Z -> -tau_x
+        let rot_pos_x = Quat::IDENTITY;
+        let rot_neg_x = Quat::from_rotation_y(PI);
+        let rcs_mounts: [(Transform, f64, f64); 12] = [
+            (Transform::new(Vec3::new(0.0, 20.0, -2.2), rot_pos_z), 55_000.0, 220.0),   // 0: Nose +Z -> +tau_x
+            (Transform::new(Vec3::new(0.0, -20.0, 4.5), rot_neg_z), 55_000.0, 220.0),   // 1: Aft  -Z -> +tau_x
+            (Transform::new(Vec3::new(0.0, 20.0, 2.2), rot_neg_z), 55_000.0, 220.0),    // 2: Nose -Z -> -tau_x
+            (Transform::new(Vec3::new(0.0, -20.0, -4.5), rot_pos_z), 55_000.0, 220.0),  // 3: Aft  +Z -> -tau_x
+            (Transform::new(Vec3::new(4.5, 18.0, 0.0), rot_neg_z), 14_000.0, 70.0),     // 4: +X, -Z -> +tau_y
+            (Transform::new(Vec3::new(-4.5, 18.0, 0.0), rot_pos_z), 14_000.0, 70.0),    // 5: -X, +Z -> +tau_y
+            (Transform::new(Vec3::new(4.5, 18.0, 0.0), rot_pos_z), 14_000.0, 70.0),     // 6: +X, +Z -> -tau_y
+            (Transform::new(Vec3::new(-4.5, 18.0, 0.0), rot_neg_z), 14_000.0, 70.0),    // 7: -X, -Z -> -tau_y
+            (Transform::new(Vec3::new(2.2, 20.0, 0.0), rot_neg_x), 55_000.0, 220.0),    // 8: Nose -X -> +tau_z
+            (Transform::new(Vec3::new(-4.5, -20.0, 0.0), rot_pos_x), 55_000.0, 220.0),  // 9: Aft  +X -> +tau_z
+            (Transform::new(Vec3::new(-2.2, 20.0, 0.0), rot_pos_x), 55_000.0, 220.0),   // 10: Nose +X -> -tau_z
+            (Transform::new(Vec3::new(4.5, -20.0, 0.0), rot_neg_x), 55_000.0, 220.0),   // 11: Aft  -X -> -tau_z
         ];
-        let mut rcs_ids = Vec::with_capacity(4);
-        for frame in rcs_mounts {
+        let mut rcs_ids = Vec::with_capacity(12);
+        for (frame, max_thrust, isp) in rcs_mounts {
             rcs_ids.push(world.devices.thrusters.insert(
                 &world.scene,
                 ThrusterSpec {
                     body: ship,
                     frame,
-                    max_thrust: 12_000.0,
-                    specific_impulse: Some(70.0), // Cold-gas N2 Isp
-                    propellant_mass: 220.0,
+                    max_thrust,
+                    specific_impulse: Some(isp),
+                    propellant_mass: 1_800.0,
                     deplete_body_mass: false,
                     min_impulse_bit: 120.0,
                     response_time: 0.025,
                 },
             )?);
         }
-        let ship_rcs_thrusters: [ThrusterId; 4] = rcs_ids.try_into().unwrap();
+        let ship_rcs_thrusters: [ThrusterId; 12] = rcs_ids.try_into().unwrap();
 
         // Register Hot-Staging Blast Impingement: Ship's 6 Raptors blast Booster's top dome!
         world.devices.rockets.register_interstage_blast_target(
@@ -948,7 +977,11 @@ impl StarshipSim {
             (Vec3::new(0.0, -15.5, -5.9), Vec3::NEG_Y, 44.0, 1.9), // aft_R (-Z)
         ];
         let mut flap_vec = Vec::with_capacity(4);
-        let init_flaps_deg = [22.0_f64, 22.0, 56.0, 56.0];
+        let init_flaps_deg = if ship_phase == ShipPhase::BellyFlopSkydiving {
+            [22.0_f64, 22.0, 56.0, 56.0]
+        } else {
+            [72.0_f64, 72.0, 72.0, 72.0]
+        };
         for (idx, (center, hinge, area, arm)) in flap_specs.into_iter().enumerate() {
             let sid = world.devices.rocket_aero.insert_surface(
                 &world.scene,
@@ -970,7 +1003,7 @@ impl StarshipSim {
             world
                 .devices
                 .rocket_aero
-                .command_surface(sid, init_flaps_deg[idx].to_radians())?;
+                .set_surface_deflection(sid, init_flaps_deg[idx].to_radians())?;
             flap_vec.push(sid);
         }
         let ship_flaps: [AeroSurfaceId; 4] = flap_vec.try_into().unwrap();
@@ -1293,7 +1326,7 @@ impl StarshipSim {
         //   +g1 (yaw_y)   -> +tau_x (when lever > 0) ==> g1 = +(I_x * alpha_x) / (T * lever)
         let g0 = (-(iz * alpha_cmd.z) / tvc_gain).clamp(-max_rad, max_rad);
         let g1 = ((ix * alpha_cmd.x) / tvc_gain).clamp(-max_rad, max_rad);
-        let roll_cmd = (-omega_b.y * 0.45).clamp(-0.08, 0.08);
+        let roll_cmd = (-omega_b.y * 1.85).clamp(-0.10, 0.10);
         ([g0, g1], roll_cmd)
     }
 
@@ -1491,7 +1524,7 @@ impl StarshipSim {
                 } else {
                     33
                 };
-                self.command_booster_cluster(n_lit, 0.92, [0.0, 0.0], 0.0)?;
+                self.command_booster_cluster(n_lit, 0.34, [0.0, 0.0], 0.0)?;
                 let thrust_y = self.world.devices.rockets.body_total_thrust_world(self.booster).y;
                 let ship_m = self.world.scene.body_mass_properties(self.ship)?.mass;
                 if elapsed > 1.15 && thrust_y > (mass + ship_m) * GRAVITY * 1.25 {
@@ -1505,26 +1538,35 @@ impl StarshipSim {
                 self.hold_down_engaged = false;
                 self.interstage_latched = true;
                 self.chopsticks_cmd_rad = 0.36;
-                // Smooth gravity turn toward +X (10° pitchover after clearing tower!).
-                let pitch_prog = ((alt_base - 180.0) / 3_500.0).clamp(0.0, 1.0);
-                let pitch_angle = 0.16 * pitch_prog;
+                // Gentle gravity turn toward +X (~3.2° pitchover) so stack flies zero-AoA through Max-Q
+                // and stages cleanly above Pad B corridor (`x ≈ 260 m`, matching 2_HotStaging)!
+                let pitch_prog = ((alt_base - 250.0) / 6_500.0).clamp(0.0, 1.0);
+                let pitch_angle = 0.055 * pitch_prog;
                 let des_up = Vec3::new(pitch_angle.sin(), pitch_angle.cos(), 0.0).normalize();
-                // Throttle bucket around Max-Q (~20..35 kPa), full thrust otherwise.
+                // Realistic Max-Q throttle bucket + pre-MECO outer-ring cutoff (33 -> 13 Raptors above 2.6 km)
+                // keeps peak dynamic pressure ~18-24 kPa and delivers MECO at h = 7.4 km, v ≈ 225 m/s!
                 let q_pa = self
                     .world
                     .devices
                     .rocket_aero
                     .body_reading(self.booster_aero)
                     .map_or(0.0, |r| r.dynamic_pressure_pa);
-                let thr = if q_pa > 22_000.0 { 0.78 } else { 0.95 };
+                let (n_eng, thr) = if alt_base > 2_600.0 || bv.linear.y > 185.0 {
+                    let t13 = (0.46 - (bv.linear.y - 205.0) * 0.005).clamp(0.28, 0.56);
+                    (13, t13)
+                } else if q_pa > 14_000.0 {
+                    (33, 0.28)
+                } else {
+                    (33, 0.34)
+                };
                 let t_gimbal = 13.0 * 2_480_000.0 * thr;
                 let (g, r_b) = Self::compute_tvc_attitude_gimbal(
-                    bp, omega_b_filt, mp, des_up, t_gimbal, eng_y, 0.95, 1.05, 0.18,
+                    bp, omega_b_filt, mp, des_up, t_gimbal, eng_y, 1.05, 1.15, 0.20,
                 );
-                self.command_booster_cluster(33, thr, g, r_b)?;
+                self.command_booster_cluster(n_eng, thr, g, r_b)?;
 
                 let prop_rem = self.world.devices.rockets.body_propellant_kg(self.booster);
-                if alt_base > 4_400.0 || prop_rem < 260_000.0 {
+                if alt_base > 7_400.0 || prop_rem < 280_000.0 {
                     self.booster_phase = BoosterPhase::MecoHotStaging;
                     self.booster_phase_start_s = self.time_s;
                     self.ship_phase = ShipPhase::HotStageIgnition;
@@ -1532,41 +1574,123 @@ impl StarshipSim {
                 }
             }
             BoosterPhase::MecoHotStaging => {
-                // Cut outer 30 engines; hold 3 center Raptors at 45% during Ship hot-stage ignition!
-                let t_gimbal = 3.0 * 2_480_000.0 * 0.45;
+                // Cut outer 30 engines; hold air-relative zero-AoA climb attitude on 3 center Raptors during Ship ignition!
+                let wind_b = self
+                    .world
+                    .devices
+                    .rocket_aero
+                    .wind()
+                    .wind_at(com_w, alt_base, self.time_s);
+                let v_rel = bv.linear - wind_b;
+                let des_up = if v_rel.length() > 25.0 {
+                    v_rel.normalize()
+                } else {
+                    Vec3::new(0.075_f64.sin(), 0.075_f64.cos(), 0.0)
+                };
+                let t_gimbal = 3.0 * 2_480_000.0 * 0.55;
                 let (g, r_b) = Self::compute_tvc_attitude_gimbal(
-                    bp, omega_b_filt, mp, up_w, t_gimbal, eng_y, 0.85, 1.05, 0.16,
+                    bp, omega_b_filt, mp, des_up, t_gimbal, eng_y, 1.15, 1.25, 0.24,
                 );
-                self.command_booster_cluster(3, 0.45, g, r_b)?;
+                self.command_booster_cluster(3, 0.55, g, r_b)?;
                 if elapsed > 0.55 {
                     self.interstage_latched = false;
                     self.ever_hot_staged = true;
                 }
-                if elapsed > 2.4 {
+                if elapsed > 2.2 {
                     self.booster_phase = BoosterPhase::FlipAndBoostback;
                     self.booster_phase_start_s = self.time_s;
                 }
             }
             BoosterPhase::FlipAndBoostback => {
-                // Pitch back toward Starbase tower (x=0, z=0) and fire 13 inner engines to reverse downrange velocity!
+                // True air-relative Q-Alpha limited RTLS boostback:
+                // 1) Wait in zero-AoA climb on 3 idle Raptors until thin upper air (`q <= 5 kPa`) so we NEVER
+                //    blast vertically with 13 engines (which would launch Booster to 40 km!) or fight forward CP.
+                // 2) Once in thin air, tilt 48° toward the tower (`x = 0`) and fire 6 Raptors horizontally ONLY
+                //    until ballistic trajectory returns cleanly to the tower, keeping apogee ~11-13 km!
+                // 3) Smoothly pitch back upright and null rotation rates before cutoff into GridFinEntry!
+                let wind_b = self
+                    .world
+                    .devices
+                    .rocket_aero
+                    .wind()
+                    .wind_at(com_w, alt_base, self.time_s);
+                let v_rel = bv.linear - wind_b;
+                let v_rel_dir = if v_rel.length() > 15.0 {
+                    v_rel.normalize()
+                } else {
+                    Vec3::Y
+                };
                 let to_tower = Vec3::new(-com_w.x, 0.0, -com_w.z);
                 let dist_h = to_tower.length();
-                let v_h = Vec3::new(bv.linear.x, 0.0, bv.linear.z);
-                let v_toward = if dist_h > 1.0 {
-                    v_h.dot(to_tower / dist_h)
-                } else {
-                    0.0
-                };
-                let target_v_return = (dist_h * 0.055).clamp(15.0, 95.0);
-                let need_boostback = dist_h > 90.0 && v_toward < target_v_return && elapsed < 14.0;
-                if need_boostback {
-                    let dir_h = to_tower.normalize_or_zero();
-                    let des_up = (dir_h * 0.65 + Vec3::Y * 0.76).normalize();
-                    let t_gimbal = 13.0 * 2_480_000.0 * 0.72;
+                let t_up = (bv.linear.y / GRAVITY).max(0.0);
+                let h_apex = alt_base + 0.5 * bv.linear.y.max(0.0).powi(2) / GRAVITY;
+                let t_fall = (2.0 * h_apex / GRAVITY).sqrt();
+                let t_flight = (t_up + t_fall).clamp(18.0, 95.0);
+                // Zero-Effort-Miss ballistic impact point (with 0.85x aerodynamic drag shortening factor):
+                // Burn ONLY during the single boostback window (`elapsed < 22 s`) while ballistic impact
+                // still overshoots east of tower (`zem > 260 m`), leaving margin for upright settle burn!
+                let zem_h = Vec3::new(
+                    com_w.x + bv.linear.x * t_flight * 0.85,
+                    0.0,
+                    com_w.z + bv.linear.z * t_flight * 0.85,
+                );
+                let prop_rem = self.world.devices.rockets.body_propellant_kg(self.booster);
+                let q_pa = self
+                    .world
+                    .devices
+                    .rocket_aero
+                    .body_reading(self.booster_aero)
+                    .map_or(0.0, |r| r.dynamic_pressure_pa);
+                let need_vel = dist_h > 80.0
+                    && zem_h.dot(-to_tower) > 0.0
+                    && zem_h.length() > 260.0
+                    && elapsed < 22.0
+                    && prop_rem > 125_000.0;
+                let need_settle = !need_vel
+                    && (tilt_rad > 0.14 || omega_b_filt.length() > 0.06)
+                    && elapsed < 34.0
+                    && prop_rem > 115_000.0;
+                if need_vel {
+                    if q_pa > 3_400.0 && bv.linear.y > 100.0 && elapsed < 14.0 {
+                        // Still in dense supersonic/transonic air: hold strict air-relative zero-AoA on
+                        // 3 idle Raptors (net decel ~-6 m/s²) until thin upper air (`q <= 3.4 kPa`)!
+                        let t_gimbal = 3.0 * 2_480_000.0 * 0.28;
+                        let (g, r_b) = Self::compute_tvc_attitude_gimbal(
+                            bp, omega_b_filt, mp, v_rel_dir, t_gimbal, eng_y, 1.15, 1.32, 0.24,
+                        );
+                        self.command_booster_cluster(3, 0.28, g, r_b)?;
+                    } else {
+                        // Thin upper air (`q <= 3.4 kPa`, aero torque < 10 MN·m vs 6-Raptor TVC > 45 MN·m!):
+                        // Pitch cleanly 34° toward tower with 6-Raptor TVC authority (never overshoots tower!).
+                        let dir_h = to_tower.normalize_or_zero();
+                        let raw_up = (dir_h * 0.56 + Vec3::Y * 0.83).normalize();
+                        let max_aoa = (3_800.0 / q_pa.max(800.0)).clamp(0.20, 0.90);
+                        let cur_ang = v_rel_dir.dot(raw_up).clamp(-1.0, 1.0).acos();
+                        let des_up = if cur_ang > max_aoa && cur_ang > 1e-4 {
+                            v_rel_dir.lerp(raw_up, max_aoa / cur_ang).normalize()
+                        } else {
+                            raw_up
+                        };
+                        let align_err = up_w.dot(des_up).clamp(-1.0, 1.0).acos();
+                        let (n_eng, thr) = if align_err < 0.30 { (6, 0.48) } else { (6, 0.34) };
+                        let t_gimbal = (n_eng as f64) * 2_480_000.0 * thr;
+                        let (g, r_b) = Self::compute_tvc_attitude_gimbal(
+                            bp, omega_b_filt, mp, des_up, t_gimbal, eng_y, 1.15, 1.32, 0.24,
+                        );
+                        self.command_booster_cluster(n_eng, thr, g, r_b)?;
+                    }
+                } else if need_settle {
+                    // Pitch smoothly back upright & null angular velocity before cutting off into coast!
+                    let settle_up = if q_pa > 2_500.0 && bv.linear.y > 40.0 {
+                        v_rel_dir
+                    } else {
+                        Vec3::Y
+                    };
+                    let t_gimbal = 3.0 * 2_480_000.0 * 0.34;
                     let (g, r_b) = Self::compute_tvc_attitude_gimbal(
-                        bp, omega_b_filt, mp, des_up, t_gimbal, eng_y, 0.95, 1.08, 0.24,
+                        bp, omega_b_filt, mp, settle_up, t_gimbal, eng_y, 1.15, 1.38, 0.24,
                     );
-                    self.command_booster_cluster(13, 0.72, g, r_b)?;
+                    self.command_booster_cluster(3, 0.34, g, r_b)?;
                 } else {
                     self.command_booster_cluster(0, 0.0, [0.0, 0.0], 0.0)?;
                     self.booster_phase = BoosterPhase::GridFinEntry;
@@ -1576,28 +1700,34 @@ impl StarshipSim {
             BoosterPhase::GridFinEntry => {
                 self.chopsticks_cmd_rad = 0.36;
                 // Tail-first aerodynamic descent steered by 4 titanium grid fins!
-                let h_err = (pin_pos_w.y - catch_target.y).max(1.0);
-                let v_down = (-bv.linear.y).max(10.0);
-                let t_go = (h_err / v_down).clamp(2.0, 35.0);
-                let zem = Vec3::new(
-                    com_w.x + bv.linear.x * t_go,
-                    0.0,
-                    com_w.z + bv.linear.z * t_go,
-                );
-                let des_tilt_x = (zem.x * 0.0035).clamp(-0.26, 0.26);
-                let des_tilt_z = (zem.z * 0.0035).clamp(-0.26, 0.26);
-                let des_up = Vec3::new(des_tilt_x, 1.0, des_tilt_z).normalize();
+                // CRITICAL: Only deflect grid fins once actually falling tail-first (`bv.linear.y < -15 m/s`);
+                // while still climbing upward toward apogee, airflow is reversed (nose-to-tail), so hold neutral!
+                if bv.linear.y < -15.0 {
+                    let h_err = (pin_pos_w.y - catch_target.y).max(1.0);
+                    let v_down = (-bv.linear.y).max(10.0);
+                    let t_go = (h_err / v_down).clamp(2.0, 35.0);
+                    let zem = Vec3::new(
+                        com_w.x + bv.linear.x * t_go,
+                        0.0,
+                        com_w.z + bv.linear.z * t_go,
+                    );
+                    let des_tilt_x = (zem.x * 0.0035).clamp(-0.26, 0.26);
+                    let des_tilt_z = (zem.z * 0.0035).clamp(-0.26, 0.26);
+                    let des_up = Vec3::new(des_tilt_x, 1.0, des_tilt_z).normalize();
 
-                let des_up_b = (bp.rotation.conjugate() * des_up).normalize_or_zero();
-                let err_b = Vec3::Y.cross(des_up_b);
-                let tau_des = err_b * 1.4 - omega_b_filt * 1.9;
+                    let des_up_b = (bp.rotation.conjugate() * des_up).normalize_or_zero();
+                    let err_b = Vec3::Y.cross(des_up_b);
+                    let tau_des = err_b * 1.4 - omega_b_filt * 1.9;
 
-                let d_x = (-tau_des.x).clamp(-0.34, 0.34);
-                let d_z = (-tau_des.z).clamp(-0.34, 0.34);
-                let d_roll = (-omega_b_filt.y * 0.5).clamp(-0.15, 0.15);
-                fin_cmds = [d_x + d_roll, d_x - d_roll, d_z + d_roll, d_z - d_roll];
+                    let d_x = (-tau_des.x).clamp(-0.34, 0.34);
+                    let d_z = (-tau_des.z).clamp(-0.34, 0.34);
+                    let d_roll = (-omega_b_filt.y * 0.5).clamp(-0.15, 0.15);
+                    fin_cmds = [d_x + d_roll, d_x - d_roll, d_z + d_roll, d_z - d_roll];
+                }
                 self.command_booster_cluster(0, 0.0, [0.0, 0.0], 0.0)?;
 
+                let h_err = (pin_pos_w.y - catch_target.y).max(1.0);
+                let v_down = (-bv.linear.y).max(10.0);
                 let a_13_net = (13.0 * 2_450_000.0 * 0.68 / mass - GRAVITY).max(18.0);
                 let h_ignite = (v_down * v_down) / (2.0 * a_13_net) + 210.0;
                 if bv.linear.y < -15.0 && (h_err <= h_ignite || alt_base < 680.0) {
@@ -1623,7 +1753,7 @@ impl StarshipSim {
                 );
                 self.command_booster_cluster(13, thr, g, r_b)?;
 
-                if v_down < 46.0 || h_err < 185.0 {
+                if v_down < 32.0 || h_err < 140.0 {
                     self.booster_phase = BoosterPhase::CatchHover3;
                     self.booster_phase_start_s = self.time_s;
                 }
@@ -1654,9 +1784,15 @@ impl StarshipSim {
                 let f_req = a_vec.length() * mass;
                 let thr = (f_req / (3.0 * 2_480_000.0)).clamp(0.28, 1.0);
                 let t_gimbal = 3.0 * 2_480_000.0 * thr;
-                let (g, r_b) = Self::compute_tvc_attitude_gimbal(
+                let (g, mut r_b) = Self::compute_tvc_attitude_gimbal(
                     bp, omega_b_filt, mp, des_up, t_gimbal, eng_y, 1.15, 1.16, 0.24,
                 );
+                // Real SpaceX Flight-5 roll alignment: align Booster ±Z catch pins cleanly with
+                // Mechazilla chopstick arms before touchdown so cradle engagement has zero roll snap!
+                // For `+θ` yaw about `+Y`, `Ry(+θ) * +Z = (+sin θ, 0, +cos θ)`, so `θ = atan2(z_b_w.x, z_b_w.z)`.
+                let z_b_w = bp.rotation * Vec3::Z;
+                let pin_yaw_err = z_b_w.x.atan2(z_b_w.z);
+                r_b = (r_b - pin_yaw_err * 0.14).clamp(-0.08, 0.08);
                 self.command_booster_cluster(3, thr, g, r_b)?;
 
                 let h_pin_err = pin_pos_w.y - catch_target.y;
@@ -1726,6 +1862,8 @@ impl StarshipSim {
         );
 
         let mut rcs_yaw_cmd_nm = 0.0_f64;
+        let mut rcs_pitch_cmd_nm = 0.0_f64;
+        let mut rcs_roll_cmd_nm = 0.0_f64;
         let mut flap_cmds = [70.0_f64.to_radians(); 4]; // Folded flat during ascent!
         let mut hls_active = false;
         let is_mars = self.atmosphere == PlanetAtmosphere::MarsCospar;
@@ -1738,29 +1876,74 @@ impl StarshipSim {
                 self.command_ship_cluster(0, 0.0, false, 0.0, [0.0, 0.0], 0.0)?;
             }
             ShipPhase::HotStageIgnition => {
-                // Ignite all 6 Raptors (3 SL + 3 RVac) atop Booster's hot-stage ring!
-                let t_gimbal = 3.0 * 2_480_000.0 * 0.90;
+                // Ignite all 6 Raptors (3 SL + 3 RVac) atop Booster's hot-stage ring holding air-relative zero-AoA!
+                let wind_s = self
+                    .world
+                    .devices
+                    .rocket_aero
+                    .wind()
+                    .wind_at(com_w, alt_base, self.time_s);
+                let v_rel = sv.linear - wind_s;
+                let des_up = if v_rel.length() > 25.0 {
+                    v_rel.normalize()
+                } else {
+                    Vec3::new(0.055_f64.sin(), 0.055_f64.cos(), 0.0)
+                };
+                let t_gimbal = 3.0 * 2_480_000.0 * 0.44;
                 let (g, r_b) = Self::compute_tvc_attitude_gimbal(
-                    sp, omega_b_filt, mp, up_w, t_gimbal, eng_y, 1.0, 1.1, 0.18,
+                    sp, omega_b_filt, mp, des_up, t_gimbal, eng_y, 1.25, 1.25, 0.24,
                 );
-                self.command_ship_cluster(3, 0.90, true, 0.90, g, r_b)?;
-                if !self.interstage_latched && elapsed > 2.2 {
+                self.command_ship_cluster(3, 0.44, true, 0.44, g, r_b)?;
+                if !self.interstage_latched && elapsed > 1.4 {
                     self.ship_phase = ShipPhase::ShipAscent6Engines;
                     self.ship_phase_start_s = self.time_s;
                 }
             }
             ShipPhase::ShipAscent6Engines => {
-                // Climb steeply toward high-altitude suborbital test apogee (~10 km) aimed back over Pad B!
-                let to_pad = Vec3::new(pad_pos.x - com_w.x, 0.0, pad_pos.z - com_w.z);
-                let des_up = (Vec3::Y + to_pad.normalize_or_zero() * (to_pad.length() * 0.0003).clamp(0.0, 0.25))
-                    .normalize();
-                let t_gimbal = 3.0 * 2_480_000.0 * 0.85;
+                // True air-relative Q-Alpha limited upper-stage push aimed toward Pad B corridor!
+                let wind_s = self
+                    .world
+                    .devices
+                    .rocket_aero
+                    .wind()
+                    .wind_at(com_w, alt_base, self.time_s);
+                let v_rel = sv.linear - wind_s;
+                let v_rel_dir = if v_rel.length() > 20.0 {
+                    v_rel.normalize()
+                } else {
+                    Vec3::Y
+                };
+                let v_h = Vec3::new(sv.linear.x, 0.0, sv.linear.z);
+                let target_x = pad_pos.x - 145.0;
+                let horiz_err = Vec3::new(com_w.x - target_x, 0.0, com_w.z - pad_pos.z);
+                let a_h = (-horiz_err * 0.020 - v_h * 0.55).clamp_length_max(4.5);
+                let raw_up = Vec3::new(a_h.x, 16.0, a_h.z).normalize();
+                let q_pa = self
+                    .world
+                    .devices
+                    .rocket_aero
+                    .body_reading(self.ship_aero)
+                    .map_or(0.0, |r| r.dynamic_pressure_pa);
+                // Enforce strict air-relative Q-Alpha limit so Ship never exceeds 3-Raptor TVC margin!
+                let max_aoa = (1_600.0 / q_pa.max(1_500.0)).clamp(0.05, 0.28);
+                let cur_ang = v_rel_dir.dot(raw_up).clamp(-1.0, 1.0).acos();
+                let des_up = if cur_ang > max_aoa && cur_ang > 1e-4 {
+                    v_rel_dir.lerp(raw_up, max_aoa / cur_ang).normalize()
+                } else {
+                    raw_up
+                };
+                let t_gimbal = 3.0 * 2_480_000.0 * 0.42;
                 let (g, r_b) = Self::compute_tvc_attitude_gimbal(
-                    sp, omega_b_filt, mp, des_up, t_gimbal, eng_y, 1.05, 1.1, 0.20,
+                    sp, omega_b_filt, mp, des_up, t_gimbal, eng_y, 1.25, 1.22, 0.24,
                 );
-                self.command_ship_cluster(3, 0.85, true, 0.85, g, r_b)?;
-                let main_prop = self.world.devices.rockets.tank_reading(self.ship_main_lox).map_or(0.0, |r| r.mass_remaining_kg);
-                if elapsed > 12.0 || alt_base > 9_500.0 || main_prop < 12_000.0 {
+                self.command_ship_cluster(3, 0.42, true, 0.42, g, r_b)?;
+                let main_prop = self
+                    .world
+                    .devices
+                    .rockets
+                    .tank_reading(self.ship_main_lox)
+                    .map_or(0.0, |r| r.mass_remaining_kg);
+                if elapsed > 1.2 || alt_base > 8_800.0 || main_prop < 1_500.0 {
                     self.switch_ship_to_headers()?;
                     self.command_ship_cluster(0, 0.0, false, 0.0, [0.0, 0.0], 0.0)?;
                     self.ship_phase = ShipPhase::ApogeeCoastFlipToBelly;
@@ -1769,31 +1952,83 @@ impl StarshipSim {
             }
             ShipPhase::ApogeeCoastFlipToBelly => {
                 self.switch_ship_to_headers()?;
-                // Pitch smoothly into horizontal 90° belly-flop orientation (belly `-X` facing down `-Y`)!
-                let q_err = (sp.rotation.conjugate() * rot_belly).normalize();
-                let mut e_v = Vec3::new(q_err.x, q_err.y, q_err.z);
-                if q_err.w < 0.0 {
-                    e_v = -e_v;
-                }
-                let ang = 2.0 * e_v.length().atan2(q_err.w.abs());
-                flap_cmds = [
-                    22.0_f64.to_radians(),
-                    22.0_f64.to_radians(),
-                    56.0_f64.to_radians(),
-                    56.0_f64.to_radians(),
-                ];
-                if ang > 0.25 && elapsed < 6.0 {
-                    let axis_b = e_v.normalize_or_zero();
-                    let g0 = (-(axis_b.z * 0.35 - omega_b_filt.z * 0.45)).clamp(-0.24, 0.24);
-                    let g1 = (axis_b.x * 0.35 - omega_b_filt.x * 0.45).clamp(-0.24, 0.24);
-                    self.command_ship_cluster(1, 0.30, false, 0.0, [g0, g1], 0.0)?;
+                // True wind-relative zero-AoA attitude hold while climbing through dense/jet-stream air
+                // (`vy > 40 m/s` & `q > 1.2 kPa`), using 1 SL Raptor (TWR ~0.35 so Ship ALWAYS decelerates
+                // cleanly to ~13 km apogee instead of climbing to 70 km!), then calm-air apogee flip to 90° belly-flop!
+                let belly_up = rot_belly * Vec3::Y;
+                let q_pa = self
+                    .world
+                    .devices
+                    .rocket_aero
+                    .body_reading(self.ship_aero)
+                    .map_or(0.0, |r| r.dynamic_pressure_pa);
+                let wind_s = self
+                    .world
+                    .devices
+                    .rocket_aero
+                    .wind()
+                    .wind_at(com_w, alt_base, self.time_s);
+                let v_rel = sv.linear - wind_s;
+                let v_rel_dir = if v_rel.length() > 15.0 {
+                    v_rel.normalize()
                 } else {
+                    Vec3::Y
+                };
+                if sv.linear.y > 40.0 {
+                    flap_cmds = [72.0_f64.to_radians(); 4];
+                    // Hold strict air-relative zero-AoA ONLY while dynamic pressure > 1.2 kPa
+                    // (1 Raptor @ 0.28 gives net -6.3 m/s² deceleration so Ship peaks cleanly ~13 km!).
+                    if q_pa > 1_200.0 {
+                        let (n_sl, thr) = if q_pa > 14_000.0 {
+                            (2, 0.28)
+                        } else {
+                            (1, 0.28)
+                        };
+                        let t_gimbal = (n_sl as f64) * 2_480_000.0 * thr;
+                        let (g, r_b) = Self::compute_tvc_attitude_gimbal(
+                            sp, omega_b_filt, mp, v_rel_dir, t_gimbal, eng_y, 1.20, 1.32, 0.24,
+                        );
+                        self.command_ship_cluster(n_sl, thr, false, 0.0, g, r_b)?;
+                    } else {
+                        self.command_ship_cluster(0, 0.0, false, 0.0, [0.0, 0.0], 0.0)?;
+                    }
+                } else {
+                    // Calm apogee air: keep main Raptors OFF so we add ZERO unwanted +X drift, and rotate
+                    // smoothly 90° to exact `rot_belly` using the real 12-pod physical RCS attitude couples!
                     self.command_ship_cluster(0, 0.0, false, 0.0, [0.0, 0.0], 0.0)?;
-                }
-                if sv.linear.y < -15.0 || elapsed > 10.0 {
-                    self.ever_ship_bellyflop = true;
-                    self.ship_phase = ShipPhase::BellyFlopSkydiving;
-                    self.ship_phase_start_s = self.time_s;
+                    let mut q_err = (sp.rotation.conjugate() * rot_belly).normalize();
+                    if q_err.w < 0.0 {
+                        q_err = -q_err;
+                    }
+                    let ev = Vec3::new(q_err.x, q_err.y, q_err.z);
+                    let s = ev.length();
+                    let att_err_b = if s > 1e-9 {
+                        ev * (2.0 * s.atan2(q_err.w) / s)
+                    } else {
+                        ev * 2.0
+                    };
+                    rcs_yaw_cmd_nm = (att_err_b.x * 5.5e6 - omega_b_filt.x * 1.1e7).clamp(-2.2e6, 2.2e6);
+                    rcs_roll_cmd_nm = (att_err_b.y * 6.0e5 - omega_b_filt.y * 1.2e6).clamp(-1.26e5, 1.26e5);
+                    rcs_pitch_cmd_nm = (att_err_b.z * 6.5e6 - omega_b_filt.z * 1.4e7).clamp(-2.2e6, 2.2e6);
+                    // Keep flaps folded until aligned near belly-flop & falling downward so nose-first crossflow
+                    // at apogee cannot weathercock Ship upright!
+                    let ang = up_w.dot(belly_up).clamp(-1.0, 1.0).acos();
+                    if sv.linear.y < -15.0 && ang < 0.45 {
+                        flap_cmds = [
+                            22.0_f64.to_radians(),
+                            22.0_f64.to_radians(),
+                            56.0_f64.to_radians(),
+                            56.0_f64.to_radians(),
+                        ];
+                    } else {
+                        flap_cmds = [72.0_f64.to_radians(); 4];
+                    }
+                    // Hand off to aerodynamic BellyFlopSkydiving only once falling belly-first (`vy < -48 m/s`)!
+                    if sv.linear.y < -48.0 && (ang < 0.35 || sv.linear.y < -70.0) {
+                        self.ever_ship_bellyflop = true;
+                        self.ship_phase = ShipPhase::BellyFlopSkydiving;
+                        self.ship_phase_start_s = self.time_s;
+                    }
                 }
             }
             ShipPhase::BellyFlopSkydiving => {
@@ -1811,8 +2046,12 @@ impl StarshipSim {
                 let zem_z = (com_w.z - pad_pos.z) + sv.linear.z * t_go * 0.65;
 
                 // World-frame glide tilt:
-                let pitch_bias = (zem_x * 0.0026).clamp(-0.26, 0.26);
-                let roll_bias = (-zem_z * 0.0026).clamp(-0.24, 0.24);
+                // - Pitch (`+Z` rot): tilts nose up -> belly drag pushes `-X` (reduces `+zem_x`)!
+                // - Roll (`+X` rot): because body flaps are folded dorsally (positive V-dihedral!),
+                //   rolling `+X` flattens the `+Z` flap into oncoming airflow so its outward normal
+                //   pushes Ship toward `-Z` (reduces `+zem_z`)!
+                let pitch_bias = (zem_x * 0.0028).clamp(-0.34, 0.34);
+                let roll_bias = (zem_z * 0.0026).clamp(-0.22, 0.22);
                 let target_rot = (Quat::from_rotation_x(roll_bias)
                     * Quat::from_rotation_z(pitch_bias)
                     * rot_belly)
@@ -1830,9 +2069,9 @@ impl StarshipSim {
                     ev * 2.0
                 };
 
-                // Real Starship cold-gas N2 nose/aft RCS pods keep yaw aligned to landing flip plane!
+                // Real Starship hot-gas nose/aft yaw RCS pods hold belly-flop heading cleanly in jet stream!
                 rcs_yaw_cmd_nm =
-                    (att_err_b.x * 2.2e6 - omega_b_filt.x * 3.2e6).clamp(-4.8e5, 4.8e5);
+                    (att_err_b.x * 6.5e6 - omega_b_filt.x * 1.1e7).clamp(-2.2e6, 2.2e6);
 
                 let u_pitch_z = (att_err_b.z * 1.55 - omega_b_filt.z * 2.20).clamp(-0.65, 0.65);
                 let u_roll_y = (att_err_b.y * 1.35 - omega_b_filt.y * 1.90).clamp(-0.48, 0.48);
@@ -1963,8 +2202,8 @@ impl StarshipSim {
                 // is ~2.7x lunar weight!) and hands off to the 4 Mid-Body HLS Landing Thrusters!
                 flap_cmds = [72.0_f64.to_radians(); 4];
                 let v_h = Vec3::new(sv.linear.x, 0.0, sv.linear.z);
-                let ay_cmd = (g_local + (-18.0 - sv.linear.y) * 0.55).clamp(1.6, 8.0);
-                let a_horiz = (-com_horiz_err * 0.010 - v_h * 0.45).clamp_length_max(9.5);
+                let ay_cmd = (g_local + (-18.0 - sv.linear.y) * 0.55).clamp(2.2, 8.0);
+                let a_horiz = (-com_horiz_err * 0.010 - v_h * 0.45).clamp_length_max(6.2);
                 let a_vec = Vec3::new(a_horiz.x, ay_cmd, a_horiz.z);
                 let des_up = a_vec.normalize();
                 let f_req = a_vec.length() * mass;
@@ -2008,10 +2247,10 @@ impl StarshipSim {
                 // Cascade velocity-limited + tilt-angle-capped Lunar HLS horizontal loop (never exceeds 15° tilt!)
                 let v_h_des = (-com_horiz_err * 0.11)
                     .clamp_length_max(if alt_base < 18.0 { 2.5 } else { 4.8 });
-                let max_tilt = if alt_base < 16.0 {
-                    8.0_f64.to_radians()
+                let max_tilt = if alt_base < 18.0 {
+                    5.5_f64.to_radians()
                 } else {
-                    15.0_f64.to_radians()
+                    14.0_f64.to_radians()
                 };
                 let a_horiz = ((v_h_des - v_h) * 0.60)
                     .clamp_length_max((ay_cmd * max_tilt.tan()).min(0.95));
@@ -2024,7 +2263,7 @@ impl StarshipSim {
 
                 // Clean physical 50/50 torque allocation: 50% signed TVC (upper ring lever < 0) + 50% diff throttle!
                 let (g_full, r_b) = Self::compute_tvc_attitude_gimbal(
-                    sp, omega_b_filt, mp, des_up, t_hls, 8.0, 1.15, 1.25, 0.21,
+                    sp, omega_b_filt, mp, des_up, t_hls, 8.0, 1.25, 1.35, 0.21,
                 );
                 let g = [g_full[0] * 0.5, g_full[1] * 0.5];
                 let des_up_b = (sp.rotation.conjugate() * des_up).normalize_or_zero();
@@ -2035,7 +2274,7 @@ impl StarshipSim {
                 } else {
                     Vec3::ZERO
                 };
-                let alpha_c = (err_b * (1.15 * 1.15) - omega_b_filt * (2.0 * 1.25 * 1.15)) * 0.5;
+                let alpha_c = (err_b * (1.25 * 1.25) - omega_b_filt * (2.0 * 1.35 * 1.25)) * 0.5;
                 let denom_diff = 2.0 * 4.75 * 220_000.0;
                 let diff_z = (mp.inertia.z_axis.z * alpha_c.z / denom_diff).clamp(-0.32, 0.32);
                 let diff_x = (-mp.inertia.x_axis.x * alpha_c.x / denom_diff).clamp(-0.32, 0.32);
@@ -2060,16 +2299,44 @@ impl StarshipSim {
             self.command_ship_hls_thrusters(false, 0.0, [0.0, 0.0], [0.0, 0.0], 0.0)?;
         }
 
-        // Command real physical Cold-Gas N2 RCS pods (0..2 = +tau_x couple, 2..4 = -tau_x couple; max 480 kN·m)!
-        let u_rcs = if self.tvc_enabled {
-            (rcs_yaw_cmd_nm / 480_000.0).clamp(-1.0, 1.0)
+        // Command real physical 12-pod RCS system:
+        // - Pods 0..4: hot-gas methalox yaw couple (±tau_x, max 2.2 MN·m) — holds belly-flop heading in jet stream
+        // - Pods 4..8: cold-gas N2 roll couple (±tau_y, max 126 kN·m) — cancels single-Raptor roll & holds apogee roll
+        // - Pods 8..12: hot-gas methalox apogee pitch couple (±tau_z, max 2.2 MN·m) — pure zero-force pitchover!
+        let u_rcs_x = if self.tvc_enabled {
+            (rcs_yaw_cmd_nm / 2_200_000.0).clamp(-1.0, 1.0)
         } else {
             0.0
         };
-        let thr_pos = u_rcs.max(0.0);
-        let thr_neg = (-u_rcs).max(0.0);
-        let rcs_throttles = [thr_pos, thr_pos, thr_neg, thr_neg];
-        for i in 0..4 {
+        let roll_rcs_active = self.tvc_enabled
+            && !matches!(
+                self.ship_phase,
+                ShipPhase::StackedOnBooster | ShipPhase::BellyFlopSkydiving | ShipPhase::LandedOnPad
+            );
+        let u_rcs_y = if !roll_rcs_active {
+            0.0
+        } else if rcs_roll_cmd_nm.abs() > 1.0 {
+            (rcs_roll_cmd_nm / 126_000.0).clamp(-1.0, 1.0)
+        } else if omega_b_filt.y.abs() > 0.015 {
+            (-omega_b_filt.y * 4.5).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        let u_rcs_z = if self.tvc_enabled {
+            (rcs_pitch_cmd_nm / 2_200_000.0).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        let tx_pos = u_rcs_x.max(0.0);
+        let tx_neg = (-u_rcs_x).max(0.0);
+        let ty_pos = u_rcs_y.max(0.0);
+        let ty_neg = (-u_rcs_y).max(0.0);
+        let tz_pos = u_rcs_z.max(0.0);
+        let tz_neg = (-u_rcs_z).max(0.0);
+        let rcs_throttles = [
+            tx_pos, tx_pos, tx_neg, tx_neg, ty_pos, ty_pos, ty_neg, ty_neg, tz_pos, tz_pos, tz_neg, tz_neg,
+        ];
+        for i in 0..12 {
             self.world
                 .devices
                 .thrusters
@@ -2096,7 +2363,11 @@ impl StarshipSim {
         let ship_h = self.ship;
         let hold_down = self.hold_down_engaged;
         let interstage = self.interstage_latched;
-        let caught = self.booster_caught;
+        let caught = self.booster_caught
+            && !matches!(
+                self.scenario,
+                StarshipScenario::MarsSrpLanding | StarshipScenario::LunarHlsDescent
+            );
         let nudge = self.user_nudge;
         let mut nudge_f_accum = 0.0_f64;
         let mut samples = 0usize;
@@ -2125,7 +2396,7 @@ impl StarshipSim {
                 };
                 let vel_at = |v: SpatialVector, com: Vec3, pt: Vec3| v.linear + v.angular.cross(pt - com);
 
-                // A. Orbital Launch Mount (OLM) Hold-Down Clamps (4-point perimeter skirt support).
+                // A. Orbital Launch Mount (OLM) Hold-Down Clamps (anisotropic: stiff axial/bending, Nyquist-safe roll!).
                 if hold_down {
                     for k in 0..4 {
                         let a = k as f64 * FRAC_PI_2;
@@ -2133,35 +2404,52 @@ impl StarshipSim {
                         let anchor_w = Vec3::new(4.5 * a.cos(), OLM_DECK_Y, 4.5 * a.sin());
                         let pt_w = bp.transform_point(local_pt);
                         let v_w = vel_at(bv, b_com, pt_w);
-                        let f = (anchor_w - pt_w) * 1.4e8 - v_w * 2.2e7;
+                        let dp = anchor_w - pt_w;
+                        let f = Vec3::new(
+                            dp.x * 8.0e6 - v_w.x * 1.0e6,
+                            dp.y * 1.0e8 - v_w.y * 1.0e7,
+                            dp.z * 8.0e6 - v_w.z * 1.0e6,
+                        );
                         apply_at(wrenches, bi, b_com, pt_w, f);
                     }
                 }
 
-                // B. Interstage Hot-Stage Ring Structural Clamp (4 perimeter pins linking Booster top -> Ship base).
+                // B. Interstage Hot-Stage Ring Structural Clamp (anisotropic: stiff along stack axis so Ship never
+                //    jackknifes at Max-Q, while tangential/roll damping stays strictly below MECO roll Nyquist!).
                 if interstage {
+                    let ax_w = (bp.rotation * Vec3::Y).normalize();
                     for k in 0..4 {
                         let a = k as f64 * FRAC_PI_2;
                         let b_pt_l = Vec3::new(4.5 * a.cos(), BOOSTER_HALF_LEN + HOTSTAGE_RING_H, 4.5 * a.sin());
                         let s_pt_l = Vec3::new(4.5 * a.cos(), -SHIP_HALF_LEN, 4.5 * a.sin());
                         let b_pt_w = bp.transform_point(b_pt_l);
                         let s_pt_w = sp.transform_point(s_pt_l);
-                        let vb = vel_at(bv, b_com, b_pt_w);
-                        let vs = vel_at(sv, s_com, s_pt_w);
-                        let f_on_ship = (b_pt_w - s_pt_w) * 9.0e7 + (vb - vs) * 1.6e7;
+                        let dp = b_pt_w - s_pt_w;
+                        let dv = vel_at(bv, b_com, b_pt_w) - vel_at(sv, s_com, s_pt_w);
+                        let dp_ax = ax_w * dp.dot(ax_w);
+                        let dp_lat = dp - dp_ax;
+                        let dv_ax = ax_w * dv.dot(ax_w);
+                        let dv_lat = dv - dv_ax;
+                        let f_on_ship = dp_ax * 8.0e7 + dv_ax * 8.0e6 + dp_lat * 6.0e6 + dv_lat * 8.0e5;
                         apply_at(wrenches, si, s_com, s_pt_w, f_on_ship);
                         apply_at(wrenches, bi, b_com, b_pt_w, -f_on_ship);
                     }
                 }
 
                 // C. Mechazilla Chopstick Catch-Pin Physical Cradle (supports 275+ t Booster on 2 steel pins!).
+                //    Anisotropic damping: stiff vertical support, gentle horizontal/roll cradle settling!
                 if caught {
                     for &sign_z in &[-1.0, 1.0] {
                         let pin_l = Vec3::new(0.0, BOOSTER_CATCH_PIN_LOCAL_Y, sign_z * 4.8);
                         let pin_w = bp.transform_point(pin_l);
                         let rest_w = Vec3::new(0.0, CHOPSTICK_CATCH_Y, sign_z * 4.8);
                         let vp = vel_at(bv, b_com, pin_w);
-                        let f = (rest_w - pin_w) * 1.2e7 - vp * 3.8e6;
+                        let dp = rest_w - pin_w;
+                        let f = Vec3::new(
+                            dp.x * 1.4e6 - vp.x * 8.0e5,
+                            dp.y * 4.0e6 - vp.y * 1.1e6,
+                            dp.z * 1.4e6 - vp.z * 8.0e5,
+                        );
                         apply_at(wrenches, bi, b_com, pin_w, f);
                     }
                 }

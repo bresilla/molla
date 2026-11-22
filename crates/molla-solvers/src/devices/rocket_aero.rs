@@ -376,6 +376,22 @@ impl RocketAero {
         Ok(())
     }
 
+    /// Sets both the commanded and instantaneous surface deflection (for scenario initialization).
+    pub fn set_surface_deflection(&mut self, id: AeroSurfaceId, deflection_rad: Real) -> Result<()> {
+        if !deflection_rad.is_finite() {
+            return Err(Error::Build("surface deflection must be finite".into()));
+        }
+        let s = self
+            .surfaces
+            .get_mut(&id)
+            .ok_or_else(|| Error::Build("no such aero surface".into()))?;
+        let d = deflection_rad.clamp(s.spec.min_deflection_rad, s.spec.max_deflection_rad);
+        s.cmd_deflection_rad = d;
+        s.deflection_rad = d;
+        s.reading.deflection_rad = d;
+        Ok(())
+    }
+
     pub fn body_reading(&self, id: AeroBodyId) -> Option<AeroBodyReading> {
         self.bodies.get(&id).map(|b| b.reading)
     }

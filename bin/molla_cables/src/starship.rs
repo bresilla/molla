@@ -624,43 +624,79 @@ impl eframe::App for App {
     }
 }
 
+fn peak_body_rates_deg_s(sim: &StarshipSim) -> video_capture::Result<(f64, f64)> {
+    let bp = sim.world.scene.body_pose(sim.booster)?;
+    let bv = sim.world.scene.body_velocity(sim.booster)?;
+    let sp = sim.world.scene.body_pose(sim.ship)?;
+    let sv = sim.world.scene.body_velocity(sim.ship)?;
+    let bw = (bp.rotation.conjugate() * bv.angular).length().to_degrees();
+    let sw = (sp.rotation.conjugate() * sv.angular).length().to_degrees();
+    Ok((bw, sw))
+}
+
 fn run_validation() -> video_capture::Result<()> {
-    // 1. Full-Stack 33-Raptor Liftoff -> Max-Q -> Hot-Staging Separation!
+    // 1. Full-Stack 33-Raptor Liftoff -> Max-Q -> Hot-Staging -> Booster Catch + Ship Pad B Landing!
     let mut sim_stack = StarshipSim::new(StarshipScenario::FullStackMission)?;
-    for _ in 0..(46.0 / SIM_DT).ceil() as usize {
+    let (mut stack_bw, mut stack_sw) = (0.0_f64, 0.0_f64);
+    for _ in 0..(280.0 / SIM_DT).ceil() as usize {
         sim_stack.step(SIM_DT)?;
-        if sim_stack.ever_hot_staged && sim_stack.booster_phase == BoosterPhase::FlipAndBoostback {
+        let (bw, sw) = peak_body_rates_deg_s(&sim_stack)?;
+        stack_bw = stack_bw.max(bw);
+        stack_sw = stack_sw.max(sw);
+        if sim_stack.ever_booster_caught && sim_stack.ever_ship_landed {
             break;
         }
     }
     let t_stack = sim_stack.telemetry()?;
 
-    // 2. Super Heavy Booster Grid-Fin Descent -> 13->3 Raptor Mechazilla Chopstick Catch!
+    // 2. Direct MECO Hot-Staging -> Booster Boostback & Catch + Ship Belly-Flop & Pad B Landing!
+    let mut sim_hot = StarshipSim::new(StarshipScenario::HotStaging)?;
+    let (mut hot_bw, mut hot_sw) = (0.0_f64, 0.0_f64);
+    for _ in 0..(230.0 / SIM_DT).ceil() as usize {
+        sim_hot.step(SIM_DT)?;
+        let (bw, sw) = peak_body_rates_deg_s(&sim_hot)?;
+        hot_bw = hot_bw.max(bw);
+        hot_sw = hot_sw.max(sw);
+        if sim_hot.ever_booster_caught && sim_hot.ever_ship_landed {
+            break;
+        }
+    }
+    let t_hot = sim_hot.telemetry()?;
+
+    // 3. Super Heavy Booster Grid-Fin Descent -> 13->3 Raptor Mechazilla Chopstick Catch!
     let mut sim_catch = StarshipSim::new(StarshipScenario::BoosterCatch)?;
+    let mut catch_bw = 0.0_f64;
     for _ in 0..(45.0 / SIM_DT).ceil() as usize {
         sim_catch.step(SIM_DT)?;
+        catch_bw = catch_bw.max(peak_body_rates_deg_s(&sim_catch)?.0);
         if sim_catch.ever_booster_caught {
             break;
         }
     }
     let t_catch = sim_catch.telemetry()?;
 
-    // 3. Starship 90° Belly-Flop Skydiving (4 Flaps) -> 3->2->1 Raptor Flip-and-Burn Landing!
+    // 4. Starship 90° Belly-Flop Skydiving (4 Flaps) -> 3->2->1 Raptor Flip-and-Burn Landing!
     let mut sim_ship = StarshipSim::new(StarshipScenario::ShipFlipLanding)?;
+    let mut ship_sw = 0.0_f64;
     for _ in 0..(80.0 / SIM_DT).ceil() as usize {
         sim_ship.step(SIM_DT)?;
+        ship_sw = ship_sw.max(peak_body_rates_deg_s(&sim_ship)?.1);
         if sim_ship.ever_ship_landed {
             break;
         }
     }
     let t_ship = sim_ship.telemetry()?;
 
-    // 4. Mars Supersonic Entry (699 Pa CO2, 3.72 m/s²) -> SRP Flip-and-Burn Touchdown!
+    // 5. Mars Supersonic Entry (699 Pa CO2, 3.72 m/s²) -> SRP Flip-and-Burn Touchdown!
     let mut sim_mars = StarshipSim::new(StarshipScenario::MarsSrpLanding)?;
     let mut mars_peak_mach = 0.0_f64;
     let mut mars_min_srp = 1.0_f64;
+    let (mut mars_bw, mut mars_sw) = (0.0_f64, 0.0_f64);
     for _ in 0..(105.0 / SIM_DT).ceil() as usize {
         sim_mars.step(SIM_DT)?;
+        let (bw, sw) = peak_body_rates_deg_s(&sim_mars)?;
+        mars_bw = mars_bw.max(bw);
+        mars_sw = mars_sw.max(sw);
         if let Some(ar) = sim_mars.world.devices.rocket_aero.body_reading(sim_mars.ship_aero) {
             mars_peak_mach = mars_peak_mach.max(ar.mach);
             mars_min_srp = mars_min_srp.min(ar.srp_drag_factor);
@@ -671,10 +707,14 @@ fn run_validation() -> video_capture::Result<()> {
     }
     let t_mars = sim_mars.telemetry()?;
 
-    // 5. Lunar HLS Powered Descent (0 Pa Vacuum, 1.625 m/s²): Main Vacuum Raptors -> 4 Mid-Body HLS Thrusters!
+    // 6. Lunar HLS Powered Descent (0 Pa Vacuum, 1.625 m/s²): Main Vacuum Raptors -> 4 Mid-Body HLS Thrusters!
     let mut sim_lunar = StarshipSim::new(StarshipScenario::LunarHlsDescent)?;
+    let (mut lunar_bw, mut lunar_sw) = (0.0_f64, 0.0_f64);
     for _ in 0..(95.0 / SIM_DT).ceil() as usize {
         sim_lunar.step(SIM_DT)?;
+        let (bw, sw) = peak_body_rates_deg_s(&sim_lunar)?;
+        lunar_bw = lunar_bw.max(bw);
+        lunar_sw = lunar_sw.max(sw);
         if sim_lunar.ever_ship_landed {
             break;
         }
@@ -682,24 +722,42 @@ fn run_validation() -> video_capture::Result<()> {
     let t_lunar = sim_lunar.telemetry()?;
 
     let report = serde_json::json!({
-        "earth_stack": {
+        "1_earth_full_stack": {
             "lifted_off": sim_stack.ever_lifted_off,
             "hot_staged": sim_stack.ever_hot_staged,
+            "caught": sim_stack.ever_booster_caught,
+            "landed": sim_stack.ever_ship_landed,
+            "time_s": sim_stack.time_s,
             "max_q_kpa": sim_stack.peak_max_q_kpa,
             "interstage_blast_mn": sim_stack.peak_interstage_blast_mn,
             "peak_twd_knm": sim_stack.peak_twd_knm,
-            "booster_alt_m": t_stack.booster_alt_m,
-            "ship_alt_m": t_stack.ship_alt_m,
+            "pad_dx_m": t_stack.ship_dist_pad_m,
+            "touchdown_speed_mps": sim_stack.ship_touchdown_speed_mps,
+            "touchdown_tilt_deg": sim_stack.ship_touchdown_tilt_deg,
+            "peak_booster_w_deg_s": stack_bw,
+            "peak_ship_w_deg_s": stack_sw,
         },
-        "earth_catch": {
+        "2_earth_hot_staging": {
+            "hot_staged": sim_hot.ever_hot_staged,
+            "caught": sim_hot.ever_booster_caught,
+            "landed": sim_hot.ever_ship_landed,
+            "time_s": sim_hot.time_s,
+            "pad_dx_m": t_hot.ship_dist_pad_m,
+            "touchdown_speed_mps": sim_hot.ship_touchdown_speed_mps,
+            "touchdown_tilt_deg": sim_hot.ship_touchdown_tilt_deg,
+            "peak_booster_w_deg_s": hot_bw,
+            "peak_ship_w_deg_s": hot_sw,
+        },
+        "3_earth_catch": {
             "caught": sim_catch.ever_booster_caught,
             "time_s": sim_catch.time_s,
             "speed_mps": sim_catch.booster_catch_speed_mps,
             "offset_m": sim_catch.booster_catch_offset_m,
             "tilt_deg": t_catch.booster_tilt_deg,
+            "peak_booster_w_deg_s": catch_bw,
             "phase": t_catch.booster_phase.label(),
         },
-        "earth_ship": {
+        "4_earth_ship": {
             "bellyflop": sim_ship.ever_ship_bellyflop,
             "flipped": sim_ship.ever_ship_flipped,
             "landed": sim_ship.ever_ship_landed,
@@ -707,9 +765,10 @@ fn run_validation() -> video_capture::Result<()> {
             "touchdown_speed_mps": sim_ship.ship_touchdown_speed_mps,
             "touchdown_tilt_deg": sim_ship.ship_touchdown_tilt_deg,
             "pad_dx_m": t_ship.ship_dist_pad_m,
+            "peak_ship_w_deg_s": ship_sw,
             "phase": t_ship.ship_phase.label(),
         },
-        "mars_srp": {
+        "5_mars_srp": {
             "landed": sim_mars.ever_ship_landed,
             "time_s": sim_mars.time_s,
             "peak_mach": mars_peak_mach,
@@ -717,16 +776,18 @@ fn run_validation() -> video_capture::Result<()> {
             "touchdown_speed_mps": sim_mars.ship_touchdown_speed_mps,
             "touchdown_tilt_deg": sim_mars.ship_touchdown_tilt_deg,
             "pad_dx_m": t_mars.ship_dist_pad_m,
-            "alt_m": t_mars.ship_alt_m,
+            "peak_booster_w_deg_s": mars_bw,
+            "peak_ship_w_deg_s": mars_sw,
             "phase": t_mars.ship_phase.label(),
         },
-        "lunar_hls": {
+        "6_lunar_hls": {
             "landed": sim_lunar.ever_ship_landed,
             "time_s": sim_lunar.time_s,
             "touchdown_speed_mps": sim_lunar.ship_touchdown_speed_mps,
             "touchdown_tilt_deg": sim_lunar.ship_touchdown_tilt_deg,
             "pad_dx_m": t_lunar.ship_dist_pad_m,
-            "alt_m": t_lunar.ship_alt_m,
+            "peak_booster_w_deg_s": lunar_bw,
+            "peak_ship_w_deg_s": lunar_sw,
             "phase": t_lunar.ship_phase.label(),
         },
     });
@@ -735,25 +796,130 @@ fn run_validation() -> video_capture::Result<()> {
     if !sim_stack.ever_lifted_off
         || !sim_stack.ever_hot_staged
         || sim_stack.peak_interstage_blast_mn < 1.0
+        || !sim_stack.ever_booster_caught
+        || !sim_stack.ever_ship_landed
+        || t_stack.ship_dist_pad_m > 25.0
+        || stack_bw > 55.0
+        || stack_sw > 55.0
+        || !sim_hot.ever_hot_staged
+        || !sim_hot.ever_booster_caught
+        || !sim_hot.ever_ship_landed
+        || t_hot.ship_dist_pad_m > 25.0
+        || hot_bw > 55.0
+        || hot_sw > 55.0
         || !sim_catch.ever_booster_caught
         || sim_catch.booster_catch_offset_m > 4.5
+        || catch_bw > 15.0
         || !sim_ship.ever_ship_bellyflop
         || !sim_ship.ever_ship_flipped
         || !sim_ship.ever_ship_landed
         || sim_ship.ship_touchdown_speed_mps > 4.5
         || sim_ship.ship_touchdown_tilt_deg > 8.0
         || t_ship.ship_dist_pad_m > 25.0
+        || ship_sw > 50.0
         || !sim_mars.ever_ship_landed
         || mars_peak_mach < 1.15
         || sim_mars.ship_touchdown_speed_mps > 4.5
         || sim_mars.ship_touchdown_tilt_deg > 8.0
         || t_mars.ship_dist_pad_m > 30.0
+        || mars_bw > 0.1
+        || mars_sw > 55.0
         || !sim_lunar.ever_ship_landed
         || sim_lunar.ship_touchdown_speed_mps > 3.5
         || sim_lunar.ship_touchdown_tilt_deg > 8.0
         || t_lunar.ship_dist_pad_m > 25.0
+        || lunar_bw > 0.1
+        || lunar_sw > 20.0
     {
         return Err("Starship full-stack physics validation failed".into());
+    }
+    Ok(())
+}
+
+fn run_audit_all() -> video_capture::Result<()> {
+    let cases: &[(&str, StarshipScenario, f64)] = &[
+        ("1_FullStack", StarshipScenario::FullStackMission, 280.0),
+        ("2_HotStaging", StarshipScenario::HotStaging, 230.0),
+        ("3_BoosterCatch", StarshipScenario::BoosterCatch, 45.0),
+        ("4_EarthShip", StarshipScenario::ShipFlipLanding, 80.0),
+        ("5_MarsSRP", StarshipScenario::MarsSrpLanding, 45.0),
+        ("6_LunarHLS", StarshipScenario::LunarHlsDescent, 55.0),
+    ];
+    for &(name, sc, dur) in cases {
+        println!("\n================ {name} ({dur:.0}s) ================");
+        let mut sim = StarshipSim::new(sc)?;
+        let mut max_b_w = Vec3::ZERO;
+        let mut max_s_w = Vec3::ZERO;
+        let steps = (dur / SIM_DT).ceil() as usize;
+        for k in 0..steps {
+            sim.step(SIM_DT)?;
+            let bp = sim.world.scene.body_pose(sim.booster)?;
+            let bv = sim.world.scene.body_velocity(sim.booster)?;
+            let sp = sim.world.scene.body_pose(sim.ship)?;
+            let sv = sim.world.scene.body_velocity(sim.ship)?;
+            let bw = (bp.rotation.conjugate() * bv.angular) * (180.0 / std::f64::consts::PI);
+            let sw = (sp.rotation.conjugate() * sv.angular) * (180.0 / std::f64::consts::PI);
+            max_b_w = Vec3::new(max_b_w.x.max(bw.x.abs()), max_b_w.y.max(bw.y.abs()), max_b_w.z.max(bw.z.abs()));
+            max_s_w = Vec3::new(max_s_w.x.max(sw.x.abs()), max_s_w.y.max(sw.y.abs()), max_s_w.z.max(sw.z.abs()));
+            let stride = 600;
+            if k % stride == 0 || k + 1 == steps {
+                let t = sim.telemetry()?;
+                let b_prop_t = sim.world.devices.rockets.body_propellant_kg(sim.booster) * 1e-3;
+                println!(
+                    "t={:5.1}s | B:{:<20} alt={:5.0}m dx={:5.1}m tilt={:4.1}° w=({:+5.1},{:+5.1},{:+5.1}) g={:4.1}° pf={:3.0}t | S:{:<22} alt={:5.0}m xz=({:+5.0},{:+4.0}) tilt={:4.1}° w=({:+5.1},{:+5.1},{:+5.1}) g={:4.1}°",
+                    sim.time_s,
+                    format!("{:?}", sim.booster_phase),
+                    t.booster_alt_m,
+                    t.booster_dist_tower_m,
+                    t.booster_tilt_deg,
+                    bw.x,
+                    bw.y,
+                    bw.z,
+                    t.booster_gimbal_deg,
+                    b_prop_t,
+                    format!("{:?}", sim.ship_phase),
+                    t.ship_alt_m,
+                    sp.position.x - 260.0,
+                    sp.position.z,
+                    t.ship_tilt_deg,
+                    sw.x,
+                    sw.y,
+                    sw.z,
+                    t.ship_gimbal_deg,
+                );
+            }
+            if matches!(sc, StarshipScenario::BoosterCatch) && sim.ever_booster_caught {
+                break;
+            }
+            if matches!(
+                sc,
+                StarshipScenario::ShipFlipLanding
+                    | StarshipScenario::MarsSrpLanding
+                    | StarshipScenario::LunarHlsDescent
+            ) && sim.ever_ship_landed
+            {
+                break;
+            }
+            if matches!(
+                sc,
+                StarshipScenario::FullStackMission | StarshipScenario::HotStaging
+            ) && sim.ever_booster_caught
+                && sim.ever_ship_landed
+            {
+                break;
+            }
+        }
+        println!(
+            "SUMMARY {name}: caught={} landed={} | peak|w_B|=({:.1},{:.1},{:.1})°/s | peak|w_S|=({:.1},{:.1},{:.1})°/s",
+            sim.ever_booster_caught,
+            sim.ever_ship_landed,
+            max_b_w.x,
+            max_b_w.y,
+            max_b_w.z,
+            max_s_w.x,
+            max_s_w.y,
+            max_s_w.z,
+        );
     }
     Ok(())
 }
@@ -762,6 +928,9 @@ fn main() -> video_capture::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--validate-physics") {
         return run_validation();
+    }
+    if args.iter().any(|a| a == "--audit-all") {
+        return run_audit_all();
     }
     let scenario = if args.iter().any(|a| a == "--catch") {
         StarshipScenario::BoosterCatch
